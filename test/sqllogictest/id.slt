@@ -23,14 +23,14 @@ SELECT id FROM mz_catalog.mz_tables WHERE name = 'x'
 ----
 u1
 
-query I
+query I rowsort
 SELECT a FROM x
 ----
 1
 2
 3
 
-query I
+query I rowsort
 SELECT a FROM [u1 AS materialize.public.y]
 ----
 1
@@ -44,7 +44,7 @@ statement error column "x.a" does not exist
 SELECT x.a FROM [u1 AS materialize.public.y]
 
 # Referring to it by its assigned name should work.
-query I
+query I rowsort
 SELECT y.a FROM [u1 AS materialize.public.y]
 ----
 1
@@ -54,8 +54,11 @@ SELECT y.a FROM [u1 AS materialize.public.y]
 statement error invalid id
 SELECT y.a FROM [u6 AS materialize.public.y]
 
-statement error invalid digit
+statement error couldn't parse id
 SELECT y.a FROM [xx AS materialize.public.y]
+
+statement error invalid digit
+SELECT y.a FROM [ux AS materialize.public.y]
 
 statement ok
 CREATE VIEW foo AS SELECT * FROM x
@@ -69,7 +72,7 @@ query TT
 SHOW CREATE VIEW foo
 ----
 materialize.public.foo
-CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM "materialize"."public"."x"
+CREATE VIEW materialize.public.foo AS SELECT * FROM materialize.public.x;
 
 statement ok
 DROP VIEW foo;
@@ -81,7 +84,7 @@ query TT
 SHOW CREATE VIEW foo
 ----
 materialize.public.foo
-CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM "materialize"."public"."x"
+CREATE VIEW materialize.public.foo AS SELECT * FROM materialize.public.x;
 
 # If the name *differs*, fall back to the id version.
 
@@ -95,4 +98,4 @@ query TT
 SHOW CREATE VIEW foo
 ----
 materialize.public.foo
-CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM [u1 AS "materialize"."public"."y"]
+CREATE VIEW materialize.public.foo AS SELECT * FROM [u1 AS materialize.public.y];

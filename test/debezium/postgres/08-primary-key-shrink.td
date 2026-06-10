@@ -20,6 +20,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_shrink_primary_key (f1 INTEGER DEFAULT 1, f2 INTEGER DEFAULT 2, PRIMARY KEY (f1, f2));
 ALTER TABLE alter_shrink_primary_key REPLICA IDENTITY FULL;
 INSERT INTO alter_shrink_primary_key VALUES (123,234),(345,456);
+ANALYZE;
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -27,12 +28,14 @@ INSERT INTO alter_shrink_primary_key VALUES (123,234),(345,456);
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE alter_shrink_primary_key
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_shrink_primary_key');
 
 > CREATE TABLE alter_shrink_primary_key_tbl FROM SOURCE alter_shrink_primary_key (REFERENCE "postgres.public.alter_shrink_primary_key")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT * FROM alter_shrink_primary_key_tbl;
 123 234

@@ -19,7 +19,7 @@
 // present SSH tunnel errors that occur after the initial connection are
 // reported only to the logs, and not to users.
 
-use std::collections::{btree_map, BTreeMap};
+use std::collections::{BTreeMap, btree_map};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
@@ -161,7 +161,7 @@ impl SshTunnelManager {
                     .await?;
 
                     // Successful connection, so defuse the scope guard.
-                    let _ = ScopeGuard::into_inner(guard);
+                    ScopeGuard::into_inner(guard);
 
                     // Record the tunnel handle for future threads.
                     let handle = Arc::new(handle);

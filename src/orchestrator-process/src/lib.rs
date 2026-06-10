@@ -14,33 +14,35 @@ use std::fmt::Debug;
 use std::fs::Permissions;
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr, TcpListener as StdTcpListener};
+use std::num::NonZero;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use async_stream::stream;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::future;
-use futures::stream::{BoxStream, FuturesUnordered, TryStreamExt};
+use futures::StreamExt;
+use futures::stream::{BoxStream, FuturesUnordered};
 use itertools::Itertools;
-use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
+use mz_orchestrator::scheduling_config::ServiceSchedulingConfig;
 use mz_orchestrator::{
-    CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
-    ServiceEvent, ServiceProcessMetrics, ServiceStatus,
+    CpuLimit, DiskLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service,
+    ServiceAssignments, ServiceConfig, ServiceEvent, ServicePort, ServiceProcessMetrics,
+    ServiceStatus,
 };
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::error::ErrorExt;
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
+use nix::sys::signal::Signal;
 use scopeguard::defer;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
@@ -148,30 +150,18 @@ impl LaunchSpec {
         image: impl AsRef<OsStr>,
         args: &[impl AsRef<OsStr>],
         wrapper: &[String],
-        full_id: &str,
-        listen_addrs: &BTreeMap<String, String>,
         memory_limit: Option<&MemoryLimit>,
         cpu_limit: Option<&CpuLimit>,
     ) -> Command {
-        let wrapper_parts = || {
-            (
-                &wrapper[0],
-                wrapper[1..]
-                    .iter()
-                    .map(|part| interpolate_command(part, full_id, listen_addrs)),
-            )
-        };
-
         let mut cmd = match self {
             Self::Direct => {
-                if wrapper.is_empty() {
-                    Command::new(image)
-                } else {
-                    let (program, wrapper_args) = wrapper_parts();
+                if let Some((program, wrapper_args)) = wrapper.split_first() {
                     let mut cmd = Command::new(program);
                     cmd.args(wrapper_args);
                     cmd.arg(image);
                     cmd
+                } else {
+                    Command::new(image)
                 }
             }
             Self::Systemd => {
@@ -187,11 +177,7 @@ impl LaunchSpec {
                     cmd.args(["-p", &format!("CPUQuota={cpu_limit}%")]);
                 }
 
-                if !wrapper.is_empty() {
-                    let (program, wrapper_args) = wrapper_parts();
-                    cmd.arg(program);
-                    cmd.args(wrapper_args);
-                };
+                cmd.args(wrapper);
                 cmd.arg(image);
                 cmd
             }
@@ -286,6 +272,7 @@ impl Orchestrator for ProcessOrchestrator {
                 services,
                 service_event_rx,
                 command_tx,
+                scheduling_config: Default::default(),
                 _worker: worker,
             })
         }))
@@ -326,6 +313,7 @@ struct NamespacedProcessOrchestrator {
     services: Arc<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
     service_event_rx: broadcast::Receiver<ServiceEvent>,
     command_tx: mpsc::UnboundedSender<WorkerCommand>,
+    scheduling_config: std::sync::RwLock<ServiceSchedulingConfig>,
     _worker: AbortOnDropHandle<()>,
 }
 
@@ -345,6 +333,20 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let service = ProcessService {
             run_dir: self.config.service_run_dir(id),
             scale: config.scale,
+        };
+
+        // Enable disk if the size does not disable it.
+        let disk = config.disk_limit != Some(DiskLimit::ZERO);
+
+        let config = EnsureServiceConfig {
+            image: config.image,
+            args: config.args,
+            ports: config.ports,
+            memory_limit: config.memory_limit,
+            cpu_limit: config.cpu_limit,
+            scale: config.scale,
+            labels: config.labels,
+            disk,
         };
 
         self.send_command(WorkerCommand::EnsureService {
@@ -408,9 +410,9 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
     fn update_scheduling_config(
         &self,
-        _config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
+        config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
     ) {
-        // This orchestrator ignores scheduling constraints.
+        *self.scheduling_config.write().expect("poisoned") = config;
     }
 }
 
@@ -422,7 +424,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 enum WorkerCommand {
     EnsureService {
         id: String,
-        config: ServiceConfig,
+        config: EnsureServiceConfig,
     },
     DropService {
         id: String,
@@ -434,6 +436,32 @@ enum WorkerCommand {
         id: String,
         result_tx: oneshot::Sender<Result<Vec<ServiceProcessMetrics>, anyhow::Error>>,
     },
+}
+
+/// Describes the desired state of a process.
+struct EnsureServiceConfig {
+    /// An opaque identifier for the executable or container image to run.
+    ///
+    /// Often names a container on Docker Hub or a path on the local machine.
+    pub image: String,
+    /// A function that generates the arguments for each process of the service
+    /// given the assigned listen addresses for each named port.
+    pub args: Box<dyn Fn(ServiceAssignments) -> Vec<String> + Send + Sync>,
+    /// Ports to expose.
+    pub ports: Vec<ServicePort>,
+    /// An optional limit on the memory that the service can use.
+    pub memory_limit: Option<MemoryLimit>,
+    /// An optional limit on the CPU that the service can use.
+    pub cpu_limit: Option<CpuLimit>,
+    /// The number of copies of this service to run.
+    pub scale: NonZero<u16>,
+    /// Arbitrary key–value pairs to attach to the service in the orchestrator
+    /// backend.
+    ///
+    /// The orchestrator backend may apply a prefix to the key if appropriate.
+    pub labels: BTreeMap<String, String>,
+    /// Whether scratch disk space should be allocated for the service.
+    pub disk: bool,
 }
 
 /// A task executing blocking work for a [`NamespacedProcessOrchestrator`] in the background.
@@ -526,8 +554,10 @@ impl OrchestratorWorker {
             metrics.push(ServiceProcessMetrics {
                 cpu_nano_cores,
                 memory_bytes,
-                // Process orchestrator does not support this right now.
-                disk_usage_bytes: None,
+                // Process orchestrator does not support the remaining fields right now.
+                disk_bytes: None,
+                heap_bytes: None,
+                heap_limit: None,
             });
         }
         Ok(metrics)
@@ -536,23 +566,16 @@ impl OrchestratorWorker {
     async fn ensure_service(
         &self,
         id: String,
-        ServiceConfig {
+        EnsureServiceConfig {
             image,
-            init_container_image: _,
             args,
             ports: ports_in,
             memory_limit,
             cpu_limit,
             scale,
             labels,
-            // Scheduling constraints are entirely ignored by the process orchestrator.
-            availability_zones: _,
-            other_replicas_selector: _,
-            replicas_selector: _,
             disk,
-            disk_limit: _,
-            node_selector: _,
-        }: ServiceConfig,
+        }: EnsureServiceConfig,
     ) -> Result<(), anyhow::Error> {
         let full_id = self.config.full_id(&id);
 
@@ -570,13 +593,47 @@ impl OrchestratorWorker {
             None
         };
 
+        // The service might already exist. If it has the same config as requested (currently we
+        // check only the scale), we have nothing to do. Otherwise we need to drop and recreate it.
+        let old_scale = {
+            let services = self.services.lock().expect("poisoned");
+            services.get(&id).map(|states| states.len())
+        };
+        match old_scale {
+            Some(old) if old == usize::cast_from(scale) => return Ok(()),
+            Some(_) => self.drop_service(&id).await?,
+            None => (),
+        }
+
+        // Create sockets for all processes in the service.
+        let mut peer_addrs = Vec::new();
+        for i in 0..scale.into() {
+            let addresses = ports_in
+                .iter()
+                .map(|port| {
+                    let addr = socket_path(&run_dir, &port.name, i);
+                    (port.name.clone(), addr)
+                })
+                .collect();
+            peer_addrs.push(addresses);
+        }
+
         {
             let mut services = self.services.lock().expect("lock poisoned");
-            let process_states = services.entry(id.clone()).or_default();
 
             // Create the state for new processes.
-            let mut new_process_states = vec![];
-            for i in process_states.len()..scale.into() {
+            let mut process_states = vec![];
+            for i in 0..usize::cast_from(scale) {
+                let listen_addrs = &peer_addrs[i];
+
+                // Fill out placeholders in the command wrapper for this process.
+                let mut command_wrapper = self.config.command_wrapper.clone();
+                if let Some(parts) = command_wrapper.get_mut(1..) {
+                    for part in parts {
+                        *part = interpolate_command(&part[..], &full_id, listen_addrs);
+                    }
+                }
+
                 // Allocate listeners for each TCP proxy, if requested.
                 let mut ports = vec![];
                 let mut tcp_proxy_addrs = BTreeMap::new();
@@ -598,8 +655,24 @@ impl OrchestratorWorker {
                     };
                     ports.push(ServiceProcessPort {
                         name: port.name.clone(),
+                        listen_addr: listen_addrs[&port.name].clone(),
                         tcp_proxy_listener,
                     });
+                }
+
+                let mut args = args(ServiceAssignments {
+                    listen_addrs,
+                    peer_addrs: &peer_addrs,
+                });
+                args.push(format!("--process={i}"));
+                if disk {
+                    if let Some(scratch) = &scratch_dir {
+                        args.push(format!("--scratch-directory={}", scratch.display()));
+                    } else {
+                        panic!(
+                            "internal error: service requested disk but no scratch directory was configured"
+                        );
+                    }
                 }
 
                 // Launch supervisor process.
@@ -608,19 +681,18 @@ impl OrchestratorWorker {
                     self.supervise_service_process(ServiceProcessConfig {
                         id: id.to_string(),
                         run_dir: run_dir.clone(),
-                        scratch_dir: scratch_dir.clone(),
                         i,
                         image: image.clone(),
-                        args: &args,
+                        args,
+                        command_wrapper,
                         ports,
                         memory_limit,
                         cpu_limit,
-                        disk,
                         launch_spec: self.config.launch_spec,
                     }),
                 );
 
-                new_process_states.push(ProcessState {
+                process_states.push(ProcessState {
                     _handle: handle.abort_on_drop(),
                     status: ProcessStatus::NotReady,
                     status_time: Utc::now(),
@@ -631,8 +703,7 @@ impl OrchestratorWorker {
 
             // Update the in-memory process state. We do this after we've created
             // all process states to avoid partially updating our in-memory state.
-            process_states.truncate(scale.into());
-            process_states.extend(new_process_states);
+            services.insert(id, process_states);
         }
 
         self.maybe_write_prometheus_service_discovery_file().await;
@@ -715,20 +786,18 @@ impl OrchestratorWorker {
         ServiceProcessConfig {
             id,
             run_dir,
-            scratch_dir,
             i,
             image,
             args,
+            command_wrapper,
             ports,
             memory_limit,
             cpu_limit,
-            disk,
             launch_spec,
         }: ServiceProcessConfig,
-    ) -> impl Future<Output = ()> {
+    ) -> impl Future<Output = ()> + use<> {
         let suppress_output = self.config.suppress_output;
         let propagate_crashes = self.config.propagate_crashes;
-        let command_wrapper = self.config.command_wrapper.clone();
         let image = self.config.image_dir.join(image);
         let pid_file = run_dir.join(format!("{i}.pid"));
         let full_id = self.config.full_id(&id);
@@ -741,24 +810,9 @@ impl OrchestratorWorker {
             service_event_tx: self.service_event_tx.clone(),
         };
 
-        let listen_addrs = ports
-            .iter()
-            .map(|p| {
-                let addr = socket_path(&run_dir, &p.name, i);
-                (p.name.clone(), addr)
-            })
-            .collect();
-        let mut args = args(&listen_addrs);
-
-        if disk {
-            if let Some(scratch) = &scratch_dir {
-                args.push(format!("--scratch-directory={}", scratch.display()));
-            } else {
-                panic!("internal error: service requested disk but no scratch directory was configured");
-            }
-        }
-
         async move {
+            // Holds AbortOnDropHandles to keep proxy tasks alive.
+            #[allow(clippy::collection_is_never_read)]
             let mut proxy_handles = vec![];
             for port in ports {
                 if let Some(tcp_listener) = port.tcp_proxy_listener {
@@ -766,7 +820,7 @@ impl OrchestratorWorker {
                         "{full_id}-{i}: {} tcp proxy listening on {}",
                         port.name, tcp_listener.local_addr,
                     );
-                    let uds_path = &listen_addrs[&port.name];
+                    let uds_path = port.listen_addr;
                     let handle = mz_ore::task::spawn(
                         || format!("{full_id}-{i}-proxy-{}", port.name),
                         tcp_proxy(TcpProxyConfig {
@@ -786,8 +840,6 @@ impl OrchestratorWorker {
                     &image,
                     &args,
                     &command_wrapper,
-                    &full_id,
-                    &listen_addrs,
                     memory_limit.as_ref(),
                     cpu_limit.as_ref(),
                 );
@@ -807,9 +859,10 @@ impl OrchestratorWorker {
                     .await
                 {
                     Ok(status) => {
-                        if propagate_crashes && did_process_crash(status) {
-                            panic!("{full_id}-{i} crashed; aborting because propagate_crashes is enabled");
-                        }
+                        assert!(
+                            !(propagate_crashes && did_process_crash(status)),
+                            "{full_id}-{i} crashed; aborting because propagate_crashes is enabled"
+                        );
                         error!("{full_id}-{i} exited: {:?}; relaunching in 5s", status);
                     }
                     Err(e) => {
@@ -873,15 +926,14 @@ impl OrchestratorWorker {
     }
 }
 
-struct ServiceProcessConfig<'a> {
+struct ServiceProcessConfig {
     id: String,
     run_dir: PathBuf,
-    scratch_dir: Option<PathBuf>,
     i: usize,
     image: String,
-    args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
+    args: Vec<String>,
+    command_wrapper: Vec<String>,
     ports: Vec<ServiceProcessPort>,
-    disk: bool,
     memory_limit: Option<MemoryLimit>,
     cpu_limit: Option<CpuLimit>,
     launch_spec: LaunchSpec,
@@ -889,6 +941,7 @@ struct ServiceProcessConfig<'a> {
 
 struct ServiceProcessPort {
     name: String,
+    listen_addr: String,
     tcp_proxy_listener: Option<AddressedTcpListener>,
 }
 
@@ -904,6 +957,7 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
         return;
     };
     let pid = process.pid();
+    let start_time = process.start_time();
 
     info!(%pid, "discovered existing process for {name}");
     state_updater.update_state(ProcessStatus::Ready { pid });
@@ -918,9 +972,17 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
         }
     }
 
-    // Periodically check if the process has terminated.
+    // Periodically check if the process has terminated. Verify start_time
+    // on each iteration to detect PID reuse.
     let mut system = System::new();
-    while system.refresh_process_specifics(pid, ProcessRefreshKind::new()) {
+    loop {
+        if !system.refresh_process_specifics(pid, ProcessRefreshKind::new()) {
+            break;
+        }
+        match system.process(pid) {
+            Some(p) if p.start_time() == start_time => {}
+            _ => break,
+        }
         time::sleep(Duration::from_secs(5)).await;
     }
 
@@ -984,10 +1046,16 @@ fn did_process_crash(status: ExitStatus) -> bool {
     // Likely not exhaustive. Feel free to add additional tests for other
     // indications of a crashed child process, as those conditions are
     // discovered.
-    matches!(
-        status.signal(),
-        Some(SIGABRT | SIGBUS | SIGSEGV | SIGTRAP | SIGILL)
-    )
+    status.signal().is_some_and(|s| {
+        matches!(
+            Signal::try_from(s),
+            Ok(Signal::SIGABRT
+                | Signal::SIGBUS
+                | Signal::SIGSEGV
+                | Signal::SIGTRAP
+                | Signal::SIGILL)
+        )
+    })
 }
 
 async fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
@@ -1038,8 +1106,7 @@ async fn tcp_proxy(
         uds_path,
     }: TcpProxyConfig,
 ) {
-    let mut conns = FuturesUnordered::<Pin<Box<dyn Future<Output = _> + Send>>>::new();
-    conns.push(Box::pin(future::pending()));
+    let mut conns = FuturesUnordered::new();
     loop {
         select! {
             res = tcp_listener.listener.accept() => {
@@ -1055,10 +1122,8 @@ async fn tcp_proxy(
                         .context("proxying")
                 }));
             }
-            res = conns.try_next() => {
-                if let Err(e) = res {
-                    warn!("{name}: tcp proxy connection failed: {}", e.display_with_causes());
-                }
+            Some(result) = conns.next() => if let Err(e) = result {
+                warn!("{name}: tcp proxy connection failed: {}", e.display_with_causes());
             }
         }
     }
@@ -1126,7 +1191,7 @@ impl From<ProcessStatus> for ServiceStatus {
     }
 }
 
-fn socket_path(run_dir: &Path, port: &str, process: usize) -> String {
+fn socket_path(run_dir: &Path, port: &str, process: u16) -> String {
     let desired = run_dir
         .join(format!("{port}-{process}"))
         .to_string_lossy()
@@ -1148,16 +1213,16 @@ struct AddressedTcpListener {
     local_addr: SocketAddr,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ProcessService {
     run_dir: PathBuf,
-    scale: u16,
+    scale: NonZero<u16>,
 }
 
 impl Service for ProcessService {
     fn addresses(&self, port: &str) -> Vec<String> {
-        (0..self.scale)
-            .map(|i| socket_path(&self.run_dir, port, i.into()))
+        (0..self.scale.get())
+            .map(|i| socket_path(&self.run_dir, port, i))
             .collect()
     }
 }

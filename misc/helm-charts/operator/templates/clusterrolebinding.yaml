@@ -19,6 +19,6 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: {{ include "materialize-operator.serviceAccountName" . }}
-  namespace: {{ .Values.namespace.name }}
+  namespace: {{ .Release.Namespace }}
 
 {{- end }}

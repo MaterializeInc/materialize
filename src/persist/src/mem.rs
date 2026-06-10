@@ -10,49 +10,21 @@
 //! In-memory implementations for testing and benchmarking.
 
 use std::collections::BTreeMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
+use mz_ore::future::yield_now;
 
 use crate::error::Error;
 use crate::location::{
     Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream, SeqNo,
     VersionedData,
 };
-
-// A snapshot of the old tokio::task::yield_now() implementation, from before it
-// had sneaky TLS shenangans.
-//
-// TODO: Move this into mz_ore somewhere so others can use it, too.
-async fn yield_now() {
-    struct YieldNow {
-        yielded: bool,
-    }
-
-    impl Future for YieldNow {
-        type Output = ();
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-            if self.yielded {
-                return Poll::Ready(());
-            }
-
-            self.yielded = true;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        }
-    }
-
-    YieldNow { yielded: false }.await
-}
 
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
 /// across dataflows
@@ -177,7 +149,7 @@ impl MemBlobConfig {
 }
 
 /// An in-memory implementation of [Blob].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MemBlob {
     core: Arc<tokio::sync::Mutex<MemBlobCore>>,
 }
@@ -229,7 +201,7 @@ impl Blob for MemBlob {
 }
 
 /// An in-memory implementation of [Consensus].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MemConsensus {
     // TODO: This was intended to be a tokio::sync::Mutex but that seems to
     // regularly deadlock in the `concurrency` test.
@@ -265,7 +237,7 @@ impl MemConsensus {
 
 #[async_trait]
 impl Consensus for MemConsensus {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         // Yield to maximize our chances for getting interesting orderings.
         let store = self.data.lock().expect("lock poisoned");
         let keys: Vec<_> = store.keys().cloned().collect();
@@ -287,18 +259,11 @@ impl Consensus for MemConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
+        let expected = new.seqno.previous();
         // Yield to maximize our chances for getting interesting orderings.
         let () = yield_now().await;
-        if let Some(expected) = expected {
-            if new.seqno <= expected {
-                return Err(ExternalError::from(
-                        anyhow!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
-                                 new.seqno, expected)));
-            }
-        }
 
         if new.seqno.0 > i64::MAX.try_into().expect("i64::MAX known to fit in u64") {
             return Err(ExternalError::from(anyhow!(
@@ -336,7 +301,7 @@ impl Consensus for MemConsensus {
         Self::scan_store(&store, key, from, limit)
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         // Yield to maximize our chances for getting interesting orderings.
         let () = yield_now().await;
         let current = self.head(key).await?;
@@ -356,7 +321,7 @@ impl Consensus for MemConsensus {
             deleted += count_before - values.len();
         }
 
-        Ok(deleted)
+        Ok(Some(deleted))
     }
 }
 

@@ -7,27 +7,23 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-cfg-if = "1.0.0"
-protobuf-src = { version = "2.0.0", optional = true }
-which = "4"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+cfg-if.workspace = true
+protobuf-src = { workspace = true, optional = true }
+which.workspace = true
 
 [lints]
 workspace = true
 
 [features]
-default = ["protobuf-src", "workspace-hack"]
+default = ["protobuf-src"]
 bazel = []
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
 
 [package.metadata.cargo-gazelle.lib]
 features_override = ["default", "bazel"]
 extra_deps = ["@rules_rust//tools/runfiles"]
 data = [
-    "@protobuf//:protoc",
-    "@protobuf//:well_known_type_protos",
+    "@com_google_protobuf//:protoc",
+    "@com_google_protobuf//:well_known_type_protos",
 ]
 rustc_flags = ["--cfg=bazel"]
 

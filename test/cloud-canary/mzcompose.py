@@ -35,7 +35,6 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.redpanda_cloud import RedpandaCloud
 from materialize.ui import UIError
@@ -52,11 +51,11 @@ APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
 VERSION = f"{MzVersion.parse_cargo()}--pr.g{os.getenv('BUILDKITE_COMMIT')}"
 
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
-KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
-SCHEMA_REGISTRY_ENDPOINT = "https://psrc-8kz20.us-east-2.aws.confluent.cloud"
+KAFKA_BOOTSTRAP_SERVER = "pkc-oxqxx9.us-east-1.aws.confluent.cloud:9092"
+SCHEMA_REGISTRY_ENDPOINT = "https://psrc-e0919.us-east-2.aws.confluent.cloud"
 # The actual values are stored in the i2 repository
-CONFLUENT_API_KEY = os.getenv("CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME")
-CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD")
+CONFLUENT_API_KEY = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME")
+CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD")
 
 
 class Redpanda:
@@ -92,7 +91,7 @@ class Redpanda:
                 "resource_group_id": self.resource_group_id,
                 "network_id": self.network_id,
                 "region": "us-east-1",
-                "throughput_tier": "tier-1-aws-v2-arm",
+                "throughput_tier": "tier-1-aws-v3-arm",
                 "type": "TYPE_DEDICATED",
                 "zones": ["use1-az2"],
                 "aws_private_link": {
@@ -145,34 +144,38 @@ class Redpanda:
         )
         cloud_conn.autocommit = True
         cloud_cursor = cloud_conn.cursor()
-        cloud_cursor.execute(
-            f"""CREATE CONNECTION privatelink_conn
+        cloud_cursor.execute(f"""CREATE CONNECTION privatelink_conn
             TO AWS PRIVATELINK (
                 SERVICE NAME '{self.aws_private_link}',
                 AVAILABILITY ZONES ('use1-az2')
-            );""".encode()
-        )
-        cloud_cursor.execute(
-            """SELECT principal
+            );""".encode())
+        cloud_cursor.execute("""SELECT principal
             FROM mz_aws_privatelink_connections plc
             JOIN mz_connections c on plc.id = c.id
-            WHERE c.name = 'privatelink_conn';"""
-        )
+            WHERE c.name = 'privatelink_conn';""")
         results = cloud_cursor.fetchone()
         assert results
         privatelink_principal = results[0]
         cloud_cursor.close()
         cloud_conn.close()
 
-        result = self.cloud.patch(
-            f"clusters/{self.cluster_info['id']}",
-            {
-                "aws_private_link": {
-                    "enabled": True,
-                    "allowed_principals": [privatelink_principal],
-                }
-            },
-        )
+        # Redpanda API sometimes returns a 404 for a while, ignore
+        while True:
+            try:
+                result = self.cloud.patch(
+                    f"clusters/{self.cluster_info['id']}",
+                    {
+                        "aws_private_link": {
+                            "enabled": True,
+                            "allowed_principals": [privatelink_principal],
+                        }
+                    },
+                )
+            except ValueError as e:
+                print(f"Failure, retrying in 10s: {e}")
+                time.sleep(10)
+                continue
+            break
         self.cloud.wait(result)
 
     def delete(self):
@@ -193,7 +196,6 @@ class Redpanda:
 
 
 SERVICES = [
-    CockroachOrPostgresMetadata(),
     Materialized(
         # We use materialize/environmentd and not materialize/materialized here
         # in order to ensure a perfect match to the container that should be
@@ -243,7 +245,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    globs = list(
+    if not os.getenv("BUILDKITE_COMMIT"):
+        raise UIError(
+            "BUILDKITE_COMMIT must be set (and valid) when running cloud-canary"
+        )
+
+    files = list(
         itertools.chain.from_iterable(
             [
                 glob.glob(file_glob, root_dir=MZ_ROOT / "test" / "cloud-canary")
@@ -272,21 +279,28 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if args.version_check:
             version_check(c)
 
+        # TODO(def-): Reenable when Redpanda fixes "Internal server error"
+        redpanda = None
         # Takes about 40 min to spin up
-        redpanda = (
-            Redpanda(c, cleanup=args.cleanup)
-            if any(["redpanda" in filename for filename in globs])
-            else None
-        )
+        # print("--- Spinnung up Redpanda Cloud (takes ~40 min)")
+        # redpanda = (
+        #     Redpanda(c, cleanup=args.cleanup)
+        #     if any(["redpanda" in filename for filename in files])
+        #     else None
+        # )
 
         try:
-            print("Running .td files ...")
+            print("--- Running .td files ...")
             td(c, text="> CREATE CLUSTER canary_sources SIZE '25cc'")
-            for filename in globs:
+
+            def process(filename: str) -> None:
                 td(c, filename, redpanda=redpanda)
+
+            c.test_parts(files, process)
             test_failed = False
         finally:
             if args.cleanup and redpanda is not None:
+                print("--- Deleting Redpanda Cloud")
                 redpanda.delete()
     finally:
         if args.cleanup:
@@ -299,7 +313,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
-    c.run("mz", "region", "disable", "--hard")
+    try:
+        c.run("mz", "region", "disable", "--hard")
+    except UIError:
+        # Can return: status 404 Not Found
+        pass
 
 
 def wait_for_cloud(c: Composition) -> None:
@@ -409,9 +427,8 @@ def td(
 
     with c.override(testdrive):
         if text:
-            c.testdrive(text, persistent=False)
+            c.testdrive(text)
         if filename:
             c.run_testdrive_files(
                 filename,
-                rm=True,
             )

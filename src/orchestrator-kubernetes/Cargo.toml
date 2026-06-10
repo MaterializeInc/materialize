@@ -10,26 +10,26 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-async-trait = "0.1.68"
-chrono = { version = "0.4.35", default-features = false }
-clap = { version = "3.2.24", features = ["derive"] }
-fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.25"
-maplit = "1.0.2"
-mz-cloud-resources = { path = "../cloud-resources" }
-mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["async"]  }
-mz-secrets = { path = "../secrets" }
-mz-repr = { path = "../repr" }
-k8s-openapi = { version = "0.22.0", features = ["v1_29"] }
-kube = { version = "0.92.1", default-features = false, features = ["client", "runtime", "ws"] }
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.125"
-sha2 = "0.10.6"
-tokio = "1.32.0"
-tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+clap.workspace = true
+fail.workspace = true
+futures.workspace = true
+maplit.workspace = true
+mz-cloud-resources = { path = "../cloud-resources", default-features = false, features = ["vpc-endpoints"] }
+mz-orchestrator = { path = "../orchestrator", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["async"]  }
+mz-secrets = { path = "../secrets", default-features = false }
+mz-repr = { path = "../repr", default-features = false }
+k8s-openapi.workspace = true
+kube.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+[features]
+default = []

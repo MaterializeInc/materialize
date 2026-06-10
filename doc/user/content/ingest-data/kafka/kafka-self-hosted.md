@@ -6,6 +6,7 @@ aliases:
   - /integrations/amazon-kafka/
   - /connect-sources/amazon-kafka/
   - /ingest-data/kafka-self-hosted/
+  - /ingest-data/kafka/upstash-kafka/
 menu:
   main:
     parent: "kafka"
@@ -26,7 +27,7 @@ self-hosted Kafka cluster.
 
 Before you begin, you must have:
 
-- A Kafka cluster running.
+- A Kafka cluster running Kafka 3.2 or later.
 - A client machine that can interact with your cluster.
 
 ## Configure network security
@@ -46,6 +47,9 @@ connect:
 
 Select the option that works best for you.
 
+{{< tabs >}}
+
+{{< tab "Cloud" >}}
 {{< tabs tabID="1" >}}
 
 {{< tab "Privatelink">}}
@@ -67,23 +71,21 @@ endpoint service (step 5).
 
 {{% network-security/ssh-tunnel %}}
 
-## Create a source connection
+1. In Materialize, create a source connection that uses the SSH tunnel
+connection you configured in the previous section:
 
-In Materialize, create a source connection that uses the SSH tunnel connection
-you configured in the previous section:
-
-```mzsql
-CREATE CONNECTION kafka_connection TO KAFKA (
-  BROKER 'broker1:9092',
-  SSH TUNNEL ssh_connection
-);
+  ```mzsql
+  CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKER 'broker1:9092',
+    SSH TUNNEL ssh_connection
+  );
 ```
 
 {{< /tab >}}
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+1. In the [SQL Shell](/console/), or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -110,6 +112,63 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 {{< /tab >}}
 
+{{< /tabs >}}
+{{< /tab >}}
+{{< tab "Self-Managed" >}}
+
+There are various ways to configure your Kafka network to allow Materialize to
+connect:
+
+- **Use an SSH tunnel**: If your Kafka cluster is running in a private network,
+    you can use an SSH tunnel to connect Materialize to the cluster.
+
+- **Allow Materialize IPs**: If your Kafka cluster is publicly accessible, you
+    can configure your firewall to allow connections from a set of static
+    Materialize IP addresses.
+
+Select the option that works best for you.
+
+{{< tabs >}}
+
+{{< tab "SSH Tunnel">}}
+
+{{% network-security/ssh-tunnel-sm %}}
+
+
+1. In Materialize, create a source connection that uses the SSH tunnel
+connection you configured in the previous section:
+
+```mzsql
+CREATE CONNECTION kafka_connection TO KAFKA (
+  BROKER 'broker1:9092',
+  SSH TUNNEL ssh_connection
+);
+```
+
+{{< /tab >}}
+
+{{< tab "Allow Materialize IPs">}}
+
+1. Update your Kafka cluster firewall rules to allow traffic from Materialize.
+
+1. Create a [Kafka connection](/sql/create-connection/#kafka) that references
+   your Kafka cluster:
+
+    ```mzsql
+    CREATE SECRET kafka_password AS '<your-password>';
+
+    CREATE CONNECTION kafka_connection TO KAFKA (
+        BROKER '<broker-url>',
+        SASL MECHANISMS = 'SCRAM-SHA-512',
+        SASL USERNAME = '<your-username>',
+        SASL PASSWORD = SECRET kafka_password
+    );
+    ```
+
+{{< /tab >}}
+
+{{< /tabs >}}
+{{< /tab >}}
 {{< /tabs >}}
 
 ## Creating a source

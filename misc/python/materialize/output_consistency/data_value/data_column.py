@@ -84,20 +84,6 @@ class DataColumn(LeafExpression):
     def collect_vertical_table_indices(self) -> set[int]:
         return set()
 
-    def get_filtered_values(self, row_selection: DataRowSelection) -> list[DataValue]:
-        assert self.data_source is not None
-
-        if row_selection.includes_all_of_source(self.data_source):
-            return self.values
-
-        selected_rows = []
-
-        for row_index, row_value in enumerate(self.values):
-            if row_selection.is_included_in_source(self.data_source, row_index):
-                selected_rows.append(row_value)
-
-        return selected_rows
-
     def get_values_at_rows(
         self, row_selection: DataRowSelection, table_index: int | None
     ) -> list[DataValue]:

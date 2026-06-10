@@ -8,12 +8,13 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 #
 # Test that tables in the mysql schema are not replicated
 #
+
+> DROP SOURCE IF EXISTS mz_source;
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
@@ -33,8 +34,6 @@ INSERT INTO t_in_mysql VALUES (1), (2);
 CREATE DATABASE public;
 USE public;
 CREATE TABLE time_zone (f1 INT);
-
-> DROP SOURCE IF EXISTS mz_source;
 
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 

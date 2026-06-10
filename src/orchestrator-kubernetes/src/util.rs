@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use anyhow::bail;
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
@@ -23,15 +25,22 @@ pub async fn create_client(context: String) -> Result<(Client, String), anyhow::
         context: Some(context),
         ..Default::default()
     };
-    let kubeconfig = match Config::from_kubeconfig(&kubeconfig_options).await {
+    let mut kubeconfig = match Config::from_kubeconfig(&kubeconfig_options).await {
         Ok(config) => config,
         Err(kubeconfig_err) => match Config::incluster_env() {
             Ok(config) => config,
             Err(in_cluster_err) => {
-                bail!("failed to infer config: in-cluster: ({in_cluster_err}), kubeconfig: ({kubeconfig_err})");
+                bail!(
+                    "failed to infer config: in-cluster: ({in_cluster_err}), kubeconfig: ({kubeconfig_err})"
+                );
             }
         },
     };
+
+    kubeconfig.connect_timeout = Some(Duration::from_secs(10));
+    kubeconfig.read_timeout = Some(Duration::from_secs(60));
+    kubeconfig.write_timeout = Some(Duration::from_secs(60));
+
     let namespace = kubeconfig.default_namespace.clone();
     let client = Client::try_from(kubeconfig)?;
     Ok((client, namespace))

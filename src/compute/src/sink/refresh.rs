@@ -8,14 +8,13 @@
 // by the Apache License, Version 2.0.
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::{AsCollection, Collection, Data};
+use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_ore::soft_panic_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Diff, Timestamp};
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::Scope;
-use timely::progress::Antichain;
 
 /// This is for REFRESH options on materialized views. It adds an operator that rounds up the
 /// timestamps of data and frontiers to the time of the next refresh. See
@@ -23,27 +22,27 @@ use timely::progress::Antichain;
 ///
 /// Note that this currently only works with 1-dim timestamps. (This is not an issue for WMR,
 /// because iteration numbers should disappear by the time the data gets to the Persist sink.)
-pub(crate) fn apply_refresh<G, D>(
-    coll: Collection<G, D, Diff>,
+pub(crate) fn apply_refresh<'scope, D>(
+    coll: VecCollection<'scope, Timestamp, D, Diff>,
     refresh_schedule: RefreshSchedule,
-) -> Collection<G, D, Diff>
+) -> VecCollection<'scope, Timestamp, D, Diff>
 where
-    G: Scope<Timestamp = Timestamp>,
     D: Data,
 {
     // We need to disconnect the reachability graph and manage capabilities manually, because we'd
     // like to round up frontiers as well as data: as soon as our input frontier passes a refresh
     // time, we'll round it up to the next refresh time.
     let mut builder = OperatorBuilder::new("apply_refresh".to_string(), coll.scope());
-    let (mut output_buf, output_stream) = builder.new_output::<ConsolidatingContainerBuilder<_>>();
-    let mut input = builder.new_input_connection(&coll.inner, Pipeline, vec![Antichain::new()]);
+    let (output_buf, output_stream) = builder.new_output();
+    let mut output_buf = OutputBuilder::<_, ConsolidatingContainerBuilder<_>>::from(output_buf);
+
+    let mut input = builder.new_input_connection(coll.inner, Pipeline, []);
     builder.build(move |capabilities| {
         // This capability directly controls this operator's output frontier (because we have
         // disconnected the input above). We wrap it in an Option so we can drop it to advance to
         // the empty output frontier when the last refresh is done. (We must be careful that we only
         // ever emit output updates at times that are at or beyond this capability.)
         let mut capability = capabilities.into_iter().next(); // (We have 1 one input.)
-        let mut buffer = Vec::new();
         move |frontiers| {
             let mut output_handle_core = output_buf.activate();
             input.for_each(|input_cap, data| {
@@ -63,10 +62,9 @@ where
                 };
                 let mut output_buf = output_handle_core.session_with_builder(&capability);
 
-                data.swap(&mut buffer);
                 let mut cached_ts: Option<Timestamp> = None;
                 let mut cached_rounded_up_data_ts = None;
-                for (d, ts, r) in buffer.drain(..) {
+                for (d, ts, r) in data.drain(..) {
                     let rounded_up_data_ts = {
                         // We cache the rounded up timestamp for the last seen timestamp,
                         // because the rounding up has a non-negligible cost. Caching for

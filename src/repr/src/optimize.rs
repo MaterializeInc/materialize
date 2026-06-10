@@ -11,13 +11,15 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 /// A macro for feature flags managed by the optimizer.
 macro_rules! optimizer_feature_flags {
     ({ $($feature:ident: $type:ty,)* }) => {
-        #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
+        #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
         pub struct OptimizerFeatures {
             $(pub $feature: $type),*
         }
@@ -92,10 +94,9 @@ macro_rules! optimizer_feature_flags {
 }
 
 optimizer_feature_flags!({
-    // Enable consolidation of unions that happen immediately after negate.
-    //
-    // The refinement happens in the LIR ⇒ LIR phase.
-    enable_consolidate_after_union_negate: bool,
+    // Use `EquivalenceClassesWithholdingErrors` instead of raw
+    // `EquivalenceClasses` during eq prop for joins.
+    enable_eq_classes_withholding_errors: bool,
     // Bound from `SystemVars::enable_eager_delta_joins`.
     enable_eager_delta_joins: bool,
     // Enable Lattice-based fixpoint iteration on LetRec nodes in the
@@ -107,8 +108,6 @@ optimizer_feature_flags!({
     enable_reduce_mfp_fusion: bool,
     // Enable joint HIR ⇒ MIR lowering of stacks of left joins.
     enable_variadic_left_join_lowering: bool,
-    // Enable the extra null filter implemented in materialize#28018.
-    enable_outer_join_null_filter: bool,
     // Enable cardinality estimation
     enable_cardinality_estimates: bool,
     // An exclusive upper bound on the number of results we may return from a
@@ -118,12 +117,26 @@ optimizer_feature_flags!({
     // Reoptimize imported views when building and optimizing a
     // `DataflowDescription` in the global MIR optimization phase.
     reoptimize_imported_views: bool,
-    // Enables the value window function fusion optimization.
-    enable_value_window_function_fusion: bool,
     // See the feature flag of the same name.
-    enable_reduce_unnest_list_fusion: bool,
+    enable_join_prioritize_arranged: bool,
     // See the feature flag of the same name.
-    enable_window_aggregation_fusion: bool,
+    enable_projection_pushdown_after_relation_cse: bool,
+    // See the feature flag of the same name.
+    enable_less_reduce_in_eqprop: bool,
+    // See the feature flag of the same name.
+    enable_dequadratic_eqprop_map: bool,
+    // See the feature flag of the same name.
+    enable_fast_path_plan_insights: bool,
+    // See the feature flag of the same name.
+    enable_cast_elimination: bool,
+    // See the feature flag of the same name.
+    enable_case_literal_transform: bool,
+    // See the feature flag of the same name.
+    enable_simplify_quantified_comparisons: bool,
+    // See the feature flag of the same name.
+    enable_coalesce_case_transform: bool,
+    // See the feature flag of the same name.
+    enable_will_distinct_propagation: bool,
 });
 
 /// A trait used to implement layered config construction.

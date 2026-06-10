@@ -1,0 +1,26 @@
+
+1. In the [SQL Shell](/console/), or your preferred SQL
+   client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
+   command to securely store the password for the SQL Server role you'll use to
+   replicate data into Materialize:
+
+    ```mzsql
+    CREATE SECRET sqlserver_pass AS '<PASSWORD>';
+    ```
+
+1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
+   connection object with access and authentication details for Materialize to
+   use:
+
+    ```mzsql
+    CREATE CONNECTION sqlserver_connection TO SQL SERVER (
+        HOST <host>,
+        PORT 1433,
+        USER 'materialize',
+        PASSWORD SECRET sqlserver_pass,
+        DATABASE <database>,
+        SSL MODE 'required'
+    );
+    ```
+
+    - Replace `<host>` with your SQL Server endpoint, and `<database>` with the database you'd like to connect to.

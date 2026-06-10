@@ -32,7 +32,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use digest::Digest;
+use aws_lc_rs::digest;
 use itertools::Itertools;
 use mz_ore::assert_none;
 use regex::Regex;
@@ -112,7 +112,7 @@ impl std::error::Error for ParseSchemaError {}
 
 /// Represents an Avro schema fingerprint
 /// More information about Avro schema fingerprints can be found in the
-/// [Avro Schema Fingerprint documentation](https://avro.apache.org/docs/current/spec.html#schema_fingerprints)
+/// [Avro Schema Resolution documentation](https://avro.apache.org/docs/++version++/specification/#schema-resolution)
 #[derive(Debug)]
 pub struct SchemaFingerprint {
     pub bytes: Vec<u8>,
@@ -153,7 +153,7 @@ impl SchemaPieceOrNamed {
     }
 
     #[inline(always)]
-    pub fn as_ref(&self) -> SchemaPieceRefOrNamed {
+    pub fn as_ref(&self) -> SchemaPieceRefOrNamed<'_> {
         match self {
             SchemaPieceOrNamed::Piece(piece) => SchemaPieceRefOrNamed::Piece(piece),
             SchemaPieceOrNamed::Named(index) => SchemaPieceRefOrNamed::Named(*index),
@@ -186,11 +186,11 @@ pub enum SchemaPiece {
     Date,
     /// An `Int64` Avro schema with a semantic type being milliseconds since the unix epoch.
     ///
-    /// <https://avro.apache.org/docs/current/spec.html#Timestamp+%28millisecond+precision%29>
+    /// <https://avro.apache.org/docs/++version++/specification/#time_ms>
     TimestampMilli,
     /// An `Int64` Avro schema with a semantic type being microseconds since the unix epoch.
     ///
-    /// <https://avro.apache.org/docs/current/spec.html#Timestamp+%28microsecond+precision%29>
+    /// <https://avro.apache.org/docs/++version++/specification/#time-microsecond-precision>
     TimestampMicro,
     /// A `bytes` or `fixed` Avro schema with a logical type of `decimal` and
     /// the specified precision and scale.
@@ -350,7 +350,7 @@ impl SchemaPiece {
 
 /// Represents any valid Avro schema
 /// More information about Avro schemas can be found in the
-/// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)
+/// [Avro Specification](https://avro.apache.org/docs/++version++/specification/#schema-declaration)
 #[derive(Clone, PartialEq)]
 pub struct Schema {
     pub(crate) named: Vec<NamedSchemaPiece>,
@@ -382,7 +382,7 @@ impl std::fmt::Debug for Schema {
 }
 
 impl Schema {
-    pub fn top_node(&self) -> SchemaNode {
+    pub fn top_node(&self) -> SchemaNode<'_> {
         let (inner, name) = self.top.get_piece_and_name(self);
         SchemaNode {
             root: self,
@@ -390,7 +390,7 @@ impl Schema {
             name,
         }
     }
-    pub fn top_node_or_named(&self) -> SchemaNodeOrNamed {
+    pub fn top_node_or_named(&self) -> SchemaNodeOrNamed<'_> {
         SchemaNodeOrNamed {
             root: self,
             inner: self.top.as_ref(),
@@ -527,7 +527,7 @@ impl<'a> From<&'a Schema> for SchemaKind {
 /// `aliases` can also be defined, to facilitate schema evolution.
 ///
 /// More information about schema names can be found in the
-/// [Avro specification](https://avro.apache.org/docs/current/spec.html#names)
+/// [Avro specification](https://avro.apache.org/docs/++version++/specification/#names)
 #[derive(Clone, Debug, PartialEq)]
 pub struct Name {
     pub name: String,
@@ -598,7 +598,7 @@ pub type Documentation = Option<String>;
 impl Name {
     /// Reports whether the given string is a valid Avro name.
     ///
-    /// See: <https://avro.apache.org/docs/1.11.1/specification/#names>
+    /// See: <https://avro.apache.org/docs/++version++/specification/#names>
     pub fn is_valid(name: &str) -> bool {
         static MATCHER: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"(^[A-Za-z_][A-Za-z0-9_]*)$").unwrap());
@@ -708,7 +708,7 @@ impl Name {
     /// Return the `fullname` of this `Name`
     ///
     /// More information about fullnames can be found in the
-    /// [Avro specification](https://avro.apache.org/docs/current/spec.html#names)
+    /// [Avro specification](https://avro.apache.org/docs/++version++/specification/#names)
     pub fn fullname(&self, default_namespace: &str) -> FullName {
         FullName::from_parts(&self.name, self.namespace.as_deref(), default_namespace)
     }
@@ -813,6 +813,11 @@ impl UnionSchema {
         &self.schemas
     }
 
+    /// Returns a mutable slice to all variants of this schema.
+    pub fn variants_mut(&mut self) -> &mut [SchemaPieceOrNamed] {
+        &mut self.schemas
+    }
+
     /// Returns true if the first variant of this `UnionSchema` is `Null`.
     pub fn is_nullable(&self) -> bool {
         !self.schemas.is_empty() && self.schemas[0] == SchemaPieceOrNamed::Piece(SchemaPiece::Null)
@@ -904,7 +909,7 @@ impl SchemaParser {
                     "Sub-schema with name {:?} encountered multiple times",
                     oe.key()
                 ))
-                .into())
+                .into());
             }
         };
         self.named.push(None);
@@ -929,7 +934,7 @@ impl SchemaParser {
                     "{} may not be used as a custom type name",
                     name.name
                 ))
-                .into())
+                .into());
             }
             _ => {}
         };
@@ -1212,7 +1217,7 @@ impl SchemaParser {
                         precision,
                         scale,
                         fixed_size: None,
-                    })
+                    });
                 }
                 Err(e) => warn!(
                     "parsing decimal as regular bytes due to parse error: {:?}, {:?}",
@@ -1263,7 +1268,7 @@ impl SchemaParser {
     /// avro ones are documented at [Avro][2].
     ///
     /// [1]: https://debezium.io/docs/connectors/mysql/#temporal-values
-    /// [2]: https://avro.apache.org/docs/1.9.0/spec.html
+    /// [2]: https://avro.apache.org/docs/++version++/specification/
     fn parse_long(complex: &Map<String, Value>) -> Result<SchemaPiece, AvroError> {
         const AVRO_MILLI_TS: &str = "timestamp-millis";
         const AVRO_MICRO_TS: &str = "timestamp-micros";
@@ -1339,9 +1344,12 @@ impl SchemaParser {
         if let Some("decimal") = logical_type {
             match Self::parse_decimal(complex) {
                 Ok((precision, scale)) => {
-                    let max = ((2_usize.pow((8 * size - 1) as u32) - 1) as f64).log10() as usize;
+                    let max = ((8 * size - 1) as f64 * 2_f64.log10()).floor() as usize;
                     if precision > max {
-                        warn!("Decimal precision {} requires more than {} bytes of space, parsing as fixed", precision, size);
+                        warn!(
+                            "Decimal precision {} requires more than {} bytes of space, parsing as fixed",
+                            precision, size
+                        );
                     } else {
                         return Ok(SchemaPiece::Decimal {
                             precision,
@@ -1367,33 +1375,130 @@ impl Schema {
     /// Create a `Schema` from a `serde_json::Value` representing a JSON Avro
     /// schema.
     pub fn parse(value: &Value) -> Result<Self, AvroError> {
+        Self::parse_with_references(value, &[])
+    }
+
+    /// Parse an JSON Avro schema with referenced named types.
+    ///
+    /// This is used when parsing a schema that references types defined in other
+    /// schemas (Confluent Schema Registry schema references). Referenced schemas
+    /// should be provided in dependency order (dependencies first).
+    ///
+    /// # Arguments
+    ///
+    /// * `primary` - The primary schema JSON value to parse
+    /// * `reference_schemas` - Schemas whose named types should be available during parsing
+    pub fn parse_with_references(
+        primary: &Value,
+        reference_schemas: &[Schema],
+    ) -> Result<Self, AvroError> {
+        // Collect and remap named types from all referenced schemas
+        let (named, indices) = Self::collect_named_types(reference_schemas);
+
+        // Create parser with pre-populated named types
         let p = SchemaParser {
-            named: vec![],
-            indices: Default::default(),
+            named: named.into_iter().map(Some).collect(),
+            indices,
         };
-        p.parse(value)
+        p.parse(primary)
+    }
+
+    /// Collect all named types from a list of schemas, remapping indices as needed.
+    ///
+    /// When combining named types from multiple schemas, each schema's internal
+    /// indices need to be remapped to account for duplicates and new positions.
+    fn collect_named_types(
+        schemas: &[Schema],
+    ) -> (Vec<NamedSchemaPiece>, BTreeMap<FullName, usize>) {
+        let mut combined_named: Vec<NamedSchemaPiece> = Vec::new();
+        let mut combined_indices: BTreeMap<FullName, usize> = BTreeMap::new();
+
+        for schema in schemas {
+            // First pass: Build the index_map from this schema's indices to combined indices.
+            // For types that already exist: map to existing combined index
+            // For new types: map to their future position in combined_named
+            let mut index_map: Vec<usize> = Vec::with_capacity(schema.named.len());
+            let mut new_type_offset = combined_named.len();
+
+            for named_piece in &schema.named {
+                if let Some(&existing_idx) = combined_indices.get(&named_piece.name) {
+                    // Type already exists, use existing index
+                    index_map.push(existing_idx);
+                } else {
+                    // New type, assign next available index
+                    index_map.push(new_type_offset);
+                    new_type_offset += 1;
+                }
+            }
+
+            // Second pass: Add new types with proper remapping
+            for named_piece in &schema.named {
+                if combined_indices.contains_key(&named_piece.name) {
+                    continue;
+                }
+
+                let mut remapped = named_piece.clone();
+                Self::remap_indices_in_piece_with_map(&mut remapped.piece, &index_map);
+
+                let new_idx = combined_named.len();
+                combined_indices.insert(remapped.name.clone(), new_idx);
+                combined_named.push(remapped);
+            }
+        }
+
+        (combined_named, combined_indices)
+    }
+
+    /// Recursively remap Named indices in a SchemaPiece using an index map.
+    fn remap_indices_in_piece_with_map(piece: &mut SchemaPiece, index_map: &[usize]) {
+        match piece {
+            SchemaPiece::Array(inner) => Self::remap_indices_with_map(inner, index_map),
+            SchemaPiece::Map(inner) => Self::remap_indices_with_map(inner, index_map),
+            SchemaPiece::Union(union) => {
+                for variant in union.variants_mut() {
+                    Self::remap_indices_with_map(variant, index_map);
+                }
+            }
+            SchemaPiece::Record { fields, .. } => {
+                for field in fields {
+                    Self::remap_indices_with_map(&mut field.schema, index_map);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Remap a single SchemaPieceOrNamed using an index map.
+    fn remap_indices_with_map(item: &mut SchemaPieceOrNamed, index_map: &[usize]) {
+        match item {
+            SchemaPieceOrNamed::Named(idx) => {
+                if let Some(&new_idx) = index_map.get(*idx) {
+                    *idx = new_idx;
+                }
+            }
+            SchemaPieceOrNamed::Piece(piece) => {
+                Self::remap_indices_in_piece_with_map(piece, index_map)
+            }
+        }
     }
 
     /// Converts `self` into its [Parsing Canonical Form].
     ///
     /// [Parsing Canonical Form]:
-    /// https://avro.apache.org/docs/1.8.2/spec.html#Parsing+Canonical+Form+for+Schemas
+    /// https://avro.apache.org/docs/++version++/specification#parsing-canonical-form-for-schemas
     pub fn canonical_form(&self) -> String {
         let json = serde_json::to_value(self).unwrap();
         parsing_canonical_form(&json)
     }
 
-    /// Generate [fingerprint] of Schema's [Parsing Canonical Form].
+    /// Generate fingerprint of Schema's [Parsing Canonical Form].
     ///
     /// [Parsing Canonical Form]:
-    /// https://avro.apache.org/docs/1.8.2/spec.html#Parsing+Canonical+Form+for+Schemas
-    /// [fingerprint]:
-    /// https://avro.apache.org/docs/current/spec.html#schema_fingerprints
-    pub fn fingerprint<D: Digest>(&self) -> SchemaFingerprint {
-        let mut d = D::new();
-        d.update(self.canonical_form());
+    /// https://avro.apache.org/docs/++version++/specification#parsing-canonical-form-for-schemas
+    pub fn fingerprint(&self, algorithm: &'static digest::Algorithm) -> SchemaFingerprint {
+        let hash = digest::digest(algorithm, self.canonical_form().as_bytes());
         SchemaFingerprint {
-            bytes: d.finalize().to_vec(),
+            bytes: hash.as_ref().to_vec(),
         }
     }
 
@@ -1763,7 +1868,7 @@ impl<'a> SchemaNode<'a> {
                         return Err(ParseSchemaError(format!(
                             "Unexpected number in default: {}",
                             n
-                        )))
+                        )));
                     }
                 }
             }
@@ -1854,7 +1959,7 @@ impl<'a> SchemaNode<'a> {
                 return Err(ParseSchemaError(format!(
                     "Json default value {} does not match schema",
                     json
-                )))
+                )));
             }
         };
         Ok(val)
@@ -2010,7 +2115,7 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                         if self.enclosing_ns != &name.namespace {
                             map.serialize_entry("namespace", &name.namespace)?;
                         }
-                        if let Some(ref docstr) = doc {
+                        if let Some(docstr) = doc {
                             map.serialize_entry("doc", docstr)?;
                         }
                         // TODO (brennan) - serialize aliases
@@ -2150,7 +2255,7 @@ impl<'a> Serialize for RecordFieldSerContext<'a> {
 }
 
 /// Parses a **valid** avro schema into the Parsing Canonical Form.
-/// <https://avro.apache.org/docs/1.8.2/spec.html#Parsing+Canonical+Form+for+Schemas>
+/// <https://avro.apache.org/docs/++version++/specification#parsing-canonical-form-for-schemas>
 fn parsing_canonical_form(schema: &serde_json::Value) -> String {
     pcf(schema, "", false)
 }
@@ -2845,23 +2950,29 @@ mod tests {
 
         // The name portion of a fullname, record field names, and enum symbols must:
         // start with [A-Za-z_] and subsequently contain only [A-Za-z0-9_]
-        assert!(Schema::from_str(
-            r#"{"type": "record", "name": "99 problems but a name aint one",
+        assert!(
+            Schema::from_str(
+                r#"{"type": "record", "name": "99 problems but a name aint one",
             "fields": [{"name": "name", "type": "string"}]}"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
 
-        assert!(Schema::from_str(
-            r#"{"type": "record", "name": "!!!",
+        assert!(
+            Schema::from_str(
+                r#"{"type": "record", "name": "!!!",
             "fields": [{"name": "name", "type": "string"}]}"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
 
-        assert!(Schema::from_str(
-            r#"{"type": "record", "name": "_valid_until_©",
+        assert!(
+            Schema::from_str(
+                r#"{"type": "record", "name": "_valid_until_©",
             "fields": [{"name": "name", "type": "string"}]}"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
 
         // Use previously defined names and namespaces as type.
         let schema = Schema::from_str(r#"{"type": "record", "name": "org.apache.avro.tests.Hello", "fields": [
@@ -2964,8 +3075,6 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_schema_fingerprint() {
-        use sha2::Sha256;
-
         let raw_schema = r#"
         {
             "type": "record",
@@ -2979,9 +3088,13 @@ mod tests {
         let expected_canonical = r#"{"name":"test","type":"record","fields":[{"name":"a","type":"long"},{"name":"b","type":"string"}]}"#;
         let schema = Schema::from_str(raw_schema).unwrap();
         assert_eq!(&schema.canonical_form(), expected_canonical);
-        let expected_fingerprint = format!("{:02x}", Sha256::digest(expected_canonical));
+        let expected_fingerprint = digest::digest(&digest::SHA256, expected_canonical.as_bytes())
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         assert_eq!(
-            format!("{}", schema.fingerprint::<Sha256>()),
+            format!("{}", schema.fingerprint(&digest::SHA256)),
             expected_fingerprint
         );
 
@@ -3005,9 +3118,13 @@ mod tests {
         let expected_canonical = r#"{"name":"ns.r1","type":"record","fields":[{"name":"f1","type":{"name":"ns.r2","type":"fixed","size":1}}]}"#;
         let schema = Schema::from_str(raw_schema).unwrap();
         assert_eq!(&schema.canonical_form(), expected_canonical);
-        let expected_fingerprint = format!("{:02x}", Sha256::digest(expected_canonical));
+        let expected_fingerprint = digest::digest(&digest::SHA256, expected_canonical.as_bytes())
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         assert_eq!(
-            format!("{}", schema.fingerprint::<Sha256>()),
+            format!("{}", schema.fingerprint(&digest::SHA256)),
             expected_fingerprint
         );
     }
@@ -3025,6 +3142,256 @@ mod tests {
         ] {
             let actual = Name::make_valid(input);
             assert_eq!(expected, actual, "Name::make_valid({input})")
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_with_simple_reference() {
+        // Schema A defines a User record
+        let ref_schema_json = r#"{
+            "type": "record",
+            "name": "User",
+            "namespace": "com.example",
+            "fields": [{"name": "id", "type": "int"}]
+        }"#;
+
+        // Schema B references User
+        let primary_json = r#"{
+            "type": "record",
+            "name": "Event",
+            "namespace": "com.example",
+            "fields": [{"name": "user", "type": "com.example.User"}]
+        }"#;
+
+        let ref_schema = Schema::from_str(ref_schema_json).unwrap();
+        let primary_value: Value = serde_json::from_str(primary_json).unwrap();
+
+        let schema = Schema::parse_with_references(&primary_value, &[ref_schema]).unwrap();
+
+        // Verify both Event and User types are in the schema
+        let user_name = FullName {
+            name: "User".to_string(),
+            namespace: "com.example".to_string(),
+        };
+        let event_name = FullName {
+            name: "Event".to_string(),
+            namespace: "com.example".to_string(),
+        };
+
+        assert!(
+            schema.indices.contains_key(&user_name),
+            "User type should be in schema indices"
+        );
+        assert!(
+            schema.indices.contains_key(&event_name),
+            "Event type should be in schema indices"
+        );
+
+        // Verify Event's user field references User
+        if let SchemaPieceOrNamed::Named(event_idx) = &schema.top {
+            let event_piece = &schema.named[*event_idx].piece;
+            if let SchemaPiece::Record { fields, .. } = event_piece {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].name, "user");
+                // The user field should reference the User type (Named)
+                assert!(matches!(fields[0].schema, SchemaPieceOrNamed::Named(_)));
+            } else {
+                panic!("Expected Event to be a record");
+            }
+        } else {
+            panic!("Expected top to be Named");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_with_nested_references() {
+        // Schema A defines Address
+        let schema_a = r#"{
+            "type": "record",
+            "name": "Address",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "street", "type": "string"},
+                {"name": "city", "type": "string"}
+            ]
+        }"#;
+
+        // Schema B defines User with Address field (references A)
+        let schema_b = r#"{
+            "type": "record",
+            "name": "User",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "id", "type": "int"},
+                {"name": "address", "type": "com.example.Address"}
+            ]
+        }"#;
+
+        // Schema C defines Event with User field (references B, transitively A)
+        let schema_c = r#"{
+            "type": "record",
+            "name": "Event",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "user", "type": "com.example.User"},
+                {"name": "timestamp", "type": "long"}
+            ]
+        }"#;
+
+        // Parse A first
+        let ref_schema_a = Schema::from_str(schema_a).unwrap();
+
+        // Parse B with reference to A
+        let schema_b_value: Value = serde_json::from_str(schema_b).unwrap();
+        let ref_schema_b =
+            Schema::parse_with_references(&schema_b_value, std::slice::from_ref(&ref_schema_a))
+                .unwrap();
+
+        // Parse C with references to A and B (in dependency order)
+        let schema_c_value: Value = serde_json::from_str(schema_c).unwrap();
+        let final_schema =
+            Schema::parse_with_references(&schema_c_value, &[ref_schema_a, ref_schema_b]).unwrap();
+
+        // Verify all three types are in the schema
+        for name in ["Address", "User", "Event"] {
+            let full_name = FullName {
+                name: name.to_string(),
+                namespace: "com.example".to_string(),
+            };
+            assert!(
+                final_schema.indices.contains_key(&full_name),
+                "{} type should be in schema indices",
+                name
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_with_multiple_types_in_reference() {
+        // Schema A defines both Address and PhoneNumber
+        let ref_schema_json = r#"{
+            "type": "record",
+            "name": "ContactInfo",
+            "namespace": "com.example",
+            "fields": [
+                {
+                    "name": "address",
+                    "type": {
+                        "type": "record",
+                        "name": "Address",
+                        "fields": [{"name": "street", "type": "string"}]
+                    }
+                },
+                {
+                    "name": "phone",
+                    "type": {
+                        "type": "record",
+                        "name": "PhoneNumber",
+                        "fields": [{"name": "number", "type": "string"}]
+                    }
+                }
+            ]
+        }"#;
+
+        // Schema B references both Address and PhoneNumber
+        let primary_json = r#"{
+            "type": "record",
+            "name": "User",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "id", "type": "int"},
+                {"name": "home", "type": "com.example.Address"},
+                {"name": "mobile", "type": "com.example.PhoneNumber"}
+            ]
+        }"#;
+
+        let ref_schema = Schema::from_str(ref_schema_json).unwrap();
+        let primary_value: Value = serde_json::from_str(primary_json).unwrap();
+
+        let schema = Schema::parse_with_references(&primary_value, &[ref_schema]).unwrap();
+
+        // Verify all types are in the schema
+        for name in ["Address", "PhoneNumber", "ContactInfo", "User"] {
+            let full_name = FullName {
+                name: name.to_string(),
+                namespace: "com.example".to_string(),
+            };
+            assert!(
+                schema.indices.contains_key(&full_name),
+                "{} type should be in schema indices",
+                name
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_with_no_references() {
+        // When no references are provided, it should behave like regular parse
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Simple",
+            "fields": [{"name": "id", "type": "int"}]
+        }"#;
+
+        let value: Value = serde_json::from_str(schema_json).unwrap();
+
+        let schema_with_refs = Schema::parse_with_references(&value, &[]).unwrap();
+        let schema_normal = Schema::parse(&value).unwrap();
+
+        // Both should produce equivalent schemas
+        assert_eq!(schema_with_refs.named.len(), schema_normal.named.len());
+        assert_eq!(schema_with_refs.indices.len(), schema_normal.indices.len());
+    }
+
+    #[mz_ore::test]
+    fn test_parse_with_reference_in_array() {
+        // Schema A defines an Item record
+        let ref_schema_json = r#"{
+            "type": "record",
+            "name": "Item",
+            "namespace": "com.example",
+            "fields": [{"name": "name", "type": "string"}]
+        }"#;
+
+        // Schema B has an array of Items
+        let primary_json = r#"{
+            "type": "record",
+            "name": "Order",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "items", "type": {"type": "array", "items": "com.example.Item"}}
+            ]
+        }"#;
+
+        let ref_schema = Schema::from_str(ref_schema_json).unwrap();
+        let primary_value: Value = serde_json::from_str(primary_json).unwrap();
+
+        let schema = Schema::parse_with_references(&primary_value, &[ref_schema]).unwrap();
+
+        // Verify both types exist
+        let item_name = FullName {
+            name: "Item".to_string(),
+            namespace: "com.example".to_string(),
+        };
+        assert!(schema.indices.contains_key(&item_name));
+
+        // Verify the array items type is a Named reference
+        if let SchemaPieceOrNamed::Named(order_idx) = &schema.top {
+            let order_piece = &schema.named[*order_idx].piece;
+            if let SchemaPiece::Record { fields, .. } = order_piece {
+                if let SchemaPieceOrNamed::Piece(SchemaPiece::Array(inner)) = &fields[0].schema {
+                    assert!(
+                        matches!(inner.as_ref(), SchemaPieceOrNamed::Named(_)),
+                        "Array items should be a Named reference to Item"
+                    );
+                } else {
+                    panic!("Expected items field to be an array");
+                }
+            } else {
+                panic!("Expected Order to be a record");
+            }
+        } else {
+            panic!("Expected top to be Named");
         }
     }
 }

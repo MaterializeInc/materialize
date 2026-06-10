@@ -11,7 +11,7 @@ use std::env;
 use std::net::Ipv4Addr;
 use std::sync::LazyLock;
 
-use hyper::{service, Response, StatusCode};
+use hyper::{Response, StatusCode, service};
 use hyper_util::rt::TokioIo;
 use mz_ccsr::tls::Identity;
 use mz_ccsr::{
@@ -29,7 +29,6 @@ pub static SCHEMA_REGISTRY_URL: LazyLock<reqwest::Url> =
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5588
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
-#[ignore] // TODO: Reenable when database-issues#8701 is fixed
 async fn test_client() -> Result<(), anyhow::Error> {
     let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
@@ -437,6 +436,23 @@ async fn count_schemas(client: &Client, subject_prefix: &str) -> Result<usize, a
         .iter()
         .filter(|s| s.starts_with(subject_prefix))
         .count())
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+fn test_invalid_tls_config_returns_error() {
+    use mz_ccsr::tls::Certificate;
+
+    // Verify that invalid TLS material is caught at construction time, not at
+    // ClientConfig::build() time (where it previously caused a panic via .unwrap()).
+    let err = Identity::from_pkcs12_der(vec![0xDE, 0xAD], "".into());
+    assert!(err.is_err(), "garbage PKCS#12 should be rejected");
+
+    let err = Certificate::from_pem(b"not a certificate");
+    assert!(err.is_err(), "garbage PEM cert should be rejected");
+
+    let err = Certificate::from_der(&[0xDE, 0xAD]);
+    assert!(err.is_err(), "garbage DER cert should be rejected");
 }
 
 #[mz_ore::test]

@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::cell::RefCell;
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Write};
@@ -17,28 +17,28 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use chrono::Utc;
+use clap::ArgAction;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
-use mz_sql::session::vars::{
-    Var, VarInput, DISK_CLUSTER_REPLICAS_DEFAULT, ENABLE_LOGICAL_COMPACTION_WINDOW,
-};
+use mz_sql::session::vars::{ENABLE_LOGICAL_COMPACTION_WINDOW, Var, VarInput};
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 use mz_tracing::CloneableEnvFilter;
+#[allow(deprecated)] // fails with libraries still using old time lib
 use time::Instant;
 use walkdir::WalkDir;
 
 /// Runs sqllogictest scripts to verify database engine correctness.
 #[derive(clap::Parser)]
 struct Args {
-    /// Increase verbosity.
-    ///
-    /// If specified once, print summary for each source file.
-    /// If specified twice, also show descriptions of each error.
-    /// If specified thrice, also print each query before it is executed.
-    #[clap(short = 'v', long = "verbose", parse(from_occurrences))]
-    verbosity: usize,
+    /// By default, prints summary for each source file and shows descriptions of each error.
+    /// If specified, also print each query before it is executed.
+    #[clap(short = 'v', long = "verbose", action = ArgAction::SetTrue, conflicts_with = "quiet")]
+    verbose: bool,
+    /// Suppress summary output unless a file has failures.
+    #[clap(short = 'q', long = "quiet", action = ArgAction::SetTrue, conflicts_with = "verbose")]
+    quiet: bool,
     /// Don't exit with a failing code if not all queries are successful.
     #[clap(long)]
     no_fail: bool,
@@ -54,6 +54,9 @@ struct Args {
     /// PostgreSQL connection URL to use for `persist` consensus.
     #[clap(long)]
     postgres_url: String,
+    /// PostgreSQL prefix for this SLT run
+    #[clap(long, default_value = "sqllogictest")]
+    prefix: String,
     /// Path to sqllogictest script to run.
     #[clap(value_name = "PATH", required = true)]
     paths: Vec<String>,
@@ -71,11 +74,11 @@ struct Args {
     /// ported SQLite SLT files. Does not work generally, so don't use it for other tests.
     #[clap(long)]
     auto_transactions: bool,
-    /// Inject `ALTER SYSTEM SET enable_table_keys = true` before running the SLT file.
+    /// Inject `ALTER SYSTEM SET unsafe_enable_table_keys = true` before running the SLT file.
     #[clap(long)]
     enable_table_keys: bool,
     /// Divide the test files into shards and run only the test files in this shard.
-    #[clap(long, requires = "shard-count", value_name = "N")]
+    #[clap(long, requires = "shard_count", value_name = "N")]
     shard: Option<usize>,
     /// Total number of shards in use.
     #[clap(long, requires = "shard", value_name = "N")]
@@ -83,15 +86,18 @@ struct Args {
     /// Wrapper program to start child processes
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
-    /// Number of replicas, defaults to 2
-    #[clap(long, default_value = "2")]
+    /// Replica size
+    #[clap(long, default_value = "scale=1,workers=2")]
+    replica_size: String,
+    /// Replication factor
+    #[clap(long, default_value = "1")]
     replicas: usize,
     /// An list of NAME=VALUE pairs used to override static defaults
     /// for system parameters.
     #[clap(
         long,
         env = "SYSTEM_PARAMETER_DEFAULT",
-        multiple = true,
+        action = ArgAction::Append,
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
@@ -99,7 +105,7 @@ struct Args {
         long,
         env = "LOG_FILTER",
         value_name = "FILTER",
-        default_value = "warn"
+        default_value = "mz_adapter::catalog::open=error,mz_persist_client::internal::gc=error,mz_persist_client::rpc=error,warn"
     )]
     pub log_filter: CloneableEnvFilter,
 }
@@ -117,7 +123,7 @@ async fn main() -> ExitCode {
         startup_log_filter: args.log_filter.clone(),
         ..Default::default()
     };
-    let (tracing_handle, _tracing_guard) = tracing_args
+    let tracing_handle = tracing_args
         .configure_tracing(
             StaticTracingConfig {
                 service_name: "sqllogictest",
@@ -131,11 +137,7 @@ async fn main() -> ExitCode {
     // sqllogictest requires that Materialize have some system variables set to some specific value
     // to pass. If the caller hasn't set this variable, then we set it for them. If the caller has
     // set this variable, then we assert that it's set to the right value.
-    let required_system_defaults: Vec<_> = [
-        (&DISK_CLUSTER_REPLICAS_DEFAULT, "true"),
-        (ENABLE_LOGICAL_COMPACTION_WINDOW.flag, "true"),
-    ]
-    .into();
+    let required_system_defaults: Vec<_> = [(ENABLE_LOGICAL_COMPACTION_WINDOW.flag, "true")].into();
     let mut system_parameter_defaults: BTreeMap<_, _> = args
         .system_parameter_default
         .clone()
@@ -168,8 +170,10 @@ async fn main() -> ExitCode {
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
-        verbosity: args.verbosity,
+        verbose: args.verbose,
+        quiet: args.quiet,
         postgres_url: args.postgres_url.clone(),
+        prefix: args.prefix.clone(),
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
@@ -188,6 +192,7 @@ async fn main() -> ExitCode {
             }
         },
         replicas: args.replicas,
+        replica_size: args.replica_size.clone(),
     };
 
     if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
@@ -222,10 +227,11 @@ async fn main() -> ExitCode {
         for entry in WalkDir::new(path) {
             match entry {
                 Ok(entry) if entry.file_type().is_file() => {
+                    #[allow(deprecated)] // fails with libraries still using old time lib
                     let start_time = Instant::now();
                     match runner::run_file(&mut runner, entry.path()).await {
                         Ok(o) => {
-                            if o.any_failed() || config.verbosity >= 1 {
+                            if o.any_failed() || !config.quiet {
                                 writeln!(
                                     config.stdout,
                                     "{}",

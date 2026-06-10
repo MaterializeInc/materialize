@@ -10,7 +10,7 @@
 import os
 from pathlib import Path
 
-from materialize import ci_util, git, mzbuild, ui
+from materialize import ci_util, git, mzbuild, spawn
 from materialize.mz_version import MzVersion
 from materialize.rustc_flags import Sanitizer
 from materialize.version_list import get_all_mz_versions
@@ -18,8 +18,11 @@ from materialize.xcompile import Arch
 
 
 def main() -> None:
-    bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
-    bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+    ci_helm_chart_version = os.getenv("CI_HELM_CHART_VERSION")
+    ci_mz_version = os.getenv("CI_MZ_VERSION")
+
+    if ci_helm_chart_version and ci_mz_version:
+        spawn.runv(["git", "checkout", ci_mz_version])
 
     repos = [
         mzbuild.Repository(
@@ -27,16 +30,14 @@ def main() -> None:
             Arch.X86_64,
             coverage=False,
             sanitizer=Sanitizer.none,
-            bazel=bazel,
-            bazel_remote_cache=bazel_remote_cache,
+            image_registry="materialize",
         ),
         mzbuild.Repository(
             Path("."),
             Arch.AARCH64,
             coverage=False,
             sanitizer=Sanitizer.none,
-            bazel=bazel,
-            bazel_remote_cache=bazel_remote_cache,
+            image_registry="materialize",
         ),
     ]
     buildkite_tag = os.environ["BUILDKITE_TAG"]

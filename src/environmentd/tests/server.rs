@@ -9,6 +9,8 @@
 
 //! Integration tests for Materialize server.
 
+#![recursion_limit = "256"]
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::io::Write as _;
@@ -22,27 +24,32 @@ use std::{iter, thread};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use futures::FutureExt;
 use http::Request;
 use itertools::Itertools;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_environmentd::test_util::{self, make_pg_tls, Ca, PostgresErrorExt, KAFKA_ADDRS};
+use mz_auth::password::Password;
+use mz_environmentd::test_util::{self, Ca, KAFKA_ADDRS, PostgresErrorExt, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
-use mz_frontegg_mock::{models::ApiToken, models::UserConfig, FronteggMockServer};
+use mz_frontegg_mock::{FronteggMockServer, models::ApiToken, models::UserConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{to_datetime, NowFn, SYSTEM_TIME};
+use mz_ore::now::{NowFn, SYSTEM_TIME, to_datetime};
 use mz_ore::retry::Retry;
 use mz_ore::{assert_contains, task::RuntimeExt};
 use mz_ore::{assert_err, assert_none, assert_ok, task};
 use mz_pgrepr::UInt8;
+use mz_repr::UNKNOWN_COLUMN_NAME;
 use mz_sql::session::user::{ANALYTICS_USER, HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql_parser::ast::display::AstDisplay;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
@@ -50,11 +57,12 @@ use openssl::x509::X509;
 use postgres::config::SslMode;
 use postgres_array::Array;
 use rand::RngCore;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::ClientConfig;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;
+use regex::Regex;
 use reqwest::blocking::Client;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE};
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -62,7 +70,7 @@ use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
-use tungstenite::{Error, Message};
+use tungstenite::{Error, Message, Utf8Bytes};
 use uuid::Uuid;
 
 // Allow the use of banned rdkafka methods, because we are just in tests.
@@ -162,47 +170,179 @@ fn test_persistence() {
     );
 }
 
+/// A wrapper around `TestServerWithRuntime` that runs statement logging checks when dropped.
+///
+/// This guard ensures that all statements have finished executing (have non-NULL `finished_at`
+/// and `finished_status` in `mz_internal.mz_recent_activity_log`) before the test completes.
+struct TestServerWithStatementLoggingChecks {
+    server: test_util::TestServerWithRuntime,
+}
+
+impl TestServerWithStatementLoggingChecks {
+    /// Connect to the __internal__ SQL port of the running `environmentd` server.
+    pub fn connect_internal<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    where
+        T: postgres::tls::MakeTlsConnect<postgres::Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as postgres::tls::TlsConnect<postgres::Socket>>::Future: Send,
+    {
+        self.server.connect_internal(tls)
+    }
+
+    /// Returns the metrics registry for the test server.
+    pub fn metrics_registry(&self) -> &MetricsRegistry {
+        self.server.metrics_registry()
+    }
+}
+
+/// Helper to get statement logging record counts from the metrics registry.
+/// Returns (sampled_true_count, sampled_false_count).
+fn get_statement_logging_record_counts(
+    server: &TestServerWithStatementLoggingChecks,
+) -> (u64, u64) {
+    let metrics = server.metrics_registry().gather();
+    let record_count_metric = metrics
+        .into_iter()
+        .find(|m| m.name() == "mz_statement_logging_record_count")
+        .expect("mz_statement_logging_record_count metric should exist");
+
+    let metric_entries = record_count_metric.get_metric();
+    let sampled_true = metric_entries
+        .iter()
+        .find(|m| {
+            m.get_label()
+                .iter()
+                .any(|l| l.name() == "sample" && l.value() == "true")
+        })
+        .map(|m| u64::cast_lossy(m.get_counter().value()))
+        .unwrap_or(0);
+    let sampled_false = metric_entries
+        .iter()
+        .find(|m| {
+            m.get_label()
+                .iter()
+                .any(|l| l.name() == "sample" && l.value() == "false")
+        })
+        .map(|m| u64::cast_lossy(m.get_counter().value()))
+        .unwrap_or(0);
+
+    (sampled_true, sampled_false)
+}
+
+impl Drop for TestServerWithStatementLoggingChecks {
+    fn drop(&mut self) {
+        // Don't run checks if we're already panicking, as this could mask the original error.
+        if std::thread::panicking() {
+            return;
+        }
+
+        let mut mz_client = self
+            .server
+            .connect_internal(postgres::NoTls)
+            .expect("Failed to connect to internal SQL port for statement logging check");
+
+        // Disable RBAC checks so we can query mz_internal tables.
+        // (We don't need to restore this afterwards, since no more tests run in the same system.)
+        mz_client
+            .batch_execute("ALTER SYSTEM SET enable_rbac_checks = false")
+            .expect("Failed to disable RBAC checks");
+
+        // The statement log has a 5-second buffer flush interval, so allow sufficient time.
+        Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let result = mz_client.query_one(
+                    "SELECT count(*)
+                     FROM mz_internal.mz_recent_activity_log
+                     WHERE
+                       (finished_at IS NULL OR finished_status IS NULL)
+                       AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'
+                       AND finished_status != 'aborted'",
+                    &[],
+                );
+
+                match result {
+                    Ok(row) => {
+                        let count: i64 = row.get(0);
+                        if count == 0 {
+                            Ok(())
+                        } else {
+                            Err(format!("{} statements have not finished", count))
+                        }
+                    }
+                    Err(e) => Err(format!("Query failed: {}", e)),
+                }
+            })
+            .expect("All statements should have finished executing");
+    }
+}
+
 fn setup_statement_logging_core(
     max_sample_rate: f64,
     sample_rate: f64,
+    target_data_rate: &str,
     test_harness: test_util::TestHarness,
-) -> (test_util::TestServerWithRuntime, postgres::Client) {
+) -> (TestServerWithStatementLoggingChecks, postgres::Client) {
     let server = test_harness
         .with_system_parameter_default(
             "statement_logging_max_sample_rate".to_string(),
             max_sample_rate.to_string(),
         )
         .with_system_parameter_default(
+            "statement_logging_default_sample_rate".to_string(),
+            sample_rate.to_string(),
+        )
+        .with_system_parameter_default(
+            "statement_logging_max_data_credit".to_string(),
+            "".to_string(),
+        )
+        .with_system_parameter_default(
+            "statement_logging_target_data_rate".to_string(),
+            target_data_rate.to_string(),
+        )
+        .with_system_parameter_default(
             "statement_logging_use_reproducible_rng".to_string(),
             "true".to_string(),
         )
         .start_blocking();
-    let mut client = server.connect(postgres::NoTls).unwrap();
-    client
-        .execute(
-            &format!("SET statement_logging_sample_rate={sample_rate}"),
-            &[],
-        )
-        .unwrap();
+    let client = server.connect(postgres::NoTls).unwrap();
+    let server = TestServerWithStatementLoggingChecks { server };
     (server, client)
 }
 
 fn setup_statement_logging(
     max_sample_rate: f64,
     sample_rate: f64,
-) -> (test_util::TestServerWithRuntime, postgres::Client) {
+    target_data_rate: &str,
+) -> (TestServerWithStatementLoggingChecks, postgres::Client) {
     setup_statement_logging_core(
         max_sample_rate,
         sample_rate,
+        target_data_rate,
         test_util::TestHarness::default(),
     )
 }
 
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
 #[mz_ore::test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/6487
 fn test_statement_logging_immediate() {
-    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
+
+    let mut mz_client = server.connect_internal(postgres::NoTls).unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET enable_statement_lifecycle_logging = false")
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET statement_logging_max_sample_rate = 1")
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET statement_logging_default_sample_rate = 1")
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET enable_load_generator_counter = true")
+        .unwrap();
+
     let successful_immediates: &[&str] = &[
         "CREATE VIEW v AS SELECT 1;",
         "CREATE DEFAULT INDEX i ON v;",
@@ -230,35 +370,47 @@ fn test_statement_logging_immediate() {
 
     for &statement in successful_immediates {
         client.execute(statement, &[]).unwrap();
+
+        // Enforce a small delay to avoid duplicate `began_at` times, which would make the ordering
+        // of logged statements non-deterministic when we retrieve them below.
+        thread::sleep(Duration::from_millis(10));
     }
 
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(10));
-
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
-    let sl = client
-        .query(
-            "
-SELECT
-    mseh.sample_rate,
-    mseh.began_at,
-    mseh.finished_at,
-    mseh.finished_status,
-    mst.sql,
-    mpsh.prepared_at,
-    mst.redacted_sql
-FROM
-    mz_internal.mz_statement_execution_history AS mseh
+    let seh_query = "
+        SELECT
+            mseh.sample_rate,
+            mseh.began_at,
+            mseh.finished_at,
+            mseh.finished_status,
+            mst.sql,
+            mpsh.prepared_at,
+            mst.redacted_sql
+        FROM mz_internal.mz_statement_execution_history AS mseh
         LEFT JOIN
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
         JOIN
             (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
             ON mpsh.sql_hash = mst.sql_hash
-ORDER BY mseh.began_at;",
-            &[],
-        )
-        .unwrap();
+        WHERE
+            mst.sql !~~ '%mz_statement_execution_history%' AND
+            mseh.finished_at IS NOT NULL
+        ORDER BY mseh.began_at";
+
+    // Statement logging happens async, retry until we get the expected number of logged
+    // statements.
+    let mut sl = Vec::new();
+    for _ in 0..10 {
+        thread::sleep(Duration::from_secs(1));
+        sl = client.query(seh_query, &[]).unwrap();
+        if sl.len() >= successful_immediates.len() {
+            break;
+        }
+    }
+
+    assert_eq!(sl.len(), successful_immediates.len());
+
     #[derive(Debug)]
     struct Record {
         sample_rate: f64,
@@ -269,7 +421,6 @@ ORDER BY mseh.began_at;",
         prepared_at: DateTime<Utc>,
         redacted_sql: String,
     }
-    assert_eq!(sl.len(), successful_immediates.len());
     for (r, stmt) in std::iter::zip(sl.iter(), successful_immediates) {
         let r = Record {
             sample_rate: r.get(0),
@@ -282,7 +433,11 @@ ORDER BY mseh.began_at;",
         };
         assert_eq!(r.sample_rate, 1.0);
 
-        let expected_sql = if r.sql.contains("SECRET") {
+        let expected_sql = if r.sql.contains("SECRET")
+            || r.sql.contains("INSERT")
+            || r.sql.contains("UPDATE")
+            || r.sql.contains("EXECUTE")
+        {
             mz_sql::parse::parse(&r.sql)
                 .unwrap()
                 .into_element()
@@ -316,7 +471,7 @@ ORDER BY mseh.began_at;",
 
 #[mz_ore::test]
 fn test_statement_logging_basic() {
-    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     client.execute("SELECT 1", &[]).unwrap();
     // We test that queries of this view execute on a cluster.
     // If we ever change the threshold for constant folding such that
@@ -343,6 +498,7 @@ fn test_statement_logging_basic() {
         error_message: Option<String>,
         prepared_at: DateTime<Utc>,
         execution_strategy: Option<String>,
+        result_size: Option<i64>,
         rows_returned: Option<i64>,
         execution_timestamp: Option<u64>,
     }
@@ -362,6 +518,7 @@ fn test_statement_logging_basic() {
     mseh.error_message,
     mpsh.prepared_at,
     mseh.execution_strategy,
+    mseh.result_size,
     mseh.rows_returned,
     mseh.execution_timestamp
 FROM
@@ -372,10 +529,11 @@ FROM
         JOIN
             (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) AS mst
             ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.sql ~~ 'SELECT%'
+WHERE (mst.sql ~~ 'SELECT%'
 AND mst.sql !~~ '%unique string to prevent this query showing up in results after retries%'
 AND mst.sql !~~ '%pg_catalog.pg_type%' --this gets executed behind the scenes by tokio-postgres
-OR mst.sql ~~ 'CREATE TABLE%'
+OR mst.sql ~~ 'CREATE TABLE%')
+AND mseh.finished_at IS NOT NULL
 ORDER BY mseh.began_at",
                     &[],
                 )
@@ -398,8 +556,9 @@ ORDER BY mseh.began_at",
                 error_message: r.get(4),
                 prepared_at: r.get(5),
                 execution_strategy: r.get(6),
-                rows_returned: r.get(7),
-                execution_timestamp: r.get::<_, Option<UInt8>>(8).map(|UInt8(val)| val),
+                result_size: r.get(7),
+                rows_returned: r.get(8),
+                execution_timestamp: r.get::<_, Option<UInt8>>(9).map(|UInt8(val)| val),
             })
             .collect::<Vec<_>>(),
         Err(rows) => {
@@ -439,18 +598,21 @@ ORDER BY mseh.began_at",
             }
         }
     }
+    assert!(sl_results[0].result_size.unwrap_or(0) > 0);
     assert_eq!(sl_results[0].rows_returned, Some(1));
     assert_eq!(sl_results[0].finished_status, "success");
     assert_eq!(
         sl_results[0].execution_strategy.as_ref().unwrap(),
         "constant"
     );
+    assert!(sl_results[1].result_size.unwrap_or(0) > 0);
     assert_eq!(sl_results[1].rows_returned, Some(10001));
     assert_eq!(sl_results[1].finished_status, "success");
     assert_eq!(
         sl_results[1].execution_strategy.as_ref().unwrap(),
         "standard"
     );
+    assert!(sl_results[2].result_size.unwrap_or(0) > 0);
     assert_eq!(sl_results[2].rows_returned, Some(10001));
     assert_eq!(sl_results[2].finished_status, "success");
     assert_eq!(
@@ -458,40 +620,87 @@ ORDER BY mseh.began_at",
         "fast-path"
     );
     assert_eq!(sl_results[3].finished_status, "error");
-    assert!(sl_results[3]
-        .error_message
-        .as_ref()
-        .unwrap()
-        .contains("division by zero"));
+    assert!(
+        sl_results[3]
+            .error_message
+            .as_ref()
+            .unwrap()
+            .contains("division by zero")
+    );
+    assert_none!(sl_results[3].result_size);
     assert_none!(sl_results[3].rows_returned);
+
+    // Verify metrics show all statements were sampled (100% sample rate means no unsampled).
+    let (sampled_true, sampled_false) = get_statement_logging_record_counts(&server);
+    assert!(
+        sampled_true > 0,
+        "some statements should be sampled with 100% rate"
+    );
+    assert_eq!(
+        sampled_false, 0,
+        "no statements should be unsampled with 100% rate"
+    );
+
+    // Verify statement_logging_actual_bytes metric is being tracked.
+    // With 100% sample rate, actual_bytes should equal unsampled_bytes.
+    let metrics = server.metrics_registry().gather();
+    let actual_bytes = metrics
+        .iter()
+        .find(|m| m.name() == "mz_statement_logging_actual_bytes")
+        .expect("mz_statement_logging_actual_bytes metric should exist")
+        .get_metric()[0]
+        .get_counter()
+        .value();
+    let unsampled_bytes = metrics
+        .iter()
+        .find(|m| m.name() == "mz_statement_logging_unsampled_bytes")
+        .expect("mz_statement_logging_unsampled_bytes metric should exist")
+        .get_metric()[0]
+        .get_counter()
+        .value();
+    assert!(
+        actual_bytes > 0.0,
+        "actual_bytes should be > 0 with 100% sample rate"
+    );
+    assert_eq!(
+        actual_bytes, unsampled_bytes,
+        "with 100% sample rate, actual_bytes should equal unsampled_bytes"
+    );
 }
 
-#[mz_ore::test]
-fn test_statement_logging_throttling() {
-    let (server, mut client) = setup_statement_logging_core(
-        1.0,
-        1.0,
-        test_util::TestHarness::default().with_system_parameter_default(
-            "statement_logging_target_data_rate".to_string(),
-            "100".to_string(),
-        ),
-    );
-    thread::sleep(Duration::from_secs(1));
-    for _ in 0..100 {
-        client.execute("SELECT 1", &[]).unwrap();
-    }
+fn run_throttling_test(use_prepared_statement: bool) {
+    // The `target_data_rate` should be
+    // - high enough so that the `SELECT 1` queries get throttled (even with high CPU load due to
+    //   other tests running in parallel),
+    // - but low enough that the `SELECT 2` query after the sleep doesn't get throttled.
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "200");
     thread::sleep(Duration::from_secs(2));
+
+    if use_prepared_statement {
+        let statement = client.prepare("SELECT 1").unwrap();
+        for _ in 0..100 {
+            client.execute(&statement, &[]).unwrap();
+        }
+    } else {
+        for _ in 0..100 {
+            client.execute("SELECT 1", &[]).unwrap();
+        }
+    }
+
+    thread::sleep(Duration::from_secs(4));
     client.execute("SELECT 2", &[]).unwrap();
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
     let logs = Retry::default()
-        .max_duration(Duration::from_secs(30))
+        .max_duration(Duration::from_secs(60))
         .retry(|_| {
             let sl_results = client
                 .query(
                     "SELECT
     sql,
     throttled_count
-FROM mz_internal.mz_prepared_statement_history mpsh
+FROM mz_internal.mz_statement_execution_history mseh
+JOIN mz_internal.mz_prepared_statement_history mpsh
+ON mseh.prepared_statement_id = mpsh.id
 JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
 ON mpsh.sql_hash = mst.sql_hash
 WHERE sql IN ('SELECT 1', 'SELECT 2')",
@@ -525,8 +734,18 @@ WHERE sql IN ('SELECT 1', 'SELECT 2')",
 }
 
 #[mz_ore::test]
+fn test_statement_logging_throttling() {
+    run_throttling_test(false);
+}
+
+#[mz_ore::test]
+fn test_statement_logging_prepared_statement_throttling() {
+    run_throttling_test(true);
+}
+
+#[mz_ore::test]
 fn test_statement_logging_subscribes() {
-    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     let cancel_token = client.cancel_token();
 
     // This should finish
@@ -549,9 +768,39 @@ fn test_statement_logging_subscribes() {
     }
     handle.join().unwrap();
 
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(5));
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
+    let seh_query = "
+        SELECT
+            mseh.sample_rate,
+            mseh.began_at,
+            mseh.finished_at,
+            mseh.finished_status,
+            mpsh.prepared_at,
+            mseh.execution_strategy
+        FROM mz_internal.mz_statement_execution_history AS mseh
+        LEFT JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+        JOIN
+            mz_internal.mz_sql_text AS mst
+            ON mpsh.sql_hash = mst.sql_hash
+        WHERE
+            mst.sql ~~ 'SUBSCRIBE%' AND
+            mseh.finished_at IS NOT NULL
+        ORDER BY mseh.began_at";
+
+    // Statement logging happens async, retry until we get the expected number of logged
+    // statements.
+    let mut sl = Vec::new();
+    for _ in 0..10 {
+        thread::sleep(Duration::from_secs(1));
+        sl = client.query(seh_query, &[]).unwrap();
+        if sl.len() >= 2 {
+            break;
+        }
+    }
+
+    assert_eq!(sl.len(), 2);
 
     struct Record {
         sample_rate: f64,
@@ -561,28 +810,8 @@ fn test_statement_logging_subscribes() {
         prepared_at: DateTime<Utc>,
         execution_strategy: Option<String>,
     }
-    let sl_subscribes = client
-        .query(
-            "SELECT
-    mseh.sample_rate,
-    mseh.began_at,
-    mseh.finished_at,
-    mseh.finished_status,
-    mpsh.prepared_at,
-    mseh.execution_strategy
-FROM
-    mz_internal.mz_statement_execution_history AS mseh
-        LEFT JOIN
-            mz_internal.mz_prepared_statement_history AS mpsh
-            ON mseh.prepared_statement_id = mpsh.id
-        JOIN
-            mz_internal.mz_sql_text AS mst
-            ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.sql ~~ 'SUBSCRIBE%'
-ORDER BY mseh.began_at",
-            &[],
-        )
-        .unwrap()
+
+    let sl_subscribes = sl
         .into_iter()
         .map(|r| Record {
             sample_rate: r.get(0),
@@ -593,10 +822,6 @@ ORDER BY mseh.began_at",
             execution_strategy: r.get(5),
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        sl_subscribes.len(), // 3
-        2
-    );
     for r in &sl_subscribes {
         assert_eq!(r.sample_rate, 1.0);
         assert!(r.prepared_at <= r.began_at);
@@ -612,47 +837,68 @@ ORDER BY mseh.began_at",
 /// (1) that the effective sampling rate for the session is 50%,
 /// (2) that we are using the deterministic testing RNG.
 fn test_statement_logging_sampling_inner(
-    server: test_util::TestServerWithRuntime,
+    server: TestServerWithStatementLoggingChecks,
     mut client: postgres::Client,
 ) {
     for i in 0..50 {
         client.execute(&format!("SELECT {i}"), &[]).unwrap();
+
+        // Enforce a small delay to avoid duplicate `began_at` times, which would make the ordering
+        // of logged statements non-deterministic when we retrieve them below.
+        thread::sleep(Duration::from_millis(10));
     }
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(5));
+
+    // 23 randomly sampled out of 50 with 50% sampling. Seems legit!
+    let expected_sqls = [
+        2, 4, 5, 6, 9, 15, 17, 18, 19, 20, 21, 23, 24, 25, 31, 32, 33, 36, 37, 42, 46,
+    ]
+    .into_iter()
+    .map(|i| format!("SELECT {i}"))
+    .collect::<Vec<_>>();
+
     let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
-    let sqls: Vec<String> = internal_client
-        .query(
-            "SELECT mst.sql
-FROM
-    mz_internal.mz_statement_execution_history AS mseh
+    let seh_query = "
+        SELECT mst.sql
+        FROM mz_internal.mz_statement_execution_history AS mseh
         JOIN
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
         JOIN
             mz_internal.mz_sql_text AS mst
             ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.sql ~~ 'SELECT%'
-ORDER BY mseh.began_at ASC;",
-            &[],
-        )
-        .unwrap()
-        .into_iter()
-        .map(|r| r.get(0))
-        .collect();
-    // 22 randomly sampled out of 50 with 50% sampling. Seems legit!
-    let expected_sqls = [
-        1, 3, 4, 5, 8, 14, 16, 17, 18, 19, 20, 22, 23, 24, 30, 31, 32, 35, 36, 41, 45, 49,
-    ]
-    .into_iter()
-    .map(|i| format!("SELECT {i}"))
-    .collect::<Vec<_>>();
+        WHERE mst.sql ~~ 'SELECT%' AND mst.sql !~~ '%mz_statement_execution_history%'
+        ORDER BY mseh.began_at ASC";
+
+    // Statement logging happens async, retry until we get the expected number of logged
+    // statements.
+    let mut sl = Vec::new();
+    for _ in 0..10 {
+        thread::sleep(Duration::from_secs(1));
+        sl = internal_client.query(seh_query, &[]).unwrap();
+        if sl.len() >= expected_sqls.len() {
+            break;
+        }
+    }
+
+    let sqls: Vec<String> = sl.into_iter().map(|r| r.get(0)).collect();
     assert_eq!(sqls, expected_sqls);
+
+    // Verify the statement_logging_record_count metric correctly tracks sampled vs unsampled.
+    // With 50% sampling and deterministic RNG, exactly 21 of 50 statements should be sampled.
+    let (sampled_true, sampled_false) = get_statement_logging_record_counts(&server);
+    assert_eq!(
+        sampled_true, 21,
+        "expected 21 statements to be sampled with 50% rate and deterministic RNG"
+    );
+    assert_eq!(
+        sampled_false, 29,
+        "expected 29 statements to not be sampled with 50% rate and deterministic RNG"
+    );
 }
 
 #[mz_ore::test]
 fn test_statement_logging_sampling() {
-    let (server, client) = setup_statement_logging(1.0, 0.5);
+    let (server, client) = setup_statement_logging(1.0, 0.5, "");
     test_statement_logging_sampling_inner(server, client);
 }
 
@@ -660,22 +906,19 @@ fn test_statement_logging_sampling() {
 /// arbitrarily high, but that it is constrained by `statement_logging_max_sample_rate`.
 #[mz_ore::test]
 fn test_statement_logging_sampling_constrained() {
-    let (server, client) = setup_statement_logging(0.5, 1.0);
+    let (server, client) = setup_statement_logging(0.5, 1.0, "");
     test_statement_logging_sampling_inner(server, client);
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-async fn test_statement_logging_unsampled_metrics() {
-    let server = test_util::TestHarness::default().start().await;
-    let client = server.connect().await.unwrap();
+/// Test that the `mz_statement_logging_unsampled_bytes` metric tracks the total bytes
+/// of SQL text that would have been logged if statement logging were fully enabled.
+/// We set `sample_rate=0.0` so no statements are actually sampled/logged, but the
+/// unsampled_bytes metric still gets incremented for every executed statement.
+#[mz_ore::test]
+fn test_statement_logging_unsampled_metrics() {
+    // Use sample_rate=0.0 so statements are not sampled, but unsampled_bytes metric is still tracked.
+    let (server, mut client) = setup_statement_logging(1.0, 0.0, "");
 
-    // TODO[btv]
-    //
-    // The point of these metrics is to show how much SQL text we
-    // would have logged had statement logging been turned on.
-    // Since there is no way (yet) to turn statement logging off or on,
-    // this test is valid as-is currently. However, once we turn statement logging on,
-    // we should make sure to turn it _off_ in this test.
     let batch_queries = [
         "SELECT 'Hello, world!';SELECT 1;;",
         "SELECT 'Hello, world again!'",
@@ -704,38 +947,84 @@ async fn test_statement_logging_unsampled_metrics() {
         .count();
 
     for q in batch_queries {
-        client.batch_execute(q).await.unwrap();
+        client.batch_execute(q).unwrap();
     }
 
     for q in single_queries {
-        client.execute(q, &[]).await.unwrap();
+        client.execute(q, &[]).unwrap();
     }
 
     for q in prepared_queries {
-        let s = client.prepare(q).await.unwrap();
-        client.execute(&s, &[]).await.unwrap();
+        let s = client.prepare(q).unwrap();
+        client.execute(&s, &[]).unwrap();
     }
 
-    client.batch_execute(&named_prepared_outer).await.unwrap();
+    client.batch_execute(&named_prepared_outer).unwrap();
 
     // This should NOT be logged, since we never actually execute it.
-    client
-        .prepare("SELECT 'Hello, not counted!'")
-        .await
-        .unwrap();
+    client.prepare("SELECT 'Hello, not counted!'").unwrap();
 
     let expected_total = batch_total + single_total + prepared_total + named_prepared_outer_len;
     let metric_value = server
-        .metrics_registry
+        .metrics_registry()
         .gather()
         .into_iter()
-        .find(|m| m.get_name() == "mz_statement_logging_unsampled_bytes")
+        .find(|m| m.name() == "mz_statement_logging_unsampled_bytes")
         .unwrap()
         .take_metric()[0]
         .get_counter()
-        .get_value();
+        .value();
     let metric_value = usize::cast_from(u64::try_cast_from(metric_value).unwrap());
     assert_eq!(expected_total, metric_value);
+
+    // Also verify that statement_logging_record_count shows all statements as not sampled
+    // (since we're using 0% sample rate).
+    let (sampled_true, _sampled_false) = get_statement_logging_record_counts(&server);
+    assert_eq!(
+        sampled_true, 0,
+        "no statements should be sampled with 0% sample rate"
+    );
+}
+
+#[mz_ore::test]
+fn test_enable_internal_statement_logging() {
+    let (server, mut client) = setup_statement_logging_core(
+        1.0,
+        1.0,
+        "",
+        test_util::TestHarness::default().with_system_parameter_default(
+            "enable_internal_statement_logging".to_string(),
+            "true".to_string(),
+        ),
+    );
+
+    client.execute("SELECT 1", &[]).unwrap();
+
+    let mut client = server.connect_internal(postgres::NoTls).unwrap();
+    let num_mz_system_statements = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let sl_results = client
+                .query(
+                    "SELECT
+    count(*)
+FROM mz_internal.mz_prepared_statement_history mpsh
+JOIN mz_internal.mz_session_history USING (session_id)
+WHERE authenticated_user='mz_system'",
+                    &[],
+                )
+                .unwrap();
+
+            let count: i64 = sl_results[0].get(0);
+
+            if count > 0 { Ok(count) } else { Err(()) }
+        })
+        .expect("at least some statements from mz_system should have been logged");
+
+    assert!(
+        num_mz_system_statements > 0,
+        "statements executed by mz_system should have been logged"
+    );
 }
 
 // Test the POST and WS server endpoints.
@@ -747,14 +1036,22 @@ fn test_http_sql() {
     // optional "rows=N" argument can be given in the directive to produce
     // datadriven output after N rows. Any directive with rows=N should be the
     // final directive in a file, since it leaves the websocket in a
-    // mid-statement state. A "fixtimestamp=true" argument can be given to
-    // replace timestamps with "<TIMESTAMP>".
+    // mid-statement state.
+    // A "fixtimestamp=true" argument can be given to replace timestamps with "<TIMESTAMP>".
+    // A "fixid=true" argument can be given to replace IDs with "<ID>".
     //
     // Datadriven directive for HTTP POST is "http". Input and output are the
     // documented JSON formats.
 
-    let fixtimestamp_re = regex::Regex::new("\\d{13}(\\.0)?").unwrap();
-    let fixtimestamp_replace = "<TIMESTAMP>";
+    let fixtimestamp_replacements = [(Regex::new(r#"\d{13}(\.0)?"#).unwrap(), "<TIMESTAMP>")];
+    let fixid_replacements = [
+        (
+            Regex::new(r#"\\"(User|System|Transient)\\": \d+"#).unwrap(),
+            "<ID>",
+        ),
+        (Regex::new(r#"\b[ust]\d+\b"#).unwrap(), "<ID>"),
+        (Regex::new(r#"\\n[ust]\d+\b"#).unwrap(), "\\n<ID>"),
+    ];
 
     datadriven::walk("tests/testdata/http", |f| {
         let server = test_util::TestHarness::default().start_blocking();
@@ -800,11 +1097,7 @@ fn test_http_sql() {
         }
 
         let ws_url = server.ws_addr();
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner().http_local_addr()
-        ))
-        .unwrap();
+        let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
         let ws_init = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
 
@@ -824,8 +1117,8 @@ fn test_http_sql() {
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
-                "ws-text" => Message::Text(tc.input.clone()),
-                "ws-binary" => Message::Binary(tc.input.as_bytes().to_vec()),
+                "ws-text" => Message::Text(tc.input.clone().into()),
+                "ws-binary" => Message::Binary(tc.input.as_bytes().to_vec().into()),
                 "http" => {
                     let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
                     let res = Client::new()
@@ -842,17 +1135,23 @@ fn test_http_sql() {
                 .get("rows")
                 .map(|rows| rows.get(0).map(|row| row.parse::<usize>().unwrap()))
                 .flatten();
-            let fixtimestamp = tc.args.contains_key("fixtimestamp");
+
+            let mut replacements = Vec::new();
+            if tc.args.contains_key("fixtimestamp") {
+                replacements.extend_from_slice(&fixtimestamp_replacements);
+            }
+            if tc.args.contains_key("fixid") {
+                replacements.extend_from_slice(&fixid_replacements);
+            }
+
             ws.send(msg).unwrap();
             let mut responses = String::new();
             loop {
                 let resp = ws.read().unwrap();
                 match resp {
                     Message::Text(mut msg) => {
-                        if fixtimestamp {
-                            msg = fixtimestamp_re
-                                .replace_all(&msg, fixtimestamp_replace)
-                                .into();
+                        for (re, replace) in &replacements {
+                            msg = Utf8Bytes::from(re.replace_all(&msg, *replace).into_owned());
                         }
                         let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                         write!(&mut responses, "{}\n", serde_json::to_string(&msg).unwrap())
@@ -923,11 +1222,13 @@ fn test_cancel_long_running_query() {
 
 fn test_cancellation_cancels_dataflows(query: &str) {
     // Query that returns how many dataflows are currently installed.
-    // Accounts for the presence of introspection subscribe dataflows by ignoring those.
+    // Ignores introspection subscribe dataflows.
+    // Ignores storage operators, whose IDs are offset by STORAGE_ID_OFFSET (1 << 48).
     const DATAFLOW_QUERY: &str = " \
         SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
-        WHERE name NOT LIKE '%introspection-subscribe%'";
+        WHERE name NOT LIKE '%introspection-subscribe%' \
+        AND id < 281474976710656";
 
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -956,11 +1257,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
                     .map_err(|_| ())
                     .unwrap()
                     .get(0);
-                if count == 0 {
-                    Err(())
-                } else {
-                    Ok(())
-                }
+                if count == 0 { Err(()) } else { Ok(()) }
             })
             .unwrap();
         cancel_token.cancel_query(postgres::NoTls).unwrap();
@@ -979,11 +1276,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
-            if count == 0 {
-                Ok(())
-            } else {
-                Err(())
-            }
+            if count == 0 { Ok(()) } else { Err(()) }
         })
         .unwrap();
 }
@@ -996,21 +1289,27 @@ fn test_cancel_dataflow_removal() {
 
 #[mz_ore::test]
 fn test_cancel_long_select() {
-    test_cancellation_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
+    test_cancellation_cancels_dataflows(
+        "WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;",
+    );
 }
 
 #[mz_ore::test]
 fn test_cancel_insert_select() {
-    test_cancellation_cancels_dataflows("INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
+    test_cancellation_cancels_dataflows(
+        "INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;",
+    );
 }
 
 fn test_closing_connection_cancels_dataflows(query: String) {
     // Query that returns how many dataflows are currently installed.
-    // Accounts for the presence of introspection subscribe dataflows by ignoring those.
+    // Ignores introspection subscribe dataflows.
+    // Ignores storage operators, whose IDs are offset by STORAGE_ID_OFFSET (1 << 48).
     const DATAFLOW_QUERY: &str = " \
         SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
-        WHERE name NOT LIKE '%introspection-subscribe%'";
+        WHERE name NOT LIKE '%introspection-subscribe%' \
+        AND id < 281474976710656";
 
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -1025,7 +1324,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
             &format!(
                 "postgres://{}:{}/materialize",
                 Ipv4Addr::LOCALHOST,
-                server.inner().sql_local_addr().port()
+                server.sql_local_addr().port()
             ),
         ])
         .stdin(Stdio::piped());
@@ -1055,11 +1354,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
-            if count == 0 {
-                Err(())
-            } else {
-                Ok(())
-            }
+            if count == 0 { Err(()) } else { Ok(()) }
         })
         .unwrap();
 
@@ -1081,11 +1376,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
-            if count == 0 {
-                Ok(())
-            } else {
-                Err(())
-            }
+            if count == 0 { Ok(()) } else { Err(()) }
         })
         .unwrap();
     info!(
@@ -1294,70 +1585,6 @@ fn test_storage_usage_updates_between_restarts() {
     }
 }
 
-#[mz_ore::test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5584
-fn test_storage_usage_doesnt_update_between_restarts() {
-    let data_dir = tempfile::tempdir().unwrap();
-    let storage_usage_collection_interval = Duration::from_secs(10);
-    let harness = test_util::TestHarness::default()
-        .with_storage_usage_collection_interval(storage_usage_collection_interval)
-        .data_directory(data_dir.path());
-
-    // Wait for initial storage usage collection.
-    let initial_timestamp = {
-        let server = harness.clone().start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-        // Retry because it may take some time for the initial snapshot to be taken.
-        Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
-                client
-                    .query_one(
-                        "SELECT DISTINCT(EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8) FROM mz_catalog.mz_storage_usage;",
-                        &[],
-                    )
-                    .map_err(|e| e.to_string()).unwrap()
-                    .try_get::<_, f64>(0)
-                    .map_err(|e| e.to_string())
-            }).unwrap()
-    };
-
-    // Another storage usage collection should not be scheduled immediately.
-    {
-        // Give plenty of time, so we don't accidentally do another collection if this test is slow.
-        let server = harness
-            .with_storage_usage_collection_interval(Duration::from_secs(60 * 1000))
-            .start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-
-        let collection_timestamps = client
-            .query(
-                "SELECT DISTINCT(EXTRACT(EPOCH FROM collection_timestamp)::float8) as epoch FROM mz_catalog.mz_storage_usage ORDER BY epoch DESC LIMIT 2;",
-                &[],
-            ).unwrap();
-        match collection_timestamps.len() {
-            0 => panic!("storage usage disappeared"),
-            1 => assert_eq!(initial_timestamp, collection_timestamps[0].get::<_, f64>(0)),
-            // It's possible that after collecting the first usage timestamp but before shutting the
-            // server down, we collect another usage timestamp.
-            2 => {
-                let most_recent_timestamp = collection_timestamps[0].get::<_, f64>(0);
-                let second_most_recent_timestamp = collection_timestamps[1].get::<_, f64>(0);
-
-                let actual_collection_interval =
-                    most_recent_timestamp - second_most_recent_timestamp;
-                let expected_collection_interval: f64 =
-                    f64::cast_lossy(storage_usage_collection_interval.as_secs());
-
-                assert!(
-                    // Add 1 second grace period to avoid flaky tests.
-                    actual_collection_interval >= expected_collection_interval - 1.0,
-                    "actual_collection_interval={actual_collection_interval}, expected_collection_interval={expected_collection_interval}"
-                );
-            }
-            _ => unreachable!("query is limited to 2"),
-        }
-    }
-}
-
 // Test that all rows for a single collection use the same timestamp.
 #[mz_ore::test]
 fn test_storage_usage_collection_interval_timestamps() {
@@ -1424,8 +1651,8 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
     };
     let data_dir = tempfile::tempdir().unwrap();
-    let collection_interval = Duration::from_secs(1);
-    let retention_period = Duration::from_millis(1100);
+    let collection_interval = Duration::from_millis(100);
+    let retention_period = Duration::from_millis(200);
     let harness = test_util::TestHarness::default()
         .with_now(now_fn)
         .with_storage_usage_collection_interval(collection_interval)
@@ -1435,6 +1662,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     let initial_timestamp = {
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
+
         // Create a table with no data, which should have some overhead and therefore some storage usage
         client
             .batch_execute("CREATE TABLE usage_test (a int)")
@@ -1450,7 +1678,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
                         "SELECT (EXTRACT(EPOCH FROM MAX(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
                         &[],
                     )
-                    .map_err(|e| e.to_string()).unwrap()
+                    .map_err(|e| e.to_string())?
                     .try_get::<_, i32>(0)
                     .map_err(|e| e.to_string())
             }).expect("Could not fetch initial timestamp");
@@ -1478,25 +1706,34 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     *now.lock().expect("lock poisoned") = u64::try_from(initial_timestamp)
         .expect("negative timestamps are impossible")
         + u64::try_from(retention_period.as_millis()).expect("known to fit")
-        + 1;
+        // Add a second to account for any rounding errors.
+        + 1000;
 
     {
         let server = harness.start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         *now.lock().expect("lock poisoned") +=
-            u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1;
+            u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1000;
 
-        let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+        let subsequent_initial_timestamp = Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let query = format!(
+                    "SELECT ts FROM (\
+                     SELECT (EXTRACT(EPOCH FROM \
+                     MIN(collection_timestamp)) * 1000)\
+                     ::integer as ts FROM \
+                     mz_internal.mz_storage_usage_by_shard\
+                     ) WHERE ts > {initial_timestamp};"
+                );
                 client
-                    .query_one(
-                        "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
-                        &[],
-                    )
-                    .map_err(|e| e.to_string()).unwrap()
+                    .query_one(&query, &[])
+                    .map_err(|e| e.to_string())?
                     .try_get::<_, i32>(0)
                     .map_err(|e| e.to_string())
-            }).expect("Could not fetch initial timestamp");
+            })
+            .expect("Could not fetch initial timestamp");
 
         info!(%subsequent_initial_timestamp);
         assert!(
@@ -1594,9 +1831,9 @@ fn test_storage_usage_records_are_not_cleared_on_restart() {
 #[mz_ore::test]
 fn test_default_cluster_sizes() {
     let server = test_util::TestHarness::default()
-        .with_builtin_system_cluster_replica_size("1".to_string())
-        .with_builtin_catalog_server_cluster_replica_size("1".to_string())
-        .with_default_cluster_replica_size("2".to_string())
+        .with_builtin_system_cluster_replica_size("scale=1,workers=1".to_string())
+        .with_builtin_catalog_server_cluster_replica_size("scale=1,workers=1".to_string())
+        .with_default_cluster_replica_size("scale=1,workers=2".to_string())
         .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -1609,7 +1846,7 @@ fn test_default_cluster_sizes() {
         .get(0)
         .unwrap()
         .get(0);
-    assert_eq!(builtin_size, "1");
+    assert_eq!(builtin_size, "scale=1,workers=1");
 
     let builtin_size: String = client
         .query(
@@ -1620,11 +1857,11 @@ fn test_default_cluster_sizes() {
         .get(0)
         .unwrap()
         .get(0);
-    assert_eq!(builtin_size, "2");
+    assert_eq!(builtin_size, "scale=1,workers=2");
 }
 
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when database-issues#6931 is fixed
+#[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/6931 is fixed
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
@@ -1645,11 +1882,7 @@ fn test_max_request_size() {
     {
         let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner().http_local_addr()
-        ))
-        .unwrap();
+        let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
         let json = format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[{param}]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         let res = Client::new().post(http_url).json(&json).send().unwrap();
@@ -1666,7 +1899,7 @@ fn test_max_request_size() {
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.send(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string().into())).unwrap();
 
         // The specific error isn't forwarded to the client, the connection is just closed.
         let err = ws.read().unwrap_err();
@@ -1705,11 +1938,7 @@ fn test_max_statement_batch_size() {
 
     // http
     {
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner().http_local_addr()
-        ))
-        .unwrap();
+        let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
 
@@ -1747,7 +1976,7 @@ fn test_max_statement_batch_size() {
         test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.send(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string().into())).unwrap();
 
         // Discard the CommandStarting message
         let _ = ws.read().unwrap();
@@ -1766,6 +1995,45 @@ fn test_max_statement_batch_size() {
             }
         }
     }
+}
+
+#[mz_ore::test]
+fn test_console_config_endpoint() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let http_url = Url::parse(&format!(
+        "http://{}/api/console/config",
+        server.http_local_addr()
+    ))
+    .unwrap();
+
+    let res = Client::new().get(http_url.clone()).send().unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Response should be the default values.
+    let body: serde_json::Value = res.json().unwrap();
+    assert_eq!(body["oidc_issuer"], "");
+    assert_eq!(body["console_oidc_client_id"], "");
+    assert_eq!(body["console_oidc_scopes"], "");
+
+    // Setting the dyncfg via the internal SQL port should be reflected.
+    let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
+    internal_client
+        .batch_execute("ALTER SYSTEM SET oidc_issuer = 'https://my-issuer.com'")
+        .unwrap();
+    internal_client
+        .batch_execute("ALTER SYSTEM SET console_oidc_client_id = 'my-client-id'")
+        .unwrap();
+    internal_client
+        .batch_execute("ALTER SYSTEM SET console_oidc_scopes = 'openid email'")
+        .unwrap();
+
+    let res = Client::new().get(http_url).send().unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body: serde_json::Value = res.json().unwrap();
+    assert_eq!(body["oidc_issuer"], "https://my-issuer.com");
+    assert_eq!(body["console_oidc_client_id"], "my-client-id");
+    assert_eq!(body["console_oidc_scopes"], "openid email");
 }
 
 #[mz_ore::test]
@@ -1803,7 +2071,7 @@ fn test_ws_passes_options() {
     // set from the options map we passed with the auth.
     let json = "{\"query\":\"SHOW application_name;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read().unwrap();
@@ -1838,27 +2106,18 @@ fn test_ws_passes_options() {
 // doesn't cause a crash with subscribes over web sockets,
 // which was previously happening (in staging) due to us
 // dropping the `ExecuteContext` on the floor in that case.
-fn test_ws_subscribe_no_crash() {
-    let server = test_util::TestHarness::default()
-        .with_system_parameter_default(
-            "statement_logging_max_sample_rate".to_string(),
-            "1.0".to_string(),
-        )
-        .with_system_parameter_default(
-            "statement_logging_default_sample_rate".to_string(),
-            "1.0".to_string(),
-        )
-        .start_blocking();
+fn test_statement_logging_ws_subscribe_no_crash() {
+    let (server, _client) = setup_statement_logging(1.0, 1.0, "");
 
     // Create our WebSocket.
-    let ws_url = server.ws_addr();
+    let ws_url = server.server.ws_addr();
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
     test_util::auth_with_ws(&mut ws, Default::default()).unwrap();
 
     let query = "SUBSCRIBE (SELECT 1)";
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     // Give the server time to crash, if it's going to.
     std::thread::sleep(Duration::from_secs(1))
@@ -1933,7 +2192,7 @@ fn test_http_options_param() {
     let make_request = |params| {
         let http_url = Url::parse(&format!(
             "http://{}/api/sql?{}",
-            server.inner().http_local_addr(),
+            server.http_local_addr(),
             params
         ))
         .unwrap();
@@ -1987,9 +2246,11 @@ fn test_http_options_param() {
     assert_eq!(result.results[0].notices.len(), 1);
 
     let notice = &result.results[0].notices[0];
-    assert!(notice
-        .message
-        .contains(r#"startup setting not_a_session_var not set"#));
+    assert!(
+        notice
+            .message
+            .contains(r#"startup setting not_a_session_var not set"#)
+    );
 }
 
 #[mz_ore::test]
@@ -2006,20 +2267,16 @@ fn test_max_connections_on_all_interfaces() {
         .connect(postgres::NoTls)
         .unwrap();
     mz_client
-        .batch_execute("ALTER SYSTEM SET max_connections = 1")
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 1")
         .unwrap();
     mz_client
-        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 0")
+        .batch_execute("ALTER SYSTEM SET max_connections = 2")
         .unwrap();
 
     let client = server.connect(postgres::NoTls).unwrap();
 
     let ws_url = server.ws_addr();
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner().http_local_addr()
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
 
@@ -2033,14 +2290,20 @@ fn test_max_connections_on_all_interfaces() {
         let status = res.status();
         let text = res.text().expect("no body?");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(text.contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
+        assert_contains!(
+            text,
+            "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)"
+        );
     }
 
     {
         // while postgres client is connected, websockets can't auth
         let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
         let err = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
-        assert!(err.to_string().contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"), "{err}");
+        assert_contains!(
+            err.to_string_with_causes(),
+            "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)"
+        );
     }
 
     tracing::info!("closing postgres client");
@@ -2052,7 +2315,7 @@ fn test_max_connections_on_all_interfaces() {
             let res = Client::new().post(http_url.clone()).json(&json).send().unwrap();
             let status = res.status();
             if status == StatusCode::INTERNAL_SERVER_ERROR {
-                assert!(res.text().expect("expect body").contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
+                assert_contains!(res.text().expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
                 return Err(());
             }
             assert_eq!(status, StatusCode::OK);
@@ -2067,7 +2330,7 @@ fn test_max_connections_on_all_interfaces() {
     test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     // The specific error isn't forwarded to the client, the connection is just closed.
     match ws.read() {
@@ -2078,11 +2341,13 @@ fn test_max_connections_on_all_interfaces() {
             );
             assert_eq!(
                 ws.read().unwrap(),
-                Message::Text("{\"type\":\"Rows\",\"payload\":{\"columns\":[{\"name\":\"?column?\",\"type_oid\":23,\"type_len\":4,\"type_mod\":-1}]}}".to_string())
+                Message::Text(format!(
+                    r#"{{"type":"Rows","payload":{{"columns":[{{"name":"{UNKNOWN_COLUMN_NAME}","type_oid":23,"type_len":4,"type_mod":-1}}]}}}}"#
+                ).into())
             );
             assert_eq!(
                 ws.read().unwrap(),
-                Message::Text("{\"type\":\"Row\",\"payload\":[\"1\"]}".to_string())
+                Message::Text("{\"type\":\"Row\",\"payload\":[\"1\"]}".to_string().into())
             );
             tracing::info!("data: {:?}", ws.read().unwrap());
         }
@@ -2096,7 +2361,42 @@ fn test_max_connections_on_all_interfaces() {
     let status = res.status();
     let text = res.text().expect("no body?");
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(text.contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
+    assert_contains!(
+        text,
+        "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)"
+    );
+
+    // Make sure lowering our max connections below the current limit does not
+    // cause a panic.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_connections = 10")
+        .unwrap();
+
+    // Open a few connections (kept alive to test connection limits).
+    #[allow(clippy::collection_is_never_read)]
+    let mut clients = Vec::new();
+    for _ in 0..5 {
+        let client = server
+            .pg_config()
+            .connect(postgres::NoTls)
+            .expect("success opening client");
+        clients.push(client);
+    }
+
+    // Lower the connection below the number of open clients.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_connections = 2")
+        .unwrap();
+
+    // Opening a new connection should fail.
+    let result = server.pg_config().connect(postgres::NoTls);
+    let Err(failure) = result else {
+        panic!("unexpected success connecting to server");
+    };
+    assert_contains!(
+        failure.to_string_with_causes(),
+        "creating connection would violate max_connections limit (desired: 7, limit: 2, current: 6)"
+    );
 }
 
 // Test max_connections and superuser_reserved_connections.
@@ -2153,7 +2453,7 @@ async fn test_max_connections_limits() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
         .start()
         .await;
@@ -2195,7 +2495,7 @@ async fn test_max_connections_limits() {
         connect_regular_user()
             .await
             .expect_err("connect should fail")
-            .to_string(),
+            .to_string_with_causes(),
         "creating connection would violate max_connections limit"
     );
 
@@ -2208,7 +2508,7 @@ async fn test_max_connections_limits() {
         connect_regular_user()
             .await
             .expect_err("connect should fail")
-            .to_string(),
+            .to_string_with_causes(),
         "creating connection would violate max_connections limit"
     );
 
@@ -2219,13 +2519,13 @@ async fn test_max_connections_limits() {
 
     {
         let client1 = connect_regular_user().await.unwrap();
-        let _ = client1.batch_execute("SELECT 1").await.unwrap();
+        client1.batch_execute("SELECT 1").await.unwrap();
 
         assert_contains!(
             connect_regular_user()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2233,7 +2533,7 @@ async fn test_max_connections_limits() {
             connect_regular_user()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2248,7 +2548,7 @@ async fn test_max_connections_limits() {
             connect_external_admin()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2267,7 +2567,7 @@ async fn test_max_connections_limits() {
             connect_regular_user()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2281,14 +2581,14 @@ async fn test_max_connections_limits() {
             let client = match connect_regular_user().await {
                 Err(e) => {
                     assert_contains!(
-                        e.to_string(),
+                        e.to_string_with_causes(),
                         "creating connection would violate max_connections limit"
                     );
                     return Err(());
                 }
                 Ok(client) => client,
             };
-            let _ = client.batch_execute("SELECT 1").await.unwrap();
+            client.batch_execute("SELECT 1").await.unwrap();
             Ok(())
         })
         .await
@@ -2299,7 +2599,8 @@ async fn test_max_connections_limits() {
         .await
         .unwrap();
 
-    // We can create lots of clients now
+    // We can create lots of clients now (kept alive to test connection limits).
+    #[allow(clippy::collection_is_never_read)]
     let mut clients = Vec::new();
     for _ in 0..10 {
         let client = connect_regular_user().await.unwrap();
@@ -2321,11 +2622,7 @@ async fn test_concurrent_id_reuse() {
             .unwrap();
     }
 
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr()
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
     let select_json = "{\"queries\":[{\"query\":\"SELECT * FROM t;\",\"params\":[]}]}";
     let select_json: serde_json::Value = serde_json::from_str(select_json).unwrap();
 
@@ -2339,7 +2636,7 @@ async fn test_concurrent_id_reuse() {
     // state and `B` will panic at any point it tries to access it's state. If they don't use
     // the same connection ID, then everything will be fine.
     fail::cfg("async_prepare", "return(true)").unwrap();
-    for i in 0..100 {
+    for i in 0..50 {
         let http_url = http_url.clone();
         if i % 2 == 0 {
             let fut = reqwest::Client::new()
@@ -2375,7 +2672,7 @@ fn test_internal_console_proxy() {
         .get(
             Url::parse(&format!(
                 "http://{}/internal-console/",
-                server.inner().internal_http_local_addr()
+                server.internal_http_local_addr()
             ))
             .unwrap(),
         )
@@ -2390,28 +2687,88 @@ fn test_internal_console_proxy() {
 }
 
 #[mz_ore::test]
+fn test_metrics_public_endpoint() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_public_metrics_endpoint".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let cluster_name = "test_cluster_1";
+    let cluster_label = format!("cluster_name=\"{cluster_name}\"");
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute(&format!(
+            "CREATE CLUSTER {cluster_name} REPLICAS (r1 (SIZE 'scale=2,workers=2'))"
+        ))
+        .unwrap();
+
+    // Create a materialized view on the cluster so a compute dataflow runs and
+    // reports `mz_dataflow_wallclock_lag_seconds`. That metric carries a
+    // `collection_id` label, which the federated endpoint resolves to a
+    // `collection_name` via the metric's advertised `ObjectNameLookup` rule.
+    let view_name = "test_mv_1";
+    let collection_label = format!("collection_name=\"{view_name}\"");
+    client
+        .batch_execute(&format!(
+            "CREATE MATERIALIZED VIEW {view_name} IN CLUSTER {cluster_name} AS SELECT 1"
+        ))
+        .unwrap();
+
+    let url = Url::parse(&format!(
+        "http://{}/metrics/public",
+        server.http_local_addr()
+    ))
+    .unwrap();
+    let fetch_body = || {
+        let res = Client::new().get(url.clone()).send().unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        res.text().unwrap()
+    };
+
+    // Retry the scrape until the replica's `http` listener is up and the
+    // wallclock-lag dataflow has reported. Until then `/metrics/public` only
+    // returns env's local metrics, without the cluster_name/collection_name
+    // labels resolved from the replica's metrics.
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| {
+            let body = fetch_body();
+            match (
+                body.contains(cluster_label.as_str()),
+                body.contains(collection_label.as_str()),
+            ) {
+                (true, true) => Ok(()),
+                (cluster, collection) => Err(format!(
+                    "labels not yet in /metrics/public \
+                     (cluster_name={cluster}, collection_name={collection})"
+                )),
+            }
+        })
+        .unwrap();
+
+    // Dropping the cluster (and its dependent view) removes both labels.
+    client
+        .batch_execute(&format!("DROP CLUSTER {cluster_name} CASCADE"))
+        .unwrap();
+
+    let body = fetch_body();
+    assert!(!body.contains(cluster_label.as_str()));
+    assert!(!body.contains(collection_label.as_str()));
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_internal_http_auth() {
     let server = test_util::TestHarness::default().start_blocking();
     let json = serde_json::json!({"query": "SELECT current_user;"});
     let url = Url::parse(&format!(
         "http://{}/api/sql",
-        server.inner().internal_http_local_addr()
+        server.internal_http_local_addr()
     ))
     .unwrap();
-
-    let res = Client::new().post(url.clone()).json(&json).send().unwrap();
-
-    tracing::info!("response: {res:?}");
-
-    assert_eq!(
-        res.status(),
-        StatusCode::OK,
-        "{:?}",
-        res.json::<serde_json::Value>()
-    );
-    // defaults to mz_system
-    assert!(res.text().unwrap().to_string().contains("mz_system"));
 
     let res = Client::new()
         .post(url.clone())
@@ -2430,6 +2787,23 @@ fn test_internal_http_auth() {
     // can be explicitly set to mz_system
     assert!(res.text().unwrap().to_string().contains("mz_system"));
 
+    // Check that mz_system is a superuser
+    let json_superuser = serde_json::json!({"query": "SHOW is_superuser;"});
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "mz_system")
+        .json(&json_superuser)
+        .send()
+        .unwrap();
+
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    assert!(res.text().unwrap().to_string().contains("on"));
+
     let res = Client::new()
         .post(url.clone())
         .header("x-materialize-user", "mz_support")
@@ -2437,7 +2811,6 @@ fn test_internal_http_auth() {
         .send()
         .unwrap();
 
-    tracing::info!("response: {res:?}");
     assert_eq!(
         res.status(),
         StatusCode::OK,
@@ -2447,6 +2820,22 @@ fn test_internal_http_auth() {
     // can be explicitly set to mz_support
     assert!(res.text().unwrap().to_string().contains("mz_support"));
 
+    // Check that mz_support is not a superuser
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "mz_support")
+        .json(&json_superuser)
+        .send()
+        .unwrap();
+
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    assert!(res.text().unwrap().to_string().contains("off"));
+
     let res = Client::new()
         .post(url.clone())
         .header("x-materialize-user", "invalid value")
@@ -2454,7 +2843,6 @@ fn test_internal_http_auth() {
         .send()
         .unwrap();
 
-    tracing::info!("response: {res:?}");
     // invalid header returns an error
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{:?}", res.text());
 }
@@ -2468,9 +2856,9 @@ fn test_internal_ws_auth() {
     let ws_url = server.internal_ws_addr();
     let make_req = || {
         Request::builder()
-            .uri(ws_url.as_str())
+            .uri(ws_url.clone())
             .method("GET")
-            .header("Host", ws_url.host_str().unwrap())
+            .header("Host", ws_url.host().unwrap())
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
@@ -2498,7 +2886,11 @@ fn test_internal_ws_auth() {
     // Auth with OptionsOnly
     test_util::auth_with_ws_impl(
         &mut ws,
-        Message::Text(serde_json::to_string(&WebSocketAuth::OptionsOnly { options }).unwrap()),
+        Message::Text(
+            serde_json::to_string(&WebSocketAuth::OptionsOnly { options })
+                .unwrap()
+                .into(),
+        ),
     )
     .unwrap();
 
@@ -2506,7 +2898,7 @@ fn test_internal_ws_auth() {
     // set from the headers passed with the websocket request.
     let json = "{\"query\":\"SELECT current_user;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read().unwrap();
@@ -2536,9 +2928,9 @@ fn test_internal_ws_auth() {
     }
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-async fn test_leader_promotion_always_using_deploy_generation() {
+fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
@@ -2546,37 +2938,37 @@ async fn test_leader_promotion_always_using_deploy_generation() {
         .with_deploy_generation(2);
     {
         // propose a deploy generation for the first time
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
     }
     {
         // keep it the same, no need to promote the leader
-        let server = harness.start().await;
-        let client = server.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
 
-        let http_client = reqwest::Client::new();
+        let http_client = reqwest::blocking::Client::new();
 
         // check that we're the leader and promotion doesn't do anything
         let status_http_url = Url::parse(&format!(
             "http://{}/api/leader/status",
-            server.inner.internal_http_local_addr()
+            server.internal_http_local_addr()
         ))
         .unwrap();
-        let res = http_client.get(status_http_url).send().await.unwrap();
+        let res = http_client.get(status_http_url).send().unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response = res.text().await.unwrap();
+        let response = res.text().unwrap();
         assert_eq!(response, r#"{"status":"IsLeader"}"#);
 
         let promote_http_url = Url::parse(&format!(
             "http://{}/api/leader/promote",
-            server.inner.internal_http_local_addr()
+            server.internal_http_local_addr()
         ))
         .unwrap();
-        let res = http_client.post(promote_http_url).send().await.unwrap();
+        let res = http_client.post(promote_http_url).send().unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response = res.text().await.unwrap();
+        let response = res.text().unwrap();
         assert_eq!(response, r#"{"result":"Success"}"#);
     }
 }
@@ -2599,8 +2991,8 @@ async fn test_leader_promotion_mixed_code_version() {
     client_this.simple_query("SELECT 1").await.unwrap();
 
     // Simulate a rolling upgrade and wait for the preflight checks.
-    let listeners_next = test_util::Listeners::new().await.unwrap();
-    let internal_http_addr_next = listeners_next.inner.internal_http_local_addr();
+    let listeners_next = test_util::Listeners::new(&harness).await.unwrap();
+    let internal_http_addr_next = listeners_next.inner.http["internal"].handle.local_addr;
     let config_next = harness
         .clone()
         .with_deploy_generation(2)
@@ -2673,7 +3065,7 @@ fn test_cancel_ws() {
     test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     loop {
         let msg = ws.read().unwrap();
@@ -2702,7 +3094,7 @@ async fn smoketest_webhook_source() {
     // Create a webhook source.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .await
@@ -2735,7 +3127,7 @@ async fn smoketest_webhook_source() {
     let http_client = reqwest::Client::new();
     let webhook_url = Arc::new(format!(
         "http://{}/api/webhook/materialize/public/webhook_json",
-        server.inner.http_local_addr()
+        server.http_local_addr()
     ));
     // Send all of our events to our webhook source.
     let mut handles = Vec::with_capacity(events.len());
@@ -2760,16 +3152,19 @@ async fn smoketest_webhook_source() {
         .metrics_registry
         .gather()
         .into_iter()
-        .find(|metric| metric.get_name() == "mz_http_requests_total")
+        .find(|metric| metric.name() == "mz_http_requests_total")
         .unwrap();
     let total_requests_metric = &total_requests_metric.get_metric()[0];
-    assert_eq!(total_requests_metric.get_counter().get_value(), 100.0);
+    assert_eq!(total_requests_metric.get_counter().value(), 100.0);
 
     let path_label = &total_requests_metric.get_label()[0];
-    assert_eq!(path_label.get_value(), "/api/webhook/:database/:schema/:id");
+    assert_eq!(
+        path_label.value(),
+        "/api/webhook/{:database}/{:schema}/{:id}"
+    );
 
     let status_label = &total_requests_metric.get_label()[2];
-    assert_eq!(status_label.get_value(), "200");
+    assert_eq!(status_label.value(), "200");
 
     // Wait for the events to be persisted.
     let (client, result) = mz_ore::retry::Retry::default()
@@ -2813,7 +3208,7 @@ fn test_invalid_webhook_body() {
     // Create a cluster we can install webhook sources on.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");
@@ -2827,7 +3222,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // Send non-UTF8 text which will fail to get deserialized.
@@ -2850,7 +3245,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_json",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // Send invalid JSON which will fail to get deserialized.
@@ -2870,12 +3265,12 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_bytes",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // No matter what is in the body, we should always succeed.
     let mut data = [0u8; 128];
-    rand::thread_rng().fill_bytes(&mut data);
+    rand::rng().fill_bytes(&mut data);
     println!("Random bytes: {data:?}");
     let resp = http_client
         .post(webhook_url)
@@ -2896,7 +3291,7 @@ fn test_webhook_duplicate_headers() {
     // Create a webhook source that includes headers.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");
@@ -2908,7 +3303,7 @@ fn test_webhook_duplicate_headers() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner().http_local_addr()
+        server.http_local_addr()
     );
 
     // Send a request with duplicate headers.
@@ -2962,25 +3357,25 @@ fn test_github_20262() {
 
     let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
     test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
-    ws.send(Message::Text(subscribe)).unwrap();
+    ws.send(Message::Text(subscribe.into())).unwrap();
     cancel();
-    ws.send(Message::Text(commit)).unwrap();
-    ws.send(Message::Text(select)).unwrap();
+    ws.send(Message::Text(commit.into())).unwrap();
+    ws.send(Message::Text(select.into())).unwrap();
 
     let mut expect = VecDeque::from([
-        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#,
-        r#"{"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"i","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
-        r#"{"type":"Error","payload":{"message":"canceling statement due to user request","code":"57014"}}"#,
-        r#"{"type":"ReadyForQuery","payload":"I"}"#,
-        r#"{"type":"Notice","payload":{"message":"there is no transaction in progress","code":"25P01","severity":"warning"}}"#,
-        r#"{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}"#,
-        r#"{"type":"CommandComplete","payload":"COMMIT"}"#,
-        r#"{"type":"ReadyForQuery","payload":"I"}"#,
-        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#,
-        r#"{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
-        r#"{"type":"Row","payload":["1"]}"#,
-        r#"{"type":"CommandComplete","payload":"SELECT 1"}"#,
-        r#"{"type":"ReadyForQuery","payload":"I"}"#,
+        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#.to_string(),
+        r#"{"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"i","type_oid":23,"type_len":4,"type_mod":-1}]}}"#.to_string(),
+        r#"{"type":"Error","payload":{"message":"canceling statement due to user request","code":"57014"}}"#.to_string(),
+        r#"{"type":"ReadyForQuery","payload":"I"}"#.to_string(),
+        r#"{"type":"Notice","payload":{"message":"there is no transaction in progress","code":"25P01","severity":"warning"}}"#.to_string(),
+        r#"{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}"#.to_string(),
+        r#"{"type":"CommandComplete","payload":"COMMIT"}"#.to_string(),
+        r#"{"type":"ReadyForQuery","payload":"I"}"#.to_string(),
+        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#.to_string(),
+        format!(r#"{{"type":"Rows","payload":{{"columns":[{{"name":"{UNKNOWN_COLUMN_NAME}","type_oid":23,"type_len":4,"type_mod":-1}}]}}}}"#),
+        r#"{"type":"Row","payload":["1"]}"#.to_string(),
+        r#"{"type":"CommandComplete","payload":"SELECT 1"}"#.to_string(),
+        r#"{"type":"ReadyForQuery","payload":"I"}"#.to_string(),
     ]);
     while !expect.is_empty() {
         if let Message::Text(text) = ws.read().unwrap() {
@@ -2998,7 +3393,7 @@ fn test_cancel_read_then_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
-    server.enable_feature_flags(&["enable_unsafe_functions"]);
+    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
@@ -3024,7 +3419,7 @@ fn test_cancel_read_then_write() {
                     .batch_execute("insert into foo select a, case when mz_unsafe.mz_sleep(ts) > 0 then 0 end as ts from foo")
                     .unwrap_err();
                 assert_contains!(
-                    err.to_string(),
+                    err.to_string_with_causes(),
                     "statement timeout"
                 );
                 client1
@@ -3035,7 +3430,7 @@ fn test_cancel_read_then_write() {
                 .batch_execute("insert into foo values ('blah', 1);")
                 .unwrap_err();
                 assert_contains!(
-                    err.to_string(),
+                    err.to_string_with_causes(),
                     "canceling statement"
                 );
             });
@@ -3058,11 +3453,7 @@ fn test_cancel_read_then_write() {
 async fn test_http_metrics() {
     let server = test_util::TestHarness::default().start().await;
 
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr(),
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr(),)).unwrap();
 
     // Handled query (successful)
     let json = r#"{ "query": "SHOW application_name;" }"#;
@@ -3108,39 +3499,39 @@ async fn test_http_metrics() {
     let metrics = server.metrics_registry.gather();
     let http_metrics: Vec<_> = metrics
         .into_iter()
-        .filter(|metric| metric.get_name().starts_with("mz_http"))
+        .filter(|metric| metric.name().starts_with("mz_http"))
         .collect();
 
     // Make sure the duration metric exists.
     let duration_count = http_metrics
         .iter()
-        .filter(|metric| metric.get_name() == "mz_http_request_duration_seconds")
+        .filter(|metric| metric.name() == "mz_http_request_duration_seconds")
         .count();
     assert_eq!(duration_count, 1);
     // Make sure the active count metric exists.
     let active_count = http_metrics
         .iter()
-        .filter(|metric| metric.get_name() == "mz_http_requests_active")
+        .filter(|metric| metric.name() == "mz_http_requests_active")
         .count();
     assert_eq!(active_count, 1);
 
     // Make sure our metrics capture the one successful query and the one failure.
     let mut request_metrics: Vec<_> = http_metrics
         .into_iter()
-        .filter(|metric| metric.get_name() == "mz_http_requests_total")
+        .filter(|metric| metric.name() == "mz_http_requests_total")
         .collect();
     assert_eq!(request_metrics.len(), 1);
 
     let request_metric = request_metrics.pop().unwrap();
     let success_metric = &request_metric.get_metric()[0];
-    assert_eq!(success_metric.get_counter().get_value(), 2.0);
-    assert_eq!(success_metric.get_label()[0].get_value(), "/api/sql");
-    assert_eq!(success_metric.get_label()[2].get_value(), "200");
+    assert_eq!(success_metric.get_counter().value(), 2.0);
+    assert_eq!(success_metric.get_label()[0].value(), "/api/sql");
+    assert_eq!(success_metric.get_label()[2].value(), "200");
 
     let failure_metric = &request_metric.get_metric()[1];
-    assert_eq!(failure_metric.get_counter().get_value(), 1.0);
-    assert_eq!(failure_metric.get_label()[0].get_value(), "/api/sql");
-    assert_eq!(failure_metric.get_label()[2].get_value(), "422");
+    assert_eq!(failure_metric.get_counter().value(), 1.0);
+    assert_eq!(failure_metric.get_label()[0].value(), "/api/sql");
+    assert_eq!(failure_metric.get_label()[2].value(), "422");
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -3160,7 +3551,7 @@ async fn webhook_concurrent_actions() {
     let src_name = "webhook_json";
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster_concurrent REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster_concurrent REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .await
@@ -3188,7 +3579,7 @@ async fn webhook_concurrent_actions() {
     // Spin up tasks that will contiously push data to the webhook.
     let keep_sending_ = Arc::clone(&keep_sending);
     let num_requests_before_drop_ = Arc::clone(&num_requests_before_drop);
-    let addr = server.inner.http_local_addr();
+    let addr = server.http_local_addr();
 
     let poster = mz_ore::task::spawn(|| "webhook_concurrent_actions-poster", async move {
         let mut i = 0;
@@ -3252,14 +3643,10 @@ async fn webhook_concurrent_actions() {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     // Stop the threads.
     keep_sending.store(false, std::sync::atomic::Ordering::Relaxed);
-    let results = poster.await.expect("thread panicked!");
+    let results = poster.await;
 
     // Inspect the results.
-    let mut results = results
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .expect("no join failures")
-        .into_iter();
+    let mut results = results.into_iter().collect::<Vec<_>>().into_iter();
 
     for _ in 0..num_requests_before_drop {
         let response = results.next().expect("element");
@@ -3305,10 +3692,15 @@ async fn webhook_concurrent_actions() {
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_concurrency_limit() {
     let concurrency_limit = 15;
-    let server = test_util::TestHarness::default().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     // Note: we need enable_unstable_dependencies to use mz_sleep.
-    server.enable_feature_flags(&["enable_unstable_dependencies", "enable_unsafe_functions"]);
+    server.enable_feature_flags(&[
+        "unsafe_enable_unstable_dependencies",
+        "unsafe_enable_unsafe_functions",
+    ]);
 
     // Reduce the webhook concurrency limit;
     let mut mz_client = server
@@ -3327,7 +3719,7 @@ fn webhook_concurrency_limit() {
     // Create a webhook source.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");
@@ -3343,7 +3735,7 @@ fn webhook_concurrency_limit() {
     let http_client = reqwest::Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner().http_local_addr().clone(),
+        server.http_local_addr().clone(),
     );
     let mut handles = Vec::with_capacity(concurrency_limit + 5);
 
@@ -3367,8 +3759,7 @@ fn webhook_concurrency_limit() {
     }
     let results = server
         .runtime()
-        .block_on(futures::future::try_join_all(handles))
-        .expect("failed to wait for requests");
+        .block_on(futures::future::join_all(handles));
 
     let successes = results
         .iter()
@@ -3390,13 +3781,16 @@ fn webhook_concurrency_limit() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_too_large_request() {
-    let server = test_util::TestHarness::default().start_blocking();
+    let metrics_registry = MetricsRegistry::new();
+    let server = test_util::TestHarness::default()
+        .with_metrics_registry(metrics_registry.clone())
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Create a webhook source.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");
@@ -3410,12 +3804,12 @@ fn webhook_too_large_request() {
     let http_client = Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_bytes",
-        server.inner().http_local_addr(),
+        server.http_local_addr(),
     );
 
     // Send an event with a body larger that is exactly our max size.
-    let two_mb = usize::cast_from(bytesize::mb(2u64));
-    let body = vec![42u8; two_mb];
+    let five_mib = usize::cast_from(bytesize::mib(5u64));
+    let body = vec![42u8; five_mib];
     let resp = http_client
         .post(&webhook_url)
         .body(body)
@@ -3424,7 +3818,7 @@ fn webhook_too_large_request() {
     assert!(resp.status().is_success());
 
     // Send an event that is one larger than our max size.
-    let body = vec![42u8; two_mb + 1];
+    let body = vec![42u8; five_mib + 1];
     let resp = http_client
         .post(&webhook_url)
         .body(body)
@@ -3433,6 +3827,26 @@ fn webhook_too_large_request() {
 
     // Note: If this changes then we need to update our docs.
     assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    // Ensure we logged a prometheus metric that we responded with a 413.
+    let metrics: Vec<_> = metrics_registry.gather().into_iter().collect();
+    let payload_too_large = metrics
+        .iter()
+        .find(|metric_family| metric_family.name() == "mz_http_requests_total")
+        .unwrap()
+        .get_metric()
+        .iter()
+        .find(|metric| {
+            metric
+                .get_label()
+                .iter()
+                .find(|label_pair| label_pair.value() == "413")
+                .is_some()
+        })
+        .unwrap()
+        .get_counter()
+        .value();
+    assert_eq!(payload_too_large, 1.0);
 }
 
 #[mz_ore::test]
@@ -3451,7 +3865,7 @@ fn test_webhook_url_notice() {
     // Create a webhook source that includes headers.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");
@@ -3462,12 +3876,9 @@ fn test_webhook_url_notice() {
         )
         .expect("failed to create source");
 
-    let url_notice = rx
-        .try_next()
-        .expect("contains notice")
-        .expect("contains message");
+    let url_notice = rx.try_recv().expect("contains notice");
     // We should only get the one notice.
-    assert_err!(rx.try_next());
+    assert_err!(rx.try_recv());
 
     // Print the notice to stderr for future debug-ability.
     eprintln!("notice: {}", url_notice.message());
@@ -3504,16 +3915,11 @@ async fn webhook_concurrent_swap() {
     let server = test_util::TestHarness::default().start().await;
     let mut client = server.connect().await.unwrap();
 
-    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-    struct WebhookEvent {
-        name: String,
-    }
-
     // Create our webhook sources.
     let webhook_cluster = "webhook_cluster_concurrent_swap";
     client
         .execute(
-            &format!("CREATE CLUSTER {webhook_cluster} REPLICAS (r1 (SIZE '1'));"),
+            &format!("CREATE CLUSTER {webhook_cluster} REPLICAS (r1 (SIZE 'scale=1,workers=1'));"),
             &[],
         )
         .await
@@ -3522,7 +3928,9 @@ async fn webhook_concurrent_swap() {
     let src_foo = "webhook_foo";
     client
         .execute(
-            &format!("CREATE SOURCE {src_foo} IN CLUSTER {webhook_cluster} FROM WEBHOOK BODY FORMAT TEXT"),
+            &format!(
+                "CREATE SOURCE {src_foo} IN CLUSTER {webhook_cluster} FROM WEBHOOK BODY FORMAT TEXT"
+            ),
             &[],
         )
         .await
@@ -3530,14 +3938,16 @@ async fn webhook_concurrent_swap() {
     let src_bar = "webhook_bar";
     client
         .execute(
-            &format!("CREATE SOURCE {src_bar} IN CLUSTER {webhook_cluster} FROM WEBHOOK BODY FORMAT TEXT"),
+            &format!(
+                "CREATE SOURCE {src_bar} IN CLUSTER {webhook_cluster} FROM WEBHOOK BODY FORMAT TEXT"
+            ),
             &[],
         )
         .await
         .expect("failed to create source");
 
     // Spin up tasks that will contiously push data to both webhooks.
-    let addr = server.inner.http_local_addr();
+    let addr = server.http_local_addr();
     let http_client = reqwest::Client::new();
     let keep_sending = Arc::new(AtomicBool::new(true));
 
@@ -3652,11 +4062,11 @@ async fn webhook_concurrent_swap() {
         .metrics_registry
         .gather()
         .into_iter()
-        .find(|m| m.get_name() == "mz_webhook_get_appender_count")
+        .find(|m| m.name() == "mz_webhook_get_appender_count")
         .unwrap()
         .take_metric()[0]
         .get_counter()
-        .get_value();
+        .value();
 
     // We should only get a webhook appender from the Coordinator 4 times, once for each source
     // when we start posting, and then once again for each source after they are renamed.
@@ -3674,16 +4084,6 @@ fn copy_from() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
-    let mut system_client = server
-        .pg_config_internal()
-        .user(&SYSTEM_USER.name)
-        .connect(postgres::NoTls)
-        .unwrap();
-    system_client
-        .batch_execute("ALTER SYSTEM SET max_copy_from_size = 50")
-        .unwrap();
-    drop(system_client);
-
     client
         .execute("CREATE TABLE copy_from_test ( x text )", &[])
         .expect("success");
@@ -3700,21 +4100,6 @@ fn copy_from() {
         .query("SELECT * FROM copy_from_test", &[])
         .expect("success");
     assert_eq!(rows.len(), 2);
-
-    // This copy from is 53 bytes long, which is greater than our limit of 50.
-    let mut writer = client
-        .copy_in("COPY copy_from_test FROM STDIN (FORMAT TEXT)")
-        .expect("success");
-    writer
-        .write_all(b"this\ncopy\nis\nlarger\nthan\nour\ngreatest\nsupported\nsize\n")
-        .expect("write all to succeed");
-    let result = writer.finish().unwrap_db_error();
-    assert_eq!(result.code(), &SqlState::INSUFFICIENT_RESOURCES);
-
-    let rows = client
-        .query("SELECT * FROM copy_from_test", &[])
-        .expect("success");
-    assert_eq!(rows.len(), 2);
 }
 
 // Test that a cluster dropped mid transaction results in an error.
@@ -3726,7 +4111,10 @@ fn concurrent_cluster_drop() {
     let mut drop_client = server.connect(postgres::NoTls).unwrap();
 
     txn_client
-        .execute("CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));", &[])
+        .execute(
+            "CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
+            &[],
+        )
         .expect("failed to create cluster");
     txn_client
         .execute("CREATE TABLE t (a INT);", &[])
@@ -3780,8 +4168,20 @@ async fn test_github_25388() {
         .start()
         .await;
     server
-        .enable_feature_flags(&["enable_unsafe_functions"])
+        .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
         .await;
+
+    // TODO(peek-seq) The second part of this test no longer works with the new peek sequencing,
+    // because we no longer check the catalog after optimization whether the original dependencies
+    // still exist. This might be fine, because nothing bad happens: timestamp determination already
+    // puts a a read hold on the index, so the index doesn't actually gets dropped in the
+    // Controller, and therefore the peek actually succeeds. In other words, the old peek
+    // sequencing's dependency check was overly cautious. I'm planning to revisit this later, and
+    // probably delete the second part of the test.
+    server
+        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
+        .await;
+
     let client1 = server.connect().await.unwrap();
 
     client1
@@ -3812,8 +4212,8 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err) if err.to_string().contains("dependency was removed") => Ok(()),
-                Err(err) => Err(err.to_string()),
+                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
+                Err(err) => Err(err.to_string_with_causes()),
             }
         })
         .await
@@ -3841,8 +4241,8 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err) if err.to_string().contains("dependency was removed") => Ok(()),
-                Err(err) => Err(err.to_string()),
+                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
+                Err(err) => Err(err.to_string_with_causes()),
             }
         })
         .await
@@ -3872,7 +4272,7 @@ async fn test_webhook_source_batch_interval() {
     let http_client = reqwest::Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_batch_interval_test",
-        server.inner.http_local_addr()
+        server.http_local_addr()
     );
 
     // Send one event to our webhook source.
@@ -3941,11 +4341,7 @@ async fn test_startup_cluster_notice_with_http_options() {
 
     let http_client = reqwest::Client::new();
 
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr(),
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr(),)).unwrap();
 
     let query = serde_json::json!({
         "query": "SHOW cluster"
@@ -4122,44 +4518,39 @@ async fn test_startup_cluster_notice() {
     "###);
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-async fn test_durable_oids() {
+fn test_durable_oids() {
     let data_dir = tempfile::tempdir().unwrap();
     let harness = test_util::TestHarness::default().data_directory(data_dir.path());
 
     let table_oid: u32 = {
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
         client
             .execute("CREATE TABLE t (a INT);", &[])
-            .await
             .expect("failed to create table");
         client
             .query_one("SELECT oid FROM mz_tables WHERE name = 't'", &[])
-            .await
             .expect("failed to select")
             .get(0)
     };
 
     {
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
 
         let restarted_table_oid: u32 = client
             .query_one("SELECT oid FROM mz_tables WHERE name = 't'", &[])
-            .await
             .expect("failed to select")
             .get(0);
         assert_eq!(table_oid, restarted_table_oid);
 
         client
             .execute("CREATE VIEW v AS SELECT 1;", &[])
-            .await
             .expect("failed to create table");
         let view_oid: u32 = client
             .query_one("SELECT oid FROM mz_views WHERE name = 'v'", &[])
-            .await
             .expect("failed to select")
             .get(0);
         assert_ne!(table_oid, view_oid);
@@ -4194,13 +4585,9 @@ async fn test_double_encoded_json() {
         .unwrap();
 
     let http_client = reqwest::Client::new();
-    let http_url = Url::parse(&format!(
-        "http://{}/api/sql",
-        server.inner.http_local_addr(),
-    ))
-    .unwrap();
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr(),)).unwrap();
     let query = serde_json::json!({
-        "query": "SELECT a FROM t1"
+        "query": "SELECT a FROM t1 ORDER BY a"
     });
 
     let result: serde_json::Value = http_client
@@ -4229,12 +4616,12 @@ async fn test_double_encoded_json() {
     insta::assert_debug_snapshot!(rows, @r###"
     Array [
         Array [
+            String(" { \"type\": \"foo\" } "),
+        ],
+        Array [
             Object {
                 "type": String("foo"),
             },
-        ],
-        Array [
-            String(" { \"type\": \"foo\" } "),
         ],
     ]
     "###);
@@ -4243,14 +4630,17 @@ async fn test_double_encoded_json() {
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
     let _ws_init = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
 
-    let json = "{\"query\":\"SELECT a FROM t1;\"}";
+    let json = "{\"query\":\"SELECT a FROM t1 ORDER BY a;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
-        let msg = ws.read().unwrap();
-        let msg = msg.into_text().expect("response should be text");
-        serde_json::from_str(&msg).unwrap()
+        loop {
+            let msg = ws.read().unwrap();
+            if let Message::Text(text) = msg {
+                return serde_json::from_str(&text).unwrap();
+            }
+        }
     };
     let _starting = read_msg();
     let _columns = read_msg();
@@ -4259,9 +4649,7 @@ async fn test_double_encoded_json() {
     insta::assert_debug_snapshot!(row_1, @r###"
     Row(
         [
-            Object {
-                "type": String("foo"),
-            },
+            String(" { \"type\": \"foo\" } "),
         ],
     )
     "###);
@@ -4269,7 +4657,9 @@ async fn test_double_encoded_json() {
     insta::assert_debug_snapshot!(row_2, @r###"
     Row(
         [
-            String(" { \"type\": \"foo\" } "),
+            Object {
+                "type": String("foo"),
+            },
         ],
     )
     "###);
@@ -4357,7 +4747,7 @@ async fn test_cert_reloading() {
     let config = test_util::TestHarness::default()
         // Enable SSL on the main port. There should be a balancerd port with no SSL.
         .with_tls(server_cert.clone(), server_key.clone())
-        .with_frontegg(&frontegg_auth)
+        .with_frontegg_auth(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
     let envd_server = config.start_with_trigger(reload_certs).await;
 
@@ -4373,8 +4763,8 @@ async fn test_cert_reloading() {
 
     let conn_str = Arc::new(format!(
         "user={frontegg_user} password={frontegg_password} host={} port={} sslmode=require",
-        envd_server.inner.sql_local_addr().ip(),
-        envd_server.inner.sql_local_addr().port()
+        envd_server.sql_local_addr().ip(),
+        envd_server.sql_local_addr().port()
     ));
 
     /// Asserts that the postgres connection provides the expected server-side certificate.
@@ -4416,7 +4806,7 @@ async fn test_cert_reloading() {
     // Assert the current certificate is as expected.
     let https_url = format!(
         "https://{addr}/api/sql",
-        addr = envd_server.inner.http_local_addr(),
+        addr = envd_server.http_local_addr(),
     );
     let resp = client
         .post(&https_url)
@@ -4578,4 +4968,1846 @@ fn test_builtin_connection_alterations_are_preserved_across_restarts() {
             "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = 'foo')"
         );
     }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_webhook_request_compression() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text",
+        server.http_local_addr(),
+    );
+
+    let og_body = "hello world!";
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(og_body.as_bytes()).unwrap();
+    let compressed_body = encoder.finish().unwrap();
+
+    assert!(og_body.as_bytes().len() < compressed_body.len());
+
+    let resp = http_client
+        .post(&webhook_url)
+        .header(CONTENT_ENCODING, "gzip")
+        .body(compressed_body)
+        .send()
+        .expect("failed to POST event");
+    assert!(resp.status().is_success(), "{resp:?}");
+
+    // Wait for up to 10s for the webhook to get appended.
+    let mut row = None;
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        row = client
+            .query_opt("SELECT body FROM webhook_text", &[])
+            .unwrap();
+        if row.is_some() {
+            break;
+        }
+    }
+
+    let rnd_body = row.as_ref().map(|r| r.get("body"));
+    assert_eq!(rnd_body, Some(og_body));
+}
+
+// =============================================================================
+// MCP (Model Context Protocol) integration tests
+// =============================================================================
+
+/// Helper to set up an MCP test server and run datadriven tests.
+fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
+    let version_re = Regex::new(r#"\d+\.\d+\.\d+(\.\d+)?(-(dev|rc)(\.\d+)?)?"#).unwrap();
+
+    datadriven::walk(testdata_path, |f| {
+        let server = harness.clone().start_blocking();
+
+        // Grant all privileges to default http user (same setup as test_http_sql).
+        {
+            let mut super_user = server
+                .pg_config_internal()
+                .user(&SYSTEM_USER.name)
+                .connect(postgres::NoTls)
+                .unwrap();
+            super_user
+                .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+        }
+
+        let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+        let developer_url = format!("http://{}/api/mcp/developer", server.http_local_addr());
+
+        f.run(|tc| {
+            let url = match tc.directive.as_str() {
+                "mcp-agent" => &agents_url,
+                "mcp-developer" => &developer_url,
+                other => panic!("unknown directive: {}", other),
+            };
+
+            let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
+            let res = Client::new().post(url).json(&json).send().unwrap();
+
+            let status = res.status();
+            let body = res.text().unwrap();
+
+            // Replace version numbers for stable output.
+            let body = version_re.replace_all(&body, "<VERSION>").to_string();
+
+            if body.is_empty() {
+                format!("{}\n", status)
+            } else {
+                format!("{}\n{}\n", status, body)
+            }
+        });
+    });
+}
+
+/// Tests the MCP agent endpoint with the query tool explicitly disabled.
+#[mz_ore::test]
+fn test_mcp_agent() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_agent_query_tool".to_string(),
+            "false".to_string(),
+        );
+    run_mcp_datadriven("tests/testdata/mcp/agent", harness);
+}
+
+/// Tests the MCP agent endpoint with the query tool enabled (default behavior).
+#[mz_ore::test]
+fn test_mcp_agent_query_tool() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/agent_query_tool", harness);
+}
+
+/// Tests that the MCP agent endpoint returns 503 when the feature flag is disabled.
+#[mz_ore::test]
+fn test_mcp_agent_disabled() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "false".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/agent_disabled", harness);
+}
+
+/// Tests the MCP developer endpoint.
+#[mz_ore::test]
+fn test_mcp_developer() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/developer", harness);
+}
+
+/// Tests the MCP developer endpoint when disabled (503).
+#[mz_ore::test]
+fn test_mcp_developer_disabled() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "false".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/developer_disabled", harness);
+}
+
+/// Regression test for database-issues#11320.
+///
+/// The developer endpoint validator allows unqualified `mz_*` table names as
+/// a UX convenience. Before the fix, an attacker with CREATE privileges could
+/// create `public.mz_leak` pointing at sensitive data and the session's
+/// `search_path` would resolve the unqualified name to that view, bypassing
+/// the system-catalog-only restriction. The fix sets a tight `search_path`
+/// containing only system schemas before executing the query, so `mz_leak`
+/// cannot resolve to a user-created object.
+#[mz_ore::test]
+fn test_mcp_developer_search_path_defense() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .start_blocking();
+
+    let developer_url = format!("http://{}/api/mcp/developer", server.http_local_addr());
+
+    // Set up a user view named `mz_leak` in the `public` schema and point the
+    // HTTP user's search_path at `public` so an unqualified reference would
+    // normally resolve to it.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+
+        super_user
+            .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+
+        // Attacker-created view with the `mz_` prefix.
+        super_user
+            .batch_execute("CREATE VIEW public.mz_leak AS SELECT 'leaked_secret'::text AS payload")
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON public.mz_leak TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "ALTER ROLE {} SET search_path TO public",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+    }
+
+    // Attempt to leak: unqualified `mz_leak` must NOT resolve to `public.mz_leak`.
+    let (status, body) = mcp_post(
+        &developer_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "query_system_catalog",
+                "arguments": {"sql_query": "SELECT * FROM mz_leak"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_object(),
+        "unqualified mz_leak should not resolve to the user view, got: {body}"
+    );
+    let result_text = body
+        .get("result")
+        .and_then(|r| r["content"].get(0))
+        .and_then(|c| c["text"].as_str())
+        .unwrap_or("");
+    assert!(
+        !result_text.contains("leaked_secret"),
+        "user view contents must not leak through MCP, got: {body}"
+    );
+
+    // Explicit qualification with a non-system schema is still rejected by the
+    // validator, regardless of search_path.
+    let (status, body) = mcp_post(
+        &developer_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "query_system_catalog",
+                "arguments": {"sql_query": "SELECT * FROM public.mz_leak"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("non-system"),
+        "public.mz_leak should be rejected by the validator, got: {body}"
+    );
+
+    // Legitimate unqualified system queries must still work: the tight
+    // search_path resolves `mz_tables` to `mz_catalog.mz_tables`.
+    let (status, body) = mcp_post(
+        &developer_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "query_system_catalog",
+                "arguments": {"sql_query": "SELECT name FROM mz_databases WHERE name = 'materialize'"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "legitimate unqualified system query should succeed, got: {body}"
+    );
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        result_text.contains("materialize"),
+        "query should return the default database, got: {result_text}"
+    );
+}
+
+/// Helper to POST a JSON-RPC request to an MCP endpoint and return the parsed response.
+fn mcp_post(url: &str, json: serde_json::Value) -> (reqwest::StatusCode, serde_json::Value) {
+    let res = Client::new().post(url).json(&json).send().unwrap();
+    let status = res.status();
+    let body: serde_json::Value = res.json().unwrap_or(serde_json::Value::Null);
+    (status, body)
+}
+
+/// Tests get_data_products, get_data_product_details, and read_data_product against
+/// a real data product (view + index + comment).
+#[mz_ore::test]
+fn test_mcp_agent_with_data_product() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+
+    // Set up a data product: create a view, index it, and add a comment on the index.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+
+        // Create the HTTP user and grant privileges.
+        super_user
+            .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+
+        // Create a materialized view and an index on it.
+        super_user
+            .batch_execute(
+                "CREATE MATERIALIZED VIEW test_products IN CLUSTER quickstart AS SELECT 1::int AS id, 'widget'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE INDEX test_products_idx IN CLUSTER quickstart ON test_products (id)",
+            )
+            .unwrap();
+        // Comment on the index enriches the data product description.
+        super_user
+            .batch_execute("COMMENT ON INDEX test_products_idx IS 'A test data product for integration testing'")
+            .unwrap();
+        // Grant SELECT on the view to the HTTP user so it appears in mz_show_my_object_privileges.
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_products TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        // Grant USAGE on the cluster so it appears in mz_show_my_cluster_privileges.
+        super_user
+            .batch_execute(&format!(
+                "GRANT USAGE ON CLUSTER quickstart TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+
+        // Indexed regular view: cheap to query via the in-memory arrangement,
+        // should appear as a data product. Comment on the view (not the index)
+        // exercises the object-comment fallback path.
+        super_user
+            .batch_execute(
+                "CREATE VIEW test_indexed_view AS SELECT 2::int AS id, 'gadget'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE INDEX test_indexed_view_idx IN CLUSTER quickstart ON test_indexed_view (id)",
+            )
+            .unwrap();
+        super_user
+            .batch_execute("COMMENT ON VIEW test_indexed_view IS 'View-level description'")
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_indexed_view TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+
+        // Non-indexed regular view: would trigger full recompute on query,
+        // must NOT appear as a data product.
+        super_user
+            .batch_execute(
+                "CREATE VIEW test_unindexed_view AS SELECT 3::int AS id, 'sprocket'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_unindexed_view TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+
+        // Materialized view without an explicit index: bounded query cost
+        // (Persist-backed), should appear as a data product. Comment on the MV
+        // itself exercises the object-comment fallback path.
+        super_user
+            .batch_execute(
+                "CREATE MATERIALIZED VIEW test_unindexed_mv IN CLUSTER quickstart AS SELECT 4::int AS id, 'bolt'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(
+                "COMMENT ON MATERIALIZED VIEW test_unindexed_mv IS 'MV-level description'",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_unindexed_mv TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+    }
+
+    // get_data_products should now return our data product.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "get_data_products",
+                "arguments": {}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let products: serde_json::Value = serde_json::from_str(result_text).unwrap();
+    let has_object = |needle: &str| {
+        products.as_array().unwrap().iter().any(|p| {
+            p.as_array()
+                .map(|arr| arr[0].as_str().unwrap_or("").contains(needle))
+                .unwrap_or(false)
+        })
+    };
+    // Indexed MV: appears.
+    assert!(
+        has_object("test_products"),
+        "indexed MV should appear as a data product"
+    );
+    // Indexed regular view: appears (in-memory arrangement is cheap to query).
+    assert!(
+        has_object("test_indexed_view"),
+        "indexed view should appear as a data product"
+    );
+    // Non-indexed MV: appears (Persist-backed, bounded query cost).
+    assert!(
+        has_object("test_unindexed_mv"),
+        "non-indexed materialized view should appear as a data product"
+    );
+    // Non-indexed regular view: excluded (would trigger full recompute).
+    assert!(
+        !has_object("test_unindexed_view"),
+        "non-indexed view must NOT appear as a data product"
+    );
+
+    // Description fallback: index comment is preferred, object comment is used
+    // when no index comment exists.
+    let find_product = |needle: &str| -> &serde_json::Value {
+        products
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| {
+                p.as_array()
+                    .map(|arr| arr[0].as_str().unwrap_or("").contains(needle))
+                    .unwrap_or(false)
+            })
+            .unwrap_or_else(|| panic!("{needle} should exist as a data product"))
+    };
+    let description_of = |needle: &str| -> String {
+        find_product(needle).as_array().unwrap()[2]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(
+        description_of("test_products"),
+        "A test data product for integration testing",
+        "indexed MV with an index comment should use the index comment"
+    );
+    assert_eq!(
+        description_of("test_indexed_view"),
+        "View-level description",
+        "indexed view without an index comment should fall back to the view comment"
+    );
+    assert_eq!(
+        description_of("test_unindexed_mv"),
+        "MV-level description",
+        "non-indexed MV should use its own comment as description"
+    );
+
+    // Find our product
+    let product = products
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| {
+            p.as_array()
+                .map(|arr| arr[0].as_str().unwrap_or("").contains("test_products"))
+                .unwrap_or(false)
+        })
+        .expect("test_products data product should exist");
+    let object_name = product.as_array().unwrap()[0].as_str().unwrap();
+    assert!(
+        object_name.contains("test_products"),
+        "object_name should contain test_products, got: {}",
+        object_name
+    );
+
+    // get_data_product_details with the exact name.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "get_data_product_details",
+                "arguments": {"name": object_name}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["result"]["content"][0]["text"].as_str().is_some());
+    assert!(body["error"].is_null());
+
+    // Each row carries a `hydration` field (5th cell). For an MV that has
+    // had time to hydrate on a single-replica `quickstart` cluster, expect
+    // `hydrated: true` with 1/1 replicas.
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    let rows = rows.as_array().expect("details should return rows");
+    assert!(!rows.is_empty(), "details should return at least one row");
+    for row in rows {
+        let row = row.as_array().expect("each row should be an array");
+        assert_eq!(
+            row.len(),
+            5,
+            "each details row should have 5 cells (object_name, cluster, description, schema, hydration), got: {:?}",
+            row,
+        );
+        let hydration = &row[4];
+        assert!(
+            hydration.is_object(),
+            "hydration cell should be a JSON object, got: {hydration}",
+        );
+        assert!(
+            hydration.get("hydrated").is_some_and(|v| v.is_boolean()),
+            "hydration.hydrated should be a bool, got: {hydration}",
+        );
+        let replica_count = hydration
+            .get("replica_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| {
+                panic!("hydration.replica_count should be an int, got: {hydration}")
+            });
+        let hydrated_replica_count = hydration
+            .get("hydrated_replica_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| {
+                panic!("hydration.hydrated_replica_count should be an int, got: {hydration}")
+            });
+        assert!(
+            replica_count >= 0 && hydrated_replica_count >= 0,
+            "replica counts must be non-negative, got: {hydration}",
+        );
+        assert!(
+            hydrated_replica_count <= replica_count,
+            "hydrated_replica_count ({hydrated_replica_count}) cannot exceed replica_count ({replica_count}): {hydration}",
+        );
+    }
+
+    // get_data_product_details should also resolve the indexed view, proving
+    // the filter change is applied consistently to mz_mcp_data_product_details.
+    let indexed_view_name = find_product("test_indexed_view").as_array().unwrap()[0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": {
+                "name": "get_data_product_details",
+                "arguments": {"name": indexed_view_name}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "indexed view should be resolvable via get_data_product_details, got: {body}"
+    );
+    assert!(body["result"]["content"][0]["text"].as_str().is_some());
+    // Indexed view should also report a hydration object.
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    let rows = rows.as_array().expect("details should return rows");
+    assert!(!rows.is_empty());
+    for row in rows {
+        let row = row.as_array().expect("each row should be an array");
+        assert_eq!(row.len(), 5, "row should include hydration cell: {row:?}");
+        assert!(row[4].is_object(), "hydration cell should be an object");
+    }
+
+    // read_data_product should return the row from the view.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": object_name, "limit": 10}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "expected 1 row");
+    // The row should have id=1, name=widget
+    let row = &rows[0];
+    assert_eq!(row[0].as_str().unwrap(), "1");
+    assert_eq!(row[1].as_str().unwrap(), "widget");
+
+    // read_data_product with cluster override.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": object_name, "limit": 10, "cluster": "quickstart"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["error"].is_null(), "cluster override should work");
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+
+    // DEX-27: an MV whose home cluster is NOT the HTTP session's default
+    // (`quickstart`) must still be readable without the caller passing a
+    // `cluster` argument. Before the auto-routing change the read would
+    // execute against `quickstart`, missing the index. Reading without an
+    // override must still succeed and return the row.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE CLUSTER dex27_other_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'))",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE MATERIALIZED VIEW test_off_default IN CLUSTER dex27_other_cluster \
+                 AS SELECT 42::int AS id, 'off_default'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_off_default TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT USAGE ON CLUSTER dex27_other_cluster TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+    }
+    // The MV was created after the cached `get_data_products` snapshot, so
+    // build the qualified name directly rather than re-querying.
+    let off_default_name = r#""materialize"."public"."test_off_default""#.to_string();
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": off_default_name, "limit": 10}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "no-override read on off-default cluster should auto-route, got: {body}",
+    );
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0][0].as_str().unwrap(), "42");
+    assert_eq!(rows[0][1].as_str().unwrap(), "off_default");
+
+    // read_data_product with limit 0 should return no rows.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": object_name, "limit": 0}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["error"].is_null());
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(
+        rows.as_array().unwrap().len(),
+        0,
+        "limit 0 should return no rows"
+    );
+
+    // read_data_product with a large `limit` is not clamped or rejected: the
+    // response is bounded only by the size cap, matching the SQL HTTP layer.
+    // The test data product has 1 row, so LIMIT 9999 just returns that 1 row.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": object_name, "limit": 9999}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "large limit should succeed; size cap is the only guard"
+    );
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+
+    // SQL injection attempt in data product name: should return DataProductNotFound, not execute.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+                "name": "get_data_product_details",
+                "arguments": {"name": "'; DROP TABLE test_products; --"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Data product not found"),
+        "SQL injection in name should be safely handled"
+    );
+
+    // SQL injection attempt in read_data_product name.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": "x' UNION SELECT * FROM mz_tables --"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid data product name"),
+        "SQL injection in read_data_product name should be rejected by validation"
+    );
+
+    // SQL injection attempt in cluster override.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": object_name, "cluster": "'; DROP TABLE test_products; --"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    // The cluster name is escaped, so this should fail as an invalid cluster, not execute injection.
+    // It may be a query execution error (bad cluster name) which is fine - the key is no injection.
+    assert!(
+        body["error"].is_object(),
+        "injection in cluster should produce an error, not succeed"
+    );
+}
+
+/// Verifies that the `WWW-Authenticate` challenge on a 401 for an MCP
+/// route includes both the Bearer (with `resource_metadata`) and Basic
+/// challenges, so OAuth-aware clients (Claude Desktop, ChatGPT remote
+/// MCP) can discover the protected resource metadata while existing
+/// callers that send Basic still see a usable challenge. This is the
+/// half of RFC 9728 that doesn't require an authorization server to be
+/// configured — even with no `oidc_issuer` set, the Bearer challenge
+/// itself fires (clients then probe the well-known URI and get a 404,
+/// which is the documented fallback path).
+#[mz_ore::test]
+fn test_mcp_unauth_emits_bearer_and_basic_challenges() {
+    // An OIDC listener is the authenticator kind that advertises OAuth
+    // (see `McpOAuthDiscovery`); an unauthenticated MCP request on it 401s
+    // with both the Bearer and Basic challenges. (A `None` listener would
+    // default to anonymous_http_user and never challenge.) `with_oidc_auth`
+    // must precede `with_mcp_routes` because it replaces the listener config.
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, true)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .start_blocking();
+
+    for endpoint in ["agent", "developer"] {
+        let url = format!("http://{}/api/mcp/{endpoint}", server.http_local_addr());
+        let res = Client::new()
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .send()
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "MCP {endpoint} without auth should 401",
+        );
+        let challenges: Vec<String> = res
+            .headers()
+            .get_all(http::header::WWW_AUTHENTICATE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert!(
+            challenges.iter().any(|c| c.starts_with("Bearer ")
+                && c.contains("resource_metadata=")
+                && c.contains("/.well-known/oauth-protected-resource")
+                && c.contains("scope=\"mcp.read\"")),
+            "expected a Bearer challenge with resource_metadata AND scope on /api/mcp/{endpoint}, got: {challenges:?}",
+        );
+        assert!(
+            challenges.iter().any(|c| c.starts_with("Basic ")),
+            "expected a Basic challenge alongside Bearer so curl/legacy callers \
+             still see a usable challenge, got: {challenges:?}",
+        );
+    }
+}
+
+/// MCP routes on a `Password`-authenticator listener must NOT advertise
+/// OAuth — discovery is scoped to `Oidc` listeners by
+/// [`oauth_metadata::McpOAuthDiscovery::for_authenticator`]. Regression
+/// guard for the seam: even with MCP routes enabled, a Password listener
+/// emits only `Basic` on a 401 and 404s the well-known discovery URI.
+#[mz_ore::test]
+fn test_mcp_unauth_on_password_listener_does_not_advertise_oauth() {
+    let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_mcp_routes(true, true)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    for endpoint in ["agent", "developer"] {
+        let res = Client::new()
+            .post(&format!(
+                "http://{}/api/mcp/{endpoint}",
+                server.http_local_addr()
+            ))
+            .header("Content-Type", "application/json")
+            .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let challenges: Vec<String> = res
+            .headers()
+            .get_all(http::header::WWW_AUTHENTICATE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert!(
+            challenges.iter().any(|c| c.starts_with("Basic ")),
+            "Password listener should still emit Basic on /api/mcp/{endpoint}: {challenges:?}",
+        );
+        assert!(
+            !challenges.iter().any(|c| c.starts_with("Bearer ")),
+            "Password listener MUST NOT advertise OAuth on /api/mcp/{endpoint}: {challenges:?}",
+        );
+    }
+
+    // The discovery endpoint must 404 on a Password listener even though
+    // `oidc_issuer` is set — there is no OAuth flow this listener honours.
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "discovery doc must not be published on a Password listener",
+    );
+}
+
+/// The SQL HTTP layer must NOT gain the Bearer challenge — only MCP
+/// routes opt into OAuth discovery. Regression guard so we don't
+/// accidentally widen the OAuth surface to the rest of the HTTP server.
+#[mz_ore::test]
+fn test_sql_http_unauth_keeps_only_basic_challenge() {
+    let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
+        .start_blocking();
+
+    // `/` triggers the WWW-Authenticate path (see auth_middleware) so we
+    // get a 401 with the challenge header.
+    let res = Client::new()
+        .get(&format!("http://{}/", server.http_local_addr()))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let challenges: Vec<String> = res
+        .headers()
+        .get_all(http::header::WWW_AUTHENTICATE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        challenges.iter().any(|c| c.starts_with("Basic ")),
+        "SQL HTTP layer should still emit Basic challenge: {challenges:?}",
+    );
+    assert!(
+        !challenges.iter().any(|c| c.starts_with("Bearer ")),
+        "SQL HTTP layer must NOT advertise OAuth: {challenges:?}",
+    );
+}
+
+/// The well-known protected resource metadata document is public (no
+/// auth) and returns the configured authorization server when
+/// `oidc_issuer` is set. Pinning the JSON shape protects MCP clients
+/// from accidental contract drift.
+///
+/// Uses `with_oidc_auth` because the discovery handler only publishes on
+/// an OIDC listener — the one authenticator kind that validates bearer
+/// tokens against `oidc_issuer` (see `McpOAuthDiscovery`). The listener
+/// never validates a token in this test, so no live IdP is needed.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_advertises_issuer() {
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: serde_json::Value = res.json().unwrap();
+
+    // `resource` is built from the request host and must point at the
+    // MCP path prefix — clients use this as the `aud` value in their
+    // RFC 8707 resource indicator.
+    let resource = body["resource"].as_str().expect("resource is a string");
+    assert!(
+        resource.ends_with("/api/mcp"),
+        "resource should point at /api/mcp prefix, got: {resource}",
+    );
+
+    let authorization_servers: Vec<String> = body["authorization_servers"]
+        .as_array()
+        .expect("authorization_servers is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        authorization_servers,
+        vec!["https://issuer.test.example.com".to_string()],
+        "should advertise the configured oidc_issuer verbatim",
+    );
+
+    let bearer_methods: Vec<String> = body["bearer_methods_supported"]
+        .as_array()
+        .expect("bearer_methods_supported is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        bearer_methods,
+        vec!["header".to_string()],
+        "we only accept the Authorization header, not a query param",
+    );
+
+    let scopes_supported: Vec<String> = body["scopes_supported"]
+        .as_array()
+        .expect("scopes_supported is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        scopes_supported,
+        vec!["mcp.read".to_string()],
+        "should advertise the mcp.read scope so clients know what to request",
+    );
+}
+
+/// Path-suffixed well-known URIs (RFC 9728 §3.1) MUST serve the same
+/// document as the bare well-known URI. Strict clients look these up
+/// first based on the resource path; if they 404 here, those clients
+/// never make it to the working bare URI.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_path_suffixed_aliases() {
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, true)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    for suffix in [
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/api/mcp/agent",
+        "/.well-known/oauth-protected-resource/api/mcp/developer",
+    ] {
+        let res = Client::new()
+            .get(&format!("http://{}{suffix}", server.http_local_addr()))
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "expected 200 at {suffix}");
+        let body: serde_json::Value = res.json().unwrap();
+        let authorization_servers: Vec<String> = body["authorization_servers"]
+            .as_array()
+            .expect("authorization_servers is an array")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            authorization_servers,
+            vec!["https://issuer.test.example.com".to_string()],
+            "all three URIs must serve the same metadata document",
+        );
+    }
+}
+
+/// An `oidc_issuer` value that does not parse as a URL must NOT be
+/// published verbatim — RFC 9728 §3 requires entries in
+/// `authorization_servers` to be valid URLs, and publishing garbage
+/// would steer every client into an unrecoverable error on their next
+/// discovery hop. The honest response is a 503 plus a server-side
+/// warning so operators can see and fix the misconfiguration.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_rejects_invalid_issuer() {
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            // Whitespace + missing scheme: not a valid URI per `http::Uri`.
+            "not a url".to_string(),
+        )
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "invalid oidc_issuer must surface as 503, not a published malformed doc",
+    );
+}
+
+/// When no `oidc_issuer` is configured on a listener that *does*
+/// validate tokens, the endpoint MUST 404. RFC 9728 requires
+/// `authorization_servers` to be non-empty, and returning an honest
+/// 404 lets clients fall back to whatever else they support instead of
+/// being misled by a half-baked document.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_404_when_no_issuer() {
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "no oidc_issuer => 404, not an empty metadata doc",
+    );
+}
+
+/// End-to-end discovery flow: an unauthenticated MCP request emits a
+/// 401 with a `resource_metadata` URL on the same host as the request,
+/// and the discovery document at that path resolves to a 200 with the
+/// configured issuer. Pinning the sequence guards against any one
+/// piece being broken in a way the per-piece tests would miss.
+///
+/// The published `resource_metadata` URL uses the `https` scheme even
+/// though the test listener is plain HTTP (we always advertise `https`;
+/// see `oauth_metadata::PUBLISHED_SCHEME`), so we extract the path
+/// suffix and re-issue the GET against the actual local HTTP listener.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_end_to_end_flow() {
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    let local_addr = server.http_local_addr();
+    let mcp_res = Client::new()
+        .post(&format!("http://{local_addr}/api/mcp/agent"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+        .send()
+        .unwrap();
+    assert_eq!(mcp_res.status(), StatusCode::UNAUTHORIZED);
+
+    let bearer_challenge = mcp_res
+        .headers()
+        .get_all(http::header::WWW_AUTHENTICATE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .find(|c| c.starts_with("Bearer "))
+        .expect("a Bearer WWW-Authenticate challenge");
+    let advertised_url = bearer_challenge
+        .split(',')
+        .find_map(|part| {
+            part.trim()
+                .strip_prefix("resource_metadata=\"")
+                .and_then(|s| s.strip_suffix('"'))
+        })
+        .expect("resource_metadata parameter in Bearer challenge");
+    assert!(
+        advertised_url.starts_with("https://"),
+        "discovery URL must always be https: {advertised_url}",
+    );
+
+    let path_suffix = advertised_url
+        .splitn(4, '/')
+        .nth(3)
+        .expect("path on the advertised URL");
+    let discovery_res = Client::new()
+        .get(&format!("http://{local_addr}/{path_suffix}"))
+        .send()
+        .unwrap();
+    assert_eq!(discovery_res.status(), StatusCode::OK);
+    let body: serde_json::Value = discovery_res.json().unwrap();
+    assert_eq!(
+        body["authorization_servers"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str()),
+        Some("https://issuer.test.example.com"),
+    );
+}
+
+/// A `None`-authenticator listener (anonymous_http_user) MUST 404 even
+/// if an `oidc_issuer` is configured: publishing on a listener that
+/// never validates tokens would mislead clients into a flow they cannot
+/// complete.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_404_on_no_auth_listener() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "None-authenticator listener must not publish OAuth metadata even with oidc_issuer set",
+    );
+}
+
+/// Verifies that MCP requests update the Prometheus counters and that
+/// tool calls record a histogram observation.
+#[mz_ore::test]
+fn test_mcp_metrics() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+
+    // Exercise three distinct request shapes:
+    //   1. `initialize`: succeeds.
+    //   2. `tools/list`: succeeds.
+    //   3. `tools/call` for `read_data_product` with a nonexistent name:
+    //      the request itself completes with an MCP error
+    //      (`DataProductNotFound`), which both `requests_total` and
+    //      `tool_calls_total` should reflect via the status label.
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "metrics-test", "version": "0"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": "nonexistent_product"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    // Helper: look up a counter value by exact (endpoint, method/tool, status)
+    // label combination. Panics with a helpful message if not found, so test
+    // failures point at the missing label set rather than a generic `None`.
+    fn find_counter(
+        gathered: &[prometheus::proto::MetricFamily],
+        metric_name: &str,
+        labels: &[(&str, &str)],
+    ) -> f64 {
+        let family = gathered
+            .iter()
+            .find(|m| m.name() == metric_name)
+            .unwrap_or_else(|| panic!("metric family {} should be present", metric_name));
+        for metric in family.get_metric() {
+            let matches_all = labels.iter().all(|(name, want)| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|l| l.name() == *name && l.value() == *want)
+            });
+            if matches_all {
+                return metric.get_counter().value();
+            }
+        }
+        panic!(
+            "no {} entry matching labels {:?} in {:?}",
+            metric_name,
+            labels,
+            family
+                .get_metric()
+                .iter()
+                .map(|m| m
+                    .get_label()
+                    .iter()
+                    .map(|l| (l.name().to_string(), l.value().to_string()))
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let gathered = server.metrics_registry().gather();
+
+    // requests_total: one entry per (endpoint, method, status). The
+    // tools/call request failed at the tool level, so its status label is
+    // the McpRequestError error_type, not "ok".
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "initialize"),
+                ("status", "ok"),
+            ],
+        ),
+        1.0,
+    );
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "tools/list"),
+                ("status", "ok"),
+            ],
+        ),
+        1.0,
+    );
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "tools/call"),
+                ("status", "DataProductNotFound"),
+            ],
+        ),
+        1.0,
+    );
+
+    // tool_calls_total: one entry per (endpoint, tool_name, status).
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_tool_calls_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("tool_name", "read_data_product"),
+                ("status", "DataProductNotFound"),
+            ],
+        ),
+        1.0,
+    );
+
+    // tool_call_duration_seconds: the single tools/call above should
+    // produce exactly one histogram observation.
+    let duration = gathered
+        .iter()
+        .find(|m| m.name() == "mz_mcp_tool_call_duration_seconds")
+        .expect("mz_mcp_tool_call_duration_seconds should be present");
+    let total_samples: u64 = duration
+        .get_metric()
+        .iter()
+        .map(|m| m.get_histogram().get_sample_count())
+        .sum();
+    assert_eq!(
+        total_samples, 1,
+        "tool_call_duration_seconds should record exactly 1 sample",
+    );
+}
+
+/// Tests runtime toggling of MCP feature flags.
+#[mz_ore::test]
+fn test_mcp_agent_runtime_flag_toggle() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, true)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+    let developer_url = format!("http://{}/api/mcp/developer", server.http_local_addr());
+
+    let tools_list = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list"
+    });
+
+    // Both endpoints should be enabled (feature flags set to true via system parameter defaults).
+    let (status, _) = mcp_post(&agents_url, tools_list.clone());
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = mcp_post(&developer_url, tools_list.clone());
+    assert_eq!(status, StatusCode::OK);
+
+    // Disable MCP agent at runtime.
+    server.disable_feature_flags(&["enable_mcp_agent"]);
+
+    let res = Client::new()
+        .post(&agents_url)
+        .json(&tools_list)
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        "agent should return 503 after disabling"
+    );
+
+    // Developer should still work.
+    let (status, _) = mcp_post(&developer_url, tools_list.clone());
+    assert_eq!(status, StatusCode::OK, "developer should still be enabled");
+
+    // Re-enable MCP agent.
+    server.enable_feature_flags(&["enable_mcp_agent"]);
+    let (status, _) = mcp_post(&agents_url, tools_list.clone());
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "agent should work again after re-enabling"
+    );
+
+    // Test query tool toggling: enabled by default.
+    let query_call = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "query",
+            "arguments": {"cluster": "quickstart", "sql_query": "SELECT 1"}
+        }
+    });
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "query tool should be enabled by default"
+    );
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        result_text.contains("1"),
+        "query should return result with 1"
+    );
+
+    // Disable query tool at runtime.
+    server.disable_feature_flags(&["enable_mcp_agent_query_tool"]);
+
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("query tool is not available"),
+        "query tool should be disabled after disabling"
+    );
+
+    // Re-enable query tool.
+    server.enable_feature_flags(&["enable_mcp_agent_query_tool"]);
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "query tool should work after re-enabling"
+    );
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        result_text.contains("1"),
+        "query should return result with 1 after re-enabling"
+    );
+}
+
+/// Tests that the MCP agent endpoint respects RBAC: data products are visible
+/// to any user with SELECT on the view. Cluster USAGE is not required for
+/// discovery — the view appears with a NULL cluster if no accessible index exists.
+#[mz_ore::test]
+fn test_mcp_agent_rbac() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+
+    let mut super_user = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    // Create the HTTP default user with basic system/database/schema privileges
+    // but NO object-level grants yet.
+    super_user
+        .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+        .unwrap();
+    super_user
+        .batch_execute(&format!(
+            "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    super_user
+        .batch_execute(&format!(
+            "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    super_user
+        .batch_execute(&format!(
+            "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+
+    // Create a data product: a materialized view (no index or comment required).
+    super_user
+        .batch_execute("CREATE MATERIALIZED VIEW rbac_product IN CLUSTER quickstart AS SELECT 1::int AS id, 'secret'::text AS payload")
+        .unwrap();
+
+    let get_products = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "get_data_products", "arguments": {}}
+    });
+
+    let products_visible = |body: &serde_json::Value| -> bool {
+        let text = body["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("[]");
+        let products: serde_json::Value =
+            serde_json::from_str(text).unwrap_or(serde_json::json!([]));
+        products
+            .as_array()
+            .map(|arr| {
+                arr.iter().any(|p| {
+                    p.as_array()
+                        .map(|row| row[0].as_str().unwrap_or("").contains("rbac_product"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    };
+
+    // 1. No SELECT → product NOT visible.
+    let (status, body) = mcp_post(&agents_url, get_products.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !products_visible(&body),
+        "product should not be visible with no privileges"
+    );
+
+    // 2. Grant SELECT on view → product NOW visible (no index or cluster USAGE needed).
+    super_user
+        .batch_execute(&format!(
+            "GRANT SELECT ON rbac_product TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    let (status, body) = mcp_post(&agents_url, get_products.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        products_visible(&body),
+        "product should be visible with just SELECT (no index required)"
+    );
+
+    // Capture the fully-qualified product name for subsequent tests.
+    let text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let products: serde_json::Value = serde_json::from_str(text).unwrap();
+    let product_name = products
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| {
+            p.as_array()
+                .map(|row| row[0].as_str().unwrap_or("").contains("rbac_product"))
+                .unwrap_or(false)
+        })
+        .unwrap()
+        .as_array()
+        .unwrap()[0]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // 3. Revoke SELECT → product disappears.
+    super_user
+        .batch_execute(&format!(
+            "REVOKE SELECT ON rbac_product FROM {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    let (status, body) = mcp_post(&agents_url, get_products.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !products_visible(&body),
+        "product should disappear after revoking SELECT"
+    );
+
+    // 4. read_data_product by name while lacking SELECT → DataProductNotFound.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "read_data_product", "arguments": {"name": product_name}}
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Data product not found"),
+        "read_data_product should fail with not-found when SELECT is revoked"
+    );
+
+    // 5. Re-grant SELECT → visible again.
+    super_user
+        .batch_execute(&format!(
+            "GRANT SELECT ON rbac_product TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    let (status, body) = mcp_post(&agents_url, get_products.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        products_visible(&body),
+        "product should reappear after re-granting SELECT"
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_inject_audit_events() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut pg_client = server.connect(postgres::NoTls).unwrap();
+
+    // Inject two audit events via the HTTP API.
+    let http_client = Client::new();
+    let url = Url::parse(&format!(
+        "http://{}/api/catalog/inject-audit-events",
+        server.internal_http_local_addr()
+    ))
+    .unwrap();
+    let res = http_client
+        .post(url)
+        .json(&serde_json::json!([
+            {
+                "event_type": "create",
+                "object_type": "table",
+                "details": {"IdNameV1": {"id": "u1", "name": "injected_table"}},
+                "user": "mz_system"
+            },
+            {
+                "event_type": "drop",
+                "object_type": "table",
+                "details": {"IdNameV1": {"id": "u1", "name": "injected_table"}},
+                "user": null
+            }
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Verify the injected events are the last two audit events.
+    let rows = pg_client
+        .query(
+            "SELECT event_type, object_type, details->>'name' as name, occurred_at
+             FROM mz_audit_events
+             ORDER BY id DESC LIMIT 2",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<_, String>("event_type"), "drop");
+    assert_eq!(rows[0].get::<_, String>("object_type"), "table");
+    assert_eq!(rows[0].get::<_, String>("name"), "injected_table");
+    assert_eq!(rows[1].get::<_, String>("event_type"), "create");
+    assert_eq!(rows[1].get::<_, String>("object_type"), "table");
+    assert_eq!(rows[1].get::<_, String>("name"), "injected_table");
+    let drop_ts: DateTime<Utc> = rows[0].get("occurred_at");
+    let create_ts: DateTime<Utc> = rows[1].get("occurred_at");
+    assert_eq!(drop_ts, create_ts);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_inject_audit_events_malformed() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let http_client = Client::new();
+    let url = Url::parse(&format!(
+        "http://{}/api/catalog/inject-audit-events",
+        server.internal_http_local_addr()
+    ))
+    .unwrap();
+
+    // Missing required fields.
+    let res = http_client
+        .post(url.clone())
+        .json(&serde_json::json!([
+            {
+                "event_type": "create"
+            }
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Invalid event_type value.
+    let res = http_client
+        .post(url.clone())
+        .json(&serde_json::json!([
+            {
+                "event_type": "bogus",
+                "object_type": "table",
+                "details": {"IdNameV1": {"id": "u1", "name": "t"}},
+                "user": null
+            }
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Not valid JSON at all.
+    let res = http_client
+        .post(url)
+        .header("content-type", "application/json")
+        .body("not json")
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }

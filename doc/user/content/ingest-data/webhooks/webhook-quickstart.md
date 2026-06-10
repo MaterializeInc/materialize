@@ -24,7 +24,7 @@ you to learn and prototype with no external dependencies.
 All you need is a Materialize account. If you already have one —
 great! If not, [sign up for a free trial account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) first.
 
-When you're ready, head over to the [Materialize console](https://console.materialize.com/),
+When you're ready, head over to the [Materialize console](/console/),
 and pop open the SQL Shell.
 
 ## Step 1. Create a secret
@@ -99,7 +99,7 @@ generator, the data will look like:
 {{< json-parser >}}
 
 Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
-top of your webhook source that uses [jsonb operators](https://materialize.com/docs/sql/types/jsonb/#operators)
+top of your webhook source that uses [jsonb operators](/sql/types/jsonb/#operators)
 to map the individual fields to columns with the required data types. Using the
 previous example:
 

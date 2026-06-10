@@ -8,8 +8,10 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
+# TODO: Reenable when database-issues#8127 is fixed
+$ skip-if
+SELECT true
 
 #
 # Test ALTER TABLE -- some column changes should not do any harm

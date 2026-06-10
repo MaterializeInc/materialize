@@ -9,9 +9,9 @@
 
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.blob_store_capabilities import BlobStoreIsRunning
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
 from materialize.zippy.framework import Action, Capability, State
-from materialize.zippy.minio_capabilities import MinioIsRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.storaged_capabilities import StoragedRunning
 
@@ -21,7 +21,7 @@ class StoragedStart(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {CockroachIsRunning, MinioIsRunning}
+        return {CockroachIsRunning, BlobStoreIsRunning}
 
     @classmethod
     def incompatible_with(cls) -> set[type[Capability]]:

@@ -161,43 +161,43 @@ impl KafkaSinkMetricDefs {
 /// Metrics reported by librdkafka
 pub(crate) struct KafkaSinkMetrics {
     /// The current number of messages in producer queues.
-    pub rdkafka_msg_cnt: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rdkafka_msg_cnt: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The current total size of messages in producer queues.
-    pub rdkafka_msg_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rdkafka_msg_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The total number of messages transmitted (produced) to brokers.
-    pub rdkafka_txmsgs: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_txmsgs: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The total number of bytes transmitted (produced) to brokers.
-    pub rdkafka_txmsg_bytes: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_txmsg_bytes: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The total number of requests sent to brokers.
-    pub rdkafka_tx: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_tx: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The total number of bytes transmitted to brokers.
-    pub rdkafka_tx_bytes: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_tx_bytes: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of requests awaiting transmission across all brokers.
-    pub rdkafka_outbuf_cnt: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_outbuf_cnt: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of messages awaiting transmission across all brokers.
-    pub rdkafka_outbuf_msg_cnt: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_outbuf_msg_cnt: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of requests in-flight across all brokers that are awaiting a response.
-    pub rdkafka_waitresp_cnt: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_waitresp_cnt: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of messages in-flight across all brokers that are awaiting a response.
-    pub rdkafka_waitresp_msg_cnt: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_waitresp_msg_cnt: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The total number of transmission errors across all brokers.
-    pub rdkafka_txerrs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rdkafka_txerrs: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The total number of request retries across all brokers.
-    pub rdkafka_txretries: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rdkafka_txretries: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The total number of requests that timed out across all brokers.
-    pub rdkafka_req_timeouts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rdkafka_req_timeouts: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The number of connection attempts, including successful and failed attempts, and name
     /// resolution failures across all brokers.
-    pub rdkafka_connects: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_connects: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of disconnections, whether triggered by the broker, the network, the load
     /// balancer, or something else across all brokers.
-    pub rdkafka_disconnects: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_disconnects: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of outstanding progress records that need to be read before the sink can resume.
-    pub outstanding_progress_records: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub outstanding_progress_records: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The number of progress records consumed while resuming the sink.
-    pub consumed_progress_records: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub consumed_progress_records: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The number of partitions this sink is publishing to.
-    pub partition_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub partition_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 }
 
 impl KafkaSinkMetrics {

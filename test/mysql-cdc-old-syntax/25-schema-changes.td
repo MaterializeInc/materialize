@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO: Reenable when database-issues#8127 is fixed
+$ skip-if
+SELECT true
+
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 
 

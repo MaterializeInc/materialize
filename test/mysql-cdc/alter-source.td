@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
@@ -26,9 +27,11 @@ CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (1, 'one');
 INSERT INTO table_a VALUES (2, 'two');
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE public.table_a);
+> COMMIT
 
 > SELECT * FROM table_a;
 1 one
@@ -44,7 +47,7 @@ $ mysql-execute name=mysql
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (9, 'nine');
 
-# TODO: database-issues#8127 (expected table was dropped)
+# TODO: Reenable when database-issues#8127 is fixed
 $ skip-if
 SELECT true
 
@@ -54,9 +57,6 @@ contains:table was dropped
 # We are not aware that the new table_a is different
 ! CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE public.table_a);
 contains:catalog item 'table_a' already exists
-
-# TODO: database-issues#8127 (expected table was dropped)
-$ skip-end
 
 > DROP SOURCE mz_source CASCADE;
 
@@ -92,6 +92,7 @@ CREATE TABLE table_g (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_g VALUES (1, 'one');
 INSERT INTO table_g VALUES (2, 'two');
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE public.table_a);
@@ -101,9 +102,9 @@ INSERT INTO table_g VALUES (2, 'two');
 > CREATE TABLE table_e FROM SOURCE mz_source (REFERENCE public.table_e);
 > CREATE TABLE table_f FROM SOURCE mz_source (REFERENCE public.table_f) WITH (TEXT COLUMNS (f2));
 > CREATE TABLE table_g FROM SOURCE mz_source (REFERENCE public.table_g);
+> COMMIT
 
 > SHOW SUBSOURCES ON mz_source
-mz_source_progress    progress
 
 > SHOW TABLES
 table_a               ""
@@ -117,10 +118,13 @@ table_g               ""
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
 > SHOW CREATE SOURCE mz_source;
-materialize.public.mz_source "CREATE SOURCE \"materialize\".\"public\".\"mz_source\" IN CLUSTER \"quickstart\" FROM MYSQL CONNECTION \"materialize\".\"public\".\"mysql_conn\" EXPOSE PROGRESS AS \"materialize\".\"public\".\"mz_source_progress\""
+materialize.public.mz_source "CREATE SOURCE materialize.public.mz_source\nIN CLUSTER quickstart\nFROM MYSQL CONNECTION materialize.public.mysql_conn;"
 
-> SHOW CREATE TABLE table_a;
-materialize.public.table_a "CREATE TABLE \"materialize\".\"public\".\"table_a\" (\"pk\" \"pg_catalog\".\"int4\" NOT NULL, \"f2\" \"pg_catalog\".\"text\", CONSTRAINT \"PRIMARY\" PRIMARY KEY (\"pk\")) FROM SOURCE \"materialize\".\"public\".\"mz_source\" (REFERENCE = \"public\".\"table_a\") WITH (<DETAILS>)"
+>[version<2600700] SHOW CREATE TABLE table_a;
+materialize.public.table_a "CREATE TABLE materialize.public.table_a (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT \"PRIMARY\" PRIMARY KEY (pk)) FROM SOURCE materialize.public.mz_source (REFERENCE = public.table_a) WITH (<DETAILS>);"
+
+>[version>=2600700] SHOW CREATE TABLE table_a;
+materialize.public.table_a "CREATE TABLE\n    materialize.public.table_a\n        (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT \"PRIMARY\" PRIMARY KEY (pk))\nFROM SOURCE materialize.public.mz_source (REFERENCE = public.table_a)\nWITH (\n    <DETAILS>\n);"
 
 #
 # Error checking
@@ -131,9 +135,11 @@ materialize.public.table_a "CREATE TABLE \"materialize\".\"public\".\"table_a\" 
 
 > DROP TABLE mz_table;
 
+> BEGIN
 > CREATE SOURCE "mz_source_too"
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE t_a FROM SOURCE "mz_source_too" (REFERENCE public.table_a);
+> COMMIT
 
 > DROP SOURCE mz_source_too CASCADE;
 
@@ -148,7 +154,6 @@ materialize.public.table_a "CREATE TABLE \"materialize\".\"public\".\"table_a\" 
 2 two
 
 > SHOW SUBSOURCES ON mz_source
-mz_source_progress    progress
 
 > SHOW TABLES
 table_b               ""
@@ -191,9 +196,9 @@ INSERT INTO table_e VALUES (3, 'three');
 3
 4
 
-> SHOW MATERIALIZED VIEWS
-mv_e quickstart  ""
-mv_f quickstart  ""
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
+mv_e
+mv_f
 
 # RESTRICT works
 ! DROP TABLE table_e RESTRICT;
@@ -206,17 +211,15 @@ contains:cannot drop table "table_e": still depended upon by materialized view "
 > DROP TABLE IF EXISTS table_e, table_f CASCADE;
 
 > SHOW SUBSOURCES ON mz_source
-mz_source_progress    progress
 
 > SHOW TABLES
 table_g               ""
 
-> SHOW MATERIALIZED VIEWS
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
 
 > DROP TABLE table_g;
 
 > SHOW SUBSOURCES ON mz_source
-mz_source_progress    progress
 
 #
 # Add tables
@@ -253,7 +256,6 @@ INSERT INTO table_h VALUES (2, 'two');
 2 two
 
 > SHOW SUBSOURCES ON mz_source
-mz_source_progress progress
 
 > SHOW TABLES
 table_a            ""
@@ -322,7 +324,7 @@ INSERT INTO table_a VALUES (5, 'five', 5);
 4 four 1
 5 five 5
 
-> EXPLAIN SELECT * FROM table_a WHERE f3 IS NULL;
+> EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM table_a WHERE f3 IS NULL;
 "Explained Query (fast path):\n  Constant <empty>\n\nTarget cluster: quickstart\n"
 
 #
@@ -338,7 +340,7 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
 2 var1
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE table_f);
-"\"f2\""
+f2
 
 # Drop a table, which shuffles the tables' output indexes, then add a table and ensure it can be added.
 $ mysql-execute name=mysql
@@ -352,7 +354,7 @@ INSERT INTO table_f VALUES (3, 'var1');
 > CREATE TABLE table_i FROM SOURCE mz_source (REFERENCE public.table_i) WITH (TEXT COLUMNS [f2]);
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE table_i);
-"\"f2\""
+f2
 
 > SELECT * FROM table_f
 1 var0
@@ -366,9 +368,11 @@ contains:TEXT COLUMNS refers to table not currently being added
 
 # Test adding text cols w/o original text columns
 
+> BEGIN
 > CREATE SOURCE "mz_source_wo_init_text_cols"
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE t_a FROM SOURCE "mz_source_wo_init_text_cols" (REFERENCE public.table_a);
+> COMMIT
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE t_a);
 <null>
@@ -376,7 +380,7 @@ contains:TEXT COLUMNS refers to table not currently being added
 > CREATE TABLE t_f FROM SOURCE mz_source_wo_init_text_cols (REFERENCE public.table_f) WITH (TEXT COLUMNS [f2]);
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE t_f);
-"\"f2\""
+f2
 
 
 #
@@ -395,7 +399,7 @@ contains: invalid EXCLUDE COLUMNS option value: unexpected multiple references t
 > CREATE TABLE table_i FROM SOURCE mz_source (REFERENCE public.table_i) WITH (EXCLUDE COLUMNS [f2]);
 
 > SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE table_i);
-"\"f2\""
+f2
 
 > SELECT * FROM table_i
 1
@@ -411,9 +415,11 @@ contains:EXCLUDE COLUMNS refers to table not currently being added
 
 # Test adding exclude cols w/o original EXCLUDE COLUMNS
 
+> BEGIN
 > CREATE SOURCE "mz_source_wo_init_exclude_cols"
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE t_a2 FROM SOURCE "mz_source_wo_init_exclude_cols" (REFERENCE public.table_a);
+> COMMIT
 
 > SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE t_a2);
 <null>
@@ -421,7 +427,7 @@ contains:EXCLUDE COLUMNS refers to table not currently being added
 > CREATE TABLE t_f2 FROM SOURCE mz_source_wo_init_exclude_cols (REFERENCE public.table_f) WITH (EXCLUDE COLUMNS [f2]);
 
 > SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE t_f2);
-"\"f2\""
+f2
 
 # Add a table after having created the source
 $ mysql-execute name=mysql

@@ -11,20 +11,6 @@
 
 const hpccWasm = window['@hpcc-js/wasm'];
 
-async function query(sql) {
-  const response = await fetch('/api/sql', {
-    method: 'POST',
-    body: JSON.stringify({ query: sql }),
-    headers: { 'Content-Type': 'application/json' },
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw `request failed: ${response.status} ${response.statusText}: ${text}`;
-  }
-  const data = await response.json();
-  return data;
-}
-
 function formatNameForQuery(name) {
   return `'${name.replace('\'', '\'\'')}'`;
 }
@@ -152,7 +138,7 @@ function Dataflows(props) {
                     mz_introspection.mz_dataflow_operators;
 
                 SELECT
-                    id, from_index, to_index, from_port, to_port, sent, batch_sent
+                    channels.id, channels.from_index, channels.to_index, channels.from_port, channels.to_port, counts.sent, counts.batch_sent
                 FROM
                     mz_introspection.mz_dataflow_channels AS channels
                     LEFT JOIN mz_introspection.mz_message_counts AS counts

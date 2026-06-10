@@ -14,12 +14,12 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 
 use crate::{CachingPolicy, SecretsReader};
 
 /// Default "time to live" for a single cache value, represented in __seconds__.
-pub const DEFAULT_TTL_SECS: AtomicU64 = AtomicU64::new(Duration::from_secs(300).as_secs());
+pub const DEFAULT_TTL_SECS: u64 = Duration::from_secs(300).as_secs();
 
 #[derive(Debug)]
 struct CachingParameters {
@@ -53,7 +53,7 @@ impl Default for CachingParameters {
     fn default() -> Self {
         CachingParameters {
             enabled: AtomicBool::new(true),
-            ttl_secs: DEFAULT_TTL_SECS,
+            ttl_secs: AtomicU64::new(DEFAULT_TTL_SECS),
         }
     }
 }
@@ -87,7 +87,7 @@ pub struct CachingSecretsReader {
     inner: Arc<dyn SecretsReader>,
     /// In-memory cache, not having a size limit or eviction policy is okay because we limit users
     /// to 100 secrets, which should not be a problem to store in-memory.
-    cache: Arc<RwLock<BTreeMap<GlobalId, CacheItem>>>,
+    cache: Arc<RwLock<BTreeMap<CatalogItemId, CacheItem>>>,
     /// Caching policy, can change at runtime, e.g. via LaunchDarkly.
     policy: Arc<CachingParameters>,
 }
@@ -141,11 +141,20 @@ impl CachingSecretsReader {
     fn set_ttl(&self, ttl: Duration) -> Duration {
         self.policy.set_ttl(ttl)
     }
+
+    /// Invalidates a single cached secret, returning whether the cache contained it.
+    pub fn invalidate(&self, id: CatalogItemId) -> bool {
+        self.cache
+            .write()
+            .expect("CachingSecretsReader panicked!")
+            .remove(&id)
+            .is_some()
+    }
 }
 
 #[async_trait]
 impl SecretsReader for CachingSecretsReader {
-    async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+    async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
         // Iff our cache is enabled will we read from it.
         if self.policy.enabled() {
             let read_guard = self.cache.read().expect("CachingSecretsReader panicked!");
@@ -181,7 +190,7 @@ mod test {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use mz_repr::GlobalId;
+    use mz_repr::CatalogItemId;
 
     use crate::cache::CachingSecretsReader;
     use crate::{InMemorySecretsController, SecretsController, SecretsReader};
@@ -193,11 +202,11 @@ mod test {
         let caching_reader = CachingSecretsReader::new(Arc::new(testing_reader.clone()));
 
         let secret = [42, 42, 42, 42];
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
 
         // Add a new secret and read it back.
         controller
-            .ensure(GlobalId::User(1), &secret[..])
+            .ensure(CatalogItemId::User(1), &secret[..])
             .await
             .expect("success");
         let roundtrip = caching_reader.read(id).await.expect("success");
@@ -226,7 +235,7 @@ mod test {
         caching_reader.set_ttl(Duration::from_secs(1));
 
         let secret = [42, 42, 42, 42];
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
 
         // Store our secret.
         controller.ensure(id, &secret).await.expect("success");
@@ -254,7 +263,7 @@ mod test {
         let caching_reader = CachingSecretsReader::new(Arc::new(testing_reader.clone()));
 
         let secret = [42, 42, 42, 42];
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
 
         // Store a value.
         controller.ensure(id, &secret).await.expect("success");
@@ -294,7 +303,7 @@ mod test {
         let caching_reader = CachingSecretsReader::new(Arc::new(testing_reader.clone()));
 
         let secret = [42, 42, 42, 42];
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
 
         // Store an initial value.
         controller.ensure(id, &secret).await.expect("success");
@@ -328,6 +337,32 @@ mod test {
         assert_eq!(reads.len(), 1);
     }
 
+    #[mz_ore::test(tokio::test)]
+    async fn test_invalidate() {
+        let controller = InMemorySecretsController::new();
+        let testing_reader = TestingSecretsReader::new(controller.reader());
+        let caching_reader = CachingSecretsReader::new(Arc::new(testing_reader.clone()));
+
+        let secret = [42, 42, 42, 42];
+        let id = CatalogItemId::User(1);
+
+        controller.ensure(id, &secret).await.expect("success");
+        caching_reader.read(id).await.expect("success");
+
+        caching_reader.read(id).await.expect("success");
+        let reads = testing_reader.drain();
+        assert_eq!(reads.len(), 1);
+
+        assert!(caching_reader.invalidate(id));
+
+        caching_reader.read(id).await.expect("success");
+        let reads = testing_reader.drain();
+        assert_eq!(reads.len(), 1);
+        assert_eq!(reads[0], id);
+
+        assert!(!caching_reader.invalidate(CatalogItemId::User(999)));
+    }
+
     /// A "secrets controller" that logs all of the actions it takes and allows us to inject
     /// failures. Used to test the implementation of our caching secrets controller.
     #[derive(Debug, Clone)]
@@ -335,7 +370,7 @@ mod test {
         /// The underlying secrets controller.
         reader: Arc<dyn SecretsReader>,
         /// A log of reads that have been made.
-        reads: Arc<Mutex<Vec<GlobalId>>>,
+        reads: Arc<Mutex<Vec<CatalogItemId>>>,
     }
 
     impl TestingSecretsReader {
@@ -347,7 +382,7 @@ mod test {
         }
 
         /// Drain all of the actions for introspection.
-        pub fn drain(&self) -> Vec<GlobalId> {
+        pub fn drain(&self) -> Vec<CatalogItemId> {
             self.reads
                 .lock()
                 .expect("TracingSecretsController panicked!")
@@ -356,7 +391,7 @@ mod test {
         }
 
         /// Record that an action has occurred.
-        fn record(&self, id: GlobalId) {
+        fn record(&self, id: CatalogItemId) {
             self.reads
                 .lock()
                 .expect("TracingSecretsController panicked!")
@@ -366,7 +401,7 @@ mod test {
 
     #[async_trait]
     impl SecretsReader for TestingSecretsReader {
-        async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+        async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
             let result = self.reader.read(id).await;
             self.record(id);
             result

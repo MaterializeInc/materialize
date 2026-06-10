@@ -240,11 +240,11 @@ CREATE TABLE date_trunc_timestamps (
 )
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT date_trunc('day', ts) FROM date_trunc_timestamps
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
-    Map (date_trunc_day_ts(#0)) // { arity: 2 }
+    Map (date_trunc_day_ts(#0{ts})) // { arity: 2 }
       ReadStorage materialize.public.date_trunc_timestamps // { arity: 1 }
 
 Source materialize.public.date_trunc_timestamps
@@ -254,11 +254,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
-    Map (date_truncts(#0, #1)) // { arity: 3 }
+    Map (date_truncts(#0{field}, #1{ts})) // { arity: 3 }
       CrossJoin type=differential // { arity: 2 }
         implementation
           %0:date_trunc_fields[×] » %1:date_trunc_timestamps[×]
@@ -747,11 +747,11 @@ CREATE TABLE t (
 )
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
-    Map ((#0) IS NULL) // { arity: 3 }
+    Map ((#0{a}) IS NULL) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
@@ -761,11 +761,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a + a + a + a + a IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a + a + a + a + a IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
-    Map ((#0) IS NULL) // { arity: 3 }
+    Map ((#0{a}) IS NULL) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
@@ -775,11 +775,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a + b IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a + b IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
-    Map ((#0) IS NULL) // { arity: 3 }
+    Map ((#0{a}) IS NULL) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
@@ -793,11 +793,11 @@ EOF
 # exist, but we do not support them yet. Similarly for OR.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (a::bool AND b::bool) IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT (a::bool AND b::bool) IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
-    Map (((integer_to_boolean(#0) AND integer_to_boolean(#1))) IS NULL) // { arity: 3 }
+    Map (((integer_to_boolean(#0{a}) AND integer_to_boolean(#1{b}))) IS NULL) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
@@ -825,7 +825,7 @@ SELECT materialize.pg_catalog.abs(1)
 ----
 1
 
-query error db error: ERROR: function "mz_catalog\.abs" does not exist
+query error function "mz_catalog\.abs" does not exist
 SELECT mz_catalog.abs(1)
 
 query error unknown database 'noexist'
@@ -844,7 +844,7 @@ SELECT pg_catalog.mod(7, 4)
 ----
 3
 
-query error db error: ERROR: function "mz_catalog\.mod" does not exist
+query error function "mz_catalog\.mod" does not exist
 SELECT mz_catalog.mod(7, 4)
 
 query error unknown database 'noexist'
@@ -955,7 +955,7 @@ SELECT array_upper(NULL::text[], 1)
 NULL
 
 # TODO(fix)
-query error db error: ERROR: could not determine polymorphic type because input has type unknown
+query error could not determine polymorphic type because input has type unknown
 SELECT array_upper(NULL, 1)
 
 query I
@@ -1023,7 +1023,7 @@ SELECT upper('ALREADYUP')
 ----
 ALREADYUP
 
-query error db error: ERROR: function upper\(numeric\) does not exist
+query error function upper\(numeric\) does not exist
 SELECT upper(2.2)
 
 query T
@@ -1036,7 +1036,7 @@ SELECT lower('alreadylow')
 ----
 alreadylow
 
-query error db error: ERROR: function lower\(interval\) does not exist
+query error function lower\(interval\) does not exist
 SELECT lower('1ms'::interval)
 
 # Test trigonometric functions.
@@ -1619,7 +1619,7 @@ SELECT mz_unsafe.mz_error_if_null(1, '')
 
 # Confirm that `mz_error_if_null` can be seen to be non-null.
 query T multiline
-EXPLAIN SELECT mz_unsafe.mz_error_if_null(t, '') IS NULL FROM ts_size;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT mz_unsafe.mz_error_if_null(t, '') IS NULL FROM ts_size;
 ----
 Explained Query:
   Project (#1)
@@ -1683,7 +1683,7 @@ SELECT pg_stat_get_numscans('pg_views'::regclass::oid)
 # mz_unsafe functions can't be executed with the enable_unsafe_functions flag turned off
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unsafe_functions = false
+ALTER SYSTEM SET unsafe_enable_unsafe_functions = false
 ----
 COMPLETE 0
 
@@ -1718,7 +1718,7 @@ statement ok
 SELECT mz_internal.mz_resolve_object_name('regclass', 't');
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unsafe_functions = true
+ALTER SYSTEM SET unsafe_enable_unsafe_functions = true
 ----
 COMPLETE 0
 

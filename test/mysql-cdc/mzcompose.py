@@ -15,44 +15,68 @@ import glob
 import threading
 from textwrap import dedent
 
-from materialize import buildkite
+from materialize import MZ_ROOT, buildkite
 from materialize.mysql_util import (
     retrieve_invalid_ssl_context_for_mysql,
     retrieve_ssl_context_for_mysql,
 )
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 
-def create_mysql(mysql_version: str) -> MySql:
-    return MySql(version=mysql_version)
+def create_mysql(mysql_version: str, binlog_full_metadata: bool = True) -> MySql:
+    additional_args = []
+    if binlog_full_metadata:
+        additional_args.extend(
+            [
+                "--binlog-row-metadata=FULL",
+                "--gtid_mode=ON",
+                "--enforce_gtid_consistency=ON",
+            ]
+        )
+    return MySql(version=mysql_version, additional_args=additional_args)
 
 
-def create_mysql_replica(mysql_version: str) -> MySql:
+def create_mysql_replica(
+    mysql_version: str, binlog_full_metadata: bool = True
+) -> MySql:
+    additional_args = [
+        "--gtid_mode=ON",
+        "--enforce_gtid_consistency=ON",
+        "--skip-replica-start",
+        "--server-id=2",
+    ]
+    if binlog_full_metadata:
+        additional_args.append("--binlog-row-metadata=FULL")
     return MySql(
         name="mysql-replica",
         version=mysql_version,
-        additional_args=[
-            "--gtid_mode=ON",
-            "--enforce_gtid_consistency=ON",
-            "--skip-replica-start",
-            "--server-id=2",
-        ],
+        use_seeded_image=False,
+        additional_args=additional_args,
     )
 
 
 SERVICES = [
+    Mz(app_password=""),
     Materialized(
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::mysql=trace,info"
         },
+        default_replication_factor=2,
     ),
     create_mysql(MySql.DEFAULT_VERSION),
     create_mysql_replica(MySql.DEFAULT_VERSION),
     TestCerts(),
+    Toxiproxy(),
     Testdrive(default_timeout="60s"),
 ]
 
@@ -69,33 +93,34 @@ def get_targeted_mysql_version(parser: WorkflowArgumentParser) -> str:
     return args.mysql_version
 
 
+def reset_binlog_stmt(mysql_version: str) -> str:
+    # RESET BINARY LOGS AND GTIDS was introduced in MySQL 8.2;
+    # RESET MASTER was removed in MySQL 8.4.
+    major_minor = tuple(int(p) for p in mysql_version.split(".")[:2])
+    return "RESET MASTER" if major_minor < (8, 2) else "RESET BINARY LOGS AND GTIDS"
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    remaining_args = [
-        arg for arg in parser.args if not arg.startswith("--mysql-version")
-    ]
+    def process(name: str) -> None:
+        if name in ("default", "large-scale"):
+            return
+        with c.test_case(name):
+            c.workflow(name, *parser.args)
 
-    # If args were passed then we are running the main CDC workflow
-    if remaining_args:
-        workflow_cdc(c, parser)
-    else:
-        workflows_with_internal_sharding = ["cdc"]
-        # Otherwise we are running all workflows
-        sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
-            [w for w in c.workflows if w not in workflows_with_internal_sharding],
-            lambda w: w,
-        )
-        print(
-            f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
-        )
-        for name in sharded_workflows:
-            if name == "default":
-                continue
-
-            with c.test_case(name):
-                c.workflow(name)
+    workflows_with_internal_sharding = ["cdc"]
+    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+        [w for w in c.workflows if w not in workflows_with_internal_sharding],
+        lambda w: w,
+    )
+    print(
+        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+    )
+    c.test_parts(sharded_workflows, process)
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
+    mysql_version = get_targeted_mysql_version(parser)
+
     parser.add_argument(
         "filter",
         nargs="*",
@@ -106,13 +131,14 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     matching_files = []
     for filter in args.filter:
-        matching_files.extend(glob.glob(filter, root_dir="test/mysql-cdc"))
-    sharded_files: list[str] = sorted(
-        buildkite.shard_list(matching_files, lambda file: file)
+        matching_files.extend(
+            glob.glob(filter, root_dir=MZ_ROOT / "test" / "mysql-cdc")
+        )
+    sharded_files: list[str] = buildkite.shard_list(
+        sorted(matching_files), lambda file: file
     )
     print(f"Files: {sharded_files}")
 
-    mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version)):
         c.up("materialized", "mysql")
 
@@ -121,18 +147,21 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.sources_and_sinks_ignored_from_validation.add("drop_table")
 
-        c.run_testdrive_files(
-            f"--var=ssl-ca={valid_ssl_context.ca}",
-            f"--var=ssl-client-cert={valid_ssl_context.client_cert}",
-            f"--var=ssl-client-key={valid_ssl_context.client_key}",
-            f"--var=ssl-wrong-ca={wrong_ssl_context.ca}",
-            f"--var=ssl-wrong-client-cert={wrong_ssl_context.client_cert}",
-            f"--var=ssl-wrong-client-key={wrong_ssl_context.client_key}",
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-            "--var=mysql-user-password=us3rp4ssw0rd",
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            *sharded_files,
+        c.test_parts(
+            sharded_files,
+            lambda file: c.run_testdrive_files(
+                f"--var=ssl-ca={valid_ssl_context.ca}",
+                f"--var=ssl-client-cert={valid_ssl_context.client_cert}",
+                f"--var=ssl-client-key={valid_ssl_context.client_key}",
+                f"--var=ssl-wrong-ca={wrong_ssl_context.ca}",
+                f"--var=ssl-wrong-client-cert={wrong_ssl_context.client_cert}",
+                f"--var=ssl-wrong-client-key={wrong_ssl_context.client_key}",
+                f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+                "--var=mysql-user-password=us3rp4ssw0rd",
+                f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
+                f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
+                file,
+            ),
         )
 
 
@@ -142,6 +171,7 @@ def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) 
         c.up("materialized", "mysql", "mysql-replica")
         c.run_testdrive_files(
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            f"--var=reset-binlog={reset_binlog_stmt(mysql_version)}",
             "override/10-replica-connection.td",
         )
 
@@ -174,15 +204,10 @@ def workflow_schema_change_restart(
 
 
 def _make_inserts(*, txns: int, txn_size: int) -> tuple[str, int]:
-    sql = "\n".join(
-        [
-            f"""
+    sql = "\n".join([f"""
             SET @i:=0;
             INSERT INTO many_inserts (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {txn_size};
-            """
-            for i in range(0, txns)
-        ]
-    )
+            """ for i in range(0, txns)])
     records = txns * txn_size
     return (sql, records)
 
@@ -200,20 +225,18 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
     """
     mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version)):
-        c.up("materialized", "mysql")
-        c.up("testdrive", persistent=True)
+        c.up("materialized", "mysql", Service("testdrive", idle=True))
 
         # Records to before creating the source.
-        (initial_sql, initial_records) = _make_inserts(txns=1, txn_size=1_000_000)
+        initial_sql, initial_records = _make_inserts(txns=1, txn_size=1_000_000)
 
         # Records to insert concurrently with creating the source.
-        (concurrent_sql, concurrent_records) = _make_inserts(txns=1000, txn_size=100)
+        concurrent_sql, concurrent_records = _make_inserts(txns=1000, txn_size=100)
 
         # Set up the MySQL server with the initial records, set up the connection to
         # the MySQL server in Materialize.
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET max_mysql_connections = 100
 
@@ -228,28 +251,23 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
                 USE public;
                 DROP TABLE IF EXISTS many_inserts;
                 CREATE TABLE many_inserts (pk SERIAL PRIMARY KEY, f2 BIGINT);
-                """
-            )
+                """)
             + dedent(initial_sql)
-            + dedent(
-                """
+            + dedent("""
                 > DROP SOURCE IF EXISTS s1 CASCADE;
-                """
-            )
+                """)
         )
 
     # Start inserting in the background.
 
     def do_inserts(c: Composition):
-        x = dedent(
-            f"""
+        x = dedent(f"""
             $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
             $ mysql-execute name=mysql
             USE public;
             {concurrent_sql}
-            """
-        )
+            """)
         c.testdrive(args=["--no-reset"], input=x)
 
     insert_thread = threading.Thread(target=do_inserts, args=(c,))
@@ -259,13 +277,11 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
     # Create the source.
     c.testdrive(
         args=["--no-reset"],
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE SOURCE s1
                 FROM MYSQL CONNECTION mysql_conn;
             > CREATE TABLE many_inserts FROM SOURCE s1 (REFERENCE public.many_inserts);
-            """
-        ),
+            """),
     )
 
     # Ensure the source eventually sees the right number of records.
@@ -274,10 +290,102 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
     print("--- Validate concurrent inserts")
     c.testdrive(
         args=["--no-reset"],
-        input=dedent(
-            f"""
+        input=dedent(f"""
             > SELECT count(*) FROM many_inserts
             {initial_records + concurrent_records}
-            """
-        ),
+            """),
     )
+
+
+def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    The goal is to test a large scale MySQL instance and to make sure that we can successfully ingest data from it quickly.
+    """
+    mysql_version = get_targeted_mysql_version(parser)
+    with c.override(create_mysql(mysql_version)):
+        c.up("materialized", "mysql", Service("testdrive", idle=True))
+
+        # Set up the MySQL server with the initial records, set up the connection to
+        # the MySQL server in Materialize.
+        c.testdrive(dedent(f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                ALTER SYSTEM SET max_mysql_connections = 100
+
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                > CREATE SECRET IF NOT EXISTS mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'
+                > CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (HOST mysql, USER root, PASSWORD SECRET mysqlpass)
+
+                $ mysql-execute name=mysql
+                DROP DATABASE IF EXISTS public;
+                CREATE DATABASE public;
+                USE public;
+                DROP TABLE IF EXISTS products;
+                CREATE TABLE products (id int NOT NULL, name varchar(255) DEFAULT NULL, merchant_id int NOT NULL, price int DEFAULT NULL, status int DEFAULT NULL, created_at timestamp NULL DEFAULT CURRENT_TIMESTAMP(), recordSizePayload longtext, PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+                ALTER TABLE products DISABLE KEYS;
+
+                > DROP SOURCE IF EXISTS s1 CASCADE;
+                """))
+
+    def make_inserts(c: Composition, start: int, batch_num: int):
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(f"""
+            $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+            $ mysql-execute name=mysql
+            SET foreign_key_checks = 0;
+            USE public;
+            SET @i:={start};
+            INSERT INTO products (id, name, merchant_id, price, status, created_at, recordSizePayload) SELECT @i:=@i+1, CONCAT("name", @i), @i % 1000, @i % 1000, @i % 10, '2024-12-12', repeat('x', 1000000) FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {batch_num};
+            """),
+        )
+
+    num_rows = 100_000  # out of disk with 200_000 rows
+    batch_size = 100
+    for i in range(0, num_rows, batch_size):
+        batch_num = min(batch_size, num_rows - i)
+        make_inserts(c, i, batch_num)
+
+    c.testdrive(
+        args=["--no-reset"],
+        input=dedent(f"""
+            > CREATE SOURCE s1
+                FROM MYSQL CONNECTION mysql_conn;
+            > CREATE TABLE products FROM SOURCE s1 (REFERENCE public.products);
+            > SELECT COUNT(*) FROM products;
+            {num_rows}
+            """),
+    )
+
+    make_inserts(c, num_rows, 1)
+
+    c.testdrive(
+        args=["--no-reset"],
+        input=dedent(f"""
+            > SELECT COUNT(*) FROM products;
+            {num_rows + 1}
+            """),
+    )
+
+
+def workflow_source_timeouts(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    Test source connect timeout using toxiproxy to drop network traffic.
+    """
+    mysql_version = get_targeted_mysql_version(parser)
+    with c.override(
+        Materialized(
+            sanity_restart=False,
+            additional_system_parameter_defaults={
+                "log_filter": "mz_storage::source::mysql=trace,info"
+            },
+            default_replication_factor=2,
+        ),
+        Toxiproxy(),
+        create_mysql(mysql_version),
+    ):
+        c.up("materialized", "mysql", "toxiproxy")
+        c.run_testdrive_files(
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            "proxied/*.td",
+        )

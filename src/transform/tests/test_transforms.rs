@@ -9,15 +9,17 @@
 
 use std::collections::BTreeSet;
 
-use mz_expr::explain::{enforce_linear_chains, ExplainContext};
-use mz_expr_parser::{handle_define, try_parse_mir, TestCatalog};
+use mz_expr::explain::{ExplainContext, enforce_linear_chains};
+use mz_expr_parser::{TestCatalog, handle_define, try_parse_mir};
 use mz_ore::str::Indent;
+use mz_repr::GlobalId;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{ExplainConfig, PlanRenderingContext};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_transform::analysis::annotate_plan;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::typecheck::TypeErrorHumanizer;
+
+const TEST_GLOBAL_ID: GlobalId = GlobalId::Transient(1234567);
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
@@ -99,6 +101,7 @@ fn handle_explain(
         humanizer: context.humanizer,
         annotations: annotated_plan.annotations.clone(),
         config: &config,
+        ambiguous_ids: BTreeSet::default(),
     })
 }
 
@@ -115,8 +118,8 @@ fn handle_typecheck(
     };
 
     // Apply the transformation, returning early on TransformError.
-    use mz_transform::typecheck::{columns_pretty, Typecheck};
-    let ctx = mz_transform::typecheck::empty_context();
+    use mz_transform::typecheck::{Typecheck, columns_pretty};
+    let ctx = mz_transform::typecheck::empty_typechecking_context();
 
     let tc = Typecheck::new(std::sync::Arc::clone(&ctx));
 
@@ -126,7 +129,9 @@ fn handle_typecheck(
         Ok(typ) => format!("{}\n", columns_pretty(&typ, catalog).trim()),
         Err(err) => format!(
             "{}\n",
-            TypeErrorHumanizer::new(&err, catalog).to_string().trim(),
+            mz_transform::typecheck::TypeErrorHumanizer::new(&err, catalog)
+                .to_string()
+                .trim(),
         ),
     }
 }
@@ -158,14 +163,14 @@ fn handle_apply(
             let transform = ANF::default();
             apply_transform(transform, catalog, input)
         }
-        "column_knowledge" => {
-            use mz_transform::column_knowledge::ColumnKnowledge;
-            let transform = ColumnKnowledge::default();
+        "equivalence_propagation" => {
+            use mz_transform::equivalence_propagation::EquivalencePropagation;
+            let transform = EquivalencePropagation::default();
             apply_transform(transform, catalog, input)
         }
-        "flatmap_to_map" => {
-            use mz_transform::canonicalization::FlatMapToMap;
-            let transform = FlatMapToMap;
+        "flat_map_elimination" => {
+            use mz_transform::canonicalization::FlatMapElimination;
+            let transform = FlatMapElimination;
             apply_transform(transform, catalog, input)
         }
         "fold_constants" => {
@@ -233,6 +238,16 @@ fn handle_apply(
             let transform = SemijoinIdempotence::default();
             apply_transform(transform, catalog, input)
         }
+        "case_literal" => {
+            use mz_transform::case_literal::CaseLiteralTransform;
+            let transform = CaseLiteralTransform;
+            apply_transform(transform, catalog, input)
+        }
+        "coalesce_case" => {
+            use mz_transform::coalesce_case::CoalesceCase;
+            let transform = CoalesceCase;
+            apply_transform(transform, catalog, input)
+        }
         "threshold_elision" => {
             use mz_transform::threshold_elision::ThresholdElision;
             let transform = ThresholdElision;
@@ -257,11 +272,20 @@ fn apply_transform<T: mz_transform::Transform>(
     // Parse the relation, returning early on parse error.
     let mut relation = try_parse_mir(catalog, input)?;
 
-    let features = mz_repr::optimize::OptimizerFeatures::default();
-    let typecheck_ctx = mz_transform::typecheck::empty_context();
+    let mut features = mz_repr::optimize::OptimizerFeatures::default();
+    // Apply a non-default feature flag to test the right implementation.
+    features.enable_letrec_fixpoint_analysis = true;
+    features.enable_dequadratic_eqprop_map = true;
+    features.enable_eq_classes_withholding_errors = true;
+    let typecheck_ctx = mz_transform::typecheck::empty_typechecking_context();
     let mut df_meta = DataflowMetainfo::default();
-    let mut transform_ctx =
-        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+    let mut transform_ctx = mz_transform::TransformCtx::local(
+        &features,
+        &typecheck_ctx,
+        &mut df_meta,
+        None,
+        Some(TEST_GLOBAL_ID),
+    );
 
     // Apply the transformation, returning early on TransformError.
     transform
@@ -269,7 +293,7 @@ fn apply_transform<T: mz_transform::Transform>(
         .map_err(|e| format!("{}\n", e.to_string().trim()))?;
 
     // Serialize and return the transformed relation.
-    Ok(relation.explain(&ExplainConfig::default(), Some(catalog)))
+    Ok(relation.debug_explain(&ExplainConfig::default(), Some(catalog)))
 }
 
 fn parse_explain_config(mut flags: BTreeSet<String>) -> Result<ExplainConfig, String> {
@@ -300,7 +324,11 @@ fn parse_explain_config(mut flags: BTreeSet<String>) -> Result<ExplainConfig, St
 struct Identity;
 
 impl mz_transform::Transform for Identity {
-    fn transform(
+    fn name(&self) -> &'static str {
+        "Identity"
+    }
+
+    fn actually_perform_transform(
         &self,
         _relation: &mut mz_expr::MirRelationExpr,
         _ctx: &mut mz_transform::TransformCtx,

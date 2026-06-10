@@ -13,17 +13,17 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
-use futures::stream::FuturesUnordered;
+use differential_dataflow::difference::Monoid;
+use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
-use mz_persist_client::batch::Batch;
 use mz_persist_client::ShardId;
+use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
-use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -36,6 +36,7 @@ use crate::txns::{Tidy, TxnsHandle};
 #[derive(Debug)]
 pub(crate) struct TxnWrite<K, V, T, D> {
     pub(crate) batches: Vec<Batch<K, V, T, D>>,
+    pub(crate) staged: Vec<ProtoBatch>,
     pub(crate) writes: Vec<(K, V, D)>,
 }
 
@@ -43,6 +44,7 @@ impl<K, V, T, D> TxnWrite<K, V, T, D> {
     /// Merges the staged writes in `other` into this.
     pub fn merge(&mut self, other: Self) {
         self.batches.extend(other.batches);
+        self.staged.extend(other.staged);
         self.writes.extend(other.writes);
     }
 }
@@ -51,6 +53,7 @@ impl<K, V, T, D> Default for TxnWrite<K, V, T, D> {
     fn default() -> Self {
         Self {
             batches: Vec::default(),
+            staged: Vec::default(),
             writes: Vec::default(),
         }
     }
@@ -67,8 +70,8 @@ impl<K, V, T, D> Txn<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
+    D: Debug + Monoid + Ord + Codec64 + Send + Sync,
 {
     pub(crate) fn new() -> Self {
         Txn {
@@ -92,6 +95,13 @@ where
             .push((key, val, diff))
     }
 
+    /// Stage a [`Batch`] to the in-progress txn.
+    ///
+    /// The timestamp will be assigned at commit time.
+    pub fn write_batch(&mut self, data_id: &ShardId, batch: ProtoBatch) {
+        self.writes.entry(*data_id).or_default().staged.push(batch)
+    }
+
     /// Commit this transaction at `commit_ts`.
     ///
     /// This either atomically commits all staged writes or, if that's no longer
@@ -106,13 +116,12 @@ where
     ///
     /// Panics if any involved data shards were not registered before commit ts.
     #[instrument(level = "debug", fields(ts = ?commit_ts))]
-    pub async fn commit_at<O, C>(
+    pub async fn commit_at<C>(
         &mut self,
-        handle: &mut TxnsHandle<K, V, T, D, O, C>,
+        handle: &mut TxnsHandle<K, V, T, D, C>,
         commit_ts: T,
     ) -> Result<TxnApply<T>, T>
     where
-        O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
         let op = &Arc::clone(&handle.metrics).commit;
@@ -157,31 +166,20 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 while let Some((data_id, updates)) = self.writes.pop_first() {
-                    let data_write =
-                        handle
-                            .datas
-                            .take_write_for_commit(&data_id)
-                            .unwrap_or_else(|| {
-                                panic!(
+                    let data_write = handle.datas.take_write_for_commit(&data_id).unwrap_or_else(
+                        || {
+                            panic!(
                                 "data shard {} must be registered with this Txn handle to commit",
                                 data_id
                             )
-                            });
+                        },
+                    );
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
-                        let mut batches = updates
-                            .batches
-                            .into_iter()
-                            .map(|mut batch| {
-                                batch
-                                    .rewrite_ts(
-                                        &Antichain::from_elem(commit_ts.clone()),
-                                        Antichain::from_elem(commit_ts.step_forward()),
-                                    )
-                                    .expect("invalid usage");
-                                batch.into_transmittable_batch()
-                            })
-                            .collect::<Vec<_>>();
+                        let mut batches =
+                            Vec::with_capacity(updates.staged.len() + updates.batches.len() + 1);
+
+                        // Form batches for any Row data.
                         if !updates.writes.is_empty() {
                             let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
                             for (k, v, d) in updates.writes.iter() {
@@ -194,6 +192,30 @@ where
                             let batch = batch.into_transmittable_batch();
                             batches.push(batch);
                         }
+
+                        // Append any already staged Batches.
+                        batches.extend(updates.staged.into_iter());
+                        batches.extend(
+                            updates
+                                .batches
+                                .into_iter()
+                                .map(|b| b.into_transmittable_batch()),
+                        );
+
+                        // Rewrite the timestamp for them all.
+                        let batches: Vec<_> = batches
+                            .into_iter()
+                            .map(|batch| {
+                                let mut batch = data_write.batch_from_transmittable_batch(batch);
+                                batch
+                                    .rewrite_ts(
+                                        &Antichain::from_elem(commit_ts.clone()),
+                                        Antichain::from_elem(commit_ts.step_forward()),
+                                    )
+                                    .expect("invalid usage");
+                                batch.into_transmittable_batch()
+                            })
+                            .collect();
 
                         let batch_updates = batches
                             .into_iter()
@@ -302,6 +324,7 @@ where
                                 .collect();
                             let txn_write = TxnWrite {
                                 writes: Vec::new(),
+                                staged: Vec::new(),
                                 batches,
                             };
                             self.writes.insert(data_write.shard_id(), txn_write);
@@ -349,13 +372,12 @@ pub struct TxnApply<T> {
 
 impl<T> TxnApply<T> {
     /// Applies the txn, unblocking reads at timestamp it was committed at.
-    pub async fn apply<K, V, D, O, C>(self, handle: &mut TxnsHandle<K, V, T, D, O, C>) -> Tidy
+    pub async fn apply<K, V, D, C>(self, handle: &mut TxnsHandle<K, V, T, D, C>) -> Tidy
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
-        O: Opaque + Debug + Codec64,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
         C: TxnsCodec,
     {
         debug!("txn apply {:?}", self.commit_ts);
@@ -375,8 +397,8 @@ impl<T> TxnApply<T> {
 mod tests {
     use std::time::{Duration, SystemTime};
 
-    use futures::stream::FuturesUnordered;
     use futures::StreamExt;
+    use futures::stream::FuturesUnordered;
     use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
 
@@ -642,7 +664,8 @@ mod tests {
                 txn.write(&ShardId::new(), "foo".into(), (), 1).await;
                 txn.commit_at(&mut txns, 1).await
             }
-        });
+        })
+        .into_tokio_handle();
         assert_err!(commit.await);
 
         let d0 = txns.expect_register(2).await;
@@ -657,7 +680,8 @@ mod tests {
                 txn.write(&d0, "foo".into(), (), 1).await;
                 txn.commit_at(&mut txns, 4).await
             }
-        });
+        })
+        .into_tokio_handle();
         assert_err!(commit.await);
     }
 

@@ -1,0 +1,20 @@
+columns:
+  - column: "Failure Type"
+  - column: "RPO"
+  - column: "RTO (RF1/RF2)"
+rows:
+
+  - "Failure Type": "**Non-data corruption errors**"
+    "RPO": |
+
+      Maximum 1 hour (time since last backup, based on hourly backups).
+
+    "RTO (RF1/RF2)": |
+      Case specific
+
+  - "Failure Type": "**Data corruption errors**"
+    "RPO": |
+
+      High/Significant. RPO is dictated by upstream system.
+    "RTO (RF1/RF2)": |
+      Case specific

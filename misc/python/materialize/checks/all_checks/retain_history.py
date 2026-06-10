@@ -6,14 +6,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-import re
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, disabled
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 # This duration needs to be long enough for running all scenarios and the CI build!
 RETAIN_HISTORY_DURATION = "60m"
@@ -27,13 +24,8 @@ def schemas() -> str:
     "database-issues#7310 and compaction not predicable and now() not appropriate while mz_now() not applicable"
 )
 class RetainHistoryOnMv(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return e.current_mz_version >= MzVersion.parse_mz("v0.81.0")
-
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > CREATE TABLE time_for_mv (time_index INT, t TIMESTAMP);
 
                 # Give it some time
@@ -65,9 +57,7 @@ class RetainHistoryOnMv(Check):
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 
                 > INSERT INTO time_for_mv VALUES (3, now());
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -239,12 +229,6 @@ class RetainHistoryOnMv(Check):
         definition_validations = f"""
                 > SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW retain_history_mv1);
                 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"retain_history_mv1\\" IN CLUSTER \\"quickstart\\" WITH (RETAIN HISTORY = FOR '{RETAIN_HISTORY_DURATION}', REFRESH = ON COMMIT) AS SELECT * FROM \\"materialize\\".\\"public\\".\\"retain_history_table\\""
-
-                > SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW retain_history_mv2);
-                "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"retain_history_mv2\\" IN CLUSTER \\"quickstart\\" WITH (RETAIN HISTORY = FOR '{RETAIN_HISTORY_DURATION}', REFRESH = ON COMMIT) AS SELECT * FROM \\"materialize\\".\\"public\\".\\"retain_history_table\\""
-
-                > SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW retain_history_mv3);
-                "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"retain_history_mv3\\" IN CLUSTER \\"quickstart\\" WITH (RETAIN HISTORY = FOR '{RETAIN_HISTORY_DURATION}', REFRESH = ON COMMIT) AS SELECT * FROM \\"materialize\\".\\"public\\".\\"retain_history_mv2\\""
         """
 
         other_validations = """
@@ -255,12 +239,7 @@ class RetainHistoryOnMv(Check):
                 Target cluster: quickstart
                 """
 
-        if self.base_version < MzVersion.parse_mz("v0.96.0-dev"):
-            other_validations = remove_target_cluster_from_explain(other_validations)
-
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 {time_definitions}
 
                 {content_validations}
@@ -268,23 +247,15 @@ class RetainHistoryOnMv(Check):
                 {definition_validations}
 
                 {other_validations}
-                """
-            )
-        )
+                """))
 
 
 @disabled(
     "database-issues#7310 and compaction not predicable and now() not appropriate while mz_now() not applicable"
 )
 class RetainHistoryOnKafkaSource(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return e.current_mz_version >= MzVersion.parse_mz("v0.81.0")
-
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                f"""
+        return Testdrive(schemas() + dedent(f"""
                 > CREATE TABLE time_for_source (time_index INT, t TIMESTAMP);
 
                 # Give it some time
@@ -315,16 +286,10 @@ class RetainHistoryOnKafkaSource(Check):
 
                 > INSERT INTO time_for_source VALUES (3, now());
 
-                >[version<11900] CREATE SOURCE retain_history_source
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-retain-history-${{testdrive.seed}}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE UPSERT
-                  WITH (RETAIN HISTORY FOR '{RETAIN_HISTORY_DURATION}')
-
-                >[version>=11900] CREATE SOURCE retain_history_source_src
+                > CREATE SOURCE retain_history_source_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-retain-history-${{testdrive.seed}}')
                   WITH (RETAIN HISTORY FOR '{RETAIN_HISTORY_DURATION}')
-                >[version>=11900] CREATE TABLE retain_history_source FROM SOURCE retain_history_source_src (REFERENCE "testdrive-retain-history-${{testdrive.seed}}")
+                > CREATE TABLE retain_history_source FROM SOURCE retain_history_source_src (REFERENCE "testdrive-retain-history-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -332,9 +297,7 @@ class RetainHistoryOnKafkaSource(Check):
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 
                 > INSERT INTO time_for_source VALUES (4, now());
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -370,9 +333,7 @@ class RetainHistoryOnKafkaSource(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ set-from-sql var=time0
                 SELECT t::STRING FROM time_for_source WHERE time_index = 0
                 $ set-from-sql var=time1
@@ -455,10 +416,4 @@ class RetainHistoryOnKafkaSource(Check):
                 K3 C3
                 K4 C4
                 K5 C5
-                """
-            )
-        )
-
-
-def remove_target_cluster_from_explain(sql: str) -> str:
-    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)
+                """))

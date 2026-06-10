@@ -70,7 +70,7 @@ def warn(message: str) -> None:
 
 def confirm(question: str) -> bool:
     """Render a question, returning True if the user says y or yes"""
-    response = input(f"{question} [y/N]")
+    response = input(f"{question} [y/N] ")
     return response.lower() in ("y", "yes")
 
 

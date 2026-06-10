@@ -9,9 +9,6 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-
 $ set-sql-timeout duration=60s
 
 $ set schema={
@@ -37,10 +34,7 @@ $ kafka-create-topic topic=data2 partitions=2
 
 > CREATE SOURCE data_rt
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (
-    TOPIC 'testdrive-data-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL = '50ms'
-  )
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW view_rt AS SELECT b, sum(a) FROM data_rt GROUP BY b

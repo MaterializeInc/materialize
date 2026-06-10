@@ -11,59 +11,48 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 
+use base64::Engine;
 use mz_persist_types::Codec;
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{RelationDesc, SqlScalarType};
 use mz_storage_types::sources::SourceData;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::upgrade::AllVersionsStateUpdateKind;
 
-const PROTO_DIRECTORY: &str = {
-    if mz_build_tools::is_bazel_build() {
-        "src/catalog/protos"
-    } else {
-        "protos"
-    }
-};
-const PROTO_EXT: &str = "proto";
+const PROTO_DIRECTORY: &str = "../catalog-protos/src";
+const PROTO_EXT: &str = "rs";
 
-static SNAPSHOT_DIRECTORY: &str = {
-    if mz_build_tools::is_bazel_build() {
-        "src/catalog/src/durable/upgrade/snapshots"
-    } else {
-        "src/durable/upgrade/snapshots"
-    }
-};
+static SNAPSHOT_DIRECTORY: &str = "src/durable/upgrade/snapshots";
 const SNAPSHOT_EXT: &str = "txt";
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_proto_serialization_stability() {
     let protos: BTreeSet<_> = read_file_names(PROTO_DIRECTORY, PROTO_EXT)
-        // Remove `objects.proto`.
-        //
-        // `objects.proto` is allowed to change and we don't have a good
-        // mechanism to force people to update `objects.txt` any time `objects.proto` changes. To
-        // avoid this rot we just don't test the contents of `objects.proto`. Additionally,
-        // `objects.proto` will always be identical to the most recent `objects_vX.proto`.
-        .filter(|name| name != "objects")
+        .filter(|name| name.starts_with("objects_v"))
         .collect();
 
     let snapshot_files: BTreeSet<_> = read_file_names(SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
 
     let unknown_snapshots: Vec<_> = snapshot_files.difference(&protos).collect();
     if !unknown_snapshots.is_empty() {
-        panic!("Have snapshots, but no proto files on disk? If a .proto file was deleted, then the .txt snapshot file must be deleted too. {unknown_snapshots:#?}");
+        panic!(
+            "Have snapshots, but no proto files on disk? \
+             If an objects_v*.rs file was deleted, then the .txt snapshot file must be deleted \
+             too. {unknown_snapshots:#?}"
+        );
     }
 
     let unencoded_protos: Vec<_> = protos.difference(&snapshot_files).collect();
     if !unencoded_protos.is_empty() {
-        panic!("Missing encodings for some proto objects, try generating them with `generate_missing_encodings`. {unencoded_protos:#?}");
+        panic!(
+            "Missing encodings for some proto objects, try generating them with \
+             `generate_missing_encodings`. {unencoded_protos:#?}"
+        );
     }
 
-    let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
     let relation_desc = RelationDesc::builder()
-        .with_column("a", ScalarType::Jsonb.nullable(false))
+        .with_column("a", SqlScalarType::Jsonb.nullable(false))
         .finish();
     for snapshot_file in snapshot_files {
         let encoded_bytes = fs::read(format!("{}/{}.txt", SNAPSHOT_DIRECTORY, snapshot_file))
@@ -71,7 +60,11 @@ fn test_proto_serialization_stability() {
         let encoded_str = std::str::from_utf8(encoded_bytes.as_slice()).expect("valid UTF-8");
         let decoded = encoded_str
             .lines()
-            .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
+            .map(|s| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(s)
+                    .expect("valid base64")
+            })
             .map(|b| SourceData::decode(&b, &relation_desc).expect("valid proto"))
             .map(StateUpdateKindJson::from)
             .map(|raw| {
@@ -87,7 +80,7 @@ fn test_proto_serialization_stability() {
         for source_data in decoded {
             buf.clear();
             source_data.encode(&mut buf);
-            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            base64::engine::general_purpose::STANDARD.encode_string(buf.as_slice(), &mut reencoded);
             reencoded.push('\n');
         }
 
@@ -101,7 +94,6 @@ fn test_proto_serialization_stability() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // not an actual test
 #[ignore]
 /// This is not a real test, it is a helper to generate encoded catalog objects
 /// for other tests. When you want to generate new encodings, then run:
@@ -111,7 +103,7 @@ fn test_proto_serialization_stability() {
 /// ```
 fn generate_missing_encodings() {
     let protos: BTreeSet<_> = read_file_names(PROTO_DIRECTORY, PROTO_EXT)
-        .filter(|name| name != "objects")
+        .filter(|name| name.starts_with("objects_v"))
         .collect();
 
     let snapshots: BTreeSet<_> = read_file_names(SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
@@ -120,8 +112,6 @@ fn generate_missing_encodings() {
     if !unknown_snapshots.is_empty() {
         panic!("Have snapshots, but no proto files on disk? {unknown_snapshots:#?}");
     }
-
-    let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
 
     for to_encode in protos.difference(&snapshots) {
         let mut file = fs::File::options()
@@ -135,11 +125,7 @@ fn generate_missing_encodings() {
             .map(|kind| kind.raw())
             .map(SourceData::from)
             .map(|source_data| source_data.encode_to_vec())
-            .map(|buf| {
-                let mut encoded = String::new();
-                base64::encode_config_buf(buf.as_slice(), base64_config, &mut encoded);
-                encoded
-            });
+            .map(|buf| base64::engine::general_purpose::STANDARD.encode(buf.as_slice()));
         for encoded_data in encoded_datas {
             write!(&mut file, "{encoded_data}\n").expect("unable to write file");
         }

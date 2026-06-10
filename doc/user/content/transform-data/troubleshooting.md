@@ -61,8 +61,8 @@ one.
 Other options to consider:
 
 * If you've gone through the dataflow troubleshooting and do not want to make
-  any changes to your query, consider [sizing up your cluster](/sql/create-cluster/#size).
-* You can also consider changing your [isolation level](/get-started/isolation-level/),
+  any changes to your query, consider [sizing up your cluster](/sql/create-cluster/#available-sizes).
+* You can also consider changing your [isolation level](/reference/isolation-level/),
   depending on the consistency guarantees that you need. With a lower isolation
   level, you may be able to query stale results out of lagging indexes and
   materialized views.
@@ -100,7 +100,7 @@ this means that the index was correctly used. If that's not the case, consider:
 If you are just looking to validate data and don't want to deal with query
 optimization at this stage, you can improve the efficiency of validation
 queries by reducing the amount of data that Materialize needs to read. You can
-achieve this by adding `LIMIT` clauses or [temporal filters](https://materialize.com/docs/transform-data/patterns/temporal-filters/)
+achieve this by adding `LIMIT` clauses or [temporal filters](/transform-data/patterns/temporal-filters/)
 to your queries.
 
 **`LIMIT` clause**
@@ -116,7 +116,7 @@ FROM <source, materialized view or table>
 LIMIT <25 or less>;
 ```
 
-To verify whether the query will return quickly, use [`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/)
+To verify whether the query will return quickly, use [`EXPLAIN PLAN`](/sql/explain-plan/)
 to get the execution plan for the query, and validate that it starts with
 `Explained Query (fast path)`.
 
@@ -139,7 +139,7 @@ more details on temporal filter pushdown, see the [reference documentation](/tra
 <!-- Copied from doc/user/content/manage/troubleshooting.md#Transactions -->
 Transactions are a database concept for bundling multiple query steps into a
 single, all-or-nothing operation. You can read more about them in the
-[transactions](https://materialize.com/docs/sql/begin) section of our docs.
+[transactions](/sql/begin) section of our docs.
 
 In Materialize, `BEGIN` starts a transaction block. All statements in a
 transaction block will be executed in a single transaction until an explicit
@@ -183,7 +183,7 @@ on, taking longer to return. As an example, if you issue a lot of
 resource-intensive queries at once, that might spike the CPU.
 
 The measure of cluster busyness is CPU. You can monitor CPU usage in the
-[Materialize console](https://console.materialize.com/) by clicking
+[Materialize console](/console/) by clicking
 the **"Clusters"** tab in the navigation bar, and clicking into the cluster.
 You can also grab CPU usage from the system catalog using SQL:
 
@@ -229,64 +229,57 @@ hydration is complete**. To see whether an object is still hydrating, navigate
 to the [workflow graph](#detect) for the object in the Materialize console.
 
 Hydration time is proportional to data volume and query complexity. This means
-that you should expect objects with large volumes of data and/or complex
-queries to take longer to hydrate. You should also expect hydration to be
+that you should expect objects with large volumes of data and/or complex queries
+to take longer to hydrate. For Cloud, you should also expect hydration to be
 triggered every time a cluster is restarted or sized up, including during
-[Materialize's routine maintenance window](/releases#schedule).
+[Materialize Cloud's routine maintenance
+window](/releases/schedule/#cloud-upgrade-schedule).
 
 ### Unhealthy cluster
 
 #### Detect
 
-If your cluster runs out of memory (i.e., it OOMs), this will result in a crash.
-After a crash, the cluster has to restart, which can take a few seconds. On
-cluster restart, your query will also automatically restart execution from the
-beginning.
+If your cluster replica reaches its capacity (i.e., it OOMs at 100% Memory Utilization), this will result in a crash. After a crash, the cluster replica has to restart, which can take a few seconds. On cluster restart, your query will also automatically restart execution from the beginning.
 
-If your cluster is CPU-maxed out (\~100% utilization), your query may be blocked
-while the cluster processes the other activity. It may eventually complete, but
-it will continue to be slow and potentially blocked until the CPU usage goes
-down. As an example, if you issue a lot of resource-intensive queries at once,
-that might spike the CPU.
+If your cluster replica is CPU-maxed out (~100% CPU usage), your query may be blocked while the cluster processes the other activity. It may eventually complete, but it will continue to be slow and potentially blocked until the CPU usage goes down. As an example, if you issue a lot of resource-intensive queries at once, that might spike the CPU.
 
-To see memory and CPU usage for your cluster in the Materialize console, go to
-https://console.materialize.com/, click the **“Clusters”** tab in the
-navigation bar, and click on the cluster name.
+We recommend setting [Alerting thresholds](https://materialize.com/docs/manage/monitor/alerting/#thresholds) to notify your team when a cluster is reaching its capacity. Please note that these are recommendations, and some configurations may reach unstable memory utilization levels sooner than the thresholds.
+
+To see Memory Utilization and CPU usage for your cluster replica in the [Materialize console](https://materialize.com/docs/console/clusters/), go to [https://console.materialize.com/](/console/), click the **“Clusters”** tab in the navigation bar, and click on the cluster name.
 
 #### Address
 
-Your query may have been the root cause of the increased memory and CPU usage,
-or it may have been something else happening on the cluster at the same time.
-To troubleshoot and fix memory and CPU usage, follow the steps in the
-[dataflow troubleshooting](/transform-data/dataflow-troubleshooting) guide.
+Your query may have been the root cause of the increased Memory Utilization and CPU usage, or it may have been something else happening on the cluster at the same time. To troubleshoot and fix Memory Utilization and CPU usage, follow the steps in the [dataflow troubleshooting](https://materialize.com/docs/transform-data/dataflow-troubleshooting) guide.
 
-For guidance on how to reduce memory and CPU usage for this or another query,
-take a look at the [indexing and query optimization](#indexing-and-query-optimization)
-and [result filtering](#result-filtering) sections above.
+For guidance on how to reduce Memory Utilization and CPU usage for this or another query, take a look at the [indexing and query optimization](https://materialize.com/docs/transform-data/troubleshooting/#indexing-and-query-optimization) and result filtering sections above.
 
-If your query was the root cause, you'll need to kill it for the cluster's
-memory or CPU to go down. If your query was causing an OOM, the cluster will
-continue to be in an "OOM loop" - every time the cluster restarts, the query
-restarts executing automatically then causes an OOM again - until you kill the
-query.
+If your query was the root cause, you’ll need to kill it for the cluster replica’s Memory Utilization or CPU to go down. If your query was causing an OOM, the cluster replica will continue to be in an “OOM loop” - every time the replica restarts, the query restarts executing automatically then causes an OOM again - until you kill the query.
 
-If your query was not the root cause, you can wait for the other activity on the
-cluster to stop and memory/CPU to go down, or switch to a different cluster.
+If your query was not the root cause, you can wait for the other activity on the cluster to stop and Memory Utilization/CPU to go down, or switch to a different cluster.
 
-If you've gone through the dataflow troubleshooting and do not want to make any
-changes to your query, consider [sizing up your cluster](/sql/create-cluster/#size).
-A larger size cluster will provision more memory and CPU resources.
+If you’ve gone through the dataflow troubleshooting and do not want to make any changes to your query, consider [sizing up your cluster](https://materialize.com/docs/sql/create-cluster/#available-sizes). A larger size cluster will provision more resources.
+
+
+## Which part of my query runs slowly or uses a lot of memory?
+
+You can [`EXPLAIN`](/sql/explain-plan/) a query to see how it will be run as a
+dataflow. In particular, `EXPLAIN PHYSICAL PLAN` (the default) will show the concrete, fully
+optimized plan that Materialize will run. That plan is written in our "low-level
+intermediate representation" (LIR).
+
+You can [`EXPLAIN ANALYZE`](/sql/explain-analyze) an index or materialized view to
+attribute performance information to each LIR operator.
 
 ## How do I troubleshoot slow queries?
 
 Materialize stores a (sampled) log of the SQL statements that are issued against
 your Materialize region in the last **three days**, along with various metadata
 about these statements. You can access this log via the **"Query history"** tab
-in the [Materialize console](https://console.materialize.com/). You can filter
+in the [Materialize console](/console/). You can filter
 and sort statements by type, duration, and other dimensions.
 
 This data is also available via the
-[mz_internal.mz_recent_activity_log](/sql/system-catalog/mz_internal/#mz_recent_activity_log)
+[mz_internal.mz_recent_activity_log](/reference/system-catalog/mz_internal/#mz_recent_activity_log)
 catalog table.
 
 It's important to note that the default (and max) sample rate for most
@@ -294,6 +287,6 @@ Materialize organizations is 99%, which means that not all statements will be
 captured in the log. The sampling rate is not user-configurable, and may change
 at any time.
 
-If you're looking for a complete audit history, use the [mz_audit_events](/sql/system-catalog/mz_catalog/#mz_audit_events)
+If you're looking for a complete audit history, use the [mz_audit_events](/reference/system-catalog/mz_catalog/#mz_audit_events)
 catalog table, which records all DDL commands issued against your Materialize
 region.

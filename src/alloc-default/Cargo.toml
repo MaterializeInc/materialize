@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 mz-alloc = { path = "../alloc", default-features = false }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 # We use jemalloc by default on non-macOS platforms, as benchmarks indicated it
 # outperforms the system allocator, while also providing heap profiles.
@@ -31,7 +30,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 mz-alloc = { path = "../alloc", features = ["jemalloc"] }
 
 [features]
-default = ["workspace-hack"]
+default = []
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack", "mz-alloc"]
+normal = ["mz-alloc"]

@@ -9,8 +9,8 @@
 
 """Buildkite utilities."""
 
-import hashlib
 import os
+import subprocess
 from collections.abc import Callable
 from enum import Enum, auto
 from pathlib import Path
@@ -75,7 +75,7 @@ def is_in_pull_request() -> bool:
     if git.is_on_release_version():
         return False
 
-    if git.contains_commit("HEAD", "main", fetch=True):
+    if git.contains_commit("HEAD", "main"):
         return False
 
     return True
@@ -103,7 +103,7 @@ def get_pipeline_default_branch(fallback: str = "main"):
 def get_merge_base(url: str = "https://github.com/MaterializeInc/materialize") -> str:
     base_branch = get_pull_request_base_branch() or get_pipeline_default_branch()
     merge_base = git.get_common_ancestor_commit(
-        remote=git.get_remote(url), branch=base_branch, fetch_branch=True
+        remote=git.get_remote(url), branch=base_branch
     )
     return merge_base
 
@@ -158,16 +158,18 @@ def find_modified_lines() -> set[tuple[str, int]]:
 
 
 def upload_artifact(path: Path | str, cwd: Path | None = None, quiet: bool = False):
-    spawn.runv(
-        [
-            "buildkite-agent",
-            "artifact",
-            "upload",
-            "--log-level",
-            "fatal" if quiet else "notice",
-            path,
-        ],
-        cwd=cwd,
+    spawn.run_with_retries(
+        lambda: spawn.runv(
+            [
+                "buildkite-agent",
+                "artifact",
+                "upload",
+                "--log-level",
+                "fatal" if quiet else "notice",
+                path,
+            ],
+            cwd=cwd,
+        )
     )
 
 
@@ -179,25 +181,6 @@ def get_parallelism_index() -> int:
 def get_parallelism_count() -> int:
     _validate_parallelism_configuration()
     return int(get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB_COUNT, 1))
-
-
-def _accepted_by_shard(
-    identifier: str,
-    parallelism_index: int | None = None,
-    parallelism_count: int | None = None,
-) -> bool:
-    if parallelism_index is None:
-        parallelism_index = get_parallelism_index()
-    if parallelism_count is None:
-        parallelism_count = get_parallelism_count()
-
-    if parallelism_count == 1:
-        return True
-
-    hash_value = int.from_bytes(
-        hashlib.md5(identifier.encode()).digest(), byteorder="big"
-    )
-    return hash_value % parallelism_count == parallelism_index
 
 
 def _upload_shard_info_metadata(items: list[str]) -> None:
@@ -244,8 +227,8 @@ def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
 
     accepted_items = [
         item
-        for item in items
-        if _accepted_by_shard(to_identifier(item), parallelism_index, parallelism_count)
+        for i, item in enumerate(items)
+        if i % parallelism_count == parallelism_index
     ]
 
     if is_in_buildkite() and accepted_items:
@@ -328,3 +311,10 @@ def get_job_url_from_pipeline_and_build(
 ) -> str:
     build_url = f"https://buildkite.com/materialize/{pipeline}/builds/{build_number}"
     return get_job_url_from_build_url(build_url, build_job_id)
+
+
+def get_build_status(build: str) -> str:
+    return spawn.capture(
+        ["buildkite-agent", "meta-data", "get", build],
+        stderr=subprocess.DEVNULL,
+    )

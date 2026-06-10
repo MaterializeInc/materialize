@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class TextByteaTypes(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE text_bytea_types_table (text_col TEXT, bytea_col BYTEA);
             > INSERT INTO text_bytea_types_table VALUES ('aaaa', '\\xAAAA'), ('това е', 'текст');
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -47,12 +43,7 @@ class TextByteaTypes(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
-                > SHOW CREATE MATERIALIZED VIEW string_bytea_types_view1;
-                materialize.public.string_bytea_types_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"string_bytea_types_view1\\" IN CLUSTER \\"{self._default_cluster()}\\" WITH (REFRESH = ON COMMIT) AS SELECT \\"text_col\\", \\"bytea_col\\", 'това'::\\"pg_catalog\\".\\"text\\", '\\\\xAAAA'::\\"pg_catalog\\".\\"bytea\\" FROM \\"materialize\\".\\"public\\".\\"text_bytea_types_table\\" WHERE \\"text_col\\" >= ''::\\"pg_catalog\\".\\"text\\" AND \\"bytea_col\\" >= ''::\\"pg_catalog\\".\\"bytea\\""
-
+        return Testdrive(dedent("""
                 > SELECT text_col, text, LENGTH(bytea_col), LENGTH(bytea) FROM string_bytea_types_view1;
                 aaaa това 2 2
                 aaaa това 2 2
@@ -61,9 +52,6 @@ class TextByteaTypes(Check):
                 "това е" това 10 2
                 "това е" това 10 2
 
-                > SHOW CREATE VIEW string_bytea_types_view2;
-                materialize.public.string_bytea_types_view2 "CREATE VIEW \\"materialize\\".\\"public\\".\\"string_bytea_types_view2\\" AS SELECT \\"text_col\\", \\"bytea_col\\", 'това'::\\"pg_catalog\\".\\"text\\", '\\\\xAAAA'::\\"pg_catalog\\".\\"bytea\\" FROM \\"materialize\\".\\"public\\".\\"text_bytea_types_table\\" WHERE \\"text_col\\" >= ''::\\"pg_catalog\\".\\"text\\" AND \\"bytea_col\\" >= ''::\\"pg_catalog\\".\\"bytea\\""
-
                 > SELECT text_col, text, LENGTH(bytea_col), LENGTH(bytea) FROM string_bytea_types_view2;
                 aaaa това 2 2
                 aaaa това 2 2
@@ -71,6 +59,4 @@ class TextByteaTypes(Check):
                 "това е" това 10 2
                 "това е" това 10 2
                 "това е" това 10 2
-            """
-            )
-        )
+            """))

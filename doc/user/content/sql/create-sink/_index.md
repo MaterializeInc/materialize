@@ -5,30 +5,66 @@ disable_list: true
 pagerank: 30
 menu:
   main:
-    parent: reference
-    name: Sinks
+    parent: commands
     identifier: 'create-sink'
-    weight: 30
 ---
 
 A [sink](/concepts/sinks/) describes an external system you
 want Materialize to write data to, and provides details about how to encode
-that data.
+that data. You can define a sink over a materialized view, source, or table.
 
-## Connectors
+## Syntax summary
 
-Materialize bundles **native connectors** that allow writing data to the
-following external systems:
+<!--"Docs Note: Using include-example shortcode instead of include-syntax since only want the code snippet on this page."
+-->
 
-{{< multilinkbox >}}
-{{< linkbox title="Message Brokers" >}}
-- [Kafka](/sql/create-sink/kafka)
-- [Redpanda](/sql/create-sink/kafka)
-{{</ linkbox >}}
-{{</ multilinkbox >}}
+{{< tabs >}}
 
-For details on the syntax, supported formats and features of each connector,
-check out the dedicated `CREATE SINK` documentation pages.
+{{< tab "Kafka/Redpanda" >}}
+
+{{< tabs >}}
+
+{{< tab "Format Avro" >}}
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-avro" %}}
+
+{{< /tab >}}
+
+{{< tab "Format JSON" >}}
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-json" %}}
+
+{{< /tab >}}
+
+{{< tab "Format TEXT/BYTES" >}}
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-text-bytes" %}}
+
+{{< /tab >}}
+
+{{< tab "KEY FORMAT VALUE FORMAT" >}}
+
+By default, the message key is encoded using the same format as the message value. However, you can set the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT`.
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-key-value-format" %}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+
+For details, see [CREATE Sink: Kafka/Redpanda](/sql/create-sink/kafka/).
+{{< /tab >}}
+
+{{< tab "Iceberg" >}}
+
+{{< public-preview />}}
+
+{{% include-example file="examples/create_sink_iceberg" example="syntax" %}}
+
+For details, see [CREATE Sink: Iceberg](/sql/create-sink/iceberg/).
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Best practices
 
@@ -56,14 +92,7 @@ materialized view.
 
 The privileges required to execute this statement are:
 
-- `CREATE` privileges on the containing schema.
-- `SELECT` privileges on the item being written out to an external system.
-  - NOTE: if the item is a view, then the view owner must also have the necessary privileges to
-    execute the view definition.
-- `CREATE` privileges on the containing cluster if the sink is created in an existing cluster.
-- `CREATECLUSTER` privileges on the system if the sink is not created in an existing cluster.
-- `USAGE` privileges on all connections and secrets used in the sink definition.
-- `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
+{{% include-headless "/headless/sql-command-privileges/create-sink" %}}
 
 ## Related pages
 

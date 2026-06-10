@@ -25,12 +25,14 @@ $ kafka-create-topic topic=data
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE s_tbl FROM SOURCE s (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 $ kafka-ingest format=avro topic=data schema=${schema}
 {"X": 1, "Y": 1}
@@ -153,12 +155,14 @@ exact:s is a source not a view
 # test that the names of the deleted objects can be used to create objects of other types
 > CREATE MATERIALIZED VIEW s AS SELECT 84 AS b
 
+> BEGIN
 > CREATE SOURCE i
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE i_tbl FROM SOURCE i (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE INDEX v ON s(b)
 
@@ -195,7 +199,7 @@ contains:unknown catalog item 'nonexistent'
 > SHOW CREATE VIEW test1
 name                      create_sql
 --------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT 42 AS \"a\""
+materialize.public.test1  "CREATE VIEW materialize.public.test1 AS SELECT 42 AS a;"
 
 ! CREATE VIEW test1 AS SELECT 43 AS b
 contains:view "materialize.public.test1" already exists

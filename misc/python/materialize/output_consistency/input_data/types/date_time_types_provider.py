@@ -68,7 +68,8 @@ DATE_TYPE = DateTimeDataType(
     [
         ("2023-06-01", set()),
         ("2024-02-29", set()),
-        ("01-02-03", {ExpressionCharacteristics.DATE_WITH_SHORT_YEAR}),
+        # TODO: Reenable when database-issues#8642 is fixed
+        # ("01-02-03", {ExpressionCharacteristics.DATE_WITH_SHORT_YEAR}),
     ],
     is_max_value_pg_compatible=False,
 )
@@ -91,13 +92,14 @@ TIMESTAMP_TYPE = DateTimeDataType(
     [
         ("2023-02-28 11:22:33.44444", set()),
         ("2024-02-29 23:50:00", set()),
-        (
-            "01-02-03 11:",
-            {
-                ExpressionCharacteristics.DATE_WITH_SHORT_YEAR,
-                ExpressionCharacteristics.INCOMPLETE_TIME_VALUE,
-            },
-        ),
+        # TODO: Reenable when database-issues#8642 is fixed
+        # (
+        #    "01-02-03 11:",
+        #    {
+        #        ExpressionCharacteristics.DATE_WITH_SHORT_YEAR,
+        #        ExpressionCharacteristics.INCOMPLETE_TIME_VALUE,
+        #    },
+        # ),
     ],
     is_max_value_pg_compatible=False,
 )

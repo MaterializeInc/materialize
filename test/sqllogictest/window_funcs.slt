@@ -12,21 +12,27 @@
 
 mode cockroach
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_reduce_unnest_list_fusion = true
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t(x string);
 
 statement ok
 INSERT INTO t VALUES ('a'), ('b'), ('c');
 
-statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
-SELECT row_number() FROM t;
+statement error window function pg_catalog\.row_number requires an OVER clause
+SELECT row_number()
+FROM t;
 
-statement error db error: ERROR: OVER clause not allowed on pg_catalog\.int8range\. The OVER clause can only be used with window functions \(including aggregations\)\.
+statement error window function pg_catalog\.row_number requires an OVER clause
+SELECT *
+FROM t
+ORDER BY row_number();
+
+statement error window function pg_catalog\.row_number requires an OVER clause
+SELECT *
+FROM t
+QUALIFY row_number();
+
+statement error OVER clause not allowed on pg_catalog\.int8range\. The OVER clause can only be used with window functions \(including aggregations\)\.
 SELECT int8range(1, 1, '') OVER (PARTITION BY 1 ORDER BY 1);
 
 query IT
@@ -150,7 +156,7 @@ ORDER BY row_number, x
 ----
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
   Project (#2, #0)
-    Map (row_number() over (partition by [#0] order by [#0 asc nulls_last]))
+    Map (row_number() over (partition by [#0{x}] order by [#0{x} asc nulls_last]))
       Get materialize.public.t
 
 Target cluster: quickstart
@@ -168,7 +174,7 @@ Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
       Project (#3..=#5) // { arity: 3 }
         Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[0](#2)) // { arity: 6 }
           FlatMap unnest_list(#1) // { arity: 3 }
-            Reduce group_by=[#0] aggregates=[row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0))] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0{x}))] // { arity: 2 }
               CrossJoin // { arity: 2 }
                 Constant // { arity: 0 }
                   - ()
@@ -209,33 +215,19 @@ query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR SELECT f1 FROM t1
 WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 ----
-Return // { arity: 1 }
-  Project (#0) // { arity: 1 }
-    Filter #4 // { arity: 5 }
-      Join on=(#0 = #2 AND #1 = #3) // { arity: 5 }
-        Get l0 // { arity: 2 }
-        Project (#0, #1, #3) // { arity: 3 }
-          Join on=(#0 = #2) // { arity: 4 }
-            Get l1 // { arity: 2 }
-            Union // { arity: 2 }
-              Get l3 // { arity: 2 }
-              CrossJoin // { arity: 2 }
-                Project (#0) // { arity: 1 }
-                  Join on=(#0 = #1) // { arity: 2 }
-                    Union // { arity: 1 }
-                      Negate // { arity: 1 }
-                        Distinct project=[#0] // { arity: 1 }
-                          Get l3 // { arity: 2 }
-                      Distinct project=[#0] // { arity: 1 }
-                        Get l2 // { arity: 1 }
-                    Get l2 // { arity: 1 }
-                Constant // { arity: 1 }
-                  - (false)
 With
-  cte l3 =
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.t1 // { arity: 2 }
+  cte l1 =
+    Distinct project=[#0] // { arity: 1 }
+      Get l0 // { arity: 2 }
+  cte l2 =
     Map (true) // { arity: 2 }
       Distinct project=[#0] // { arity: 1 }
-        Filter (integer_to_bigint(#0) = #1) // { arity: 2 }
+        Filter (integer_to_bigint(#0{f1}) = #1{right_col0_0}) // { arity: 2 }
           Project (#0, #4) // { arity: 2 }
             Map (#3) // { arity: 5 }
               Project (#3..=#6) // { arity: 4 }
@@ -243,55 +235,64 @@ With
                   FlatMap unnest_list(#1) // { arity: 3 }
                     Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
                       CrossJoin // { arity: 3 }
-                        Get l2 // { arity: 1 }
+                        Get l1 // { arity: 1 }
                         Get materialize.public.t2 // { arity: 2 }
-  cte l2 =
-    Distinct project=[#0] // { arity: 1 }
-      Get l1 // { arity: 2 }
-  cte l1 =
-    Distinct project=[#0, #1] // { arity: 2 }
-      Get l0 // { arity: 2 }
-  cte l0 =
-    CrossJoin // { arity: 2 }
-      Constant // { arity: 0 }
-        - ()
-      Get materialize.public.t1 // { arity: 2 }
+Return // { arity: 1 }
+  Project (#0) // { arity: 1 }
+    Filter #2 // { arity: 3 }
+      Project (#0, #1, #3) // { arity: 3 }
+        Join on=(#0 = #2) // { arity: 4 }
+          Get l0 // { arity: 2 }
+          Union // { arity: 2 }
+            Get l2 // { arity: 2 }
+            CrossJoin // { arity: 2 }
+              Project (#0) // { arity: 1 }
+                Join on=(#0 = #1) // { arity: 2 }
+                  Union // { arity: 1 }
+                    Negate // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
+                        Get l2 // { arity: 2 }
+                    Distinct project=[#0] // { arity: 1 }
+                      Get l1 // { arity: 1 }
+                  Get l1 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (false)
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT f1 FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT f1 FROM t1
 WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 ----
 Explained Query:
+  With
+    cte l0 =
+      Project (#0{f1}) // { arity: 1 }
+        ReadStorage materialize.public.t1 // { arity: 2 }
   Return // { arity: 1 }
-    Project (#0) // { arity: 1 }
-      Join on=(#0 = #1) type=differential // { arity: 2 }
+    Project (#0{f1}) // { arity: 1 }
+      Join on=(#0{f1} = #1) type=differential // { arity: 2 }
         implementation
           %1[#0]UKA » %0:l0[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 1 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Distinct project=[record_get[0](record_get[1](#0))] // { arity: 1 }
             Project (#1) // { arity: 1 }
               Filter (integer_to_bigint(record_get[0](record_get[1](#1))) = record_get[0](#1)) // { arity: 2 }
-                FlatMap unnest_list(#0) // { arity: 2 }
-                  Project (#1) // { arity: 1 }
-                    Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                FlatMap unnest_list(#0{row_number}) // { arity: 2 }
+                  Project (#1{row_number}) // { arity: 1 }
+                    Reduce group_by=[#0{f1}] aggregates=[row_number[order_by=[]](row(list[row(#0{f1}, #1{f1}, #2{f2})]))] // { arity: 2 }
                       CrossJoin type=differential // { arity: 3 }
                         implementation
                           %0[×] » %1:t2[×]
                         ArrangeBy keys=[[]] // { arity: 1 }
-                          Distinct project=[#0] // { arity: 1 }
+                          Distinct project=[#0{f1}] // { arity: 1 }
                             Get l0 // { arity: 1 }
                         ArrangeBy keys=[[]] // { arity: 2 }
                           ReadStorage materialize.public.t2 // { arity: 2 }
-  With
-    cte l0 =
-      Project (#0) // { arity: 1 }
-        ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
 Source materialize.public.t2
@@ -320,7 +321,7 @@ SELECT * FROM t1, LATERAL(SELECT t2.*, ROW_NUMBER() OVER() FROM t2 WHERE t1.f2 =
 2  2  1  2  1
 2  2  2  2  2
 
-query IIIII
+query IIIII rowsort
 SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f1 = t2.f1) AS foo;
 ----
 1  1  1  1  1
@@ -333,7 +334,7 @@ SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f1 =
 1  1  1  1  1
 2  2  2  2  1
 
-query IIIII
+query IIIII rowsort
 SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f2 = t2.f2) AS foo;
 ----
 1  1  1  1  1
@@ -345,6 +346,12 @@ SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f2 =
 query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f2 = t2.f2) AS foo;
 ----
+With
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.t2 // { arity: 2 }
 Return // { arity: 5 }
   Project (#0, #1, #3..=#5) // { arity: 5 }
     Join on=(#1 = #2) // { arity: 6 }
@@ -355,17 +362,11 @@ Return // { arity: 5 }
             Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
               FlatMap unnest_list(#1) // { arity: 3 }
                 Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
-                  Filter (#2 = #0) // { arity: 3 }
+                  Filter (#2{f2} = #0{f2}) // { arity: 3 }
                     CrossJoin // { arity: 3 }
                       Distinct project=[#1] // { arity: 1 }
                         Get l0 // { arity: 2 }
                       Get materialize.public.t1 // { arity: 2 }
-With
-  cte l0 =
-    CrossJoin // { arity: 2 }
-      Constant // { arity: 0 }
-        - ()
-      Get materialize.public.t2 // { arity: 2 }
 
 Target cluster: quickstart
 
@@ -374,6 +375,12 @@ EOF
 query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER(PARTITION BY f1) FROM t1 WHERE t1.f2 = t2.f2) AS foo;
 ----
+With
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.t2 // { arity: 2 }
 Return // { arity: 5 }
   Project (#0, #1, #3..=#5) // { arity: 5 }
     Join on=(#1 = #2) // { arity: 6 }
@@ -384,17 +391,11 @@ Return // { arity: 5 }
             Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[2](record_get[1](#3)), record_get[0](#3)) // { arity: 8 }
               FlatMap unnest_list(#2) // { arity: 4 }
                 Reduce group_by=[#0, #1] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 3 }
-                  Filter (#2 = #0) // { arity: 3 }
+                  Filter (#2{f2} = #0{f2}) // { arity: 3 }
                     CrossJoin // { arity: 3 }
                       Distinct project=[#1] // { arity: 1 }
                         Get l0 // { arity: 2 }
                       Get materialize.public.t1 // { arity: 2 }
-With
-  cte l0 =
-    CrossJoin // { arity: 2 }
-      Constant // { arity: 0 }
-        - ()
-      Get materialize.public.t2 // { arity: 2 }
 
 Target cluster: quickstart
 
@@ -436,7 +437,7 @@ INSERT INTO not_allowed_tests (k, v) VALUES (99, 100) RETURNING sum(v) OVER ();
 query error window functions are not allowed in LIMIT
 SELECT sum(v) FROM not_allowed_tests GROUP BY k LIMIT sum(v) OVER ();
 
-query error OFFSET must be an integer constant
+query error window functions are not allowed in OFFSET \(function pg_catalog\.sum\)
 SELECT sum(v) FROM not_allowed_tests GROUP BY k LIMIT 1 OFFSET sum(v) OVER ();
 
 query error window functions are not allowed in VALUES
@@ -459,7 +460,7 @@ c
 
 # rank and dense_rank
 
-query error db error: ERROR: function rank has 0 parameters, but was called with 1
+query error function rank has 0 parameters, but was called with 1
 SELECT rank(x) OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
 ORDER BY dense_rank;
 
@@ -513,7 +514,7 @@ ORDER BY dense_rank
 2  b
 3  a
 
-query IIT
+query IIT rowsort
 SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
 ----
 1  1  a
@@ -589,7 +590,7 @@ CREATE TABLE t(x string, y int);
 statement ok
 INSERT INTO t VALUES ('a', 98), ('b', 99), ('c', 98);
 
-query IIT
+query IIT rowsort
 SELECT rank() OVER (PARTITION BY y ORDER BY x), dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t;
 ----
 1  1  a
@@ -650,7 +651,7 @@ ORDER BY dense_rank, x;
 1  c
 2  a
 
-query IIT
+query IIT rowsort
 SELECT rank() OVER (PARTITION BY x ORDER BY x), dense_rank() OVER (PARTITION BY x ORDER BY x), x FROM t;
 ----
 1  1  a
@@ -665,7 +666,7 @@ ORDER BY dense_rank, x;
 1  b
 1  c
 
-query IIT
+query IIT rowsort
 SELECT rank() OVER (PARTITION BY NULL ORDER BY 10000), dense_rank() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
 FROM t AS a1, t AS a2;
 ----
@@ -1482,7 +1483,7 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 1  2
 3  12
 
-query II
+query II rowsort
 SELECT f1, lag(f1 * f2, f1 - 1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -2421,13 +2422,13 @@ ORDER BY x;
 15  16  1  14  14  18  18
 17  18  1  16  16  NULL  NULL
 
-query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
+query error IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
 select first_value(x) ignore nulls over() from t6;
 
-query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
+query error IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
 select row_number() ignore nulls over();
 
-query error db error: ERROR: Both IGNORE NULLS and RESPECT NULLS were given\.
+query error Both IGNORE NULLS and RESPECT NULLS were given\.
 select row_number() ignore nulls respect nulls over();
 
 ## window frames
@@ -3578,20 +3579,20 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 # Test offset limits
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 100 FOLLOWING AND 1000001 FOLLOWING)
 
 # Test near-overflow behavior on offsets
 # u64::MAX FOLLOWING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1000001 PRECEDING AND 100 FOLLOWING)
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3602,12 +3603,12 @@ FROM t
 ORDER BY f2, f3, f1, last_value
 
 # u64::MAX PRECEDING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551615 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551614 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -4892,12 +4893,12 @@ ORDER BY f2, f3, f1, last_value
 # u64::MAX FOLLOWING
 
 # u64::MAX PRECEDING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -5164,7 +5165,7 @@ SELECT 3 + lag(a) OVER (ORDER BY a) + 5 + 27
 FROM foo;
 ----
 Project (#3)
-  Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (((3 + #2) + 5) + 27))
+  Map (lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), (((3 + #2{?column?}) + 5) + 27))
     Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5178,13 +5179,13 @@ FROM foo LEFT JOIN (SELECT a AS right_a FROM foo WHERE a<2) ON foo.a = right_a
 GROUP BY b, right_a;
 ----
 Project (#4, #5, #0)
-  Map (lag(row(((10 * #1) + 3), 1, null)) over (order by [#1 asc nulls_first]), -(#3), -(#2))
-    Reduce group_by=[#3, #4] aggregates=[sum(#0)]
-      Map (#1, #2)
-        LeftOuterJoin (#0 = #2)
+  Map (lag(row(((10 * #1{right_a}) + 3), 1, null)) over (order by [#1{right_a} asc nulls_first]), -(#3{?column?}), -(#2{?column?}))
+    Reduce group_by=[#3, #4] aggregates=[sum(#0{a})]
+      Map (#1{b}, #2{right_a})
+        LeftOuterJoin (#0{a} = #2{right_a})
           Get materialize.public.foo
           Project (#0)
-            Filter (#0 < 2)
+            Filter (#0{a} < 2)
               Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5199,7 +5200,7 @@ ORDER BY o;
 ----
 Finish order_by=[#0 asc nulls_last] output=[#0]
   Project (#3)
-    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (3 + #2))
+    Map (lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), (3 + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5220,7 +5221,7 @@ ORDER BY a;
 ----
 Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
   Project (#0, #4, #4, #2, #3, #5)
-    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), lead(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (3 + #2), (5 + #2))
+    Map (lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), lead(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), (3 + #2{?column?}), (5 + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5253,7 +5254,7 @@ ORDER BY a;
 ----
 Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
   Project (#0, #1, #3)
-    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (#2 + #2))
+    Map (lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), (#2{?column?} + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5280,7 +5281,7 @@ ORDER BY a;
 ----
 Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
   Project (#0, #1, #4)
-    Map (lead(row(#0, 1, null)) over (order by [#0 asc nulls_last]), lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (#3 + #2))
+    Map (lead(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), (#3{?column?} + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5306,7 +5307,7 @@ FROM foo;
 ----
 Project (#0, #1)
   TopK group_by=[#3] limit=1
-    Map (lag(row(#0, 1, 0)) over (order by [#0 asc nulls_last]), (1 + #2))
+    Map (lag(row(#0{a}, 1, 0)) over (order by [#0{a} asc nulls_last]), (1 + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5351,7 +5352,7 @@ ORDER BY 1 + lag(a, 1, 0) OVER (ORDER BY a), a ASC;
 2  two
 3  three
 
-query error db error: ERROR: SELECT DISTINCT ON expressions must match initial ORDER BY expressions
+query error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
 SELECT DISTINCT ON(1 + lag(a, 1, 0) OVER (ORDER BY a)) *
 FROM foo
 ORDER BY lag(a, 1, 0) OVER (ORDER BY a), a DESC;
@@ -5383,7 +5384,7 @@ ORDER BY 5 + lag(a) OVER (ORDER BY a), o;
 ----
 Finish order_by=[#4 asc nulls_last, #3 asc nulls_last] output=[#3]
   TopK group_by=[#4] order_by=[#3 asc nulls_last] limit=1
-    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), lead(row(#0, 1, null)) over (order by [#1 asc nulls_last]), (5 + #2))
+    Map (lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), lead(row(#0{a}, 1, null)) over (order by [#1{b} asc nulls_last]), (5 + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5525,7 +5526,7 @@ SELECT
 FROM bools;
 ----
 Project (#0, #1, #3)
-  Map (first_value(#1) over (order by [#1 desc nulls_first]), case when #0 then #2 else 42 end)
+  Map (first_value(#1{x}) over (order by [#1{x} desc nulls_first]), case when #0{cond} then #2{?column?} else 42 end)
     Get materialize.public.bools
 
 Target cluster: quickstart
@@ -5671,7 +5672,7 @@ ORDER BY chat_id, message_tstamp;
 
 # Window func with (non-windowed) aggregations
 
-query error db error: ERROR: window functions are not allowed in aggregate function \(function pg_catalog\.lag\)
+query error window functions are not allowed in aggregate function \(function pg_catalog\.lag\)
 EXPLAIN RAW PLAN FOR
 SELECT sum(lag(a) OVER ())
 FROM foo;
@@ -5968,6 +5969,12 @@ FROM (
 ORDER BY outer_a, outer_b;
 ----
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
+  With
+    cte [l1 as subquery-1] =
+      Reduce aggregates=[sum(#0{lead_a})]
+        Project (#3)
+          Map (lead(row(#0{a}, 1, null)) over (partition by [((4 * #0{a}) / (#^0{outer_a} + char_length(#^1{outer_b})))] order by [#0{a} asc nulls_last]), (3 + #2{?column?}))
+            Get materialize.public.foo
   Return
     Map (select(Get l1))
       Distinct
@@ -5976,17 +5983,11 @@ Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
             Union
               Get materialize.public.foo
               Project (#2, #1)
-                Map ((#0 + 2))
+                Map ((#0{a} + 2))
                   Get materialize.public.foo
           Project (#2, #1)
-            Map ((#0 + 5))
+            Map ((#0{a} + 5))
               Get materialize.public.foo
-  With
-    cte l1 =
-      Reduce aggregates=[sum(#0)]
-        Project (#3)
-          Map (lead(row(#0, 1, null)) over (partition by [((4 * #0) / (#^0 + char_length(#^1)))] order by [#0 asc nulls_last]), (3 + #2))
-            Get materialize.public.foo
 
 Target cluster: quickstart
 
@@ -6013,8 +6014,8 @@ Finish order_by=[#0 asc nulls_last] output=[#2]
       Project (#4..=#6)
         Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[0](#3))
           FlatMap unnest_list(#2)
-            Reduce group_by=[#2, #3] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0, #1), (#1 - 3)), (#0 + 1), (#1 + 2)))]
-              Map ((2 * #0), (3 * #1))
+            Reduce group_by=[#2, #3] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0, #1), (#1{y} - 3)), (#0{x} + 1), (#1{y} + 2)))]
+              Map ((2 * #0{x}), (3 * #1{y}))
                 CrossJoin
                   Constant
                     - ()
@@ -6025,7 +6026,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   sum(y-3) OVER (PARTITION BY 2*x, 3*y ORDER BY x+1, y+2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 FROM t7
@@ -6035,9 +6036,9 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#2]
     Project (#3..=#5)
       Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1))
-        FlatMap unnest_list(#0)
-          Project (#2)
-            Reduce group_by=[(2 * #0), (3 * #1)] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0, #1), (#1 - 3)), (#0 + 1), (#1 + 2)))]
+        FlatMap unnest_list(#0{window_agg})
+          Project (#2{window_agg})
+            Reduce group_by=[(2 * #0{x}), (3 * #1{y})] aggregates=[window_agg[sum order_by=[#0{x} asc nulls_last, #1{y} asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0{x}, #1{y}), (#1{y} - 3)), (#0{x} + 1), (#1{y} + 2)))]
               ReadStorage materialize.public.t7
 
 Source materialize.public.t7
@@ -6090,7 +6091,7 @@ INSERT INTO t7 VALUES (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13,
 # Test various nestings
 
 # Postgres also doesn't support this.
-query error db error: ERROR: window functions are not allowed in aggregate function \(function pg_catalog\.sum\)
+query error window functions are not allowed in aggregate function \(function pg_catalog\.sum\)
 SELECT sum(sum(x) OVER ()) FROM t7;
 
 # Other way around: grouped aggregate inside a window aggregate.
@@ -6239,7 +6240,7 @@ NULL  9  NULL  {9,11}  {18,22}  22
 NULL  11  NULL  {11}  {22}  NULL
 
 # https://github.com/MaterializeInc/database-issues/issues/6626
-query error db error: ERROR: DISTINCT in window aggregates not yet supported
+query error DISTINCT in window aggregates not yet supported
 SELECT
   x-y,
   x,
@@ -6579,22 +6580,22 @@ ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
 17  18  17  17  17  {17}
 
 # mixed UNBOUNDED - OFFSET frames
-query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+query error mixed unbounded \- offset frames not yet supported
 SELECT
   sum(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND 2 PRECEDING)
 FROM t7;
 
-query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+query error mixed unbounded \- offset frames not yet supported
 SELECT
   sum(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING)
 FROM t7;
 
-query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+query error mixed unbounded \- offset frames not yet supported
 SELECT
   sum(y) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t7;
 
-query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+query error mixed unbounded \- offset frames not yet supported
 SELECT
   sum(y) OVER (ORDER BY x ROWS BETWEEN 3 FOLLOWING AND UNBOUNDED FOLLOWING)
 FROM t7;
@@ -6873,20 +6874,26 @@ NULL  11  NULL  22  22  22  {22}
 # than one window function call in one test, because we currently forget the key information after a window function
 # call (even when `ReduceElision` simplifies the window function call).
 # TODO: Add an optimization that eliminates a Map-FlatMap pair where the Map is just creating a 1-element list on which
-# the FlatMap is immediately calling `unnest_list`.
+# the FlatMap is immediately calling `unnest_list`. We could use the `Equivalences` analysis for this, which would tell
+# us that the column reference in `unnest_list` is equal to a `list_create` with 1 argument.
 query T multiline
-EXPLAIN WITH(keys)
+EXPLAIN OPTIMIZED PLAN WITH(keys, humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   sum(sum(x)) OVER ()
 FROM t7;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0{x})] // { keys: "([])" }
+        Project (#0{x}) // { keys: "()" }
+          ReadStorage materialize.public.t7 // { keys: "()" }
   Return // { keys: "()" }
     Project (#2) // { keys: "()" }
       Map (record_get[0](#1)) // { keys: "()" }
         FlatMap unnest_list(#0) // { keys: "()" }
           Project (#1) // { keys: "([])" }
-            Map (list[row(bigint_to_numeric(#0), row(#0))]) // { keys: "([])" }
+            Map (list[row(bigint_to_numeric(#0{sum_x}), row(#0{sum_x}))]) // { keys: "([])" }
               Union // { keys: "([])" }
                 Get l0 // { keys: "([])" }
                 Map (null) // { keys: "()" }
@@ -6896,11 +6903,6 @@ Explained Query:
                         Get l0 // { keys: "([])" }
                     Constant // { keys: "([])" }
                       - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum(#0)] // { keys: "([])" }
-        Project (#0) // { keys: "()" }
-          ReadStorage materialize.public.t7 // { keys: "()" }
 
 Source materialize.public.t7
 
@@ -6930,7 +6932,7 @@ FROM t7;
 1
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ----
 COMPLETE 0
 
@@ -6943,7 +6945,7 @@ INSERT INTO t9 VALUES (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13,
 # Still testing `AggregateExpr::on_unique`. Here, the uniqueness constraint on the table makes `ReduceElision` call
 # `on_unique`. There should be 0 Reduce operations in the plan.
 query T multiline
-EXPLAIN WITH(keys)
+EXPLAIN OPTIMIZED PLAN WITH(keys, humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   sum(y) OVER (PARTITION BY x)
 FROM t9
@@ -6955,7 +6957,7 @@ Explained Query:
       Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1)) // { keys: "()" }
         FlatMap unnest_list(#0) // { keys: "()" }
           Project (#2) // { keys: "()" }
-            Map (list[row(integer_to_bigint(#1), row(#0, #1))]) // { keys: "([0])" }
+            Map (list[row(integer_to_bigint(#1{y}), row(#0{x}, #1{y}))]) // { keys: "([0])" }
               ReadStorage materialize.public.t9 // { keys: "([0])" }
 
 Source materialize.public.t9
@@ -7145,7 +7147,7 @@ NULL
 
 # Test `on_unique` for lag/lead
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   lag(x,y,100) OVER (PARTITION BY x ORDER BY y+y)
 FROM t9;
@@ -7155,7 +7157,7 @@ Explained Query:
     Map (record_get[0](#1))
       FlatMap unnest_list(#0)
         Project (#2)
-          Map (list[row(case when (#1) IS NULL then null else case when (#1 = 0) then #0 else 100 end end, row(#0, #1))])
+          Map (list[row(case when (#1{y}) IS NULL then null else case when (#1{y} = 0) then #0{x} else 100 end end, row(#0{x}, #1{y}))])
             ReadStorage materialize.public.t9
 
 Source materialize.public.t9
@@ -7164,7 +7166,7 @@ Target cluster: quickstart
 
 EOF
 
-query I
+query I rowsort
 SELECT
   lag(x,y,100) OVER (PARTITION BY x ORDER BY y+y)
 FROM t9;
@@ -7179,7 +7181,7 @@ NULL
 100
 100
 
-query I
+query I rowsort
 SELECT
   lead(x,y-2,120) OVER (PARTITION BY x ORDER BY x)
 FROM t9;
@@ -7196,7 +7198,7 @@ NULL
 
 # Test `on_unique` for `FusedValueWindowFunc`. There should be NO window function call in the following plan.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   x,
   y,
@@ -7215,7 +7217,7 @@ Explained Query:
       Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1), record_get[0](#5), record_get[1](#5), record_get[2](#5), record_get[3](#5), record_get[4](#5))
         FlatMap unnest_list(#0)
           Project (#3)
-            Map ((#1) IS NULL, list[row(row(case when #2 then null else case when (0 = (#1 - 2)) then #0 else 120 end end, #1, #1, case when #2 then null else case when (#1 = 0) then #0 else 100 end end, case when #2 then null else case when (#1 = 0) then #0 else 110 end end), row(#0, #1))])
+            Map ((#1{y}) IS NULL, list[row(row(case when #2 then null else case when (0 = (#1{y} - 2)) then #0{x} else 120 end end, #1{y}, #1{y}, case when #2 then null else case when (#1{y} = 0) then #0{x} else 100 end end, case when #2 then null else case when (#1{y} = 0) then #0{x} else 110 end end), row(#0{x}, #1{y}))])
               ReadStorage materialize.public.t9
 
 Source materialize.public.t9
@@ -7362,7 +7364,10 @@ ORDER BY x5_simple;
 4  NULL  NULL  NULL
 
 # Regression test for https://github.com/MaterializeInc/materialize/pull/22270#issuecomment-1761432124
-statement error db error: ERROR: Evaluation error: "4294967295 \* 2" uint4 out of range
+statement ok
+SET cluster_replica = r1
+
+statement error Evaluation error: "4294967295 \* 2" uint4 out of range
 select max(1) over (partition by 1 order by 1, 1)
 from
   (select
@@ -7430,7 +7435,7 @@ where (case when (((select "collection_timestamp" from mz_internal.mz_storage_us
 ## Tests for window function fusion
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   *,
   lag(x)          OVER (ORDER BY x),
@@ -7452,27 +7457,27 @@ ORDER BY x,y;
 Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#14]
     Project (#3, #4, #16, #15, #14, #17, #13, #9, #11, #10, #18, #8, #7, #6, #5)
-      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[4](#2), record_get[5](#2), record_get[7](#2), record_get[8](#2), record_get[10](#2), record_get[12](#2), record_get[0](#1), record_get[0](#12), record_get[1](#12), record_get[2](#12), record_get[3](#12), (#3 * #4), (#3 + #4))
-        FlatMap unnest_list(#0)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[4](#2), record_get[5](#2), record_get[7](#2), record_get[8](#2), record_get[10](#2), record_get[12](#2), record_get[0](#1), record_get[0](#12), record_get[1](#12), record_get[2](#12), record_get[3](#12), (#3{x} * #4{y}), (#3{x} + #4{y}))
+        FlatMap unnest_list(#0{fused_value_window_func})
           Reduce aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], last_value[order_by=[#0 asc nulls_last]], first_value[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[7](record_get[1](#0)), record_get[8](record_get[1](#0)), record_get[9](record_get[1](#0)), record_get[10](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(row(record_get[1](record_get[1](#0)), 1, null), record_get[0](record_get[1](#0)), record_get[0](record_get[1](#0)), row(record_get[0](record_get[1](#0)), 1, null))), record_get[0](record_get[1](#0))))]
             Project (#1)
-              FlatMap unnest_list(#0)
-                Project (#1)
+              FlatMap unnest_list(#0{lead})
+                Project (#1{lead})
                   Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[lead[order_by=[#0 asc nulls_first]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[7](record_get[1](#0)), record_get[8](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(record_get[0](record_get[1](#0)), 2, null)), -(record_get[1](record_get[1](#0)))))]
                     Project (#1)
-                      FlatMap unnest_list(#0)
-                        Project (#1)
+                      FlatMap unnest_list(#0{lead})
+                        Project (#1{lead})
                           Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[lead[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), row(record_get[0](record_get[1](#0)), 2, null)), -(record_get[1](record_get[1](#0)))))]
                             Project (#1)
-                              FlatMap unnest_list(#0)
-                                Project (#1)
+                              FlatMap unnest_list(#0{fused_value_window_func})
+                                Project (#1{fused_value_window_func})
                                   Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), row(row((record_get[0](record_get[1](#0)) + record_get[0](record_get[1](#0))), 2, null), row((record_get[0](record_get[1](#0)) + record_get[0](record_get[1](#0))), 1, null))), record_get[1](record_get[1](#0))))]
                                     Project (#1)
-                                      FlatMap unnest_list(#0)
+                                      FlatMap unnest_list(#0{fused_window_agg})
                                         Reduce aggregates=[fused_window_agg(row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(record_get[0](record_get[1](#0)), record_get[0](record_get[1](#0)))), record_get[0](record_get[1](#0))))]
                                           Project (#1)
-                                            FlatMap unnest_list(#0)
-                                              Reduce aggregates=[window_agg[max order_by=[#0 asc nulls_last]](row(row(row(#0, #1), #0), #1))]
+                                            FlatMap unnest_list(#0{window_agg})
+                                              Reduce aggregates=[window_agg[max order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}, #1{y}), #0{x}), #1{y}))]
                                                 ReadStorage materialize.public.t7
 
 Source materialize.public.t7
@@ -7515,7 +7520,7 @@ ORDER BY x,y;
 # In the following query, currently we only fuse the two inner `lag`s.
 # In theory, we could also fuse the two `last_value`s.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   *,
   first_value(
@@ -7534,25 +7539,25 @@ ORDER BY x,y;
 Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#7]
     Project (#3, #4, #8, #9, #7, #6, #5, #10)
-      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2), record_get[8](#2), record_get[0](#1), (#3 * #4), (#3 + #4))
-        FlatMap unnest_list(#0)
-          Project (#1)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2), record_get[8](#2), record_get[0](#1), (#3{x} * #4{y}), (#3{x} + #4{y}))
+        FlatMap unnest_list(#0{first_value})
+          Project (#1{first_value})
             Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[first_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), record_get[6](record_get[1](#0))), record_get[1](record_get[1](#0))))]
               Project (#1)
-                FlatMap unnest_list(#0)
-                  Project (#1)
+                FlatMap unnest_list(#0{last_value})
+                  Project (#1{last_value})
                     Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[last_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), record_get[0](record_get[0](#0))), (record_get[1](record_get[1](#0)) + record_get[1](record_get[1](#0)))))]
                       Project (#1)
-                        FlatMap unnest_list(#0)
-                          Project (#1)
+                        FlatMap unnest_list(#0{fused_value_window_func})
+                          Project (#1{fused_value_window_func})
                             Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(row((record_get[0](record_get[1](#0)) * record_get[0](record_get[1](#0))), record_get[1](record_get[1](#0)), 2222), row((record_get[0](record_get[1](#0)) * record_get[0](record_get[1](#0))), record_get[1](record_get[1](#0)), 1111))), record_get[1](record_get[1](#0))))]
                               Project (#1)
-                                FlatMap unnest_list(#0)
-                                  Project (#1)
+                                FlatMap unnest_list(#0{last_value})
+                                  Project (#1{last_value})
                                     Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[last_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), (record_get[0](record_get[1](#0)) + record_get[1](record_get[1](#0)))), (record_get[1](record_get[1](#0)) + record_get[1](record_get[1](#0)))))]
                                       Project (#1)
-                                        FlatMap unnest_list(#0)
-                                          Reduce aggregates=[lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#1, 1, null)), #0))]
+                                        FlatMap unnest_list(#0{lag})
+                                          Reduce aggregates=[lag[order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}, #1{y}), row(#1{y}, 1, null)), #0{x}))]
                                             ReadStorage materialize.public.t7
 
 Source materialize.public.t7
@@ -7589,62 +7594,8 @@ ORDER BY x,y;
 15  16  1111  240  2222  31  14  31
 17  18  1111  306  2222  35  16  35
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_value_window_function_fusion = false
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_window_aggregation_fusion = false
-----
-COMPLETE 0
-
 query T multiline
-EXPLAIN
-SELECT
-  *,
-  lag(x) OVER (),
-  lag(y) OVER (),
-  sum(x) OVER (),
-  min(x) OVER ()
-FROM t7
-ORDER BY x,y;
-----
-Explained Query:
-  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#5]
-    Project (#3, #4, #8, #7, #6, #5)
-      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[3](#2), record_get[5](#2), record_get[7](#2), record_get[0](#1))
-        FlatMap unnest_list(#0)
-          Reduce aggregates=[lag[order_by=[]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(record_get[0](record_get[1](#0)), 1, null))))]
-            Project (#1)
-              FlatMap unnest_list(#0)
-                Reduce aggregates=[lag[order_by=[]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(record_get[1](record_get[1](#0)), 1, null))))]
-                  Project (#1)
-                    FlatMap unnest_list(#0)
-                      Reduce aggregates=[window_agg[sum order_by=[]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), record_get[0](record_get[1](#0)))))]
-                        Project (#1)
-                          FlatMap unnest_list(#0)
-                            Reduce aggregates=[window_agg[min order_by=[]](row(row(row(#0, #1), #0)))]
-                              ReadStorage materialize.public.t7
-
-Source materialize.public.t7
-
-Target cluster: quickstart
-
-EOF
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_value_window_function_fusion = true
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_window_aggregation_fusion = true
-----
-COMPLETE 0
-
-query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   *,
   lag(x) OVER (),
@@ -7658,11 +7609,11 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#5]
     Project (#3, #4, #9, #8, #6, #5)
       Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[3](#2), record_get[4](#2), record_get[0](#1), record_get[0](#7), record_get[1](#7))
-        FlatMap unnest_list(#0)
+        FlatMap unnest_list(#0{fused_value_window_func})
           Reduce aggregates=[fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), row(row(record_get[1](record_get[1](#0)), 1, null), row(record_get[0](record_get[1](#0)), 1, null)))))]
             Project (#1)
-              FlatMap unnest_list(#0)
-                Reduce aggregates=[fused_window_agg(row(row(row(#0, #1), row(#0, #0))))]
+              FlatMap unnest_list(#0{fused_window_agg})
+                Reduce aggregates=[fused_window_agg(row(row(row(#0{x}, #1{y}), row(#0{x}, #0{x}))))]
                   ReadStorage materialize.public.t7
 
 Source materialize.public.t7
@@ -7711,12 +7662,13 @@ ORDER BY x,y,l;
 13  14  11
 15  16  13
 
-## Check some LIR plans that the optimization guarded by `enable_reduce_unnest_list_fusion` happens.
+## Check some LIR plans that the optimization of fusing `Reduce` with `FlatMap UnnestList` happens.
+## https://github.com/MaterializeInc/materialize/pull/29554
 ## These should show `fused_unnest_list=true`.
 
 # Simple situation
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT
   lead(x,y-2,120) OVER (ORDER BY x)
 FROM t9;
@@ -7727,12 +7679,12 @@ Explained Query:
     map=(record_get[0](#0))
     input_key=
     Reduce::Basic
-      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
-      val_plan
-        project=(#2)
-        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      aggr=(lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
       key_plan
         project=()
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
       Get::PassArrangements materialize.public.t9
         raw=true
 
@@ -7744,7 +7696,7 @@ EOF
 
 # PARTITION BY
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT
   lead(x,y-2,120) OVER (PARTITION BY x/2 ORDER BY x)
 FROM t9;
@@ -7755,13 +7707,13 @@ Explained Query:
     map=(record_get[0](#1))
     input_key=#0
     Reduce::Basic
-      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
-      val_plan
-        project=(#2)
-        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      aggr=(lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
       key_plan
         project=(#2)
-        map=((#0 / 2))
+        map=((#0{x} / 2))
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
       Get::PassArrangements materialize.public.t9
         raw=true
 
@@ -7773,7 +7725,7 @@ EOF
 
 # PARTITION BY multiple columns
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT
   lead(x,y-2,120) OVER (PARTITION BY x/2, y ORDER BY x)
 FROM t9;
@@ -7784,13 +7736,13 @@ Explained Query:
     map=(record_get[0](#2))
     input_key=#0, #1
     Reduce::Basic
-      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
-      val_plan
-        project=(#2)
-        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      aggr=(lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
       key_plan
         project=(#2, #1)
-        map=((#0 / 2))
+        map=((#0{x} / 2))
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
       Get::PassArrangements materialize.public.t9
         raw=true
 
@@ -7802,7 +7754,7 @@ EOF
 
 # row_number()
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT
   row_number() OVER (ORDER BY x),
   x
@@ -7816,12 +7768,12 @@ Explained Query:
       map=(record_get[0](record_get[1](#0)), record_get[0](#0))
       input_key=
       Reduce::Basic
-        aggr=(0, row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0)), fused_unnest_list=true)
-        val_plan
-          project=(#2)
-          map=(row(list[row(#0, #1)], #0))
+        aggr=(row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0{x})), fused_unnest_list=true)
         key_plan
           project=()
+        val_plan
+          project=(#2)
+          map=(row(list[row(#0, #1)], #0{x}))
         Get::PassArrangements materialize.public.t7
           raw=true
 
@@ -7833,7 +7785,7 @@ EOF
 
 # MFP after is fused into the Reduce
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT *
 FROM (
   SELECT *, lag(x) OVER (ORDER BY x) AS l
@@ -7849,12 +7801,12 @@ Explained Query:
       map=(record_get[0](#0), record_get[1](#0), record_get[0](#2), record_get[1](#2))
       input_key=
       Reduce::Basic
-        aggr=(0, lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, 1, null)), #0)), fused_unnest_list=true)
-        val_plan
-          project=(#2)
-          map=(row(row(row(#0, #1), row(#0, 1, null)), #0))
+        aggr=(lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, 1, null)), #0{x})), fused_unnest_list=true)
         key_plan
           project=()
+        val_plan
+          project=(#2)
+          map=(row(row(row(#0, #1), row(#0{x}, 1, null)), #0{x}))
         mfp_after
           filter=((record_get[0](#0) < 14))
         Get::PassArrangements materialize.public.t7
@@ -7868,7 +7820,7 @@ EOF
 
 # Two lags fused with each other + Reduce-FlatMap fusion.
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT
   *,
   lag(x) OVER (),
@@ -7883,12 +7835,12 @@ Explained Query:
       map=(record_get[1](#0), record_get[0](#1), record_get[1](#1), record_get[0](#0), record_get[0](#4), record_get[1](#4))
       input_key=
       Reduce::Basic
-        aggr=(0, fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null))))), fused_unnest_list=true)
-        val_plan
-          project=(#2)
-          map=(row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null)))))
+        aggr=(fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1{y}, 1, null), row(#0{x}, 1, null))))), fused_unnest_list=true)
         key_plan
           project=()
+        val_plan
+          project=(#2)
+          map=(row(row(row(#0, #1), row(row(#1{y}, 1, null), row(#0{x}, 1, null)))))
         Get::PassArrangements materialize.public.t7
           raw=true
 
@@ -7897,192 +7849,6 @@ Source materialize.public.t7
 Target cluster: quickstart
 
 EOF
-
-## Run some tests also with `enable_reduce_unnest_list_fusion` disabled.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_reduce_unnest_list_fusion = false
-----
-COMPLETE 0
-
-# This is a new test.
-query IIIIIIIIIIIIII
-SELECT
-  *,
-  first_value(
-    lag(x*x,y,1111) OVER (PARTITION BY x ORDER BY y)
-  ) OVER (PARTITION BY x ORDER BY y),
-  x*y,
-  last_value(
-    lag(x*x,y,2222) OVER (PARTITION BY x ORDER BY y)
-  ) OVER (PARTITION BY x ORDER BY y+y),
-  last_value(x+y) OVER (PARTITION BY x ORDER BY y+y),
-  lag(y)          OVER (ORDER BY x),
-  row_number() OVER (ORDER BY x),
-  rank()       OVER (ORDER BY x),
-  dense_rank() OVER (ORDER BY x),
-  sum(y+3)     OVER (ORDER BY x),
-  min(y+4)     OVER (PARTITION BY x%2 ORDER BY x),
-  x+y,
-  sum(y+5)     OVER (ORDER BY x)
-FROM t7
-ORDER BY x,y;
-----
-1  2  1111  2  2222  3  NULL  1  1  1  5  6  3  7
-3  NULL  NULL  NULL  NULL  NULL  2  2  2  2  5  6  NULL  7
-5  6  1111  30  2222  11  NULL  3  3  3  14  6  11  18
-7  8  1111  56  2222  15  6  4  4  4  25  6  15  31
-9  NULL  NULL  NULL  NULL  NULL  8  5  5  5  25  6  NULL  31
-10  -50  1111  -500  2222  -40  NULL  6  6  6  -59  -46  -40  -49
-10  -40  1111  -400  2222  -30  -50  7  6  6  -59  -46  -30  -49
-11  NULL  NULL  NULL  NULL  NULL  -40  8  8  7  -59  6  NULL  -49
-13  14  1111  182  2222  27  NULL  9  9  8  -42  6  27  -30
-15  16  1111  240  2222  31  14  10  10  9  -23  6  31  -9
-17  18  1111  306  2222  35  16  11  11  10  -2  6  35  14
-
-# These are copied from above.
-query III
-SELECT *
-FROM (
-  SELECT *, lag(x) OVER (ORDER BY x) AS l
-  FROM t7
-)
-WHERE l/2 < 7
-ORDER BY x,y,l;
-----
-3  NULL  1
-5  6  3
-7  8  5
-9  NULL  7
-10  -50  9
-10  -40  10
-11  NULL  10
-13  14  11
-15  16  13
-
-query IRRB
-WITH
-  simple AS (
-    SELECT
-      x%5 AS x5_simple,
-      avg(y) OVER (PARTITION BY x%5) AS avg_simple
-    FROM t7
-  ),
-  complicated AS ( -- array_agg, then do an unnest and global agg in a subquery in a SELECT
-    WITH
-      array_agg AS (
-        SELECT
-          x%5 AS x5,
-          array_agg(y) OVER (PARTITION BY x%5) AS l
-        FROM t7
-      )
-    SELECT
-      x5 AS x5_complicated,
-      (
-        SELECT avg(uy)
-        FROM unnest(l) AS uy
-      ) AS avg_complicated
-    FROM array_agg
-  )
-SELECT DISTINCT
-  x5_simple,
-  avg_simple,
-  avg_complicated,
-  avg_simple = avg_complicated
-FROM simple, complicated
-WHERE x5_simple = x5_complicated
-ORDER BY x5_simple;
-----
-0  -17  -17  true
-1  2  2  true
-2  13  13  true
-3  14  14  true
-4  NULL  NULL  NULL
-
-query IIIIIIIIIIIIIIIIIIII
-select
-  x,
-  y,
-  lag(y) over (partition by x%4 order by x) as lag1,
-  lag(y) respect nulls over (partition by x%4 order by x) as lag1_resp,
-  lag(y) ignore nulls over (partition by x%4 order by x) as lag1_ign,
-  lead(y) over (partition by x%4 order by x) as lead1,
-  lead(y) ignore nulls over (partition by x%4 order by x) as lead1_ign,
-  lag(y, 2) over (partition by x%4 order by x) as lag2,
-  lag(y, 2) ignore nulls over (partition by x%4 order by x) as lag2_ign,
-  lead(y, 2) over (partition by x%4 order by x) as lead2,
-  lead(y, 2) ignore nulls over (partition by x%4 order by x) as lead2_ign,
-  lag(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lag2_ign_def,
-  lead(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lead2_ign_def,
-  lag(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lag2_ign_def16,
-  lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16,
-  lag(y, -1, 100) ignore nulls over (partition by x%4 order by x) as lag_neg_offset,
-  lead(y, -2, 100) ignore nulls over (partition by x%4 order by x) as lead_neg_offset,
-  lag(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lag_dynamic_offset,
-  lead(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lead_dynamic_offset,
-  lag(y, null) ignore nulls over (partition by x%4 order by x) as lag_literal_null_offset
-from t6
-order by x%4, x;
-----
-1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14  6  100  NULL  6  NULL
-5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18  14  100  NULL  18  NULL
-9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18  14  2  NULL  NULL  NULL
-13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16  18  2  NULL  NULL  NULL
-17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16  100  6  NULL  NULL  NULL
-3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16  8  100  NULL  NULL  NULL
-7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
-11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
-15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16  100  100  NULL  NULL  NULL
-
-# Run the same test with also `enable_value_window_function_fusion` disabled.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_value_window_function_fusion = false
-----
-COMPLETE 0
-
-query IIIIIIIIIIIIIIIIIIII
-select
-  x,
-  y,
-  lag(y) over (partition by x%4 order by x) as lag1,
-  lag(y) respect nulls over (partition by x%4 order by x) as lag1_resp,
-  lag(y) ignore nulls over (partition by x%4 order by x) as lag1_ign,
-  lead(y) over (partition by x%4 order by x) as lead1,
-  lead(y) ignore nulls over (partition by x%4 order by x) as lead1_ign,
-  lag(y, 2) over (partition by x%4 order by x) as lag2,
-  lag(y, 2) ignore nulls over (partition by x%4 order by x) as lag2_ign,
-  lead(y, 2) over (partition by x%4 order by x) as lead2,
-  lead(y, 2) ignore nulls over (partition by x%4 order by x) as lead2_ign,
-  lag(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lag2_ign_def,
-  lead(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lead2_ign_def,
-  lag(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lag2_ign_def16,
-  lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16,
-  lag(y, -1, 100) ignore nulls over (partition by x%4 order by x) as lag_neg_offset,
-  lead(y, -2, 100) ignore nulls over (partition by x%4 order by x) as lead_neg_offset,
-  lag(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lag_dynamic_offset,
-  lead(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lead_dynamic_offset,
-  lag(y, null) ignore nulls over (partition by x%4 order by x) as lag_literal_null_offset
-from t6
-order by x%4, x;
-----
-1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14  6  100  NULL  6  NULL
-5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18  14  100  NULL  18  NULL
-9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18  14  2  NULL  NULL  NULL
-13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16  18  2  NULL  NULL  NULL
-17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16  100  6  NULL  NULL  NULL
-3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16  8  100  NULL  NULL  NULL
-7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
-11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
-15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16  100  100  NULL  NULL  NULL
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_value_window_function_fusion = true
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_reduce_unnest_list_fusion = true
-----
-COMPLETE 0
 
 ## Window functions on big relations.
 
@@ -8153,3 +7919,97 @@ FROM (
 );
 ----
 69999
+
+## QUALIFY
+query II
+SELECT *
+FROM t6
+QUALIFY row_number() OVER (PARTITION BY x%3 ORDER BY y) = 1;
+----
+1  2
+5  6
+15  16
+
+query IIII rowsort
+SELECT *, x%3, row_number() OVER (PARTITION BY x%3 ORDER BY y)
+FROM t6
+QUALIFY row_number() OVER (PARTITION BY x%3 ORDER BY y) = 1;
+----
+15  16  0  1
+1  2  1  1
+5  6  2  1
+
+query II
+SELECT *
+FROM t6
+QUALIFY sum(x) OVER (ORDER BY y) = 26;
+----
+13  14
+
+query II
+SELECT *
+FROM (SELECT * FROM t6 UNION ALL SELECT * FROM t6)
+QUALIFY sum(x) OVER (ORDER BY y) = 26;
+----
+7  8
+7  8
+
+query I
+SELECT avg(u)
+FROM (
+  SELECT x, unnest(l) AS u
+  FROM (
+    SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+    FROM t7
+  ) AS ff1
+) AS ff2
+GROUP BY x%5
+QUALIFY sum(avg(u)) OVER (ORDER BY x%5) = -15
+ORDER BY x%5;
+----
+2
+
+query II
+SELECT *
+FROM (
+  SELECT x, unnest(l) AS u
+  FROM (
+    SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+    FROM t7
+  ) AS ff1
+)
+QUALIFY x-lag(x) OVER (ORDER BY x) = 0 AND lag(x) OVER (ORDER BY x) - lag(lag(x) OVER (ORDER BY x)) OVER (ORDER BY x) = 0
+ORDER BY x,u;
+----
+5  6
+5  16
+10  -40
+10  -40
+10  6
+10  6
+10  16
+10  16
+15  6
+15  16
+
+query III
+SELECT *, sum(x-9) OVER (ORDER BY x, u)
+FROM
+(
+  SELECT DISTINCT *
+  FROM (
+    SELECT x, unnest(l) AS u
+    FROM (
+      SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+      FROM t7
+    ) AS ff1
+  )
+  QUALIFY x-lag(x) OVER (ORDER BY x) = 0 AND lag(x) OVER (ORDER BY x) - lag(lag(x) OVER (ORDER BY x)) OVER (ORDER BY x) = 0
+)
+QUALIFY sum(x-9) OVER (ORDER BY x, u) > -6
+ORDER BY x,u;
+----
+5  6  -4
+10  16  -5
+15  6  1
+15  16  7

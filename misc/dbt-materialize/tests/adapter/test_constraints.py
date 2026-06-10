@@ -34,6 +34,7 @@ from fixtures import (
     contract_invalid_cluster_schema_yml,
     contract_pseudo_types_yml,
     nullability_assertions_schema_yml,
+    partition_by_with_constraints_schema_yml,
     test_materialized_view,
     test_pseudo_types,
     test_view,
@@ -133,8 +134,41 @@ class TestNullabilityAssertions:
             fetch="one",
         )
         assert (
-            'ASSERT NOT NULL = "a", ASSERT NOT NULL = "b"'
-            in nullability_assertions_ddl[1]
+            "ASSERT NOT NULL = a, ASSERT NOT NULL = b" in nullability_assertions_ddl[1]
+        )
+
+
+class TestPartitionByWithConstraints:
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "partition_by_with_constraints_schema.yml": partition_by_with_constraints_schema_yml,
+            "test_partition_by_with_constraints_ddl.sql": test_materialized_view,
+        }
+
+    def test_ddl_enforcement(self, project):
+
+        partition_by_with_constraints_model = ".".join(
+            [
+                project.adapter.config.credentials.database,
+                project.adapter.config.credentials.schema,
+                "test_partition_by_with_constraints_ddl",
+            ]
+        )
+
+        run_dbt(["run"])
+
+        # Confirm that PARTITION BY and ASSERT NOT NULL both appear in a single
+        # WITH (...) clause and that the partition column matches.
+        partition_by_with_constraints_ddl = run_sql_with_adapter(
+            project.adapter,
+            f"SHOW CREATE MATERIALIZED VIEW {partition_by_with_constraints_model}",
+            fetch="one",
+        )
+        assert "PARTITION BY = (a)" in partition_by_with_constraints_ddl[1]
+        assert (
+            "ASSERT NOT NULL = a, ASSERT NOT NULL = b"
+            in partition_by_with_constraints_ddl[1]
         )
 
 
@@ -163,7 +197,7 @@ class TestContractInvalidCluster:
 
         run_dbt(["run", "--models", "contract_invalid_cluster"], expect_pass=True)
 
-        project.run_sql("CREATE CLUSTER quickstart SIZE = '1'")
+        project.run_sql("CREATE CLUSTER quickstart SIZE = 'scale=1,workers=1'")
 
 
 class TestContractPseudoTypes:

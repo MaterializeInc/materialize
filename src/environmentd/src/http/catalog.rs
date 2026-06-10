@@ -5,14 +5,16 @@
 //
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
-// by the Apach
+// by the Apache License, Version 2.0.
 
 //! Catalog introspection HTTP endpoints.
 
+use axum::Json;
 use axum::response::IntoResponse;
 use axum_extra::TypedHeader;
 use headers::ContentType;
 use http::StatusCode;
+use mz_adapter::catalog::InjectedAuditEvent;
 
 use crate::http::AuthedClient;
 
@@ -37,6 +39,16 @@ pub async fn handle_coordinator_check(client: AuthedClient) -> impl IntoResponse
         Err(inconsistencies) => serde_json::json!({ "err": inconsistencies }),
     };
     (TypedHeader(ContentType::json()), response.to_string())
+}
+
+pub async fn handle_inject_audit_events(
+    mut client: AuthedClient,
+    Json(events): Json<Vec<InjectedAuditEvent>>,
+) -> impl IntoResponse {
+    match client.client.inject_audit_events(events).await {
+        Ok(()) => Ok(StatusCode::OK),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
 }
 
 pub async fn handle_coordinator_dump(client: AuthedClient) -> impl IntoResponse {

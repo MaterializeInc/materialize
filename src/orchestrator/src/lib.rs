@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::num::NonZero;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -145,7 +146,9 @@ pub trait Service: fmt::Debug + Send + Sync {
 pub struct ServiceProcessMetrics {
     pub cpu_nano_cores: Option<u64>,
     pub memory_bytes: Option<u64>,
-    pub disk_usage_bytes: Option<u64>,
+    pub disk_bytes: Option<u64>,
+    pub heap_bytes: Option<u64>,
+    pub heap_limit: Option<u64>,
 }
 
 /// A simple language for describing assertions about a label's existence and value.
@@ -198,20 +201,30 @@ pub struct ServiceConfig {
     /// A function that generates the arguments for each process of the service
     /// given the assigned listen addresses for each named port.
     #[derivative(Debug = "ignore")]
-    pub args: Box<dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync>,
+    pub args: Box<dyn Fn(ServiceAssignments) -> Vec<String> + Send + Sync>,
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
     pub memory_limit: Option<MemoryLimit>,
+    /// An optional request on the memory that the service can use. If unspecified,
+    /// use the same value as `memory_limit`.
+    pub memory_request: Option<MemoryLimit>,
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
+    /// An optional request on the CPU that the service can use.
+    pub cpu_request: Option<CpuLimit>,
     /// The number of copies of this service to run.
-    pub scale: u16,
+    pub scale: NonZero<u16>,
     /// Arbitrary key–value pairs to attach to the service in the orchestrator
     /// backend.
     ///
     /// The orchestrator backend may apply a prefix to the key if appropriate.
     pub labels: BTreeMap<String, String>,
+    /// Arbitrary key–value pairs to attach to the service as annotations in the
+    /// orchestrator backend.
+    ///
+    /// The orchestrator backend may apply a prefix to the key if appropriate.
+    pub annotations: BTreeMap<String, String>,
     /// The availability zones the service can be run in. If no availability
     /// zones are specified, the orchestrator is free to choose one.
     pub availability_zones: Option<Vec<String>>,
@@ -231,8 +244,6 @@ pub struct ServiceConfig {
     /// The orchestrator backend may or may not actually implement placement spread functionality.
     pub replicas_selector: Vec<LabelSelector>,
 
-    /// Whether scratch disk space should be allocated for the service.
-    pub disk: bool,
     /// The maximum amount of scratch disk space that the service is allowed to consume.
     pub disk_limit: Option<DiskLimit>,
     /// Node selector for this service.
@@ -250,6 +261,25 @@ pub struct ServicePort {
     ///
     /// Not all orchestrator backends will make use of the hint.
     pub port_hint: u16,
+}
+
+/// Assignments that the orchestrator has made for a process in a service.
+#[derive(Clone, Debug)]
+pub struct ServiceAssignments<'a> {
+    /// For each specified [`ServicePort`] name, a listen address.
+    pub listen_addrs: &'a BTreeMap<String, String>,
+    /// The listen addresses of each peer in the service.
+    ///
+    /// The order of peers is significant. Each peer is uniquely identified by its position in the
+    /// list.
+    pub peer_addrs: &'a [BTreeMap<String, String>],
+}
+
+impl ServiceAssignments<'_> {
+    /// Return the peer addresses for the specified [`ServicePort`] name.
+    pub fn peer_addresses(&self, name: &str) -> Vec<String> {
+        self.peer_addrs.iter().map(|a| a[name].clone()).collect()
+    }
 }
 
 /// Describes a limit on memory.
@@ -364,6 +394,7 @@ impl Serialize for CpuLimit {
 pub struct DiskLimit(pub ByteSize);
 
 impl DiskLimit {
+    pub const ZERO: Self = Self(ByteSize(0));
     pub const MAX: Self = Self(ByteSize(u64::MAX));
     pub const ARBITRARY: Self = Self(ByteSize::gib(1));
 }
@@ -414,6 +445,13 @@ pub mod scheduling_config {
         ///
         /// Defaults to `1`.
         pub max_skew: i32,
+        /// The `minDomains` for spread constraints.
+        /// See
+        /// <https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/>
+        /// for more details.
+        ///
+        /// Defaults to None.
+        pub min_domains: Option<i32>,
         /// If `true`, make the spread constraints into a preference.
         ///
         /// Defaults to `false`.
@@ -446,11 +484,6 @@ pub mod scheduling_config {
         ///
         /// Defaults to `100`.
         pub soften_az_affinity_weight: i32,
-        /// Whether to always provision a replica with disk,
-        /// regardless of `DISK` DDL option.
-        ///
-        /// Defaults to `false`.
-        pub always_use_disk: bool,
         // Whether to enable security context for the service.
         pub security_context_enabled: bool,
     }
@@ -462,11 +495,11 @@ pub mod scheduling_config {
     pub const DEFAULT_TOPOLOGY_SPREAD_ENABLED: bool = true;
     pub const DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: bool = true;
     pub const DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW: i32 = 1;
+    pub const DEFAULT_TOPOLOGY_SPREAD_MIN_DOMAIN: Option<i32> = None;
     pub const DEFAULT_TOPOLOGY_SPREAD_SOFT: bool = false;
 
     pub const DEFAULT_SOFTEN_AZ_AFFINITY: bool = false;
     pub const DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT: i32 = 100;
-    pub const DEFAULT_ALWAYS_USE_DISK: bool = false;
     pub const DEFAULT_SECURITY_CONTEXT_ENABLED: bool = true;
 
     impl Default for ServiceSchedulingConfig {
@@ -480,11 +513,11 @@ pub mod scheduling_config {
                     enabled: DEFAULT_TOPOLOGY_SPREAD_ENABLED,
                     ignore_non_singular_scale: DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
                     max_skew: DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
+                    min_domains: DEFAULT_TOPOLOGY_SPREAD_MIN_DOMAIN,
                     soft: DEFAULT_TOPOLOGY_SPREAD_SOFT,
                 },
                 soften_az_affinity: DEFAULT_SOFTEN_AZ_AFFINITY,
                 soften_az_affinity_weight: DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
-                always_use_disk: DEFAULT_ALWAYS_USE_DISK,
                 security_context_enabled: DEFAULT_SECURITY_CONTEXT_ENABLED,
             }
         }

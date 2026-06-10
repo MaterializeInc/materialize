@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 def load(path: Path) -> dict[Any, Any]: ...
+def dump(obj: dict[Any, Any], file: TextIO, sort_keys: bool = True) -> None: ...

@@ -13,7 +13,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 
-REDPANDA_VERSION = "v24.2.7"
+REDPANDA_VERSION = "v26.1.8"
 
 
 class Redpanda(Service):
@@ -25,9 +25,10 @@ class Redpanda(Service):
         image: str | None = None,
         aliases: list[str] | None = None,
         ports: list[int] | None = None,
+        extra_cluster_settings: dict[str, str] | None = None,
     ) -> None:
         if image is None:
-            image = f"vectorized/redpanda:{version}"
+            image = f"redpandadata/redpanda:{version}"
 
         if ports is None:
             ports = [9092, 8081]
@@ -37,7 +38,7 @@ class Redpanda(Service):
             aliases = ["kafka", "schema-registry"]
 
         # Most of these options are simply required when using Redpanda in Docker.
-        # See: https://vectorized.io/docs/quick-start-docker/#Single-command-for-a-1-node-cluster
+        # See: https://docs.redpanda.com/current/get-started/quick-start/#Single-command-for-a-1-node-cluster
         # The `enable_transactions` and `enable_idempotence` feature flags enable
         # features Materialize requires that are present by default in Apache Kafka
         # but not in Redpanda.
@@ -60,6 +61,15 @@ class Redpanda(Service):
             # Only require 4KB per topic partition rather than 4MiB.
             "--set",
             "redpanda.topic_memory_per_partition=4096",
+        ]
+        # Callers can inject additional `redpanda.<key>=<value>` cluster
+        # settings. We can't apply such settings broadly because the same
+        # `Redpanda()` is instantiated across `kafka-matrix`, which exercises
+        # historical Redpanda versions that don't recognize newer keys (a
+        # bad key crashes the container at startup).
+        for key, value in (extra_cluster_settings or {}).items():
+            command_list += ["--set", f"redpanda.{key}={value}"]
+        command_list += [
             "--set",
             f"--advertise-kafka-addr=kafka:{ports[0]}",
         ]

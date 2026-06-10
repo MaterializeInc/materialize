@@ -7,12 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test indexes.
+# Test replica expiration.
 
 ## No retractions: expiration=30d, temporal filter width=20d
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     content TEXT,
@@ -23,17 +23,19 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
   FROM events
   WHERE mz_now() <= event_ts + INTERVAL '20 days';
 > CREATE DEFAULT INDEX ON events_view;
-> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
-> SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000000) AS x;
+# We expect to have at least 1 million records in the arrangement, and 1 million future retractions.
+# Some of the future retractions may still be buffered and don't show up in the arrangement size.
+> SELECT records BETWEEN 1000001 AND 2000000 FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%events_view_primary_idx';
-2000
+true
 > DROP TABLE events CASCADE;
 > DROP CLUSTER test;
 
 ## Does retractions: expiration=20d, temporal filter width=30d
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     content TEXT,
@@ -44,10 +46,10 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
   FROM events
   WHERE mz_now() <= event_ts + INTERVAL '30 days';
 > CREATE DEFAULT INDEX ON events_view;
-> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
+> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000000) AS x;
 > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%events_view_primary_idx';
-1000
+1000000
 > DROP TABLE events CASCADE;
 > DROP CLUSTER test;
 
@@ -58,7 +60,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 ## No retractions: expiration=30d, temporal filter width=20d
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     content TEXT,
@@ -77,7 +79,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
 ## Does retractions: expiration=20d, temporal filter width=30d
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     content TEXT,
@@ -99,7 +101,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 ## No transitive refresh enables expiration, thus no retractions
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     id INT,
@@ -135,8 +137,8 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 ## Transitive refresh disables expiration, resulting in retractions
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
-> CREATE CLUSTER test (SIZE = '1')
-> SET CLUSTER TO test
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1');
+> SET CLUSTER TO test;
 > CREATE TABLE events (
     id INT,
     content TEXT,
@@ -174,11 +176,15 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d';
-> CREATE CLUSTER test (SIZE = '1');
+ALTER SYSTEM SET enable_index_options = true;
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1');
 > SET CLUSTER TO test;
 > CREATE VIEW events_over_time AS VALUES ('joe', 100), ('mike', 101), ('sam', 200), ('end', 18446144073709551615);
 > CREATE VIEW events AS SELECT * FROM events_over_time WHERE mz_now() <= column2 + 2592000000; -- 30d in ms
-> CREATE DEFAULT INDEX ON events;
+# RETAIN HISTORY pins the index's `since` at 0 so the SUBSCRIBE below can use
+# `AS OF 0`; without it, `since` advances toward wall-clock and the query
+# becomes unservable.
+> CREATE DEFAULT INDEX ON events WITH (RETAIN HISTORY = FOR '365000 days');
 > SUBSCRIBE events WITH (progress) AS OF 0;
 mz_timestamp mz_progressed mz_diff column1 column2
 ----
@@ -200,7 +206,7 @@ mz_timestamp mz_progressed mz_diff column1 column2
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = 0;
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     content TEXT,
@@ -211,10 +217,10 @@ ALTER SYSTEM SET compute_replica_expiration_offset = 0;
   FROM events
   WHERE mz_now() <= event_ts + INTERVAL '30 days';
 > CREATE DEFAULT INDEX ON events_view;
-> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
-> SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000000) AS x;
+> SELECT records BETWEEN 1000001 AND 2000000 FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%events_view_primary_idx';
-2000
+true
 > DROP TABLE events CASCADE;
 > DROP CLUSTER test;
 
@@ -223,7 +229,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = 0;
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '30d';
-> CREATE CLUSTER test (SIZE = '1', REPLICATION FACTOR = 0);
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 0);
 > SET CLUSTER TO test;
 # `now()` cannot be materialized.
 > CREATE MATERIALIZED VIEW events_mv AS

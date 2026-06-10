@@ -7,9 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import argparse
 import os
 import subprocess
 import tempfile
+import urllib.request
 from pathlib import Path
 from tempfile import _TemporaryFileWrapper
 
@@ -22,6 +24,7 @@ from materialize.ci_util.upload_debug_symbols_to_s3 import (
 )
 from materialize.mzbuild import Repository, ResolvedImage
 from materialize.rustc_flags import Sanitizer
+from materialize.xcompile import Arch
 
 # Upload debuginfo and sources to Polar Signals (our continuous
 # profiling provider).
@@ -29,26 +32,107 @@ from materialize.rustc_flags import Sanitizer
 # expensive, so we don't want to upload development or unstable builds
 # that won't ever be profiled by Polar Signals.
 
+DEBUGINFO_URL = "https://debuginfo.dev.materialize.com"
+
+DEFAULT_TOKENS = [
+    t
+    for t in (
+        os.getenv("POLAR_SIGNALS_API_TOKEN"),
+        os.getenv("POLAR_SIGNALS_SELF_MANAGED_1_API_TOKEN"),
+    )
+    if t is not None
+]
+
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="upload_debug_symbols_to_polarsignals",
+        description="""Upload debug symbols to Polar Signals.""",
+    )
+    parser.add_argument(
+        "--arch",
+        help="the architecture of the binaries to upload",
+        choices=[str(Arch.X86_64), str(Arch.AARCH64)],
+        default=str(Arch.host()),
+    )
+    parser.add_argument(
+        "--protocol",
+        help="the source for downloading debug symbols",
+        choices=["http", "s3"],
+        default="s3",
+    )
+    parser.add_argument(
+        "--token",
+        action="append",
+        help="the Polar Signals API token",
+        default=DEFAULT_TOKENS,
+    )
+    parser.add_argument(
+        "--build-id",
+        help="directly fetch and upload debug symbols for a specific build ID, skipping docker image resolution",
+    )
+
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="Use release build",
+        default=os.getenv("CI_LTO"),
+    )
+    args = parser.parse_intermixed_args()
+
+    assert args.token, "Need at least one Polar Signals API token"
+
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
-    bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
-    bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
 
     repo = mzbuild.Repository(
         Path("."),
         coverage=coverage,
         sanitizer=sanitizer,
-        bazel=bazel,
-        bazel_remote_cache=bazel_remote_cache,
+        arch=Arch(args.arch),
+        profile=mzbuild.Profile.RELEASE if args.release else mzbuild.Profile.OPTIMIZED,
+        image_registry="materialize",
     )
 
-    collect_and_upload_debug_data_to_polarsignals(repo, DEBUGINFO_BINS)
+    if args.build_id:
+        upload_debug_data_by_build_id(repo, args.build_id, args.protocol, args.token)
+    else:
+        collect_and_upload_debug_data_to_polarsignals(
+            repo, DEBUGINFO_BINS, args.protocol, args.token
+        )
+
+
+def upload_debug_data_by_build_id(
+    repo: mzbuild.Repository,
+    build_id: str,
+    protocol: str,
+    polar_signals_api_tokens: list[str],
+) -> None:
+    """Fetch debug symbols by build ID and upload to Polar Signals."""
+    ui.section(f"Uploading debug data for build ID {build_id} to PolarSignals...")
+
+    if protocol == "s3":
+        bin_path, dbg_path = fetch_debug_symbols_from_s3(build_id)
+    elif protocol == "http":
+        bin_path, dbg_path = fetch_debug_symbols_from_http(build_id)
+    else:
+        raise ValueError(f"Unknown protocol: {protocol}")
+    print(f"Fetched debug symbols for build ID {build_id} from {protocol}")
+
+    upload_completed = upload_debug_data_to_polarsignals(
+        repo, build_id, bin_path, dbg_path, polar_signals_api_tokens
+    )
+    if upload_completed:
+        print(f"Uploaded debug symbols for build ID {build_id} to PolarSignals")
+    else:
+        print(f"Did not upload debug symbols for build ID {build_id} to PolarSignals")
 
 
 def collect_and_upload_debug_data_to_polarsignals(
-    repo: mzbuild.Repository, debuginfo_bins: set[str]
+    repo: mzbuild.Repository,
+    debuginfo_bins: set[str],
+    protocol: str,
+    polar_signals_api_tokens: list[str],
 ) -> None:
     ui.section("Collecting and uploading debug data to PolarSignals...")
 
@@ -56,6 +140,7 @@ def collect_and_upload_debug_data_to_polarsignals(
     print(f"Considered images are: {relevant_images_by_name.keys()}")
 
     for image_name, image in relevant_images_by_name.items():
+        remove_docker_container_if_exists(image_name)
         container_name = create_docker_container(image_name, image)
         print(
             f"Created docker container from image {image_name} (spec: {image.spec()})"
@@ -67,11 +152,16 @@ def collect_and_upload_debug_data_to_polarsignals(
         build_id = get_build_id(repo, path_to_binary)
         print(f"{image_name} has build_id {build_id}")
 
-        bin_path, dbg_path = fetch_debug_symbols_from_s3(build_id)
-        print(f"Fetched debug symbols of {image_name} from S3")
+        if protocol == "s3":
+            bin_path, dbg_path = fetch_debug_symbols_from_s3(build_id)
+        elif protocol == "http":
+            bin_path, dbg_path = fetch_debug_symbols_from_http(build_id)
+        else:
+            raise ValueError(f"Unknown protocol: {protocol}")
+        print(f"Fetched debug symbols of {image_name} from {protocol}")
 
         upload_completed = upload_debug_data_to_polarsignals(
-            repo, build_id, bin_path, dbg_path
+            repo, build_id, bin_path, dbg_path, polar_signals_api_tokens
         )
         if upload_completed:
             print(f"Uploaded debug symbols of {image_name} to PolarSignals")
@@ -94,6 +184,13 @@ def get_build_images(
         resolved_images[image_name] = dependency_set[image_name]
 
     return resolved_images
+
+
+def remove_docker_container_if_exists(image_name: str) -> None:
+    try:
+        subprocess.run(["docker", "rm", image_name], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Removing container failed, ignoring: {e}")
 
 
 def create_docker_container(image_name: str, image: ResolvedImage) -> str:
@@ -137,6 +234,28 @@ def get_build_id(repo: mzbuild.Repository, path_to_binary: str) -> str:
     )
 
 
+def fetch_debug_symbols_from_http(build_id: str) -> tuple[str, str]:
+    file_names = [
+        "executable",
+        "debuginfo",
+    ]
+
+    downloaded_file_paths = dict()
+
+    for file_name in file_names:
+        key = f"buildid/{build_id}/{file_name}"
+        target_file_name = key.replace("/", "_")
+        print(
+            f"Downloading {file_name} from {DEBUGINFO_URL}/{key} to {target_file_name}"
+        )
+
+        urllib.request.urlretrieve(f"{DEBUGINFO_URL}/{key}", target_file_name)
+
+        downloaded_file_paths[file_name] = target_file_name
+
+    return downloaded_file_paths["executable"], downloaded_file_paths["debuginfo"]
+
+
 def fetch_debug_symbols_from_s3(build_id: str) -> tuple[str, str]:
     s3 = boto3.client("s3")
 
@@ -167,19 +286,24 @@ def upload_debug_data_to_polarsignals(
     build_id: str,
     bin_path: Path | str,
     dbg_path: Path | str,
+    polar_signals_api_tokens: list[str],
 ) -> bool:
-    polar_signals_api_token = os.environ["POLAR_SIGNALS_API_TOKEN"]
-    _upload_debug_info_to_polarsignals(repo, dbg_path, polar_signals_api_token)
+    result = True
+    for token in polar_signals_api_tokens:
+        _upload_debug_info_to_polarsignals(repo, dbg_path, token)
 
-    with tempfile.NamedTemporaryFile() as tarball:
-        _create_source_tarball(repo, bin_path, tarball)
-        return _upload_source_tarball_to_polarsignals(
-            repo, bin_path, tarball, build_id, polar_signals_api_token
-        )
+        with tempfile.NamedTemporaryFile() as tarball:
+            _create_source_tarball(repo, bin_path, tarball)
+            result = result or _upload_source_tarball_to_polarsignals(
+                repo, bin_path, tarball, build_id, token
+            )
+    return result
 
 
 def _upload_debug_info_to_polarsignals(
-    repo: mzbuild.Repository, dbg_path: Path | str, polar_signals_api_token: str
+    repo: mzbuild.Repository,
+    dbg_path: Path | str,
+    polar_signals_api_token: str,
 ) -> None:
     print(f"Uploading debuginfo for {dbg_path} to Polar Signals...")
     spawn.run_with_retries(

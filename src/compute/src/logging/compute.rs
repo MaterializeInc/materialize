@@ -15,130 +15,238 @@ use std::fmt::{Display, Write};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use columnar::{Columnar, Index, Ref};
+use differential_dataflow::VecCollection;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
-use differential_dataflow::Collection;
+use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, GlobalId, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
+use mz_timely_util::columnar::batcher;
+use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
-use timely::communication::Allocate;
-use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::{Counter, Tee};
+use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Filter, Operator};
-use timely::dataflow::{Scope, Stream};
-use timely::logging::WorkerIdentifier;
-use timely::scheduling::Scheduler;
-use timely::worker::Worker;
-use timely::{Container, Data};
+use timely::dataflow::operators::generic::operator::empty;
+use timely::dataflow::{Scope, StreamVec};
+use timely::scheduling::activate::{Activations, Activator};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::{
-    ComputeLog, EventQueue, LogCollection, LogVariant, PermutedRowPacker, SharedLoggingState,
+    ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
+    SharedLoggingState, Update,
 };
 use crate::typedefs::RowRowSpine;
+use mz_row_spine::RowRowBuilder;
 
 /// Type alias for a logger of compute events.
-pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;
+pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
+pub type ComputeEventBuilder = ColumnBuilder<(Duration, ComputeEvent)>;
 
-/// A logged compute event.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
-pub enum ComputeEvent {
-    /// A dataflow export was created.
-    Export {
-        /// Identifier of the export.
-        id: GlobalId,
-        /// Timely worker index of the exporting dataflow.
-        dataflow_index: usize,
-    },
-    /// A dataflow export was dropped.
-    ExportDropped {
-        /// Identifier of the export.
-        id: GlobalId,
-    },
-    /// Peek command.
-    Peek {
-        /// The data for the peek itself.
-        peek: Peek,
-        /// The relevant _type_ of peek: index or persist.
-        // Note that this is not stored on the Peek event for data-packing reasons only.
-        peek_type: PeekType,
-        /// True if the peek is being installed; false if it's being removed.
-        installed: bool,
-    },
-    /// Available frontier information for dataflow exports.
-    Frontier {
-        id: GlobalId,
-        time: Timestamp,
-        diff: i8,
-    },
-    /// Available frontier information for dataflow imports.
-    ImportFrontier {
-        import_id: GlobalId,
-        export_id: GlobalId,
-        time: Timestamp,
-        diff: i8,
-    },
-    /// Arrangement heap size update
-    ArrangementHeapSize {
-        /// Operator index
-        operator: usize,
-        /// Delta of the heap size in bytes of the arrangement.
-        delta_size: isize,
-    },
-    /// Arrangement heap size update
-    ArrangementHeapCapacity {
-        /// Operator index
-        operator: usize,
-        /// Delta of the heap capacity in bytes of the arrangement.
-        delta_capacity: isize,
-    },
-    /// Arrangement heap size update
-    ArrangementHeapAllocations {
-        /// Operator index
-        operator: usize,
-        /// Delta of distinct heap allocations backing the arrangement.
-        delta_allocations: isize,
-    },
-    /// Arrangement size operator address
-    ArrangementHeapSizeOperator {
-        /// Operator index
-        operator: usize,
-        /// The address of the operator.
-        address: Rc<[usize]>,
-    },
-    /// Arrangement size operator dropped
-    ArrangementHeapSizeOperatorDrop {
-        /// Operator index
-        operator: usize,
-    },
-    /// All operators of a dataflow have shut down.
-    DataflowShutdown {
-        /// Timely worker index of the dataflow.
-        dataflow_index: usize,
-    },
-    /// The number of errors in a dataflow export has changed.
-    ErrorCount {
-        /// Identifier of the export.
-        export_id: GlobalId,
-        /// The change in error count.
-        diff: i64,
-    },
-    /// A dataflow export was hydrated.
-    Hydration { export_id: GlobalId },
+/// A dataflow exports a global ID.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct Export {
+    /// Identifier of the export.
+    pub export_id: GlobalId,
+    /// Timely worker index of the exporting dataflow.
+    pub dataflow_index: usize,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
+/// The export for a global id was dropped.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct ExportDropped {
+    /// Identifier of the export.
+    pub export_id: GlobalId,
+}
+
+/// A peek event with a [`PeekType`], and an installation status.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct PeekEvent {
+    /// The identifier of the view the peek targets.
+    pub id: GlobalId,
+    /// The logical timestamp requested.
+    pub time: Timestamp,
+    /// The ID of the peek.
+    pub uuid: uuid::Bytes,
+    /// The relevant _type_ of peek: index or persist.
+    // Note that this is not stored on the Peek event for data-packing reasons only.
+    pub peek_type: PeekType,
+    /// True if the peek is being installed; false if it's being removed.
+    pub installed: bool,
+}
+
+/// Frontier change event.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct Frontier {
+    pub export_id: GlobalId,
+    pub time: Timestamp,
+    pub diff: i8,
+}
+
+/// An import frontier change.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct ImportFrontier {
+    pub import_id: GlobalId,
+    pub export_id: GlobalId,
+    pub time: Timestamp,
+    pub diff: i8,
+}
+
+/// A change in an arrangement's heap size.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct ArrangementHeapSize {
+    /// Operator index
+    pub operator_id: usize,
+    /// Delta of the heap size in bytes of the arrangement.
+    pub delta_size: isize,
+}
+
+/// A change in an arrangement's heap capacity.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct ArrangementHeapCapacity {
+    /// Operator index
+    pub operator_id: usize,
+    /// Delta of the heap capacity in bytes of the arrangement.
+    pub delta_capacity: isize,
+}
+
+/// A change in an arrangement's heap allocation count.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct ArrangementHeapAllocations {
+    /// Operator index
+    pub operator_id: usize,
+    /// Delta of distinct heap allocations backing the arrangement.
+    pub delta_allocations: isize,
+}
+
+/// Announcing an operator that manages an arrangement.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct ArrangementHeapSizeOperator {
+    /// Operator index
+    pub operator_id: usize,
+    /// The address of the operator.
+    pub address: Vec<usize>,
+}
+
+/// Drop event for an operator managing an arrangement.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct ArrangementHeapSizeOperatorDrop {
+    /// Operator index
+    pub operator_id: usize,
+}
+
+/// Dataflow shutdown event.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct DataflowShutdown {
+    /// Timely worker index of the dataflow.
+    pub dataflow_index: usize,
+}
+
+/// Error count update event.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct ErrorCount {
+    /// Identifier of the export.
+    pub export_id: GlobalId,
+    /// The change in error count.
+    pub diff: Diff,
+}
+
+/// An export is hydrated.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct Hydration {
+    /// Identifier of the export.
+    pub export_id: GlobalId,
+}
+
+/// An operator's hydration status changed.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct OperatorHydration {
+    /// Identifier of the export.
+    pub export_id: GlobalId,
+    /// Identifier of the operator's LIR node.
+    pub lir_id: LirId,
+    /// Whether the operator is hydrated.
+    pub hydrated: bool,
+}
+
+/// Announce a mapping of an LIR operator to a dataflow operator for a global ID.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct LirMapping {
+    /// The `GlobalId` in which the LIR operator is rendered.
+    ///
+    /// NB a single a dataflow may have many `GlobalId`s inside it.
+    /// A separate mapping (using `ComputeEvent::DataflowGlobal`)
+    /// tracks the many-to-one relationship between `GlobalId`s and
+    /// dataflows.
+    pub global_id: GlobalId,
+    /// The actual mapping.
+    /// Represented this way to reduce the size of `ComputeEvent`.
+    pub mapping: Vec<(LirId, LirMetadata)>,
+}
+
+/// Announce that a dataflow supports a specific global ID.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct DataflowGlobal {
+    /// The identifier of the dataflow.
+    pub dataflow_index: usize,
+    /// A `GlobalId` that is rendered as part of this dataflow.
+    pub global_id: GlobalId,
+}
+
+/// A logged compute event.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub enum ComputeEvent {
+    /// A dataflow export was created.
+    Export(Export),
+    /// A dataflow export was dropped.
+    ExportDropped(ExportDropped),
+    /// Peek command.
+    Peek(PeekEvent),
+    /// Available frontier information for dataflow exports.
+    Frontier(Frontier),
+    /// Available frontier information for dataflow imports.
+    ImportFrontier(ImportFrontier),
+    /// Arrangement heap size update
+    ArrangementHeapSize(ArrangementHeapSize),
+    /// Arrangement heap size update
+    ArrangementHeapCapacity(ArrangementHeapCapacity),
+    /// Arrangement heap size update
+    ArrangementHeapAllocations(ArrangementHeapAllocations),
+    /// Arrangement size operator address
+    ArrangementHeapSizeOperator(ArrangementHeapSizeOperator),
+    /// Arrangement size operator dropped
+    ArrangementHeapSizeOperatorDrop(ArrangementHeapSizeOperatorDrop),
+    /// All operators of a dataflow have shut down.
+    DataflowShutdown(DataflowShutdown),
+    /// The number of errors in a dataflow export has changed.
+    ErrorCount(ErrorCount),
+    /// A dataflow export was hydrated.
+    Hydration(Hydration),
+    /// A dataflow operator's hydration status changed.
+    OperatorHydration(OperatorHydration),
+    /// An LIR operator was mapped to some particular dataflow operator.
+    ///
+    /// Cf. `ComputeLog::LirMaping`
+    LirMapping(LirMapping),
+    DataflowGlobal(DataflowGlobal),
+}
+
+/// A peek type distinguishing between index and persist peeks.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Columnar)]
 pub enum PeekType {
+    /// A peek against an index.
     Index,
+    /// A peek against persist.
     Persist,
 }
 
 impl PeekType {
+    /// A human-readable name for a peek type.
     fn name(self) -> &'static str {
         match self {
             PeekType::Index => "index",
@@ -147,76 +255,108 @@ impl PeekType {
     }
 }
 
-/// A logged peek event.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
-pub struct Peek {
-    /// The identifier of the view the peek targets.
-    id: GlobalId,
-    /// The logical timestamp requested.
-    time: Timestamp,
-    /// The ID of the peek.
-    uuid: Uuid,
+/// Metadata for LIR operators.
+#[derive(Clone, Debug, PartialEq, PartialOrd, Columnar)]
+pub struct LirMetadata {
+    /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
+    operator: String,
+    /// The LIR identifier of the parent (if any).
+    parent_lir_id: Option<LirId>,
+    /// How nested the operator is (for nice indentation).
+    nesting: u8,
+    /// The dataflow operator ids, given as start (inclusive) and end (exclusive).
+    /// If `start == end`, then no operators were used.
+    operator_span: (usize, usize),
 }
 
-impl Peek {
-    /// Create a new peek from its arguments.
-    pub fn new(id: GlobalId, time: Timestamp, uuid: Uuid) -> Self {
-        Self { id, time, uuid }
+impl LirMetadata {
+    /// Construct a new LIR metadata object.
+    pub fn new(
+        operator: String,
+        parent_lir_id: Option<LirId>,
+        nesting: u8,
+        operator_span: (usize, usize),
+    ) -> Self {
+        Self {
+            operator,
+            parent_lir_id,
+            nesting,
+            operator_span,
+        }
     }
 }
 
-/// Constructs the logging dataflow for compute logs.
+/// The return type of the [`construct`] function.
+pub(super) struct Return {
+    /// Collections returned by [`construct`].
+    pub collections: BTreeMap<LogVariant, LogCollection>,
+}
+
+/// Constructs the logging dataflow fragment for compute logs.
 ///
 /// Params
-/// * `worker`: The Timely worker hosting the log analysis dataflow.
+/// * `scope`: The Timely scope hosting the log analysis dataflow.
+/// * `scheduler`: The timely scheduler to obtainer activators.
 /// * `config`: Logging configuration.
 /// * `event_queue`: The source to read compute log events from.
-pub(super) fn construct<A: Allocate + 'static>(
-    worker: &mut timely::worker::Worker<A>,
+/// * `compute_event_streams`: Additional compute event streams to absorb.
+/// * `shared_state`: Shared state between logging dataflow fragments.
+pub(super) fn construct<'scope>(
+    scope: Scope<'scope, Timestamp>,
+    activations: Rc<RefCell<Activations>>,
     config: &mz_compute_client::logging::LoggingConfig,
-    event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, ComputeEvent)>>,
+    event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> BTreeMap<LogVariant, LogCollection> {
+) -> Return {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
-    let worker_id = worker.index();
-    let worker2 = worker.clone();
-    let dataflow_index = worker.next_dataflow_index();
 
-    worker.dataflow_named("Dataflow: compute logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link)
-            .mz_replay::<_, CapacityContainerBuilder<_>, _>(
+    scope.scoped("compute logging", move |scope| {
+        let enable_logging = config.enable_logging;
+        let (logs, token) = if enable_logging {
+            event_queue.links.mz_replay(
                 scope,
                 "compute logs",
                 config.interval,
                 event_queue.activator,
-                |mut session, data| session.give_iterator(data.iter()),
-            );
-
-        // If logging is disabled, we still need to install the indexes, but we can leave them
-        // empty. We do so by immediately filtering all logs events.
-        if !config.enable_logging {
-            logs = logs.filter(|_| false);
-        }
+            )
+        } else {
+            let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
+            (empty(scope), token)
+        };
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
-        let (mut export_out, export) = demux.new_output();
-        let (mut frontier_out, frontier) = demux.new_output();
-        let (mut import_frontier_out, import_frontier) = demux.new_output();
-        let (mut peek_out, peek) = demux.new_output();
-        let (mut peek_duration_out, peek_duration) = demux.new_output();
-        let (mut shutdown_duration_out, shutdown_duration) = demux.new_output();
-        let (mut arrangement_heap_size_out, arrangement_heap_size) = demux.new_output();
-        let (mut arrangement_heap_capacity_out, arrangement_heap_capacity) = demux.new_output();
-        let (mut arrangement_heap_allocations_out, arrangement_heap_allocations) =
-            demux.new_output();
-        let (mut error_count_out, error_count) = demux.new_output();
-        let (mut hydration_time_out, hydration_time) = demux.new_output();
+        let mut input = demux.new_input(logs, Pipeline);
+        let (export_out, export) = demux.new_output();
+        let mut export_out = OutputBuilder::from(export_out);
+        let (frontier_out, frontier) = demux.new_output();
+        let mut frontier_out = OutputBuilder::from(frontier_out);
+        let (import_frontier_out, import_frontier) = demux.new_output();
+        let mut import_frontier_out = OutputBuilder::from(import_frontier_out);
+        let (peek_out, peek) = demux.new_output();
+        let mut peek_out = OutputBuilder::from(peek_out);
+        let (peek_duration_out, peek_duration) = demux.new_output();
+        let mut peek_duration_out = OutputBuilder::from(peek_duration_out);
+        let (arrangement_heap_size_out, arrangement_heap_size) = demux.new_output();
+        let mut arrangement_heap_size_out = OutputBuilder::from(arrangement_heap_size_out);
+        let (arrangement_heap_capacity_out, arrangement_heap_capacity) = demux.new_output();
+        let mut arrangement_heap_capacity_out = OutputBuilder::from(arrangement_heap_capacity_out);
+        let (arrangement_heap_allocations_out, arrangement_heap_allocations) = demux.new_output();
+        let mut arrangement_heap_allocations_out =
+            OutputBuilder::from(arrangement_heap_allocations_out);
+        let (error_count_out, error_count) = demux.new_output();
+        let mut error_count_out = OutputBuilder::from(error_count_out);
+        let (hydration_time_out, hydration_time) = demux.new_output();
+        let mut hydration_time_out = OutputBuilder::from(hydration_time_out);
+        let (operator_hydration_status_out, operator_hydration_status) = demux.new_output();
+        let mut operator_hydration_status_out = OutputBuilder::from(operator_hydration_status_out);
+        let (lir_mapping_out, lir_mapping) = demux.new_output();
+        let mut lir_mapping_out = OutputBuilder::from(lir_mapping_out);
+        let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
+        let mut dataflow_global_ids_out = OutputBuilder::from(dataflow_global_ids_out);
 
-        let mut demux_state = DemuxState::new(worker2);
-        let mut demux_buffer = Vec::new();
+        let mut demux_state = DemuxState::new(activations, scope.index());
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut export = export_out.activate();
@@ -224,39 +364,40 @@ pub(super) fn construct<A: Allocate + 'static>(
                 let mut import_frontier = import_frontier_out.activate();
                 let mut peek = peek_out.activate();
                 let mut peek_duration = peek_duration_out.activate();
-                let mut shutdown_duration = shutdown_duration_out.activate();
                 let mut arrangement_heap_size = arrangement_heap_size_out.activate();
                 let mut arrangement_heap_capacity = arrangement_heap_capacity_out.activate();
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
                 let mut error_count = error_count_out.activate();
                 let mut hydration_time = hydration_time_out.activate();
+                let mut operator_hydration_status = operator_hydration_status_out.activate();
+                let mut lir_mapping = lir_mapping_out.activate();
+                let mut dataflow_global_ids = dataflow_global_ids_out.activate();
 
                 input.for_each(|cap, data| {
-                    data.swap(&mut demux_buffer);
-
                     let mut output_sessions = DemuxOutput {
-                        export: export.session(&cap),
-                        frontier: frontier.session(&cap),
-                        import_frontier: import_frontier.session(&cap),
-                        peek: peek.session(&cap),
-                        peek_duration: peek_duration.session(&cap),
-                        shutdown_duration: shutdown_duration.session(&cap),
-                        arrangement_heap_size: arrangement_heap_size.session(&cap),
-                        arrangement_heap_capacity: arrangement_heap_capacity.session(&cap),
-                        arrangement_heap_allocations: arrangement_heap_allocations.session(&cap),
-                        error_count: error_count.session(&cap),
-                        hydration_time: hydration_time.session(&cap),
+                        export: export.session_with_builder(&cap),
+                        frontier: frontier.session_with_builder(&cap),
+                        import_frontier: import_frontier.session_with_builder(&cap),
+                        peek: peek.session_with_builder(&cap),
+                        peek_duration: peek_duration.session_with_builder(&cap),
+                        arrangement_heap_allocations: arrangement_heap_allocations
+                            .session_with_builder(&cap),
+                        arrangement_heap_capacity: arrangement_heap_capacity
+                            .session_with_builder(&cap),
+                        arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
+                        error_count: error_count.session_with_builder(&cap),
+                        hydration_time: hydration_time.session_with_builder(&cap),
+                        operator_hydration_status: operator_hydration_status
+                            .session_with_builder(&cap),
+                        lir_mapping: lir_mapping.session_with_builder(&cap),
+                        dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
                     };
 
-                    for (time, logger_id, event) in demux_buffer.drain(..) {
-                        // We expect the logging infrastructure to not shuffle events between
-                        // workers and this code relies on the assumption that each worker handles
-                        // its own events.
-                        assert_eq!(logger_id, worker_id);
-
+                    let shared_state = &mut shared_state.borrow_mut();
+                    for (time, event) in data.borrow().into_index_iter() {
                         DemuxHandler {
                             state: &mut demux_state,
-                            shared_state: &mut shared_state.borrow_mut(),
+                            shared_state,
                             output: &mut output_sessions,
                             logging_interval_ms,
                             time,
@@ -267,154 +408,49 @@ pub(super) fn construct<A: Allocate + 'static>(
             }
         });
 
-        // Encode the contents of each logging stream into its expected `Row` format.
-        let packer = PermutedRowPacker::new(ComputeLog::DataflowCurrent);
-        let dataflow_current = export.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice(&[
-                    make_string_datum(datum.id, &mut scratch),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::UInt64(u64::cast_from(datum.dataflow_id)),
-                ])
-            }
-        });
-        let packer = PermutedRowPacker::new(ComputeLog::FrontierCurrent);
-        let frontier_current = frontier.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice(&[
-                    make_string_datum(datum.export_id, &mut scratch),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::MzTimestamp(datum.frontier),
-                ])
-            }
-        });
-        let packer = PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent);
-        let import_frontier_current = import_frontier.as_collection().map({
-            let mut scratch1 = String::new();
-            let mut scratch2 = String::new();
-            move |datum| {
-                packer.pack_slice(&[
-                    make_string_datum(datum.export_id, &mut scratch1),
-                    make_string_datum(datum.import_id, &mut scratch2),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::MzTimestamp(datum.frontier),
-                ])
-            }
-        });
-        let packer = PermutedRowPacker::new(ComputeLog::PeekCurrent);
-        let peek_current = peek.as_collection().map({
-            let mut scratch = String::new();
-            move |PeekDatum { peek, peek_type }| {
-                packer.pack_slice(&[
-                    Datum::Uuid(peek.uuid),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    make_string_datum(peek.id, &mut scratch),
-                    Datum::String(peek_type.name()),
-                    Datum::MzTimestamp(peek.time),
-                ])
-            }
-        });
-        let packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
-        let peek_duration =
-            peek_duration
-                .as_collection()
-                .map(move |PeekDurationDatum { peek_type, bucket }| {
-                    packer.pack_slice(&[
-                        Datum::UInt64(u64::cast_from(worker_id)),
-                        Datum::String(peek_type.name()),
-                        Datum::UInt64(bucket.try_into().expect("bucket too big")),
-                    ])
-                });
-        let packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
-        let shutdown_duration = shutdown_duration.as_collection().map(move |bucket| {
-            packer.pack_slice(&[
-                Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::UInt64(bucket.try_into().expect("bucket too big")),
-            ])
-        });
-
-        let arrangement_heap_datum_to_row =
-            move |packer: &mut PermutedRowPacker, ArrangementHeapDatum { operator_id }| {
-                packer.pack_slice(&[
-                    Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                ])
-            };
-
-        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapSize);
-        let arrangement_heap_size = arrangement_heap_size
-            .as_collection()
-            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
-
-        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapCapacity);
-        let arrangement_heap_capacity = arrangement_heap_capacity
-            .as_collection()
-            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
-
-        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapSize);
-        let arrangement_heap_allocations = arrangement_heap_allocations
-            .as_collection()
-            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
-
-        let packer = PermutedRowPacker::new(ComputeLog::ErrorCount);
-        let error_count = error_count.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice(&[
-                    make_string_datum(datum.export_id, &mut scratch),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::Int64(datum.count),
-                ])
-            }
-        });
-
-        let packer = PermutedRowPacker::new(ComputeLog::HydrationTime);
-        let hydration_time = hydration_time.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice(&[
-                    make_string_datum(datum.export_id, &mut scratch),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::from(datum.time_ns),
-                ])
-            }
-        });
-
         use ComputeLog::*;
         let logs = [
-            (DataflowCurrent, dataflow_current),
-            (FrontierCurrent, frontier_current),
-            (ImportFrontierCurrent, import_frontier_current),
-            (PeekCurrent, peek_current),
-            (PeekDuration, peek_duration),
-            (ShutdownDuration, shutdown_duration),
-            (ArrangementHeapSize, arrangement_heap_size),
-            (ArrangementHeapCapacity, arrangement_heap_capacity),
             (ArrangementHeapAllocations, arrangement_heap_allocations),
+            (ArrangementHeapCapacity, arrangement_heap_capacity),
+            (ArrangementHeapSize, arrangement_heap_size),
+            (DataflowCurrent, export),
+            (DataflowGlobal, dataflow_global_ids),
             (ErrorCount, error_count),
+            (FrontierCurrent, frontier),
             (HydrationTime, hydration_time),
+            (ImportFrontierCurrent, import_frontier),
+            (LirMapping, lir_mapping),
+            (OperatorHydrationStatus, operator_hydration_status),
+            (PeekCurrent, peek),
+            (PeekDuration, peek_duration),
         ];
 
         // Build the output arrangements.
-        let mut result = BTreeMap::new();
-        for (variant, collection) in logs {
+        let mut collections = BTreeMap::new();
+        for (variant, stream) in logs {
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
-                let trace = collection
-                    .mz_arrange::<RowRowSpine<_, _>>(&format!("Arrange {variant:?}"))
+                let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<Row, Row, Timestamp, Diff>,
+                );
+                let trace = stream
+                    .mz_arrange_core::<
+                        _,
+                        batcher::Chunker<_>,
+                        Col2ValBatcher<_, _, _, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {
                     trace,
                     token: Rc::clone(&token),
-                    dataflow_index,
                 };
-                result.insert(variant, collection);
+                collections.insert(variant, collection);
             }
         }
 
-        result
+        Return { collections }
     })
 }
 
@@ -433,157 +469,327 @@ where
 }
 
 /// State maintained by the demux operator.
-struct DemuxState<A: Allocate> {
-    /// The worker hosting this operator.
-    worker: Worker<A>,
+struct DemuxState {
+    /// The timely activations handle.
+    activations: Rc<RefCell<Activations>>,
+    /// The index of this worker.
+    worker_id: usize,
+    /// A reusable scratch string for formatting IDs.
+    scratch_string_a: String,
+    /// A reusable scratch string for formatting IDs.
+    scratch_string_b: String,
     /// State tracked per dataflow export.
     exports: BTreeMap<GlobalId, ExportState>,
-    /// Maps live dataflows to counts of their exports.
-    dataflow_export_counts: BTreeMap<usize, u32>,
-    /// Maps dropped dataflows to their drop time.
-    dataflow_drop_times: BTreeMap<usize, Duration>,
-    /// Contains dataflows that have shut down but not yet been dropped.
-    shutdown_dataflows: BTreeSet<usize>,
     /// Maps pending peeks to their installation time.
     peek_stash: BTreeMap<Uuid, Duration>,
-    /// Arrangement size stash
+    /// Arrangement size stash.
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
+    /// LIR -> operator span mapping.
+    lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, LirMetadata>>,
+    /// Dataflow -> `GlobalId` mapping (many-to-one).
+    dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
+    /// A row packer for the arrangement heap allocations output.
+    arrangement_heap_allocations_packer: PermutedRowPacker,
+    /// A row packer for the arrangement heap capacity output.
+    arrangement_heap_capacity_packer: PermutedRowPacker,
+    /// A row packer for the arrangement heap size output.
+    arrangement_heap_size_packer: PermutedRowPacker,
+    /// A row packer for the dataflow global output.
+    dataflow_global_packer: PermutedRowPacker,
+    /// A row packer for the error count output.
+    error_count_packer: PermutedRowPacker,
+    /// A row packer for the exports output.
+    export_packer: PermutedRowPacker,
+    /// A row packer for the frontier output.
+    frontier_packer: PermutedRowPacker,
+    /// A row packer for the exports output.
+    import_frontier_packer: PermutedRowPacker,
+    /// A row packer for the LIR mapping output.
+    lir_mapping_packer: PermutedRowPacker,
+    /// A row packer for the operator hydration status output.
+    operator_hydration_status_packer: PermutedRowPacker,
+    /// A row packer for the peek durations output.
+    peek_duration_packer: PermutedRowPacker,
+    /// A row packer for the peek output.
+    peek_packer: PermutedRowPacker,
+    /// A row packer for the hydration time output.
+    hydration_time_packer: PermutedRowPacker,
 }
 
-impl<A: Allocate> DemuxState<A> {
-    fn new(worker: Worker<A>) -> Self {
+impl DemuxState {
+    fn new(activations: Rc<RefCell<Activations>>, worker_id: usize) -> Self {
         Self {
-            worker,
+            activations,
+            worker_id,
+            scratch_string_a: String::new(),
+            scratch_string_b: String::new(),
             exports: Default::default(),
-            dataflow_export_counts: Default::default(),
-            dataflow_drop_times: Default::default(),
-            shutdown_dataflows: Default::default(),
             peek_stash: Default::default(),
             arrangement_size: Default::default(),
+            lir_mapping: Default::default(),
+            dataflow_global_ids: Default::default(),
+            arrangement_heap_allocations_packer: PermutedRowPacker::new(
+                ComputeLog::ArrangementHeapAllocations,
+            ),
+            arrangement_heap_capacity_packer: PermutedRowPacker::new(
+                ComputeLog::ArrangementHeapCapacity,
+            ),
+            arrangement_heap_size_packer: PermutedRowPacker::new(ComputeLog::ArrangementHeapSize),
+            dataflow_global_packer: PermutedRowPacker::new(ComputeLog::DataflowGlobal),
+            error_count_packer: PermutedRowPacker::new(ComputeLog::ErrorCount),
+            export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
+            frontier_packer: PermutedRowPacker::new(ComputeLog::FrontierCurrent),
+            hydration_time_packer: PermutedRowPacker::new(ComputeLog::HydrationTime),
+            import_frontier_packer: PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent),
+            lir_mapping_packer: PermutedRowPacker::new(ComputeLog::LirMapping),
+            operator_hydration_status_packer: PermutedRowPacker::new(
+                ComputeLog::OperatorHydrationStatus,
+            ),
+            peek_duration_packer: PermutedRowPacker::new(ComputeLog::PeekDuration),
+            peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
         }
+    }
+
+    /// Pack an arrangement heap allocations update key-value for the given operator.
+    fn pack_arrangement_heap_allocations_update(
+        &mut self,
+        operator_id: usize,
+    ) -> (&RowRef, &RowRef) {
+        self.arrangement_heap_allocations_packer.pack_slice(&[
+            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+        ])
+    }
+
+    /// Pack an arrangement heap capacity update key-value for the given operator.
+    fn pack_arrangement_heap_capacity_update(&mut self, operator_id: usize) -> (&RowRef, &RowRef) {
+        self.arrangement_heap_capacity_packer.pack_slice(&[
+            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+        ])
+    }
+
+    /// Pack an arrangement heap size update key-value for the given operator.
+    fn pack_arrangement_heap_size_update(&mut self, operator_id: usize) -> (&RowRef, &RowRef) {
+        self.arrangement_heap_size_packer.pack_slice(&[
+            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+        ])
+    }
+
+    /// Pack a dataflow global update key-value for the given dataflow index and global ID.
+    fn pack_dataflow_global_update(
+        &mut self,
+        dataflow_index: usize,
+        global_id: GlobalId,
+    ) -> (&RowRef, &RowRef) {
+        self.dataflow_global_packer.pack_slice(&[
+            Datum::UInt64(u64::cast_from(dataflow_index)),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            make_string_datum(global_id, &mut self.scratch_string_a),
+        ])
+    }
+
+    /// Pack an error count update key-value for the given export ID and count.
+    fn pack_error_count_update(&mut self, export_id: GlobalId, count: Diff) -> (&RowRef, &RowRef) {
+        // Normally we would use DD's diff field to encode counts, but in this case we can't: The total
+        // per-worker error count might be negative and at the SQL level having negative multiplicities
+        // is treated as an error.
+        self.error_count_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::Int64(count.into_inner()),
+        ])
+    }
+
+    /// Pack an export update key-value for the given export ID and dataflow index.
+    fn pack_export_update(
+        &mut self,
+        export_id: GlobalId,
+        dataflow_index: usize,
+    ) -> (&RowRef, &RowRef) {
+        self.export_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt64(u64::cast_from(dataflow_index)),
+        ])
+    }
+
+    /// Pack a hydration time update key-value for the given export ID and hydration time.
+    fn pack_hydration_time_update(
+        &mut self,
+        export_id: GlobalId,
+        time_ns: Option<u64>,
+    ) -> (&RowRef, &RowRef) {
+        self.hydration_time_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::from(time_ns),
+        ])
+    }
+
+    /// Pack an import frontier update key-value for the given export ID and dataflow index.
+    fn pack_import_frontier_update(
+        &mut self,
+        export_id: GlobalId,
+        import_id: GlobalId,
+        time: Timestamp,
+    ) -> (&RowRef, &RowRef) {
+        self.import_frontier_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            make_string_datum(import_id, &mut self.scratch_string_b),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::MzTimestamp(time),
+        ])
+    }
+
+    /// Pack an LIR mapping update key-value for the given LIR operator metadata.
+    fn pack_lir_mapping_update(
+        &mut self,
+        global_id: GlobalId,
+        lir_id: LirId,
+        operator: String,
+        parent_lir_id: Option<LirId>,
+        nesting: u8,
+        operator_span: (usize, usize),
+    ) -> (&RowRef, &RowRef) {
+        self.lir_mapping_packer.pack_slice(&[
+            make_string_datum(global_id, &mut self.scratch_string_a),
+            Datum::UInt64(lir_id.into()),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            make_string_datum(operator, &mut self.scratch_string_b),
+            parent_lir_id.map_or(Datum::Null, |lir_id| Datum::UInt64(lir_id.into())),
+            Datum::UInt16(u16::cast_from(nesting)),
+            Datum::UInt64(u64::cast_from(operator_span.0)),
+            Datum::UInt64(u64::cast_from(operator_span.1)),
+        ])
+    }
+
+    /// Pack an operator hydration status update key-value for the given export ID, LIR ID, and
+    /// hydration status.
+    fn pack_operator_hydration_status_update(
+        &mut self,
+        export_id: GlobalId,
+        lir_id: LirId,
+        hydrated: bool,
+    ) -> (&RowRef, &RowRef) {
+        self.operator_hydration_status_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(lir_id.into()),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::from(hydrated),
+        ])
+    }
+
+    /// Pack a peek duration update key-value for the given peek and peek type.
+    fn pack_peek_duration_update(
+        &mut self,
+        peek_type: PeekType,
+        bucket: u128,
+    ) -> (&RowRef, &RowRef) {
+        self.peek_duration_packer.pack_slice(&[
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::String(peek_type.name()),
+            Datum::UInt64(bucket.try_into().expect("bucket too big")),
+        ])
+    }
+
+    /// Pack a peek update key-value for the given peek and peek type.
+    fn pack_peek_update(
+        &mut self,
+        id: GlobalId,
+        time: Timestamp,
+        uuid: Uuid,
+        peek_type: PeekType,
+    ) -> (&RowRef, &RowRef) {
+        self.peek_packer.pack_slice(&[
+            Datum::Uuid(uuid),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            make_string_datum(id, &mut self.scratch_string_a),
+            Datum::String(peek_type.name()),
+            Datum::MzTimestamp(time),
+        ])
+    }
+
+    /// Pack a frontier update key-value for the given export ID and time.
+    fn pack_frontier_update(&mut self, export_id: GlobalId, time: Timestamp) -> (&RowRef, &RowRef) {
+        self.frontier_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::MzTimestamp(time),
+        ])
     }
 }
 
 /// State tracked for each dataflow export.
 struct ExportState {
     /// The ID of the dataflow maintaining this export.
-    dataflow_id: usize,
+    dataflow_index: usize,
     /// Number of errors in this export.
     ///
     /// This must be a signed integer, since per-worker error counts can be negative, only the
     /// cross-worker total has to sum up to a non-negative value.
-    error_count: i64,
+    error_count: Diff,
     /// When this export was created.
     created_at: Instant,
     /// Whether the exported collection is hydrated.
     hydration_time_ns: Option<u64>,
+    /// Hydration status of operators feeding this export.
+    operator_hydration: BTreeMap<LirId, bool>,
 }
 
 impl ExportState {
-    fn new(dataflow_id: usize) -> Self {
+    fn new(dataflow_index: usize) -> Self {
         Self {
-            dataflow_id,
-            error_count: 0,
+            dataflow_index,
+            error_count: Diff::ZERO,
             created_at: Instant::now(),
             hydration_time_ns: None,
+            operator_hydration: BTreeMap::new(),
         }
     }
 }
 
 /// State for tracking arrangement sizes.
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct ArrangementSizeState {
     size: isize,
     capacity: isize,
     count: isize,
 }
 
-type Update<D> = (D, Timestamp, Diff);
-type Pusher<D> = Counter<Timestamp, Vec<Update<D>>, Tee<Timestamp, Vec<Update<D>>>>;
-type OutputSession<'a, D> =
-    Session<'a, Timestamp, CapacityContainerBuilder<Vec<Update<D>>>, Pusher<D>>;
-
 /// Bundled output sessions used by the demux operator.
-struct DemuxOutput<'a> {
-    export: OutputSession<'a, ExportDatum>,
-    frontier: OutputSession<'a, FrontierDatum>,
-    import_frontier: OutputSession<'a, ImportFrontierDatum>,
-    peek: OutputSession<'a, PeekDatum>,
-    peek_duration: OutputSession<'a, PeekDurationDatum>,
-    shutdown_duration: OutputSession<'a, u128>,
-    arrangement_heap_size: OutputSession<'a, ArrangementHeapDatum>,
-    arrangement_heap_capacity: OutputSession<'a, ArrangementHeapDatum>,
-    arrangement_heap_allocations: OutputSession<'a, ArrangementHeapDatum>,
-    hydration_time: OutputSession<'a, HydrationTimeDatum>,
-    error_count: OutputSession<'a, ErrorCountDatum>,
-}
-
-#[derive(Clone)]
-struct ExportDatum {
-    id: GlobalId,
-    dataflow_id: usize,
-}
-
-#[derive(Clone)]
-struct FrontierDatum {
-    export_id: GlobalId,
-    frontier: Timestamp,
-}
-
-#[derive(Clone)]
-struct ImportFrontierDatum {
-    export_id: GlobalId,
-    import_id: GlobalId,
-    frontier: Timestamp,
-}
-
-#[derive(Clone)]
-struct PeekDatum {
-    peek: Peek,
-    peek_type: PeekType,
-}
-
-#[derive(Clone)]
-struct PeekDurationDatum {
-    peek_type: PeekType,
-    bucket: u128,
-}
-
-#[derive(Clone)]
-struct ArrangementHeapDatum {
-    operator_id: usize,
-}
-
-#[derive(Clone)]
-struct HydrationTimeDatum {
-    export_id: GlobalId,
-    time_ns: Option<u64>,
-}
-
-#[derive(Clone)]
-struct ErrorCountDatum {
-    export_id: GlobalId,
-    // Normally we would use DD's diff field to encode counts, but in this case we can't: The total
-    // per-worker error count might be negative and at the SQL level having negative multiplicities
-    // is treated as an error.
-    count: i64,
+struct DemuxOutput<'a, 'b> {
+    export: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    frontier: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    import_frontier: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    peek: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    peek_duration: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    arrangement_heap_allocations: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    arrangement_heap_capacity: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    arrangement_heap_size: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    hydration_time: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    operator_hydration_status: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    error_count: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    lir_mapping: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    dataflow_global_ids: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
 }
 
 /// Event handler of the demux operator.
-struct DemuxHandler<'a, 'b, A: Allocate + 'static> {
+struct DemuxHandler<'a, 'b, 'c> {
     /// State kept by the demux operator.
-    state: &'a mut DemuxState<A>,
+    state: &'a mut DemuxState,
     /// State shared across log receivers.
     shared_state: &'a mut SharedLoggingState,
     /// Demux output sessions.
-    output: &'a mut DemuxOutput<'b>,
+    output: &'a mut DemuxOutput<'b, 'c>,
     /// The logging interval specifying the time granularity for the updates.
     logging_interval_ms: u128,
     /// The current event time.
     time: Duration,
 }
 
-impl<A: Allocate> DemuxHandler<'_, '_, A> {
+impl DemuxHandler<'_, '_, '_> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {
@@ -594,152 +800,146 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     /// Handle the given compute event.
-    fn handle(&mut self, event: ComputeEvent) {
-        use ComputeEvent::*;
-
+    fn handle(&mut self, event: Ref<'_, ComputeEvent>) {
+        use ComputeEventReference::*;
         match event {
-            Export { id, dataflow_index } => self.handle_export(id, dataflow_index),
-            ExportDropped { id } => self.handle_export_dropped(id),
-            Peek {
-                peek,
-                peek_type,
-                installed: true,
-            } => self.handle_peek_install(peek, peek_type),
-            Peek {
-                peek,
-                peek_type,
-                installed: false,
-            } => self.handle_peek_retire(peek, peek_type),
-            Frontier { id, time, diff } => self.handle_frontier(id, time, diff),
-            ImportFrontier {
-                import_id,
-                export_id,
-                time,
-                diff,
-            } => self.handle_import_frontier(import_id, export_id, time, diff),
-            ArrangementHeapSize {
-                operator,
-                delta_size: size,
-            } => self.handle_arrangement_heap_size(operator, size),
-            ArrangementHeapCapacity {
-                operator,
-                delta_capacity: capacity,
-            } => self.handle_arrangement_heap_capacity(operator, capacity),
-            ArrangementHeapAllocations {
-                operator,
-                delta_allocations: allocations,
-            } => self.handle_arrangement_heap_allocations(operator, allocations),
-            ArrangementHeapSizeOperator { operator, address } => {
-                self.handle_arrangement_heap_size_operator(operator, address)
+            Export(export) => self.handle_export(export),
+            ExportDropped(export_dropped) => self.handle_export_dropped(export_dropped),
+            Peek(peek) if peek.installed => self.handle_peek_install(peek),
+            Peek(peek) => self.handle_peek_retire(peek),
+            Frontier(frontier) => self.handle_frontier(frontier),
+            ImportFrontier(import_frontier) => self.handle_import_frontier(import_frontier),
+            ArrangementHeapSize(inner) => self.handle_arrangement_heap_size(inner),
+            ArrangementHeapCapacity(inner) => self.handle_arrangement_heap_capacity(inner),
+            ArrangementHeapAllocations(inner) => self.handle_arrangement_heap_allocations(inner),
+            ArrangementHeapSizeOperator(inner) => self.handle_arrangement_heap_size_operator(inner),
+            ArrangementHeapSizeOperatorDrop(inner) => {
+                self.handle_arrangement_heap_size_operator_dropped(inner)
             }
-            ArrangementHeapSizeOperatorDrop { operator } => {
-                self.handle_arrangement_heap_size_operator_dropped(operator)
-            }
-            DataflowShutdown { dataflow_index } => self.handle_dataflow_shutdown(dataflow_index),
-            ErrorCount { export_id, diff } => self.handle_error_count(export_id, diff),
-            Hydration { export_id } => self.handle_hydration(export_id),
+            DataflowShutdown(shutdown) => self.handle_dataflow_shutdown(shutdown),
+            ErrorCount(error_count) => self.handle_error_count(error_count),
+            Hydration(hydration) => self.handle_hydration(hydration),
+            OperatorHydration(hydration) => self.handle_operator_hydration(hydration),
+            LirMapping(mapping) => self.handle_lir_mapping(mapping),
+            DataflowGlobal(global) => self.handle_dataflow_global(global),
         }
     }
 
-    fn handle_export(&mut self, id: GlobalId, dataflow_id: usize) {
+    fn handle_export(
+        &mut self,
+        ExportReference {
+            export_id,
+            dataflow_index,
+        }: Ref<'_, Export>,
+    ) {
+        let export_id = Columnar::into_owned(export_id);
         let ts = self.ts();
-        let datum = ExportDatum { id, dataflow_id };
-        self.output.export.give((datum, ts, 1));
+        let datum = self.state.pack_export_update(export_id, dataflow_index);
+        self.output.export.give((datum, ts, Diff::ONE));
 
-        let existing = self.state.exports.insert(id, ExportState::new(dataflow_id));
-        if existing.is_some() {
-            error!(export = %id, "export already registered");
-        }
-
-        *self
+        let existing = self
             .state
-            .dataflow_export_counts
-            .entry(dataflow_id)
-            .or_default() += 1;
+            .exports
+            .insert(export_id, ExportState::new(dataflow_index));
+        if existing.is_some() {
+            error!(%export_id, "export already registered");
+        }
 
         // Insert hydration time logging for this export.
-        let datum = HydrationTimeDatum {
-            export_id: id,
-            time_ns: None,
-        };
-        self.output.hydration_time.give((datum, ts, 1));
+        let datum = self.state.pack_hydration_time_update(export_id, None);
+        self.output.hydration_time.give((datum, ts, Diff::ONE));
     }
 
-    fn handle_export_dropped(&mut self, id: GlobalId) {
-        let Some(export) = self.state.exports.remove(&id) else {
-            error!(export = %id, "missing exports entry at time of export drop");
+    fn handle_export_dropped(
+        &mut self,
+        ExportDroppedReference { export_id }: Ref<'_, ExportDropped>,
+    ) {
+        let export_id = Columnar::into_owned(export_id);
+        let Some(export) = self.state.exports.remove(&export_id) else {
+            error!(%export_id, "missing exports entry at time of export drop");
             return;
         };
 
         let ts = self.ts();
-        let dataflow_id = export.dataflow_id;
+        let dataflow_index = export.dataflow_index;
 
-        let datum = ExportDatum { id, dataflow_id };
-        self.output.export.give((datum, ts, -1));
-
-        match self.state.dataflow_export_counts.get_mut(&dataflow_id) {
-            entry @ Some(0) | entry @ None => {
-                error!(
-                    export = %id,
-                    dataflow = %dataflow_id,
-                    "invalid dataflow_export_counts entry at time of export drop: {entry:?}",
-                );
-            }
-            Some(1) => self.handle_dataflow_dropped(dataflow_id),
-            Some(count) => *count -= 1,
-        }
+        let datum = self.state.pack_export_update(export_id, dataflow_index);
+        self.output.export.give((datum, ts, Diff::MINUS_ONE));
 
         // Remove error count logging for this export.
-        if export.error_count != 0 {
-            let datum = ErrorCountDatum {
-                export_id: id,
-                count: export.error_count,
-            };
-            self.output.error_count.give((datum, ts, -1));
+        if export.error_count != Diff::ZERO {
+            let datum = self
+                .state
+                .pack_error_count_update(export_id, export.error_count);
+            self.output.error_count.give((datum, ts, Diff::MINUS_ONE));
         }
 
         // Remove hydration time logging for this export.
-        let datum = HydrationTimeDatum {
-            export_id: id,
-            time_ns: export.hydration_time_ns,
-        };
-        self.output.hydration_time.give((datum, ts, -1));
-    }
+        let datum = self
+            .state
+            .pack_hydration_time_update(export_id, export.hydration_time_ns);
+        self.output
+            .hydration_time
+            .give((datum, ts, Diff::MINUS_ONE));
 
-    fn handle_dataflow_dropped(&mut self, id: usize) {
-        self.state.dataflow_export_counts.remove(&id);
-
-        if self.state.shutdown_dataflows.remove(&id) {
-            // Dataflow has already shut down before it was dropped.
-            self.output.shutdown_duration.give((0, self.ts(), 1));
-        } else {
-            // Dataflow has not yet shut down.
-            let existing = self.state.dataflow_drop_times.insert(id, self.time);
-            if existing.is_some() {
-                error!(dataflow = %id, "dataflow already dropped");
-            }
-        }
-    }
-
-    fn handle_dataflow_shutdown(&mut self, id: usize) {
-        if let Some(start) = self.state.dataflow_drop_times.remove(&id) {
-            // Dataflow has alredy been dropped.
-            let elapsed_ns = self.time.saturating_sub(start).as_nanos();
-            let elapsed_pow = elapsed_ns.next_power_of_two();
+        // Remove operator hydration logging for this export.
+        for (lir_id, hydrated) in export.operator_hydration {
+            let datum = self
+                .state
+                .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
             self.output
-                .shutdown_duration
-                .give((elapsed_pow, self.ts(), 1));
-        } else {
-            // Dataflow has not yet been dropped.
-            let was_new = self.state.shutdown_dataflows.insert(id);
-            if !was_new {
-                error!(dataflow = %id, "dataflow already shutdown");
+                .operator_hydration_status
+                .give((datum, ts, Diff::MINUS_ONE));
+        }
+    }
+
+    fn handle_dataflow_shutdown(
+        &mut self,
+        DataflowShutdownReference { dataflow_index }: Ref<'_, DataflowShutdown>,
+    ) {
+        let ts = self.ts();
+
+        // We deal with any `GlobalId` based mappings in this event.
+        if let Some(global_ids) = self.state.dataflow_global_ids.remove(&dataflow_index) {
+            for global_id in global_ids {
+                // Remove dataflow/`GlobalID` mapping.
+                let datum = self
+                    .state
+                    .pack_dataflow_global_update(dataflow_index, global_id);
+                self.output
+                    .dataflow_global_ids
+                    .give((datum, ts, Diff::MINUS_ONE));
+
+                // Remove LIR mapping.
+                if let Some(mappings) = self.state.lir_mapping.remove(&global_id) {
+                    for (
+                        lir_id,
+                        LirMetadata {
+                            operator,
+                            parent_lir_id,
+                            nesting,
+                            operator_span,
+                        },
+                    ) in mappings
+                    {
+                        let datum = self.state.pack_lir_mapping_update(
+                            global_id,
+                            lir_id,
+                            operator,
+                            parent_lir_id,
+                            nesting,
+                            operator_span,
+                        );
+                        self.output.lir_mapping.give((datum, ts, Diff::MINUS_ONE));
+                    }
+                }
             }
         }
     }
 
-    fn handle_error_count(&mut self, export_id: GlobalId, diff: i64) {
+    fn handle_error_count(&mut self, ErrorCountReference { export_id, diff }: Ref<'_, ErrorCount>) {
         let ts = self.ts();
+        let export_id = Columnar::into_owned(export_id);
 
         let Some(export) = self.state.exports.get_mut(&export_id) else {
             // The export might have already been dropped, in which case we are no longer
@@ -749,30 +949,24 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
         let old_count = export.error_count;
         let new_count = old_count + diff;
-
-        if old_count != 0 {
-            let datum = ErrorCountDatum {
-                export_id,
-                count: old_count,
-            };
-            self.output.error_count.give((datum, ts, -1));
-        }
-        if new_count != 0 {
-            let datum = ErrorCountDatum {
-                export_id,
-                count: new_count,
-            };
-            self.output.error_count.give((datum, ts, 1));
-        }
-
         export.error_count = new_count;
+
+        if old_count != Diff::ZERO {
+            let datum = self.state.pack_error_count_update(export_id, old_count);
+            self.output.error_count.give((datum, ts, Diff::MINUS_ONE));
+        }
+        if new_count != Diff::ZERO {
+            let datum = self.state.pack_error_count_update(export_id, new_count);
+            self.output.error_count.give((datum, ts, Diff::ONE));
+        }
     }
 
-    fn handle_hydration(&mut self, export_id: GlobalId) {
+    fn handle_hydration(&mut self, HydrationReference { export_id }: Ref<'_, Hydration>) {
         let ts = self.ts();
+        let export_id = Columnar::into_owned(export_id);
 
         let Some(export) = self.state.exports.get_mut(&export_id) else {
-            error!(export = %export_id, "hydration event for unknown export");
+            error!(%export_id, "hydration event for unknown export");
             return;
         };
         if export.hydration_time_ns.is_some() {
@@ -783,132 +977,221 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
         let duration = export.created_at.elapsed();
         let nanos = u64::try_from(duration.as_nanos()).expect("must fit");
-
-        let retraction = HydrationTimeDatum {
-            export_id,
-            time_ns: None,
-        };
-        let insertion = HydrationTimeDatum {
-            export_id,
-            time_ns: Some(nanos),
-        };
-        self.output.hydration_time.give((retraction, ts, -1));
-        self.output.hydration_time.give((insertion, ts, 1));
-
         export.hydration_time_ns = Some(nanos);
+
+        let retraction = self.state.pack_hydration_time_update(export_id, None);
+        self.output
+            .hydration_time
+            .give((retraction, ts, Diff::MINUS_ONE));
+        let insertion = self
+            .state
+            .pack_hydration_time_update(export_id, Some(nanos));
+        self.output.hydration_time.give((insertion, ts, Diff::ONE));
     }
 
-    fn handle_peek_install(&mut self, peek: Peek, peek_type: PeekType) {
-        let uuid = peek.uuid;
+    fn handle_operator_hydration(
+        &mut self,
+        OperatorHydrationReference {
+            export_id,
+            lir_id,
+            hydrated,
+        }: Ref<'_, OperatorHydration>,
+    ) {
         let ts = self.ts();
+        let export_id = Columnar::into_owned(export_id);
+        let lir_id = Columnar::into_owned(lir_id);
+        let hydrated = Columnar::into_owned(hydrated);
+
+        let Some(export) = self.state.exports.get_mut(&export_id) else {
+            // The export might have already been dropped, in which case we are no longer
+            // interested in its operator hydration events.
+            return;
+        };
+
+        let old_status = export.operator_hydration.get(&lir_id).copied();
+        export.operator_hydration.insert(lir_id, hydrated);
+
+        if let Some(hydrated) = old_status {
+            let retraction = self
+                .state
+                .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
+            self.output
+                .operator_hydration_status
+                .give((retraction, ts, Diff::MINUS_ONE));
+        }
+
+        let insertion = self
+            .state
+            .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
         self.output
-            .peek
-            .give((PeekDatum { peek, peek_type }, ts, 1));
+            .operator_hydration_status
+            .give((insertion, ts, Diff::ONE));
+    }
+
+    fn handle_peek_install(
+        &mut self,
+        PeekEventReference {
+            id,
+            time,
+            uuid,
+            peek_type,
+            installed: _,
+        }: Ref<'_, PeekEvent>,
+    ) {
+        let id = Columnar::into_owned(id);
+        let uuid = Uuid::from_bytes(uuid::Bytes::into_owned(uuid));
+        let ts = self.ts();
+        let datum = self.state.pack_peek_update(id, time, uuid, peek_type);
+        self.output.peek.give((datum, ts, Diff::ONE));
 
         let existing = self.state.peek_stash.insert(uuid, self.time);
         if existing.is_some() {
-            error!(
-                uuid = %uuid,
-                "peek already registered",
-            );
+            error!(%uuid, "peek already registered");
         }
     }
 
-    fn handle_peek_retire(&mut self, peek: Peek, peek_type: PeekType) {
-        let uuid = peek.uuid;
+    fn handle_peek_retire(
+        &mut self,
+        PeekEventReference {
+            id,
+            time,
+            uuid,
+            peek_type,
+            installed: _,
+        }: Ref<'_, PeekEvent>,
+    ) {
+        let id = Columnar::into_owned(id);
+        let uuid = Uuid::from_bytes(uuid::Bytes::into_owned(uuid));
         let ts = self.ts();
-        self.output
-            .peek
-            .give((PeekDatum { peek, peek_type }, ts, -1));
+        let datum = self.state.pack_peek_update(id, time, uuid, peek_type);
+        self.output.peek.give((datum, ts, Diff::MINUS_ONE));
 
         if let Some(start) = self.state.peek_stash.remove(&uuid) {
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let bucket = elapsed_ns.next_power_of_two();
-            self.output
-                .peek_duration
-                .give((PeekDurationDatum { peek_type, bucket }, ts, 1));
+            let datum = self.state.pack_peek_duration_update(peek_type, bucket);
+            self.output.peek_duration.give((datum, ts, Diff::ONE));
         } else {
-            error!(
-                uuid = %uuid,
-                "peek not yet registered",
-            );
+            error!(%uuid, "peek not yet registered");
         }
     }
 
-    fn handle_frontier(&mut self, export_id: GlobalId, frontier: Timestamp, diff: i8) {
-        let diff = i64::from(diff);
-        let ts = self.ts();
-        let datum = FrontierDatum {
+    fn handle_frontier(
+        &mut self,
+        FrontierReference {
             export_id,
-            frontier,
-        };
+            time,
+            diff,
+        }: Ref<'_, Frontier>,
+    ) {
+        let export_id = Columnar::into_owned(export_id);
+        let diff = Diff::from(*diff);
+        let ts = self.ts();
+        let time = Columnar::into_owned(time);
+        let datum = self.state.pack_frontier_update(export_id, time);
         self.output.frontier.give((datum, ts, diff));
     }
 
     fn handle_import_frontier(
         &mut self,
-        import_id: GlobalId,
-        export_id: GlobalId,
-        frontier: Timestamp,
-        diff: i8,
-    ) {
-        let ts = self.ts();
-        let datum = ImportFrontierDatum {
-            export_id,
+        ImportFrontierReference {
             import_id,
-            frontier,
-        };
-        self.output.import_frontier.give((datum, ts, diff.into()));
+            export_id,
+            time,
+            diff,
+        }: Ref<'_, ImportFrontier>,
+    ) {
+        let import_id = Columnar::into_owned(import_id);
+        let export_id = Columnar::into_owned(export_id);
+        let diff = Diff::from(*diff);
+        let ts = self.ts();
+        let time = Columnar::into_owned(time);
+        let datum = self
+            .state
+            .pack_import_frontier_update(export_id, import_id, time);
+        self.output.import_frontier.give((datum, ts, diff));
     }
 
     /// Update the allocation size for an arrangement.
-    fn handle_arrangement_heap_size(&mut self, operator_id: usize, size: isize) {
+    fn handle_arrangement_heap_size(
+        &mut self,
+        ArrangementHeapSizeReference {
+            operator_id,
+            delta_size,
+        }: Ref<'_, ArrangementHeapSize>,
+    ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
             return;
         };
 
-        let datum = ArrangementHeapDatum { operator_id };
-        self.output
-            .arrangement_heap_size
-            .give((datum, ts, Diff::cast_from(size)));
+        state.size += delta_size;
 
-        state.size += size;
+        let datum = self.state.pack_arrangement_heap_size_update(operator_id);
+        let diff = Diff::cast_from(delta_size);
+        self.output.arrangement_heap_size.give((datum, ts, diff));
     }
 
     /// Update the allocation capacity for an arrangement.
-    fn handle_arrangement_heap_capacity(&mut self, operator_id: usize, capacity: isize) {
+    fn handle_arrangement_heap_capacity(
+        &mut self,
+        ArrangementHeapCapacityReference {
+            operator_id,
+            delta_capacity,
+        }: Ref<'_, ArrangementHeapCapacity>,
+    ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
             return;
         };
 
-        let datum = ArrangementHeapDatum { operator_id };
+        state.capacity += delta_capacity;
+
+        let datum = self
+            .state
+            .pack_arrangement_heap_capacity_update(operator_id);
+        let diff = Diff::cast_from(delta_capacity);
         self.output
             .arrangement_heap_capacity
-            .give((datum, ts, Diff::cast_from(capacity)));
-
-        state.capacity += capacity;
+            .give((datum, ts, diff));
     }
 
     /// Update the allocation count for an arrangement.
-    fn handle_arrangement_heap_allocations(&mut self, operator_id: usize, count: isize) {
+    fn handle_arrangement_heap_allocations(
+        &mut self,
+        ArrangementHeapAllocationsReference {
+            operator_id,
+            delta_allocations,
+        }: Ref<'_, ArrangementHeapAllocations>,
+    ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
             return;
         };
 
-        let datum = ArrangementHeapDatum { operator_id };
+        state.count += delta_allocations;
+
+        let datum = self
+            .state
+            .pack_arrangement_heap_allocations_update(operator_id);
+        let diff = Diff::cast_from(delta_allocations);
         self.output
             .arrangement_heap_allocations
-            .give((datum, ts, Diff::cast_from(count)));
-
-        state.count += count;
+            .give((datum, ts, diff));
     }
 
     /// Indicate that a new arrangement exists, start maintaining the heap size state.
-    fn handle_arrangement_heap_size_operator(&mut self, operator_id: usize, address: Rc<[usize]>) {
-        let activator = self.state.worker.activator_for(address);
+    fn handle_arrangement_heap_size_operator(
+        &mut self,
+        ArrangementHeapSizeOperatorReference {
+            operator_id,
+            address,
+        }: Ref<'_, ArrangementHeapSizeOperator>,
+    ) {
+        let activator = Activator::new(
+            address.into_iter().collect(),
+            Rc::clone(&self.state.activations),
+        );
         let existing = self
             .state
             .arrangement_size
@@ -926,29 +1209,91 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     /// Indicate that an arrangement has been dropped and we can cleanup the heap size state.
-    fn handle_arrangement_heap_size_operator_dropped(&mut self, operator_id: usize) {
+    fn handle_arrangement_heap_size_operator_dropped(
+        &mut self,
+        event: Ref<'_, ArrangementHeapSizeOperatorDrop>,
+    ) {
+        let operator_id = event.operator_id;
         if let Some(state) = self.state.arrangement_size.remove(&operator_id) {
             let ts = self.ts();
-            let datum = ArrangementHeapDatum { operator_id };
-            self.output.arrangement_heap_size.give((
-                datum.clone(),
-                ts,
-                -Diff::cast_from(state.size),
-            ));
-            self.output.arrangement_heap_capacity.give((
-                datum.clone(),
-                ts,
-                -Diff::cast_from(state.capacity),
-            ));
-            self.output.arrangement_heap_allocations.give((
-                datum,
-                ts,
-                -Diff::cast_from(state.count),
-            ));
+            let allocations = self
+                .state
+                .pack_arrangement_heap_allocations_update(operator_id);
+            let diff = -Diff::cast_from(state.count);
+            self.output
+                .arrangement_heap_allocations
+                .give((allocations, ts, diff));
+
+            let capacity = self
+                .state
+                .pack_arrangement_heap_capacity_update(operator_id);
+            let diff = -Diff::cast_from(state.capacity);
+            self.output
+                .arrangement_heap_capacity
+                .give((capacity, ts, diff));
+
+            let size = self.state.pack_arrangement_heap_size_update(operator_id);
+            let diff = -Diff::cast_from(state.size);
+            self.output.arrangement_heap_size.give((size, ts, diff));
         }
         self.shared_state
             .arrangement_size_activators
             .remove(&operator_id);
+    }
+
+    /// Indicate that a new LIR operator exists; record the dataflow address it maps to.
+    fn handle_lir_mapping(
+        &mut self,
+        LirMappingReference { global_id, mapping }: Ref<'_, LirMapping>,
+    ) {
+        let global_id = Columnar::into_owned(global_id);
+        // record the state (for the later drop)
+        let mappings = || mapping.into_iter().map(Columnar::into_owned);
+        self.state
+            .lir_mapping
+            .entry(global_id)
+            .and_modify(|existing_mapping| existing_mapping.extend(mappings()))
+            .or_insert_with(|| mappings().collect());
+
+        // send the datum out
+        let ts = self.ts();
+        for (lir_id, meta) in mapping.into_iter() {
+            let datum = self.state.pack_lir_mapping_update(
+                global_id,
+                Columnar::into_owned(lir_id),
+                Columnar::into_owned(meta.operator),
+                Columnar::into_owned(meta.parent_lir_id),
+                Columnar::into_owned(meta.nesting),
+                Columnar::into_owned(meta.operator_span),
+            );
+            self.output.lir_mapping.give((datum, ts, Diff::ONE));
+        }
+    }
+
+    fn handle_dataflow_global(
+        &mut self,
+        DataflowGlobalReference {
+            dataflow_index,
+            global_id,
+        }: Ref<'_, DataflowGlobal>,
+    ) {
+        let global_id = Columnar::into_owned(global_id);
+        self.state
+            .dataflow_global_ids
+            .entry(dataflow_index)
+            .and_modify(|globals| {
+                // NB BTreeSet::insert() returns `false` when the element was already in the set
+                if !globals.insert(global_id) {
+                    error!(%dataflow_index, %global_id, "dataflow mapping already knew about this GlobalId");
+                }
+            })
+            .or_insert_with(|| BTreeSet::from([global_id]));
+
+        let ts = self.ts();
+        let datum = self
+            .state
+            .pack_dataflow_global_update(dataflow_index, global_id);
+        self.output.dataflow_global_ids.give((datum, ts, Diff::ONE));
     }
 }
 
@@ -957,7 +1302,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 /// This type is used to produce appropriate log events in response to changes of logged collection
 /// state, e.g. frontiers, and to produce cleanup events when a collection is dropped.
 pub struct CollectionLogging {
-    id: GlobalId,
+    export_id: GlobalId,
     logger: Logger,
 
     logged_frontier: Option<Timestamp>,
@@ -967,15 +1312,18 @@ pub struct CollectionLogging {
 impl CollectionLogging {
     /// Create new logging state for the identified collection and emit initial logging events.
     pub fn new(
-        id: GlobalId,
+        export_id: GlobalId,
         logger: Logger,
         dataflow_index: usize,
         import_ids: impl Iterator<Item = GlobalId>,
     ) -> Self {
-        logger.log(ComputeEvent::Export { id, dataflow_index });
+        logger.log(&ComputeEvent::Export(Export {
+            export_id,
+            dataflow_index,
+        }));
 
         let mut self_ = Self {
-            id,
+            export_id,
             logger,
             logged_frontier: None,
             logged_import_frontiers: Default::default(),
@@ -995,10 +1343,22 @@ impl CollectionLogging {
         self.logged_frontier = new_time;
 
         if old_time != new_time {
-            let id = self.id;
-            let retraction = old_time.map(|time| ComputeEvent::Frontier { id, time, diff: -1 });
-            let insertion = new_time.map(|time| ComputeEvent::Frontier { id, time, diff: 1 });
-            let events = retraction.into_iter().chain(insertion);
+            let export_id = self.export_id;
+            let retraction = old_time.map(|time| {
+                ComputeEvent::Frontier(Frontier {
+                    export_id,
+                    time,
+                    diff: -1,
+                })
+            });
+            let insertion = new_time.map(|time| {
+                ComputeEvent::Frontier(Frontier {
+                    export_id,
+                    time,
+                    diff: 1,
+                })
+            });
+            let events = retraction.as_ref().into_iter().chain(insertion.as_ref());
             self.logger.log_many(events);
         }
     }
@@ -1012,28 +1372,38 @@ impl CollectionLogging {
         }
 
         if old_time != new_time {
-            let export_id = self.id;
-            let retraction = old_time.map(|time| ComputeEvent::ImportFrontier {
-                import_id,
-                export_id,
-                time,
-                diff: -1,
+            let export_id = self.export_id;
+            let retraction = old_time.map(|time| {
+                ComputeEvent::ImportFrontier(ImportFrontier {
+                    import_id,
+                    export_id,
+                    time,
+                    diff: -1,
+                })
             });
-            let insertion = new_time.map(|time| ComputeEvent::ImportFrontier {
-                import_id,
-                export_id,
-                time,
-                diff: 1,
+            let insertion = new_time.map(|time| {
+                ComputeEvent::ImportFrontier(ImportFrontier {
+                    import_id,
+                    export_id,
+                    time,
+                    diff: 1,
+                })
             });
-            let events = retraction.into_iter().chain(insertion);
+            let events = retraction.as_ref().into_iter().chain(insertion.as_ref());
             self.logger.log_many(events);
         }
     }
 
     /// Set the collection as hydrated.
     pub fn set_hydrated(&self) {
-        self.logger
-            .log(ComputeEvent::Hydration { export_id: self.id });
+        self.logger.log(&ComputeEvent::Hydration(Hydration {
+            export_id: self.export_id,
+        }));
+    }
+
+    /// The export global ID of this collection.
+    pub fn export_id(&self) -> GlobalId {
+        self.export_id
     }
 }
 
@@ -1043,11 +1413,13 @@ impl Drop for CollectionLogging {
         self.set_frontier(None);
 
         let import_ids: Vec<_> = self.logged_import_frontiers.keys().copied().collect();
-        for id in import_ids {
-            self.set_import_frontier(id, None);
+        for import_id in import_ids {
+            self.set_import_frontier(import_id, None);
         }
 
-        self.logger.log(ComputeEvent::ExportDropped { id: self.id });
+        self.logger.log(&ComputeEvent::ExportDropped(ExportDropped {
+            export_id: self.export_id,
+        }));
     }
 }
 
@@ -1057,23 +1429,20 @@ pub(crate) trait LogDataflowErrors {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self;
 }
 
-impl<G, D> LogDataflowErrors for Collection<G, D, Diff>
+impl<'scope, T, D> LogDataflowErrors for VecCollection<'scope, T, D, Diff>
 where
-    G: Scope,
-    D: Data,
+    T: timely::progress::Timestamp,
+    D: Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.inner
             .unary(Pipeline, "LogDataflowErrorsCollection", |_cap, _info| {
-                let mut buffer = Vec::new();
                 move |input, output| {
                     input.for_each(|cap, data| {
-                        data.swap(&mut buffer);
+                        let diff = data.iter().map(|(_d, _t, r)| *r).sum::<Diff>();
+                        logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
-                        let diff = buffer.iter().map(|(_d, _t, r)| r).sum();
-                        logger.log(ComputeEvent::ErrorCount { export_id, diff });
-
-                        output.session(&cap).give_container(&mut buffer);
+                        output.session(&cap).give_container(data);
                     });
                 }
             })
@@ -1081,22 +1450,19 @@ where
     }
 }
 
-impl<G, B> LogDataflowErrors for Stream<G, B>
+impl<'scope, T, B> LogDataflowErrors for StreamVec<'scope, T, B>
 where
-    G: Scope,
+    T: timely::progress::Timestamp,
     for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
-            let mut buffer = Vec::new();
             move |input, output| {
                 input.for_each(|cap, data| {
-                    data.swap(&mut buffer);
+                    let diff = data.iter().map(sum_batch_diffs).sum::<Diff>();
+                    logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
-                    let diff = buffer.iter().map(sum_batch_diffs).sum();
-                    logger.log(ComputeEvent::ErrorCount { export_id, diff });
-
-                    output.session(&cap).give_container(&mut buffer);
+                    output.session(&cap).give_container(data);
                 });
             }
         })
@@ -1113,7 +1479,7 @@ fn sum_batch_diffs<B>(batch: &B) -> Diff
 where
     for<'a> B: BatchReader<DiffGat<'a> = &'a Diff>,
 {
-    let mut sum = 0;
+    let mut sum = Diff::ZERO;
     let mut cursor = batch.cursor();
 
     while cursor.key_valid(batch) {
@@ -1134,6 +1500,6 @@ mod tests {
     #[mz_ore::test]
     fn test_compute_event_size() {
         // This could be a static assertion, but we don't use those yet in this crate.
-        assert_eq!(48, std::mem::size_of::<ComputeEvent>())
+        assert_eq!(56, std::mem::size_of::<ComputeEvent>())
     }
 }

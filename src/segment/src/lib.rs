@@ -82,6 +82,23 @@ impl Client {
         Client { client_side, tx }
     }
 
+    /// Creates a new dummy client that doesn't report anything but still
+    /// accepts updates.
+    pub fn new_dummy_client() -> Client {
+        let (tx, mut rx) = mpsc::channel(MAX_PENDING_EVENTS);
+
+        mz_ore::task::spawn(|| "segment_send_task", async move {
+            while let Some(msg) = rx.recv().await {
+                tracing::debug!(?msg, "segment update");
+            }
+        });
+
+        Client {
+            client_side: true,
+            tx,
+        }
+    }
+
     /// Sends a new [track event] to Segment.
     ///
     /// Delivery happens asynchronously on a background thread. It is best

@@ -15,6 +15,7 @@
 
 {% materialization source_table, adapter='materialize' %}
   {%- set identifier = model['alias'] -%}
+  {%- set force_recreate = config.get('force_recreate', False) -%}
   {%- set old_relation = adapter.get_relation(identifier=identifier,
                                               schema=schema,
                                               database=database) -%}
@@ -23,8 +24,20 @@
                                                 database=database,
                                                 type='table') -%}
 
+  {{ validate_source_table_schema_isolation(schema, database) }}
+
   {% if old_relation %}
-    {{ adapter.drop_relation(old_relation) }}
+    {% if var('strict_mode', False) and not force_recreate %}
+      {# In strict_mode, skip recreation if relation exists (unless force_recreate is set) #}
+      {{ log("Relation " ~ old_relation ~ " already exists, skipping creation. Set force_recreate=True to recreate.", info=True) }}
+      {% call statement('main') -%}
+        SELECT 1
+      {%- endcall %}
+      {{ return({'relations': [target_relation]}) }}
+    {% else %}
+      {# Not in strict_mode or force_recreate is set - drop and recreate #}
+      {{ adapter.drop_relation(old_relation) }}
+    {% endif %}
   {% endif %}
 
   {{ run_hooks(pre_hooks, inside_transaction=False) }}

@@ -25,7 +25,7 @@ use maplit::btreemap;
 use mz_ore::str::StrExt;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
-use toml_edit::{value, Document};
+use toml_edit::{DocumentMut, value};
 
 #[cfg(target_os = "macos")]
 use security_framework::passwords::{get_generic_password, set_generic_password};
@@ -70,7 +70,7 @@ static GLOBAL_PARAMS: LazyLock<BTreeMap<&'static str, GlobalParam>> = LazyLock::
 pub struct ConfigFile {
     path: PathBuf,
     parsed: TomlConfigFile,
-    editable: Document,
+    editable: DocumentMut,
 }
 
 impl ConfigFile {
@@ -115,7 +115,7 @@ impl ConfigFile {
 
     /// Loads a profile from the configuration file.
     /// Panics if the profile is not found.
-    pub fn load_profile<'a>(&'a self, name: &'a str) -> Result<Profile, Error> {
+    pub fn load_profile<'a>(&'a self, name: &'a str) -> Result<Profile<'a>, Error> {
         match &self.parsed.profiles {
             Some(profiles) => match profiles.get(name) {
                 None => Err(Error::ProfileMissing(name.to_string())),
@@ -136,7 +136,11 @@ impl ConfigFile {
         let mut new_profile = toml_edit::Table::new();
 
         self.add_app_password(&mut new_profile, &name, profile.clone())?;
-        new_profile["region"] = value(profile.region.unwrap_or("aws/us-east-1".to_string()));
+        new_profile["region"] = value(
+            profile
+                .region
+                .unwrap_or_else(|| "aws/us-east-1".to_string()),
+        );
 
         if let Some(admin_endpoint) = profile.admin_endpoint {
             new_profile["admin-endpoint"] = value(admin_endpoint);
@@ -198,7 +202,7 @@ impl ConfigFile {
     }
 
     /// Removes a profile from the configuration file.
-    pub async fn remove_profile<'a>(&self, name: &str) -> Result<(), Error> {
+    pub async fn remove_profile(&self, name: &str) -> Result<(), Error> {
         let mut editable = self.editable.clone();
         let profiles = editable["profiles"]
             .as_table_mut()
@@ -257,7 +261,7 @@ impl ConfigFile {
         &'a self,
         name: &str,
         profile: &'a str,
-    ) -> Result<Option<&str>, Error> {
+    ) -> Result<Option<&'a str>, Error> {
         let profile = self.load_profile(profile)?;
         let value = (PROFILE_PARAMS[name].get)(profile.parsed);
 
@@ -396,7 +400,7 @@ impl Profile<'_> {
                                         return Ok(app_password);
                                     }
                                     Err(err) => {
-                                        return Err(Error::MacOsSecurityError(err.to_string()))
+                                        return Err(Error::MacOsSecurityError(err.to_string()));
                                     }
                                 }
                             }

@@ -10,18 +10,20 @@
 use std::collections::BTreeSet;
 
 use anyhow::bail;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::SqlColumnType;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::any;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::ColumnType;
 
 use self::proto_my_sql_column_desc::Meta;
 
 include!(concat!(env!("OUT_DIR"), "/mz_mysql_util.rs"));
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlTableDesc {
     /// In MySQL the schema and database of a table are synonymous.
     pub schema_name: String,
@@ -32,11 +34,17 @@ pub struct MySqlTableDesc {
     /// The index of each column is based on its `ordinal_position`
     /// reported by the information_schema.columns table, which defines
     /// the order of column values when received in a row.
-    #[proptest(strategy = "proptest::collection::vec(any::<MySqlColumnDesc>(), 0..4)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::vec(any::<MySqlColumnDesc>(), 0..4)")
+    )]
     pub columns: Vec<MySqlColumnDesc>,
     /// Applicable keys for this table (i.e. primary key and unique
     /// constraints).
-    #[proptest(strategy = "proptest::collection::btree_set(any::<MySqlKeyDesc>(), 0..4)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::btree_set(any::<MySqlKeyDesc>(), 0..4)")
+    )]
     pub keys: BTreeSet<MySqlKeyDesc>,
 }
 
@@ -76,7 +84,11 @@ impl MySqlTableDesc {
     /// exceptions:
     /// - `self`'s columns are a prefix of `other`'s columns.
     /// - `self`'s keys are all present in `other`
-    pub fn determine_compatibility(&self, other: &MySqlTableDesc) -> Result<(), anyhow::Error> {
+    pub fn determine_compatibility(
+        &self,
+        other: &MySqlTableDesc,
+        binlog_full_metadata: bool,
+    ) -> Result<(), anyhow::Error> {
         if self == other {
             return Ok(());
         }
@@ -91,12 +103,42 @@ impl MySqlTableDesc {
             );
         }
 
-        // `columns` is ordered by the ordinal_position of each column in the table,
-        // so as long as `self.columns` is a compatible prefix of `other.columns`, we can
-        // ignore extra columns from `other.columns`.
-        let mut other_columns = other.columns.iter();
-        for self_column in &self.columns {
-            let other_column = other_columns.next().ok_or_else(|| {
+        // In the case that we don't have full binlog row metadata, `columns` is ordered by the
+        // ordinal position of each column in the table, so as long as `self.columns` is a
+        // compatible prefix of `other.columns`, we can ignore extra columns from `other.columns`.
+        //
+        // If we do have full metadata, then we can match columns by name and just check that all
+        // columns in `self.columns` are present and compatible with columns in `other.columns`.
+        for (i, self_column) in self.columns.iter().enumerate() {
+            if self_column.column_type.is_none() {
+                // This is an excluded column and can be ignored.
+                continue;
+            }
+            let wire_idx = if !binlog_full_metadata {
+                // No column name metadata, so we match by index.
+                (i < other.columns.len()).then_some(i)
+            } else {
+                // This means the row from the binlog has column name included in the metadata,
+                // so we can match on that instead of position.
+                other
+                    .columns
+                    .iter()
+                    .position(|oc| oc.name.as_str() == self_column.name.as_str())
+            };
+
+            let wire_idx = match wire_idx {
+                Some(idx) => idx,
+                None => {
+                    // We could not find a column in the incoming row that matches this descriptor column.
+                    // This is an error as the column is not ignored (ignored columns have already been skipped).
+                    return Err(anyhow::anyhow!(
+                        "column {} no longer present in table {}",
+                        self_column.name,
+                        self.name
+                    ));
+                }
+            };
+            let other_column = other.columns.get(wire_idx).ok_or_else(|| {
                 anyhow::anyhow!(
                     "column {} no longer present in table {}",
                     self_column.name,
@@ -111,7 +153,6 @@ impl MySqlTableDesc {
                 );
             }
         }
-
         // Our keys are all still present in exactly the same shape.
         // TODO: Implement a more relaxed key compatibility check:
         // We should check that for all keys that we know about there exists an upstream key whose
@@ -133,9 +174,13 @@ impl MySqlTableDesc {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlColumnMetaEnum {
-    #[proptest(strategy = "proptest::collection::vec(any::<String>(), 0..3)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::vec(any::<String>(), 0..3)")
+    )]
     pub values: Vec<String>,
 }
 
@@ -157,7 +202,8 @@ trait IsCompatible {
     fn is_compatible(&self, other: &Self) -> bool;
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum MySqlColumnMeta {
     /// The described column is an enum, with the given possible values.
     Enum(MySqlColumnMetaEnum),
@@ -169,6 +215,8 @@ pub enum MySqlColumnMeta {
     Date,
     /// The described column is a timestamp value with a set precision.
     Timestamp(u32),
+    /// The described column is a `bit` column, with the given possibly precision.
+    Bit(u32),
 }
 
 impl IsCompatible for Option<MySqlColumnMeta> {
@@ -180,12 +228,10 @@ impl IsCompatible for Option<MySqlColumnMeta> {
             (Some(MySqlColumnMeta::Enum(self_enum)), Some(MySqlColumnMeta::Enum(other_enum))) => {
                 // so as long as `self.values` is a compatible prefix of `other.values`, we can
                 // ignore extra values from `other.values`.
-                self_enum.values.len() <= other_enum.values.len()
-                    && self_enum
-                        .values
-                        .iter()
-                        .zip(other_enum.values.iter())
-                        .all(|(self_val, other_val)| self_val == other_val)
+                match other_enum.values.get(0..self_enum.values.len()) {
+                    Some(prefix) => self_enum.values == prefix,
+                    None => false,
+                }
             }
             (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,
             (Some(MySqlColumnMeta::Year), Some(MySqlColumnMeta::Year)) => true,
@@ -195,18 +241,22 @@ impl IsCompatible for Option<MySqlColumnMeta> {
                 Some(MySqlColumnMeta::Timestamp(precision)),
                 Some(MySqlColumnMeta::Timestamp(other_precision)),
             ) => precision <= other_precision,
+            // We always cast bit columns to u64's and the max precision of a bit column
+            // is 64 bits, so any bit column is always compatible with another.
+            (Some(MySqlColumnMeta::Bit(_)), Some(MySqlColumnMeta::Bit(_))) => true,
             _ => false,
         }
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlColumnDesc {
     /// The name of the column.
     pub name: String,
     /// The intended data type of this column within Materialize
     /// If this is None, the column is intended to be skipped within Materialize
-    pub column_type: Option<ColumnType>,
+    pub column_type: Option<SqlColumnType>,
     /// Optional metadata about the column that may be necessary for decoding
     pub meta: Option<MySqlColumnMeta>,
 }
@@ -226,6 +276,9 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                         precision: *precision,
                     }))
                 }
+                MySqlColumnMeta::Bit(precision) => Some(Meta::Bit(ProtoMySqlColumnMetaBit {
+                    precision: *precision,
+                })),
             }),
         }
     }
@@ -245,6 +298,7 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                     Meta::Year(_) => Some(Ok(MySqlColumnMeta::Year)),
                     Meta::Date(_) => Some(Ok(MySqlColumnMeta::Date)),
                     Meta::Timestamp(e) => Some(Ok(MySqlColumnMeta::Timestamp(e.precision))),
+                    Meta::Bit(e) => Some(Ok(MySqlColumnMeta::Bit(e.precision))),
                 })
                 .transpose()?,
         })
@@ -274,14 +328,18 @@ impl IsCompatible for MySqlColumnDesc {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlKeyDesc {
     /// The name of the index.
     pub name: String,
     /// Whether or not this key is the primary key.
     pub is_primary: bool,
     /// The columns that make up the key.
-    #[proptest(strategy = "proptest::collection::vec(any::<String>(), 0..4)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::vec(any::<String>(), 0..4)")
+    )]
     pub columns: Vec<String>,
 }
 

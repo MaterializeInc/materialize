@@ -16,19 +16,19 @@ from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
-prerequisites = ["zookeeper", "kafka", "schema-registry", "debezium", "materialized"]
+prerequisites = ["kafka", "schema-registry", "debezium", "materialized"]
 
 SERVICES = [
-    Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Debezium(),
+    Mz(app_password=""),
     Materialized(),
     Postgres(),
     SqlServer(),
@@ -38,12 +38,13 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
-
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_postgres(c: Composition) -> None:

@@ -12,5 +12,4 @@ description: Frontegg mock server.
 pre-image:
   - type: cargo-build
     bin: [mz-frontegg-mock]
-    bazel-bin: "@//src/frontegg-mock:mz_frontegg_mock_bin"
     strip: false

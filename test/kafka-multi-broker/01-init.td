@@ -13,6 +13,8 @@
 
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": "string" } ] }
 
+$ set-sql-timeout duration=60s
+
 $ kafka-create-topic topic=kafka-multi-broker replication-factor=2
 
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=1
@@ -26,12 +28,14 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=3
 
 > CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
+> BEGIN
 > CREATE SOURCE kafka_multi_broker
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-${testdrive.seed}')
 
 > CREATE TABLE kafka_multi_broker_tbl FROM SOURCE kafka_multi_broker (REFERENCE "testdrive-kafka-multi-broker-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=4
 {"f1": "02-01" }
@@ -47,6 +51,7 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=6
   );
 
 > CREATE SINK multi_broker_sink
+  IN CLUSTER quickstart
   FROM kafka_multi_broker_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

@@ -466,13 +466,13 @@ SELECT round((SELECT * FROM nums));
 ----
 NULL
 
-query error db error: ERROR: function round\(double precision, integer\) does not exist
+query error function round\(double precision, integer\) does not exist
 SELECT round((SELECT * FROM nums), 2)
 
-query error db error: ERROR: function round\(double precision, double precision\) does not exist
+query error function round\(double precision, double precision\) does not exist
 SELECT round((SELECT * FROM nums), (SELECT * FROM nums))
 
-query error db error: ERROR: function round\(numeric, double precision\) does not exist
+query error function round\(numeric, double precision\) does not exist
 SELECT round(5.0, (SELECT * FROM nums))
 
 query R
@@ -480,22 +480,22 @@ SELECT round(5.0, CAST ((SELECT * FROM nums) AS integer))
 ----
 NULL
 
-query error db error: ERROR: function round\(double precision, integer\) does not exist
+query error function round\(double precision, integer\) does not exist
 SELECT round(CAST (5.0 AS double precision), 3)
 
-query error db error: ERROR: function round\(double precision, integer\) does not exist
+query error function round\(double precision, integer\) does not exist
 SELECT round(CAST (5.0 AS float), 3)
 
-query error db error: ERROR: function round\(boolean, integer\) does not exist
+query error function round\(boolean, integer\) does not exist
 SELECT round(true, 3)
 
 query error
 SELECT round(true)
 
-query error db error: ERROR: function round\(double precision, numeric\) does not exist
+query error function round\(double precision, numeric\) does not exist
 SELECT round(CAST (5.0 AS float), 3.0)
 
-query error db error: ERROR: function round\(double precision, double precision\) does not exist
+query error function round\(double precision, double precision\) does not exist
 SELECT round(CAST (5.0 AS float), CAST (3.0 AS float))
 
 query R
@@ -573,7 +573,7 @@ SELECT trunc(1.5678)
 statement ok
 DROP TABLE nums
 
-query error db error: ERROR: function trunc\(boolean\) does not exist
+query error function trunc\(boolean\) does not exist
 SELECT trunc(true)
 
 query I
@@ -951,14 +951,14 @@ SELECT
 1 1 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   x1 >> x2 << x3 as r1,
   y1 << y2 >> y3 as r2
 FROM nums
 ----
 Explained Query:
   Project (#9, #10) // { arity: 2 }
-    Map (((#0 >> smallint_to_integer(#1)) << smallint_to_integer(#2)), ((#3 << #4) >> #5)) // { arity: 11 }
+    Map (((#0{x1} >> smallint_to_integer(#1{x2})) << smallint_to_integer(#2{x3})), ((#3{y1} << #4{y2}) >> #5{y3})) // { arity: 11 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
 Source materialize.public.nums
@@ -986,14 +986,14 @@ SELECT
 8 8 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   x1 >> x2 & x3 as r1,
   y1 << y2 & y3 as r2
 FROM nums
 ----
 Explained Query:
   Project (#9, #10) // { arity: 2 }
-    Map (((#0 >> smallint_to_integer(#1)) & #2), ((#3 << #4) & #5)) // { arity: 11 }
+    Map (((#0{x1} >> smallint_to_integer(#1{x2})) & #2{x3}), ((#3{y1} << #4{y2}) & #5{y3})) // { arity: 11 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
 Source materialize.public.nums
@@ -1021,7 +1021,7 @@ SELECT
 0 0 1
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   x1 & x2 | x3 as r1,
   y1 & y2 | y3 as r2,
   z1 & z2 | z3 as r3,
@@ -1030,7 +1030,7 @@ FROM nums
 ----
 Explained Query:
   Project (#9..=#12) // { arity: 4 }
-    Map (((#0 & #1) | #2), ((#3 & #4) | #5), ((#6 & #7) | #8), (integer_to_bigint((smallint_to_integer(#0) & #4)) | #8)) // { arity: 13 }
+    Map (((#0{x1} & #1{x2}) | #2{x3}), ((#3{y1} & #4{y2}) | #5{y3}), ((#6{z1} & #7{z2}) | #8{z3}), (integer_to_bigint((smallint_to_integer(#0{x1}) & #4{y2})) | #8{z3})) // { arity: 13 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
 Source materialize.public.nums
@@ -1058,7 +1058,7 @@ SELECT
 0 0 1
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   x1 # x2 & x3 as r1,
   y1 # y2 & y3 as r2,
   z1 # z2 & z3 as r3,
@@ -1067,7 +1067,7 @@ FROM nums
 ----
 Explained Query:
   Project (#9..=#12) // { arity: 4 }
-    Map (((#0 # #1) & #2), ((#3 # #4) & #5), ((#6 # #7) & #8), (integer_to_bigint((smallint_to_integer(#0) # #4)) & #8)) // { arity: 13 }
+    Map (((#0{x1} # #1{x2}) & #2{x3}), ((#3{y1} # #4{y2}) & #5{y3}), ((#6{z1} # #7{z2}) & #8{z3}), (integer_to_bigint((smallint_to_integer(#0{x1}) # #4{y2})) & #8{z3})) // { arity: 13 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
 Source materialize.public.nums
@@ -1095,7 +1095,7 @@ SELECT
 1 1 0
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT
   x1 # x2 | x3 as r1,
   y1 # y2 | y3 as r2,
   z1 # z2 | z3 as r3,
@@ -1104,7 +1104,7 @@ FROM nums
 ----
 Explained Query:
   Project (#9..=#12) // { arity: 4 }
-    Map (((#0 # #1) | #2), ((#3 # #4) | #5), ((#6 # #7) | #8), (integer_to_bigint((smallint_to_integer(#0) # #4)) | #8)) // { arity: 13 }
+    Map (((#0{x1} # #1{x2}) | #2{x3}), ((#3{y1} # #4{y2}) | #5{y3}), ((#6{z1} # #7{z2}) | #8{z3}), (integer_to_bigint((smallint_to_integer(#0{x1}) # #4{y2})) | #8{z3})) // { arity: 13 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
 Source materialize.public.nums

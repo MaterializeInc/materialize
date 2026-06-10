@@ -13,18 +13,15 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use mz_ore::now::NowFn;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
-use proptest_derive::Arbitrary;
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, SqlScalarType};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+use crate::AlterCompatible;
 use crate::sources::AlterError;
 use crate::sources::{MzOffset, SourceConnection};
-use crate::AlterCompatible;
-
-use super::SourceExportDetails;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -42,7 +39,7 @@ pub enum Event<F: IntoIterator, D> {
     Message(F::Item, D),
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LoadGeneratorSourceConnection {
     pub load_generator: LoadGenerator,
     pub tick_micros: Option<u64>,
@@ -52,7 +49,7 @@ pub struct LoadGeneratorSourceConnection {
 
 pub static LOAD_GEN_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
-        .with_column("offset", ScalarType::UInt64.nullable(true))
+        .with_column("offset", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
 
@@ -70,7 +67,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
             LoadGenerator::KeyValue(_) => {
                 // `"key"` is overridden by the key_envelope in planning.
                 RelationDesc::builder()
-                    .with_column("key", ScalarType::UInt64.nullable(false))
+                    .with_column("key", SqlScalarType::UInt64.nullable(false))
                     .finish()
             }
             _ => RelationDesc::empty(),
@@ -83,13 +80,13 @@ impl SourceConnection for LoadGeneratorSourceConnection {
             LoadGenerator::Clock => RelationDesc::builder()
                 .with_column(
                     "time",
-                    ScalarType::TimestampTz { precision: None }.nullable(false),
+                    SqlScalarType::TimestampTz { precision: None }.nullable(false),
                 )
                 .finish(),
             LoadGenerator::Datums => {
-                let mut desc =
-                    RelationDesc::builder().with_column("rowid", ScalarType::Int64.nullable(false));
-                let typs = ScalarType::enumerate();
+                let mut desc = RelationDesc::builder()
+                    .with_column("rowid", SqlScalarType::Int64.nullable(false));
+                let typs = SqlScalarType::enumerate();
                 let mut names = BTreeSet::new();
                 for typ in typs {
                     // Cut out variant information from the debug print.
@@ -109,17 +106,17 @@ impl SourceConnection for LoadGeneratorSourceConnection {
                 desc.finish()
             }
             LoadGenerator::Counter { .. } => RelationDesc::builder()
-                .with_column("counter", ScalarType::Int64.nullable(false))
+                .with_column("counter", SqlScalarType::Int64.nullable(false))
                 .finish(),
             LoadGenerator::Marketing => RelationDesc::empty(),
             LoadGenerator::Tpch { .. } => RelationDesc::empty(),
             LoadGenerator::KeyValue(KeyValueLoadGenerator { include_offset, .. }) => {
                 let mut desc = RelationDesc::builder()
-                    .with_column("partition", ScalarType::UInt64.nullable(false))
-                    .with_column("value", ScalarType::Bytes.nullable(false));
+                    .with_column("partition", SqlScalarType::UInt64.nullable(false))
+                    .with_column("value", SqlScalarType::Bytes.nullable(false));
 
                 if let Some(offset_name) = include_offset.as_deref() {
-                    desc = desc.with_column(offset_name, ScalarType::UInt64.nullable(false));
+                    desc = desc.with_column(offset_name, SqlScalarType::UInt64.nullable(false));
                 }
                 desc.finish()
             }
@@ -130,48 +127,22 @@ impl SourceConnection for LoadGeneratorSourceConnection {
         LOAD_GEN_PROGRESS_DESC.clone()
     }
 
-    fn connection_id(&self) -> Option<GlobalId> {
+    fn connection_id(&self) -> Option<CatalogItemId> {
         None
     }
 
-    // Some load-gen types output to their primary collection while
-    // others do not.
-    fn primary_export_details(&self) -> SourceExportDetails {
-        match &self.load_generator {
-            LoadGenerator::Auction => SourceExportDetails::None,
-            LoadGenerator::Clock => {
-                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
-                    output: LoadGeneratorOutput::Default,
-                })
-            }
-            LoadGenerator::Datums => {
-                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
-                    output: LoadGeneratorOutput::Default,
-                })
-            }
-            LoadGenerator::Counter { .. } => {
-                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
-                    output: LoadGeneratorOutput::Default,
-                })
-            }
-            LoadGenerator::Marketing => SourceExportDetails::None,
-            LoadGenerator::Tpch { .. } => SourceExportDetails::None,
-            LoadGenerator::KeyValue(_) => {
-                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
-                    output: LoadGeneratorOutput::Default,
-                })
-            }
-        }
+    fn supports_read_only(&self) -> bool {
+        true
     }
 
-    fn supports_read_only(&self) -> bool {
+    fn prefers_single_replica(&self) -> bool {
         false
     }
 }
 
 impl crate::AlterCompatible for LoadGeneratorSourceConnection {}
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
     Clock,
@@ -196,6 +167,8 @@ pub enum LoadGenerator {
 pub const LOAD_GENERATOR_DATABASE_NAME: &str = "mz_load_generators";
 
 impl LoadGenerator {
+    /// Must be kept in-sync with the same mapping on the `LoadGenerator` enum defined in
+    /// src/sql-parser/src/ast/defs/ddl.rs.
     pub fn schema_name(&self) -> &'static str {
         match self {
             LoadGenerator::Counter { .. } => "counter",
@@ -215,8 +188,8 @@ impl LoadGenerator {
                 (
                     "organizations",
                     RelationDesc::builder()
-                        .with_column("id", ScalarType::Int64.nullable(false))
-                        .with_column("name", ScalarType::String.nullable(false))
+                        .with_column("id", SqlScalarType::Int64.nullable(false))
+                        .with_column("name", SqlScalarType::String.nullable(false))
                         .with_key(vec![0])
                         .finish(),
                     LoadGeneratorOutput::Auction(AuctionView::Organizations),
@@ -224,9 +197,9 @@ impl LoadGenerator {
                 (
                     "users",
                     RelationDesc::builder()
-                        .with_column("id", ScalarType::Int64.nullable(false))
-                        .with_column("org_id", ScalarType::Int64.nullable(false))
-                        .with_column("name", ScalarType::String.nullable(false))
+                        .with_column("id", SqlScalarType::Int64.nullable(false))
+                        .with_column("org_id", SqlScalarType::Int64.nullable(false))
+                        .with_column("name", SqlScalarType::String.nullable(false))
                         .with_key(vec![0])
                         .finish(),
                     LoadGeneratorOutput::Auction(AuctionView::Users),
@@ -234,9 +207,9 @@ impl LoadGenerator {
                 (
                     "accounts",
                     RelationDesc::builder()
-                        .with_column("id", ScalarType::Int64.nullable(false))
-                        .with_column("org_id", ScalarType::Int64.nullable(false))
-                        .with_column("balance", ScalarType::Int64.nullable(false))
+                        .with_column("id", SqlScalarType::Int64.nullable(false))
+                        .with_column("org_id", SqlScalarType::Int64.nullable(false))
+                        .with_column("balance", SqlScalarType::Int64.nullable(false))
                         .with_key(vec![0])
                         .finish(),
                     LoadGeneratorOutput::Auction(AuctionView::Accounts),
@@ -244,12 +217,12 @@ impl LoadGenerator {
                 (
                     "auctions",
                     RelationDesc::builder()
-                        .with_column("id", ScalarType::Int64.nullable(false))
-                        .with_column("seller", ScalarType::Int64.nullable(false))
-                        .with_column("item", ScalarType::String.nullable(false))
+                        .with_column("id", SqlScalarType::Int64.nullable(false))
+                        .with_column("seller", SqlScalarType::Int64.nullable(false))
+                        .with_column("item", SqlScalarType::String.nullable(false))
                         .with_column(
                             "end_time",
-                            ScalarType::TimestampTz { precision: None }.nullable(false),
+                            SqlScalarType::TimestampTz { precision: None }.nullable(false),
                         )
                         .with_key(vec![0])
                         .finish(),
@@ -258,13 +231,13 @@ impl LoadGenerator {
                 (
                     "bids",
                     RelationDesc::builder()
-                        .with_column("id", ScalarType::Int64.nullable(false))
-                        .with_column("buyer", ScalarType::Int64.nullable(false))
-                        .with_column("auction_id", ScalarType::Int64.nullable(false))
-                        .with_column("amount", ScalarType::Int32.nullable(false))
+                        .with_column("id", SqlScalarType::Int64.nullable(false))
+                        .with_column("buyer", SqlScalarType::Int64.nullable(false))
+                        .with_column("auction_id", SqlScalarType::Int64.nullable(false))
+                        .with_column("amount", SqlScalarType::Int32.nullable(false))
                         .with_column(
                             "bid_time",
-                            ScalarType::TimestampTz { precision: None }.nullable(false),
+                            SqlScalarType::TimestampTz { precision: None }.nullable(false),
                         )
                         .with_key(vec![0])
                         .finish(),
@@ -278,9 +251,9 @@ impl LoadGenerator {
                     (
                         "customers",
                         RelationDesc::builder()
-                            .with_column("id", ScalarType::Int64.nullable(false))
-                            .with_column("email", ScalarType::String.nullable(false))
-                            .with_column("income", ScalarType::Int64.nullable(false))
+                            .with_column("id", SqlScalarType::Int64.nullable(false))
+                            .with_column("email", SqlScalarType::String.nullable(false))
+                            .with_column("income", SqlScalarType::Int64.nullable(false))
                             .with_key(vec![0])
                             .finish(),
                         LoadGeneratorOutput::Marketing(MarketingView::Customers),
@@ -288,12 +261,12 @@ impl LoadGenerator {
                     (
                         "impressions",
                         RelationDesc::builder()
-                            .with_column("id", ScalarType::Int64.nullable(false))
-                            .with_column("customer_id", ScalarType::Int64.nullable(false))
-                            .with_column("campaign_id", ScalarType::Int64.nullable(false))
+                            .with_column("id", SqlScalarType::Int64.nullable(false))
+                            .with_column("customer_id", SqlScalarType::Int64.nullable(false))
+                            .with_column("campaign_id", SqlScalarType::Int64.nullable(false))
                             .with_column(
                                 "impression_time",
-                                ScalarType::TimestampTz { precision: None }.nullable(false),
+                                SqlScalarType::TimestampTz { precision: None }.nullable(false),
                             )
                             .with_key(vec![0])
                             .finish(),
@@ -302,10 +275,10 @@ impl LoadGenerator {
                     (
                         "clicks",
                         RelationDesc::builder()
-                            .with_column("impression_id", ScalarType::Int64.nullable(false))
+                            .with_column("impression_id", SqlScalarType::Int64.nullable(false))
                             .with_column(
                                 "click_time",
-                                ScalarType::TimestampTz { precision: None }.nullable(false),
+                                SqlScalarType::TimestampTz { precision: None }.nullable(false),
                             )
                             .finish(),
                         LoadGeneratorOutput::Marketing(MarketingView::Clicks),
@@ -313,17 +286,17 @@ impl LoadGenerator {
                     (
                         "leads",
                         RelationDesc::builder()
-                            .with_column("id", ScalarType::Int64.nullable(false))
-                            .with_column("customer_id", ScalarType::Int64.nullable(false))
+                            .with_column("id", SqlScalarType::Int64.nullable(false))
+                            .with_column("customer_id", SqlScalarType::Int64.nullable(false))
                             .with_column(
                                 "created_at",
-                                ScalarType::TimestampTz { precision: None }.nullable(false),
+                                SqlScalarType::TimestampTz { precision: None }.nullable(false),
                             )
                             .with_column(
                                 "converted_at",
-                                ScalarType::TimestampTz { precision: None }.nullable(true),
+                                SqlScalarType::TimestampTz { precision: None }.nullable(true),
                             )
-                            .with_column("conversion_amount", ScalarType::Int64.nullable(true))
+                            .with_column("conversion_amount", SqlScalarType::Int64.nullable(true))
                             .with_key(vec![0])
                             .finish(),
                         LoadGeneratorOutput::Marketing(MarketingView::Leads),
@@ -331,13 +304,13 @@ impl LoadGenerator {
                     (
                         "coupons",
                         RelationDesc::builder()
-                            .with_column("id", ScalarType::Int64.nullable(false))
-                            .with_column("lead_id", ScalarType::Int64.nullable(false))
+                            .with_column("id", SqlScalarType::Int64.nullable(false))
+                            .with_column("lead_id", SqlScalarType::Int64.nullable(false))
                             .with_column(
                                 "created_at",
-                                ScalarType::TimestampTz { precision: None }.nullable(false),
+                                SqlScalarType::TimestampTz { precision: None }.nullable(false),
                             )
-                            .with_column("amount", ScalarType::Int64.nullable(false))
+                            .with_column("amount", SqlScalarType::Int64.nullable(false))
                             .with_key(vec![0])
                             .finish(),
                         LoadGeneratorOutput::Marketing(MarketingView::Coupons),
@@ -345,13 +318,13 @@ impl LoadGenerator {
                     (
                         "conversion_predictions",
                         RelationDesc::builder()
-                            .with_column("lead_id", ScalarType::Int64.nullable(false))
-                            .with_column("experiment_bucket", ScalarType::String.nullable(false))
+                            .with_column("lead_id", SqlScalarType::Int64.nullable(false))
+                            .with_column("experiment_bucket", SqlScalarType::String.nullable(false))
                             .with_column(
                                 "predicted_at",
-                                ScalarType::TimestampTz { precision: None }.nullable(false),
+                                SqlScalarType::TimestampTz { precision: None }.nullable(false),
                             )
-                            .with_column("score", ScalarType::Float64.nullable(false))
+                            .with_column("score", SqlScalarType::Float64.nullable(false))
                             .finish(),
                         LoadGeneratorOutput::Marketing(MarketingView::ConversionPredictions),
                     ),
@@ -359,8 +332,8 @@ impl LoadGenerator {
             }
             LoadGenerator::Datums => vec![],
             LoadGenerator::Tpch { .. } => {
-                let identifier = ScalarType::Int64.nullable(false);
-                let decimal = ScalarType::Numeric {
+                let identifier = SqlScalarType::Int64.nullable(false);
+                let decimal = SqlScalarType::Numeric {
                     max_scale: Some(NumericMaxScale::try_from(2i64).unwrap()),
                 }
                 .nullable(false);
@@ -369,12 +342,12 @@ impl LoadGenerator {
                         "supplier",
                         RelationDesc::builder()
                             .with_column("s_suppkey", identifier.clone())
-                            .with_column("s_name", ScalarType::String.nullable(false))
-                            .with_column("s_address", ScalarType::String.nullable(false))
+                            .with_column("s_name", SqlScalarType::String.nullable(false))
+                            .with_column("s_address", SqlScalarType::String.nullable(false))
                             .with_column("s_nationkey", identifier.clone())
-                            .with_column("s_phone", ScalarType::String.nullable(false))
+                            .with_column("s_phone", SqlScalarType::String.nullable(false))
                             .with_column("s_acctbal", decimal.clone())
-                            .with_column("s_comment", ScalarType::String.nullable(false))
+                            .with_column("s_comment", SqlScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
                         LoadGeneratorOutput::Tpch(TpchView::Supplier),
@@ -383,14 +356,14 @@ impl LoadGenerator {
                         "part",
                         RelationDesc::builder()
                             .with_column("p_partkey", identifier.clone())
-                            .with_column("p_name", ScalarType::String.nullable(false))
-                            .with_column("p_mfgr", ScalarType::String.nullable(false))
-                            .with_column("p_brand", ScalarType::String.nullable(false))
-                            .with_column("p_type", ScalarType::String.nullable(false))
-                            .with_column("p_size", ScalarType::Int32.nullable(false))
-                            .with_column("p_container", ScalarType::String.nullable(false))
+                            .with_column("p_name", SqlScalarType::String.nullable(false))
+                            .with_column("p_mfgr", SqlScalarType::String.nullable(false))
+                            .with_column("p_brand", SqlScalarType::String.nullable(false))
+                            .with_column("p_type", SqlScalarType::String.nullable(false))
+                            .with_column("p_size", SqlScalarType::Int32.nullable(false))
+                            .with_column("p_container", SqlScalarType::String.nullable(false))
                             .with_column("p_retailprice", decimal.clone())
-                            .with_column("p_comment", ScalarType::String.nullable(false))
+                            .with_column("p_comment", SqlScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
                         LoadGeneratorOutput::Tpch(TpchView::Part),
@@ -400,9 +373,9 @@ impl LoadGenerator {
                         RelationDesc::builder()
                             .with_column("ps_partkey", identifier.clone())
                             .with_column("ps_suppkey", identifier.clone())
-                            .with_column("ps_availqty", ScalarType::Int32.nullable(false))
+                            .with_column("ps_availqty", SqlScalarType::Int32.nullable(false))
                             .with_column("ps_supplycost", decimal.clone())
-                            .with_column("ps_comment", ScalarType::String.nullable(false))
+                            .with_column("ps_comment", SqlScalarType::String.nullable(false))
                             .with_key(vec![0, 1])
                             .finish(),
                         LoadGeneratorOutput::Tpch(TpchView::Partsupp),
@@ -411,13 +384,13 @@ impl LoadGenerator {
                         "customer",
                         RelationDesc::builder()
                             .with_column("c_custkey", identifier.clone())
-                            .with_column("c_name", ScalarType::String.nullable(false))
-                            .with_column("c_address", ScalarType::String.nullable(false))
+                            .with_column("c_name", SqlScalarType::String.nullable(false))
+                            .with_column("c_address", SqlScalarType::String.nullable(false))
                             .with_column("c_nationkey", identifier.clone())
-                            .with_column("c_phone", ScalarType::String.nullable(false))
+                            .with_column("c_phone", SqlScalarType::String.nullable(false))
                             .with_column("c_acctbal", decimal.clone())
-                            .with_column("c_mktsegment", ScalarType::String.nullable(false))
-                            .with_column("c_comment", ScalarType::String.nullable(false))
+                            .with_column("c_mktsegment", SqlScalarType::String.nullable(false))
+                            .with_column("c_comment", SqlScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
                         LoadGeneratorOutput::Tpch(TpchView::Customer),
@@ -427,13 +400,13 @@ impl LoadGenerator {
                         RelationDesc::builder()
                             .with_column("o_orderkey", identifier.clone())
                             .with_column("o_custkey", identifier.clone())
-                            .with_column("o_orderstatus", ScalarType::String.nullable(false))
+                            .with_column("o_orderstatus", SqlScalarType::String.nullable(false))
                             .with_column("o_totalprice", decimal.clone())
-                            .with_column("o_orderdate", ScalarType::Date.nullable(false))
-                            .with_column("o_orderpriority", ScalarType::String.nullable(false))
-                            .with_column("o_clerk", ScalarType::String.nullable(false))
-                            .with_column("o_shippriority", ScalarType::Int32.nullable(false))
-                            .with_column("o_comment", ScalarType::String.nullable(false))
+                            .with_column("o_orderdate", SqlScalarType::Date.nullable(false))
+                            .with_column("o_orderpriority", SqlScalarType::String.nullable(false))
+                            .with_column("o_clerk", SqlScalarType::String.nullable(false))
+                            .with_column("o_shippriority", SqlScalarType::Int32.nullable(false))
+                            .with_column("o_comment", SqlScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
                         LoadGeneratorOutput::Tpch(TpchView::Orders),
@@ -444,19 +417,19 @@ impl LoadGenerator {
                             .with_column("l_orderkey", identifier.clone())
                             .with_column("l_partkey", identifier.clone())
                             .with_column("l_suppkey", identifier.clone())
-                            .with_column("l_linenumber", ScalarType::Int32.nullable(false))
+                            .with_column("l_linenumber", SqlScalarType::Int32.nullable(false))
                             .with_column("l_quantity", decimal.clone())
                             .with_column("l_extendedprice", decimal.clone())
                             .with_column("l_discount", decimal.clone())
                             .with_column("l_tax", decimal)
-                            .with_column("l_returnflag", ScalarType::String.nullable(false))
-                            .with_column("l_linestatus", ScalarType::String.nullable(false))
-                            .with_column("l_shipdate", ScalarType::Date.nullable(false))
-                            .with_column("l_commitdate", ScalarType::Date.nullable(false))
-                            .with_column("l_receiptdate", ScalarType::Date.nullable(false))
-                            .with_column("l_shipinstruct", ScalarType::String.nullable(false))
-                            .with_column("l_shipmode", ScalarType::String.nullable(false))
-                            .with_column("l_comment", ScalarType::String.nullable(false))
+                            .with_column("l_returnflag", SqlScalarType::String.nullable(false))
+                            .with_column("l_linestatus", SqlScalarType::String.nullable(false))
+                            .with_column("l_shipdate", SqlScalarType::Date.nullable(false))
+                            .with_column("l_commitdate", SqlScalarType::Date.nullable(false))
+                            .with_column("l_receiptdate", SqlScalarType::Date.nullable(false))
+                            .with_column("l_shipinstruct", SqlScalarType::String.nullable(false))
+                            .with_column("l_shipmode", SqlScalarType::String.nullable(false))
+                            .with_column("l_comment", SqlScalarType::String.nullable(false))
                             .with_key(vec![0, 3])
                             .finish(),
                         LoadGeneratorOutput::Tpch(TpchView::Lineitem),
@@ -465,9 +438,9 @@ impl LoadGenerator {
                         "nation",
                         RelationDesc::builder()
                             .with_column("n_nationkey", identifier.clone())
-                            .with_column("n_name", ScalarType::String.nullable(false))
+                            .with_column("n_name", SqlScalarType::String.nullable(false))
                             .with_column("n_regionkey", identifier.clone())
-                            .with_column("n_comment", ScalarType::String.nullable(false))
+                            .with_column("n_comment", SqlScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
                         LoadGeneratorOutput::Tpch(TpchView::Nation),
@@ -476,8 +449,8 @@ impl LoadGenerator {
                         "region",
                         RelationDesc::builder()
                             .with_column("r_regionkey", identifier)
-                            .with_column("r_name", ScalarType::String.nullable(false))
-                            .with_column("r_comment", ScalarType::String.nullable(false))
+                            .with_column("r_name", SqlScalarType::String.nullable(false))
+                            .with_column("r_comment", SqlScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
                         LoadGeneratorOutput::Tpch(TpchView::Region),
@@ -507,7 +480,17 @@ impl LoadGenerator {
 // Used to identify a view of a load-generator source
 // such that the source dataflow can output data to the correct
 // data output for a source-export using this view
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord
+)]
 pub enum LoadGeneratorOutput {
     // Used for outputting to the primary source output
     Default,
@@ -516,7 +499,17 @@ pub enum LoadGeneratorOutput {
     Tpch(TpchView),
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord
+)]
 pub enum AuctionView {
     Organizations,
     Users,
@@ -525,7 +518,17 @@ pub enum AuctionView {
     Bids,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord
+)]
 pub enum MarketingView {
     Customers,
     Impressions,
@@ -535,7 +538,17 @@ pub enum MarketingView {
     ConversionPredictions,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord
+)]
 pub enum TpchView {
     Supplier,
     Part,
@@ -711,35 +724,19 @@ impl RustType<ProtoLoadGeneratorOutput> for LoadGeneratorOutput {
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoLoadGeneratorOutput::kind",
-                ))
+                ));
             }
         })
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LoadGeneratorSourceExportDetails {
     pub output: LoadGeneratorOutput,
 }
 
-impl RustType<ProtoLoadGeneratorSourceExportDetails> for LoadGeneratorSourceExportDetails {
-    fn into_proto(&self) -> ProtoLoadGeneratorSourceExportDetails {
-        ProtoLoadGeneratorSourceExportDetails {
-            output: self.output.into_proto().into(),
-        }
-    }
-
-    fn from_proto(proto: ProtoLoadGeneratorSourceExportDetails) -> Result<Self, TryFromProtoError> {
-        Ok(LoadGeneratorSourceExportDetails {
-            output: proto
-                .output
-                .into_rust_if_some("ProtoLoadGeneratorSourceExportDetails::output")?,
-        })
-    }
-}
-
 impl AlterCompatible for LoadGeneratorSourceExportDetails {
-    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let Self { output } = self;
         if output != &other.output {
             tracing::warn!(
@@ -760,81 +757,10 @@ pub trait Generator {
         now: NowFn,
         seed: Option<u64>,
         resume_offset: MzOffset,
-    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>>;
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>>;
 }
 
-impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {
-    fn into_proto(&self) -> ProtoLoadGeneratorSourceConnection {
-        use proto_load_generator_source_connection::Kind;
-        ProtoLoadGeneratorSourceConnection {
-            kind: Some(match &self.load_generator {
-                LoadGenerator::Auction => Kind::Auction(()),
-                LoadGenerator::Clock => Kind::Clock(()),
-                LoadGenerator::Counter { max_cardinality } => {
-                    Kind::Counter(ProtoCounterLoadGenerator {
-                        max_cardinality: *max_cardinality,
-                    })
-                }
-                LoadGenerator::Marketing => Kind::Marketing(()),
-                LoadGenerator::Tpch {
-                    count_supplier,
-                    count_part,
-                    count_customer,
-                    count_orders,
-                    count_clerk,
-                } => Kind::Tpch(ProtoTpchLoadGenerator {
-                    count_supplier: *count_supplier,
-                    count_part: *count_part,
-                    count_customer: *count_customer,
-                    count_orders: *count_orders,
-                    count_clerk: *count_clerk,
-                }),
-                LoadGenerator::Datums => Kind::Datums(()),
-                LoadGenerator::KeyValue(kv) => Kind::KeyValue(kv.into_proto()),
-            }),
-            tick_micros: self.tick_micros,
-            as_of: self.as_of,
-            up_to: self.up_to,
-        }
-    }
-
-    fn from_proto(proto: ProtoLoadGeneratorSourceConnection) -> Result<Self, TryFromProtoError> {
-        use proto_load_generator_source_connection::Kind;
-        let kind = proto.kind.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoLoadGeneratorSourceConnection::kind")
-        })?;
-        Ok(LoadGeneratorSourceConnection {
-            load_generator: match kind {
-                Kind::Auction(()) => LoadGenerator::Auction,
-                Kind::Clock(()) => LoadGenerator::Clock,
-                Kind::Counter(ProtoCounterLoadGenerator { max_cardinality }) => {
-                    LoadGenerator::Counter { max_cardinality }
-                }
-                Kind::Marketing(()) => LoadGenerator::Marketing,
-                Kind::Tpch(ProtoTpchLoadGenerator {
-                    count_supplier,
-                    count_part,
-                    count_customer,
-                    count_orders,
-                    count_clerk,
-                }) => LoadGenerator::Tpch {
-                    count_supplier,
-                    count_part,
-                    count_customer,
-                    count_orders,
-                    count_clerk,
-                },
-                Kind::Datums(()) => LoadGenerator::Datums,
-                Kind::KeyValue(kv) => LoadGenerator::KeyValue(kv.into_rust()?),
-            },
-            tick_micros: proto.tick_micros,
-            as_of: proto.as_of,
-            up_to: proto.up_to,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub struct KeyValueLoadGenerator {
     /// The keyspace of the source.
     pub keys: u64,
@@ -879,35 +805,5 @@ impl KeyValueLoadGenerator {
         } else {
             self.snapshot_rounds
         }
-    }
-}
-
-impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
-    fn into_proto(&self) -> ProtoKeyValueLoadGenerator {
-        ProtoKeyValueLoadGenerator {
-            keys: self.keys,
-            snapshot_rounds: self.snapshot_rounds,
-            transactional_snapshot: self.transactional_snapshot,
-            value_size: self.value_size,
-            partitions: self.partitions,
-            tick_interval: self.tick_interval.into_proto(),
-            batch_size: self.batch_size,
-            seed: self.seed,
-            include_offset: self.include_offset.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKeyValueLoadGenerator) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            keys: proto.keys,
-            snapshot_rounds: proto.snapshot_rounds,
-            transactional_snapshot: proto.transactional_snapshot,
-            value_size: proto.value_size,
-            partitions: proto.partitions,
-            tick_interval: proto.tick_interval.into_rust()?,
-            batch_size: proto.batch_size,
-            seed: proto.seed,
-            include_offset: proto.include_offset,
-        })
     }
 }

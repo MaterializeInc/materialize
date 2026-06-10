@@ -20,8 +20,6 @@ use syn::{Data, DataEnum, DataStruct, DataUnion, DeriveInput, Item};
 /// Returns [`DeriveInput`]s representing all struct and enum items in the
 /// module. This is exactly what a custom derive procedural macro would see,
 /// except that we can present information for all types simultaneously.
-///
-
 pub fn parse_mod<P>(path: P) -> Result<Vec<DeriveInput>>
 where
     P: AsRef<Path>,
@@ -45,8 +43,7 @@ where
 
     let src =
         fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
-    let file =
-        syn::parse_file(&src).with_context(|| format!("Failed to parse {}", path.display()))?;
+    let file = syn::parse_file(&src)?;
 
     for item in file.items {
         match item {

@@ -10,29 +10,20 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 SCHEMA = "optimizer_notices"
 
 
 class OptimizerNotices(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.81.0-dev")
-
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_mz_notices TO true
                 > DROP SCHEMA IF EXISTS {SCHEMA} CASCADE;
                 > CREATE SCHEMA {SCHEMA};
                 > CREATE TABLE {SCHEMA}.t1(x INTEGER, y INTEGER);
                 > CREATE INDEX t1_idx ON {SCHEMA}.t1(x, y);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -51,9 +42,7 @@ class OptimizerNotices(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT o.type, o.name, replace(n.notice_type, ' ', '␠')
                   FROM mz_internal.mz_notices n
                   JOIN mz_catalog.mz_objects o ON (o.id = n.object_id)
@@ -62,6 +51,4 @@ class OptimizerNotices(Check):
                 index             v1_idx  Empty␠index␠key
                 index             v1_idx  Index␠too␠wide␠for␠literal␠constraints
                 materialized-view mv1     Index␠too␠wide␠for␠literal␠constraints
-                """
-            )
-        )
+                """))

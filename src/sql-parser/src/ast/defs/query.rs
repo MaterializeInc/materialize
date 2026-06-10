@@ -244,6 +244,8 @@ pub struct Select<T: AstInfo> {
     pub group_by: Vec<Expr<T>>,
     /// HAVING
     pub having: Option<Expr<T>>,
+    /// QUALIFY
+    pub qualify: Option<Expr<T>>,
     /// OPTION
     pub options: Vec<SelectOption<T>>,
 }
@@ -274,6 +276,10 @@ impl<T: AstInfo> AstDisplay for Select<T> {
         if let Some(ref having) = self.having {
             f.write_str(" HAVING ");
             f.write_node(having);
+        }
+        if let Some(ref qualify) = self.qualify {
+            f.write_str(" QUALIFY ");
+            f.write_node(qualify);
         }
         if !self.options.is_empty() {
             f.write_str(" OPTIONS (");
@@ -594,12 +600,12 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                 with_ordinality,
             } => {
                 f.write_node(function);
+                if *with_ordinality {
+                    f.write_str(" WITH ORDINALITY");
+                }
                 if let Some(alias) = &alias {
                     f.write_str(" AS ");
                     f.write_node(alias);
-                }
-                if *with_ordinality {
-                    f.write_str(" WITH ORDINALITY");
                 }
             }
             TableFactor::RowsFrom {
@@ -610,12 +616,12 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                 f.write_str("ROWS FROM (");
                 f.write_node(&display::comma_separated(functions));
                 f.write_str(")");
+                if *with_ordinality {
+                    f.write_str(" WITH ORDINALITY");
+                }
                 if let Some(alias) = alias {
                     f.write_str(" AS ");
                     f.write_node(alias);
-                }
-                if *with_ordinality {
-                    f.write_str(" WITH ORDINALITY");
                 }
             }
             TableFactor::Derived {
@@ -708,7 +714,7 @@ impl<T: AstInfo> AstDisplay for Join<T> {
                                 f.write_node(join_using_alias);
                             }
                         }
-                        _ => {}
+                        JoinConstraint::Natural => {}
                     }
                 }
             }
@@ -809,7 +815,15 @@ impl<T: AstInfo> AstDisplay for Values<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("VALUES ");
         let mut delim = "";
-        for row in &self.0 {
+
+        for (i, row) in self.0.iter().enumerate() {
+            if f.redacted() && i == 20 {
+                f.write_str("/* ");
+                f.write_str(&(self.0.len().saturating_sub(20)).to_string());
+                f.write_str(" more rows */");
+                break;
+            }
+
             f.write_str(delim);
             delim = ", ";
             f.write_str("(");

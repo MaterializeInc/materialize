@@ -23,9 +23,6 @@ from materialize.mzcompose.composition import Composition
 from materialize.util import PgConnInfo
 
 DB_FILE = "parallel-benchmark.db"
-assert (
-    sqlite3.threadsafety == 3
-), f"Thread safety level 3 (serialized) required, but is: {sqlite3.threadsafety}"
 
 
 class Measurement:

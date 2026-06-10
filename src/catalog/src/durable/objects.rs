@@ -45,11 +45,12 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::plan::{ClusterSchedule, NetworkPolicyRule};
+#[cfg(test)]
 use proptest_derive::Arbitrary;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
-use crate::durable::objects::serialization::proto;
 use crate::durable::Epoch;
+use crate::durable::objects::serialization::proto;
 
 // Structs used to pass information to outside modules.
 
@@ -210,6 +211,44 @@ impl DurableType for Role {
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct RoleAuth {
+    pub role_id: RoleId,
+    pub password_hash: Option<String>,
+    pub updated_at: u64,
+}
+
+impl DurableType for RoleAuth {
+    type Key = RoleAuthKey;
+    type Value = RoleAuthValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            RoleAuthKey {
+                role_id: self.role_id,
+            },
+            RoleAuthValue {
+                password_hash: self.password_hash,
+                updated_at: self.updated_at,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            role_id: key.role_id,
+            password_hash: value.password_hash,
+            updated_at: value.updated_at,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        RoleAuthKey {
+            role_id: self.role_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct NetworkPolicy {
     pub name: String,
     pub id: NetworkPolicyId,
@@ -310,7 +349,6 @@ pub struct ClusterVariantManaged {
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
     pub replication_factor: u32,
-    pub disk: bool,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
     pub schedule: ClusterSchedule,
 }
@@ -338,11 +376,11 @@ impl DurableType for IntrospectionSourceIndex {
                 catalog_id: self
                     .item_id
                     .try_into()
-                    .expect("cluster introspection source index mapping must be a System ID"),
+                    .expect("cluster introspection source index mapping must be an Introspection Source Index ID"),
                 global_id: self
                     .index_id
                     .try_into()
-                    .expect("cluster introspection source index mapping must be a System ID"),
+                    .expect("cluster introspection source index mapping must be a Introspection Source Index ID"),
                 oid: self.oid,
             },
         )
@@ -432,16 +470,12 @@ impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
 pub enum ReplicaLocation {
     Unmanaged {
         storagectl_addrs: Vec<String>,
-        storage_addrs: Vec<String>,
         computectl_addrs: Vec<String>,
-        compute_addrs: Vec<String>,
-        workers: usize,
     },
     Managed {
         size: String,
         /// `Some(az)` if the AZ was specified by the user and must be respected;
         availability_zone: Option<String>,
-        disk: bool,
         internal: bool,
         billed_as: Option<String>,
         pending: bool,
@@ -454,24 +488,17 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
             mz_controller::clusters::ReplicaLocation::Unmanaged(
                 mz_controller::clusters::UnmanagedReplicaLocation {
                     storagectl_addrs,
-                    storage_addrs,
                     computectl_addrs,
-                    compute_addrs,
-                    workers,
                 },
             ) => Self::Unmanaged {
                 storagectl_addrs,
-                storage_addrs,
                 computectl_addrs,
-                compute_addrs,
-                workers,
             },
             mz_controller::clusters::ReplicaLocation::Managed(
                 mz_controller::clusters::ManagedReplicaLocation {
                     allocation: _,
                     size,
                     availability_zones,
-                    disk,
                     billed_as,
                     internal,
                     pending,
@@ -487,7 +514,6 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     } else {
                         None
                     },
-                disk,
                 internal,
                 billed_as,
                 pending,
@@ -507,6 +533,12 @@ pub struct Item {
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
+}
+
+impl Item {
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
+    }
 }
 
 impl DurableType for Item {
@@ -555,7 +587,8 @@ pub struct SourceReferences {
     pub references: Vec<SourceReference>,
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, Arbitrary)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SourceReference {
     pub name: String,
     pub namespace: Option<String>,
@@ -603,6 +636,7 @@ impl TryFrom<CatalogItemId> for SystemCatalogItemId {
     fn try_from(val: CatalogItemId) -> Result<Self, Self::Error> {
         match val {
             CatalogItemId::System(x) => Ok(SystemCatalogItemId(x)),
+            CatalogItemId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
             CatalogItemId::User(_) => Err("user"),
             CatalogItemId::Transient(_) => Err("transient"),
         }
@@ -612,6 +646,31 @@ impl TryFrom<CatalogItemId> for SystemCatalogItemId {
 impl From<SystemCatalogItemId> for CatalogItemId {
     fn from(val: SystemCatalogItemId) -> Self {
         CatalogItemId::System(val.0)
+    }
+}
+
+/// A newtype wrapper for [`CatalogItemId`] that is only for the "introspection source index" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct IntrospectionSourceIndexCatalogItemId(u64);
+
+impl TryFrom<CatalogItemId> for IntrospectionSourceIndexCatalogItemId {
+    type Error = &'static str;
+
+    fn try_from(val: CatalogItemId) -> Result<Self, Self::Error> {
+        match val {
+            CatalogItemId::System(_) => Err("system"),
+            CatalogItemId::IntrospectionSourceIndex(x) => {
+                Ok(IntrospectionSourceIndexCatalogItemId(x))
+            }
+            CatalogItemId::User(_) => Err("user"),
+            CatalogItemId::Transient(_) => Err("transient"),
+        }
+    }
+}
+
+impl From<IntrospectionSourceIndexCatalogItemId> for CatalogItemId {
+    fn from(val: IntrospectionSourceIndexCatalogItemId) -> Self {
+        CatalogItemId::IntrospectionSourceIndex(val.0)
     }
 }
 
@@ -625,6 +684,7 @@ impl TryFrom<GlobalId> for SystemGlobalId {
     fn try_from(val: GlobalId) -> Result<Self, Self::Error> {
         match val {
             GlobalId::System(x) => Ok(SystemGlobalId(x)),
+            GlobalId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
             GlobalId::User(_) => Err("user"),
             GlobalId::Transient(_) => Err("transient"),
             GlobalId::Explain => Err("explain"),
@@ -635,6 +695,30 @@ impl TryFrom<GlobalId> for SystemGlobalId {
 impl From<SystemGlobalId> for GlobalId {
     fn from(val: SystemGlobalId) -> Self {
         GlobalId::System(val.0)
+    }
+}
+
+/// A newtype wrapper for [`GlobalId`] that is only for the "introspection source index" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct IntrospectionSourceIndexGlobalId(u64);
+
+impl TryFrom<GlobalId> for IntrospectionSourceIndexGlobalId {
+    type Error = &'static str;
+
+    fn try_from(val: GlobalId) -> Result<Self, Self::Error> {
+        match val {
+            GlobalId::System(_) => Err("system"),
+            GlobalId::IntrospectionSourceIndex(x) => Ok(IntrospectionSourceIndexGlobalId(x)),
+            GlobalId::User(_) => Err("user"),
+            GlobalId::Transient(_) => Err("transient"),
+            GlobalId::Explain => Err("explain"),
+        }
+    }
+}
+
+impl From<IntrospectionSourceIndexGlobalId> for GlobalId {
+    fn from(val: IntrospectionSourceIndexGlobalId) -> Self {
+        GlobalId::IntrospectionSourceIndex(val.0)
     }
 }
 
@@ -1055,6 +1139,7 @@ pub struct Snapshot {
     pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
     pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
     pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
+    pub role_auth: BTreeMap<proto::RoleAuthKey, proto::RoleAuthValue>,
     pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
     pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
@@ -1089,7 +1174,8 @@ impl Snapshot {
 ///
 /// Every time a new process takes over, the `epoch` should be incremented.
 /// Every time a new version is deployed, the `deploy` generation should be incremented.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct FenceToken {
     pub(crate) deploy_generation: u64,
     pub(crate) epoch: Epoch,
@@ -1164,8 +1250,8 @@ pub struct ClusterIntrospectionSourceIndexKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
-    pub(crate) catalog_id: SystemCatalogItemId,
-    pub(crate) global_id: SystemGlobalId,
+    pub(crate) catalog_id: IntrospectionSourceIndexCatalogItemId,
+    pub(crate) global_id: IntrospectionSourceIndexGlobalId,
     pub(crate) oid: u32,
 }
 
@@ -1182,12 +1268,14 @@ pub struct ClusterReplicaValue {
     pub(crate) owner_id: RoleId,
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct DatabaseKey {
     pub(crate) id: DatabaseId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct DatabaseValue {
     pub(crate) name: String,
     pub(crate) owner_id: RoleId,
@@ -1195,23 +1283,27 @@ pub struct DatabaseValue {
     pub(crate) oid: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SourceReferencesKey {
     pub(crate) source_id: CatalogItemId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SourceReferencesValue {
     pub(crate) references: Vec<SourceReference>,
     pub(crate) updated_at: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SchemaKey {
     pub(crate) id: SchemaId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SchemaValue {
     pub(crate) database_id: Option<DatabaseId>,
     pub(crate) name: String,
@@ -1220,12 +1312,14 @@ pub struct SchemaValue {
     pub(crate) oid: u32,
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug, Arbitrary)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ItemKey {
     pub(crate) id: CatalogItemId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ItemValue {
     pub(crate) schema_id: SchemaId,
     pub(crate) name: String,
@@ -1238,32 +1332,39 @@ pub struct ItemValue {
 }
 
 impl ItemValue {
-    pub(crate) fn item_type(&self) -> CatalogItemType {
-        // NOTE(benesch): the implementation of this method is hideous, but is
-        // there a better alternative? Storing the object type alongside the
-        // `create_sql` would introduce the possibility of skew.
-        let mut tokens = self.create_sql.split_whitespace();
-        assert_eq!(tokens.next(), Some("CREATE"));
-        match tokens.next() {
-            Some("TABLE") => CatalogItemType::Table,
-            Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
-            Some("SINK") => CatalogItemType::Sink,
-            Some("VIEW") => CatalogItemType::View,
-            Some("MATERIALIZED") => {
-                assert_eq!(tokens.next(), Some("VIEW"));
-                CatalogItemType::MaterializedView
-            }
-            Some("CONTINUAL") => {
-                assert_eq!(tokens.next(), Some("TASK"));
-                CatalogItemType::ContinualTask
-            }
-            Some("INDEX") => CatalogItemType::Index,
-            Some("TYPE") => CatalogItemType::Type,
-            Some("FUNCTION") => CatalogItemType::Func,
-            Some("SECRET") => CatalogItemType::Secret,
-            Some("CONNECTION") => CatalogItemType::Connection,
-            _ => panic!("unexpected create sql: {}", self.create_sql),
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
+    }
+}
+
+pub fn item_type(create_sql: &str) -> CatalogItemType {
+    // NOTE(benesch): the implementation of this method is hideous, but is
+    // there a better alternative? Storing the object type alongside the
+    // `create_sql` would introduce the possibility of skew.
+    let mut tokens = create_sql.split_whitespace();
+    assert_eq!(tokens.next(), Some("CREATE"));
+
+    // Read away item type modifiers, if any.
+    let next_token = match tokens.next() {
+        Some("TEMPORARY") | Some("REPLACEMENT") => tokens.next(),
+        token => token,
+    };
+
+    match next_token {
+        Some("TABLE") => CatalogItemType::Table,
+        Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
+        Some("SINK") => CatalogItemType::Sink,
+        Some("VIEW") => CatalogItemType::View,
+        Some("MATERIALIZED") => {
+            assert_eq!(tokens.next(), Some("VIEW"));
+            CatalogItemType::MaterializedView
         }
+        Some("INDEX") => CatalogItemType::Index,
+        Some("TYPE") => CatalogItemType::Type,
+        Some("FUNCTION") => CatalogItemType::Func,
+        Some("SECRET") => CatalogItemType::Secret,
+        Some("CONNECTION") => CatalogItemType::Connection,
+        _ => panic!("unexpected create sql: {}", create_sql),
     }
 }
 
@@ -1273,7 +1374,8 @@ pub struct CommentKey {
     pub(crate) sub_component: Option<usize>,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct CommentValue {
     pub(crate) comment: String,
 }
@@ -1380,6 +1482,20 @@ pub struct SystemPrivilegesKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SystemPrivilegesValue {
     pub(crate) acl_mode: AclMode,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct RoleAuthKey {
+    // TODO(auth): Depending on what the future holds, here is where
+    // we might also want to key by a `version` field.
+    // That way we can store password versions or what have you.
+    pub(crate) role_id: RoleId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct RoleAuthValue {
+    pub(crate) password_hash: Option<String>,
+    pub(crate) updated_at: u64,
 }
 
 #[cfg(test)]

@@ -10,33 +10,32 @@ publish = false
 workspace = true
 
 [dependencies]
-askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
-axum = "0.7.5"
-axum-extra = { version = "0.9.3", features = ["typed-header"] }
-bytesize = "1.1.0"
-cfg-if = "1.0.0"
-headers = "0.4.0"
-http = "1.1.0"
-include_dir = "0.7.3"
-mappings = "0.6.0"
-mime = "0.3.16"
+askama.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+bytesize.workspace = true
+cfg-if.workspace = true
+headers.workspace = true
+http.workspace = true
+include_dir.workspace = true
+mappings.workspace = true
+mime.workspace = true
 mz-build-info = { path = "../build-info", default-features = false }
 mz-http-util = { path = "../http-util", default-features = false }
 mz-ore = { path = "../ore", default-features = false }
 mz-prof = { path = "../prof", default-features = false }
-jemalloc_pprof = { version = "0.6", optional = true }
-pprof_util = "0.6"
-serde = { version = "1.0.152", features = ["derive"] }
-tokio = { version = "1.38.0", features = ["time"] }
-tracing = { version = "0.1.37", optional = true }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+jemalloc_pprof = { workspace = true, optional = true }
+pprof_util.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing = { workspace = true, optional = true }
 
 [build-dependencies]
-anyhow = "1.0.66"
+anyhow.workspace = true
 mz-npm = { path = "../npm", default-features = false }
 
 [features]
-default = ["workspace-hack"]
+default = []
 # When enabled, static assets for the web UI are loaded from disk on every HTTP
 # request rather than compiled into the binary. This vastly speeds up the
 # iteration cycle when developing the web UI.
@@ -49,7 +48,3 @@ jemalloc = ["mz-prof/jemalloc", "jemalloc_pprof"]
 
 [package.metadata.cargo-udeps.ignore]
 # "bytesize" not used on linux
-normal = ["bytesize", "workspace-hack"]
-
-[package.metadata.cargo-gazelle.lib]
-compile_data = ["templates/*", "src/http/static/**/*"]

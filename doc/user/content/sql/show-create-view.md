@@ -10,11 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-view.svg" >}}
+```sql
+SHOW [REDACTED] CREATE VIEW <view_name>;
+```
 
-Field | Use
-------|-----
-_view&lowbar;name_ | The view you want to use. You can find available view names through [`SHOW VIEWS`](../show-views).
+{{< yaml-table data="show_create_redacted_option" >}}
+
+For available view names, see [`SHOW VIEWS`](/sql/show-views).
 
 ## Examples
 
@@ -31,7 +33,7 @@ SHOW CREATE VIEW my_view;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the view.
+{{% include-headless "/headless/sql-command-privileges/show-create-view" %}}
 
 ## Related pages
 

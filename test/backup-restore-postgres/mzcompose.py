@@ -13,7 +13,7 @@ Basic Backup & Restore test with a table
 
 from textwrap import dedent
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.persistcli import Persistcli
@@ -25,7 +25,7 @@ SERVICES = [
     Minio(setup_materialize=True),
     Mc(),
     Materialized(
-        external_minio=True,
+        external_blob_store=True,
         external_metadata_store=True,
         sanity_restart=False,
         metadata_store="postgres-metadata",
@@ -42,39 +42,30 @@ def workflow_default(c: Composition) -> None:
     c.enable_minio_versioning()
 
     # Start Materialize, and set up some basic state in it
-    c.up("materialized")
-    c.up("testdrive", persistent=True)
-    c.testdrive(
-        dedent(
-            """
+    c.up("materialized", Service("testdrive", idle=True))
+    c.testdrive(dedent("""
                 > DROP TABLE IF EXISTS numbers;
                 > CREATE TABLE IF NOT EXISTS numbers (id BIGINT);
                 > INSERT INTO numbers SELECT * from generate_series(1, 1);
                 > INSERT INTO numbers SELECT * from generate_series(1, 10);
                 > INSERT INTO numbers SELECT * from generate_series(1, 100);
-                """
-        )
-    )
+                """))
 
-    c.backup_postgres()
+    PostgresMetadata.backup(c)
 
     # Make further updates to Materialize's state
     for i in range(0, 100):
         # TODO: This seems to be enough to produce interesting shard state;
         # ie. if we remove the restore-blob step we can see the restore fail.
         # Is there any cheaper or more obvious way to do that?
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                     > INSERT INTO numbers SELECT * from generate_series(1, 1);
                     > INSERT INTO numbers SELECT * from generate_series(1, 10);
                     > INSERT INTO numbers SELECT * from generate_series(1, 100);
-                    """
-            )
-        )
+                    """))
 
     # Restore CRDB from backup, run persistcli restore-blob and restart Mz
-    c.restore_postgres()
+    PostgresMetadata.restore(c)
 
     # Confirm that the database is readable / has shard data
     c.exec(
@@ -86,11 +77,7 @@ def workflow_default(c: Composition) -> None:
     )
 
     # Check that the cluster is up and that it answers queries as of the old state
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
                 > SELECT count(*) FROM numbers;
                 111
-                """
-        )
-    )
+                """))

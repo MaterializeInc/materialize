@@ -9,30 +9,65 @@
 
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
+MZFROM console AS console
 
 MZFROM ubuntu-base
 
-RUN groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize
+ARG CI_SANITIZER=none
 
-RUN apt-get update \
+RUN groupadd --system --gid=999 materialize \
+    && useradd --system --gid=999 --uid=999 --create-home materialize \
+    && apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
         ca-certificates \
         curl \
-        llvm \
-        postgresql \
-        postgresql-contrib \
+        gettext-base \
+        nginx \
+        postgresql-16 \
+        openssh-client \
         tini \
-        ssh \
+    && if [ "$CI_SANITIZER" != "none" ]; then \
+        TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
+       fi \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
-    && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
-    && chown -R materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/log/postgresql /var/lib/postgresql/16/main
+    && rm -rf /var/lib/postgresql \
+    # Remove unused PostgreSQL binaries (keep only postgres, initdb, pg_isready, pg_ctl, psql) \
+    && find /usr/lib/postgresql/16/bin -type f \
+        ! -name postgres ! -name initdb ! -name pg_isready ! -name pg_ctl ! -name psql \
+        -delete \
+    # Remove PostgreSQL client binaries except psql \
+    && find /usr/bin -name 'pg_*' -delete \
+    # Remove docs, man pages \
+    && rm -rf /usr/share/postgresql/16/man \
+    && rm -rf /usr/share/doc/postgresql* \
+    # Remove LLVM bitcode (PostgreSQL JIT support, not used) \
+    && rm -rf /usr/lib/postgresql/16/lib/bitcode \
+    # Remove pgxs (extension build infrastructure) \
+    && rm -rf /usr/lib/postgresql/16/lib/pgxs \
+    # Remove static libraries \
+    && find /usr/lib/postgresql -name '*.a' -delete \
+    # Remove unused extension SQL files (keep only plpgsql which is needed for initdb) \
+    && find /usr/share/postgresql/16/extension -type f \
+        ! -name 'plpgsql*' -delete \
+    # Remove nginx docs and unnecessary files \
+    && rm -rf /usr/share/doc/nginx* \
+    && rm -rf /usr/share/nginx/modules-available \
+    && mkdir -p /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx \
+    && touch /run/nginx.pid \
+    && chown -R materialize /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx /run/nginx.pid
 
-COPY postgresql.conf pg_hba.conf /etc/postgresql/16/main/
+COPY postgresql.conf pg_hba.conf /etc/postgresql/
+
+COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
+COPY console_nginx.template /etc/nginx/templates/default.conf.template
+
+# Configure the console to listen on port 6874 and proxy API requests through to
+# the Materialize instance that will be started and listening for requests on
+# port 6876.
+RUN MZ_ENDPOINT=http://localhost:6876 \
+    MZ_NGINX_LISTENER_CONFIG="listen 6874;" \
+    envsubst '${MZ_ENDPOINT} ${MZ_NGINX_LISTENER_CONFIG}' < /etc/nginx/templates/default.conf.template > /etc/nginx/sites-enabled/default \
+    && rm /etc/nginx/templates/default.conf.template
 
 USER materialize
-
-RUN pg_ctlcluster 16 main start \
-    && psql -U postgres -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" \
-    && psql -U postgres -c "CREATE DATABASE root OWNER root"

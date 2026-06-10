@@ -22,7 +22,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, ItemFn, ReturnType};
+use syn::{ItemFn, ReturnType, parse_macro_input};
 
 /// Persist wrapper around the `test` macro.
 ///
@@ -91,35 +91,12 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 {
                     // Enable new compaction tracking / claiming
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_record_compactions", ::mz_dyncfg::ConfigVal::Bool(true));
                     x.add_dynamic("persist_claim_unclaimed_compactions", ::mz_dyncfg::ConfigVal::Bool(true));
                     x
                 },
                 {
-                    // Write the format of a Part in State.
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_batch_record_run_meta", ::mz_dyncfg::ConfigVal::Bool(true));
-                    x
-                },
-                {
-                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_batch_columnar_format", ::mz_dyncfg::ConfigVal::String("both_v2".into()));
-                    x.add_dynamic("persist_batch_columnar_format_percent", ::mz_dyncfg::ConfigVal::Usize(100));
-                    x.add_dynamic("persist_part_decode_format", ::mz_dyncfg::ConfigVal::String("arrow".into()));
-                    x
-                },
-                {
-                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_batch_columnar_format", ::mz_dyncfg::ConfigVal::String("both_v2".into()));
-                    x.add_dynamic("persist_batch_columnar_format_percent", ::mz_dyncfg::ConfigVal::Usize(100));
-                    x
-                },
-                {
-                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_batch_columnar_format", ::mz_dyncfg::ConfigVal::String("both_v2".into()));
-                    x.add_dynamic("persist_batch_columnar_format_percent", ::mz_dyncfg::ConfigVal::Usize(100));
-                    x.add_dynamic("persist_batch_structured_key_lower_len", ::mz_dyncfg::ConfigVal::Usize(256));
-                    x.add_dynamic("persist_batch_structured_order", ::mz_dyncfg::ConfigVal::Bool(true));
+                    x.add_dynamic("persist_record_schema_id", ::mz_dyncfg::ConfigVal::Bool(true));
                     x
                 },
                 {
@@ -132,11 +109,17 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     x.add_dynamic("persist_batch_max_run_len", ::mz_dyncfg::ConfigVal::Usize(4));
                     x
                 },
+
+                 {
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_enable_incremental_compaction", ::mz_dyncfg::ConfigVal::Bool(true));
+                    x
+                },
             ];
 
             for (idx, dyncfgs) in dyncfgs.into_iter().enumerate() {
                 let debug = dyncfgs.updates.iter().map(|(name, val)| {
-                    format!(" {}={:?}", name, val.val.clone().unwrap())
+                    format!(" {}={:?}", name, val)
                 }).collect::<String>();
                 eprintln!("mz_persist_proc::test {}{}", idx, debug);
                 test_impl(dyncfgs)#await_

@@ -10,7 +10,6 @@
 import argparse
 import datetime
 import json
-import sys
 from typing import Any
 
 from materialize.cli.scratch import check_required_vars
@@ -26,6 +25,48 @@ from materialize.scratch import (
 )
 
 MAX_AGE_DAYS = 1.5
+
+
+def _natsort_key(s: str) -> list:
+    """Split a string into text and integer parts for natural sorting."""
+    import re
+
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", s)]
+
+
+def pick_machine() -> str:
+    """Show available machine configs and let the user pick one."""
+    from prettytable import PrettyTable
+
+    scratch_dir = MZ_ROOT / "misc" / "scratch"
+    configs: list[tuple[str, str, str]] = []
+    for f in sorted(scratch_dir.glob("*.json"), key=lambda f: _natsort_key(f.stem)):
+        with open(f) as fh:
+            descs = [MachineDesc.model_validate(obj) for obj in multi_json(fh.read())]
+        for d in descs:
+            configs.append((f.stem, d.instance_type, d.name))
+
+    pt = PrettyTable()
+    pt.field_names = ["#", "Config", "Instance Type", "Name"]
+    pt.align = "l"
+    for i, (stem, instance_type, name) in enumerate(configs, 1):
+        pt.add_row([i, stem, instance_type, name])
+    print(pt)
+
+    while True:
+        choice = input("Select a machine config [#]: ").strip()
+        try:
+            idx = int(choice)
+            if 1 <= idx <= len(configs):
+                return configs[idx - 1][0]
+        except ValueError:
+            # Allow typing the config name directly
+            for stem, _, _ in configs:
+                if choice == stem:
+                    return stem
+        print(
+            f"Invalid choice: {choice!r}. Enter a number 1-{len(configs)} or a config name."
+        )
 
 
 def multi_json(s: str) -> list[dict[Any, Any]]:
@@ -45,7 +86,7 @@ def multi_json(s: str) -> list[dict[Any, Any]]:
         if s[idx] in " \t\n\r":
             idx += 1
         else:
-            (obj, idx) = decoder.raw_decode(s, idx)
+            obj, idx = decoder.raw_decode(s, idx)
             result.append(obj)
 
     return result
@@ -65,7 +106,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         "--extra-tags",
         type=str,
         required=False,
-        help='Additional EC2 tags for created instance. Format: {"key", "value"}',
+        help='Additional tags/labels for created instance. Format: {"key": "value"}',
     )
     parser.add_argument(
         "--instance-profile",
@@ -117,20 +158,18 @@ def run(args: argparse.Namespace) -> None:
                 "extra-tags must be a JSON dictionary of strings to strings"
             )
 
-    check_required_vars()
-
-    extra_tags["LaunchedBy"] = whoami()
-
     if args.machine:
         with open(MZ_ROOT / "misc" / "scratch" / f"{args.machine}.json") as f:
-
             print(f"Reading machine configs from {f.name}")
             descs = [MachineDesc.model_validate(obj) for obj in multi_json(f.read())]
     else:
-        print("Reading machine configs from stdin...")
-        descs = [
-            MachineDesc.model_validate(obj) for obj in multi_json(sys.stdin.read())
-        ]
+        args.machine = pick_machine()
+        with open(MZ_ROOT / "misc" / "scratch" / f"{args.machine}.json") as f:
+            print(f"Reading machine configs from {f.name}")
+            descs = [MachineDesc.model_validate(obj) for obj in multi_json(f.read())]
+
+    check_required_vars()
+    extra_tags["LaunchedBy"] = whoami()
 
     if args.ssh and len(descs) != 1:
         raise RuntimeError(f"Cannot use `--ssh` with {len(descs)} instances")

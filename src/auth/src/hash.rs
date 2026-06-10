@@ -1,0 +1,511 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+// Clippy misreads some doc comments as HTML tags, so we disable the lint
+#![allow(rustdoc::invalid_html_tags)]
+
+use std::fmt::Display;
+use std::num::NonZeroU32;
+
+use aws_lc_rs::constant_time::verify_slices_are_equal;
+use aws_lc_rs::digest;
+use aws_lc_rs::hmac;
+use aws_lc_rs::rand::{SecureRandom, SystemRandom};
+use base64::prelude::*;
+use itertools::Itertools;
+use mz_ore::secure::{Zeroize, Zeroizing};
+
+use crate::password::Password;
+
+/// The default salt size, which isn't currently configurable.
+const DEFAULT_SALT_SIZE: usize = 32;
+
+const SHA256_OUTPUT_LEN: usize = 32;
+
+/// The options for hashing a password
+#[derive(Debug, PartialEq)]
+pub struct HashOpts {
+    /// The number of iterations to use for PBKDF2
+    pub iterations: NonZeroU32,
+    /// The salt to use for PBKDF2. It is up to the caller to
+    /// ensure that however the salt is generated, it is cryptographically
+    /// secure.
+    pub salt: [u8; DEFAULT_SALT_SIZE],
+}
+
+impl Drop for HashOpts {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+    }
+}
+
+pub struct PasswordHash {
+    /// The salt used for hashing
+    pub salt: [u8; DEFAULT_SALT_SIZE],
+    /// The number of iterations used for hashing
+    pub iterations: NonZeroU32,
+    /// The hash of the password.
+    /// This is the result of PBKDF2 with SHA256
+    pub hash: [u8; SHA256_OUTPUT_LEN],
+}
+
+impl Drop for PasswordHash {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+        self.hash.zeroize();
+    }
+}
+
+#[derive(Debug)]
+pub enum VerifyError {
+    MalformedHash,
+    InvalidPassword,
+    Hash(HashError),
+}
+
+#[derive(Debug)]
+pub enum HashError {
+    Crypto(aws_lc_rs::error::Unspecified),
+}
+
+impl Display for HashError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HashError::Crypto(e) => write!(f, "crypto error: {}", e),
+        }
+    }
+}
+
+/// Hashes a password using PBKDF2 with SHA256
+/// and a random salt.
+pub fn hash_password(
+    password: &Password,
+    iterations: &NonZeroU32,
+) -> Result<PasswordHash, HashError> {
+    let rng = SystemRandom::new();
+    let mut salt = Zeroizing::new([0u8; DEFAULT_SALT_SIZE]);
+    rng.fill(&mut *salt).map_err(HashError::Crypto)?;
+
+    let hash = hash_password_inner(
+        &HashOpts {
+            iterations: iterations.to_owned(),
+            salt: *salt,
+        },
+        password.as_bytes(),
+    )?;
+
+    Ok(PasswordHash {
+        salt: *salt,
+        iterations: iterations.to_owned(),
+        hash,
+    })
+}
+
+pub fn generate_nonce(client_nonce: &str) -> Result<String, HashError> {
+    let rng = SystemRandom::new();
+    let mut nonce = Zeroizing::new([0u8; 24]);
+    rng.fill(&mut *nonce).map_err(HashError::Crypto)?;
+    let nonce = BASE64_STANDARD.encode(&*nonce);
+    let new_nonce = format!("{}{}", client_nonce, nonce);
+    Ok(new_nonce)
+}
+
+/// Hashes a password using PBKDF2 with SHA256
+/// and the given options.
+pub fn hash_password_with_opts(
+    opts: &HashOpts,
+    password: &Password,
+) -> Result<PasswordHash, HashError> {
+    let hash = hash_password_inner(opts, password.as_bytes())?;
+
+    Ok(PasswordHash {
+        salt: opts.salt,
+        iterations: opts.iterations,
+        hash,
+    })
+}
+
+/// Hashes a password using PBKDF2 with SHA256,
+/// and returns it in the SCRAM-SHA-256 format.
+/// The format is SCRAM-SHA-256$<iterations>:<salt>$<stored_key>:<server_key>
+pub fn scram256_hash(password: &Password, iterations: &NonZeroU32) -> Result<String, HashError> {
+    let hashed_password = hash_password(password, iterations)?;
+    Ok(scram256_hash_inner(hashed_password).to_string())
+}
+
+fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
+    verify_slices_are_equal(a, b).is_ok()
+}
+
+/// Verifies a password against a SCRAM-SHA-256 hash.
+pub fn scram256_verify(password: &Password, hashed_password: &str) -> Result<(), VerifyError> {
+    let opts = scram256_parse_opts(hashed_password)?;
+    let hashed = hash_password_with_opts(&opts, password).map_err(VerifyError::Hash)?;
+    let scram = scram256_hash_inner(hashed);
+    if constant_time_compare(hashed_password.as_bytes(), scram.to_string().as_bytes()) {
+        Ok(())
+    } else {
+        Err(VerifyError::InvalidPassword)
+    }
+}
+
+pub fn sasl_verify(
+    hashed_password: &str,
+    proof: &str,
+    auth_message: &str,
+) -> Result<String, VerifyError> {
+    // Parse SCRAM hash: SCRAM-SHA-256$<iterations>:<salt>$<stored_key>:<server_key>
+    let parts: Vec<&str> = hashed_password.split('$').collect();
+    if parts.len() != 3 {
+        return Err(VerifyError::MalformedHash);
+    }
+    let auth_info = parts[1].split(':').collect::<Vec<&str>>();
+    if auth_info.len() != 2 {
+        return Err(VerifyError::MalformedHash);
+    }
+    let auth_value = parts[2].split(':').collect::<Vec<&str>>();
+    if auth_value.len() != 2 {
+        return Err(VerifyError::MalformedHash);
+    }
+
+    let stored_key = Zeroizing::new(
+        BASE64_STANDARD
+            .decode(auth_value[0])
+            .map_err(|_| VerifyError::MalformedHash)?,
+    );
+    let server_key = Zeroizing::new(
+        BASE64_STANDARD
+            .decode(auth_value[1])
+            .map_err(|_| VerifyError::MalformedHash)?,
+    );
+
+    // Compute client signature: HMAC(stored_key, auth_message)
+    let client_signature = Zeroizing::new(generate_signature(&stored_key, auth_message)?);
+
+    // Decode provided proof
+    let provided_client_proof = Zeroizing::new(
+        BASE64_STANDARD
+            .decode(proof)
+            .map_err(|_| VerifyError::InvalidPassword)?,
+    );
+
+    if provided_client_proof.len() != client_signature.len() {
+        return Err(VerifyError::InvalidPassword);
+    }
+
+    // Recover client_key = proof XOR client_signature
+    let client_key: Zeroizing<Vec<u8>> = Zeroizing::new(
+        provided_client_proof
+            .iter()
+            .zip_eq(client_signature.iter())
+            .map(|(p, s)| p ^ s)
+            .collect(),
+    );
+
+    let computed_stored_key = digest::digest(&digest::SHA256, &client_key);
+    if !constant_time_compare(computed_stored_key.as_ref(), &stored_key) {
+        return Err(VerifyError::InvalidPassword);
+    }
+
+    // Compute server verifier: HMAC(server_key, auth_message)
+    let verifier = Zeroizing::new(generate_signature(&server_key, auth_message)?);
+    Ok(BASE64_STANDARD.encode(&*verifier))
+}
+
+fn generate_signature(key: &[u8], message: &str) -> Result<Zeroizing<Vec<u8>>, VerifyError> {
+    let signing_key = hmac::Key::new(hmac::HMAC_SHA256, key);
+    let tag = hmac::sign(&signing_key, message.as_bytes());
+    Ok(Zeroizing::new(tag.as_ref().to_vec()))
+}
+
+// Generate a mock challenge based on the username and client nonce
+// We do this so that we can present a deterministic challenge even for
+// nonexistent users, to avoid user enumeration attacks.
+pub fn mock_sasl_challenge(username: &str, mock_nonce: &str, iterations: &NonZeroU32) -> HashOpts {
+    let mut buf = Vec::with_capacity(username.len() + mock_nonce.len());
+    buf.extend_from_slice(username.as_bytes());
+    buf.extend_from_slice(mock_nonce.as_bytes());
+    let hash = digest::digest(&digest::SHA256, &buf);
+    let mut salt = [0u8; DEFAULT_SALT_SIZE];
+    salt.copy_from_slice(hash.as_ref());
+
+    HashOpts {
+        iterations: iterations.to_owned(),
+        salt,
+    }
+}
+
+/// Parses a SCRAM-SHA-256 hash and returns the options used to create it.
+pub fn scram256_parse_opts(hashed_password: &str) -> Result<HashOpts, VerifyError> {
+    let parts: Vec<&str> = hashed_password.split('$').collect();
+    if parts.len() != 3 {
+        return Err(VerifyError::MalformedHash);
+    }
+    let scheme = parts[0];
+    if scheme != "SCRAM-SHA-256" {
+        return Err(VerifyError::MalformedHash);
+    }
+    let auth_info = parts[1].split(':').collect::<Vec<&str>>();
+    if auth_info.len() != 2 {
+        return Err(VerifyError::MalformedHash);
+    }
+    let auth_value = parts[2].split(':').collect::<Vec<&str>>();
+    if auth_value.len() != 2 {
+        return Err(VerifyError::MalformedHash);
+    }
+
+    let iterations = auth_info[0]
+        .parse::<u32>()
+        .map_err(|_| VerifyError::MalformedHash)?;
+
+    let salt = BASE64_STANDARD
+        .decode(auth_info[1])
+        .map_err(|_| VerifyError::MalformedHash)?;
+
+    let salt = salt.try_into().map_err(|_| VerifyError::MalformedHash)?;
+
+    Ok(HashOpts {
+        iterations: NonZeroU32::new(iterations).ok_or(VerifyError::MalformedHash)?,
+        salt,
+    })
+}
+
+/// The SCRAM-SHA-256 hash
+struct ScramSha256Hash {
+    /// The number of iterations used for hashing
+    iterations: NonZeroU32,
+    /// The salt used for hashing
+    salt: [u8; 32],
+    /// The server key
+    server_key: [u8; SHA256_OUTPUT_LEN],
+    /// The stored key
+    stored_key: [u8; SHA256_OUTPUT_LEN],
+}
+
+impl Drop for ScramSha256Hash {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+        self.server_key.zeroize();
+        self.stored_key.zeroize();
+    }
+}
+
+impl Display for ScramSha256Hash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SCRAM-SHA-256${}:{}${}:{}",
+            self.iterations,
+            BASE64_STANDARD.encode(&self.salt),
+            BASE64_STANDARD.encode(&self.stored_key),
+            BASE64_STANDARD.encode(&self.server_key)
+        )
+    }
+}
+
+fn scram256_hash_inner(hashed_password: PasswordHash) -> ScramSha256Hash {
+    let signing_key = hmac::Key::new(hmac::HMAC_SHA256, &hashed_password.hash);
+    let client_key_tag = hmac::sign(&signing_key, b"Client Key");
+    let client_key = Zeroizing::new(client_key_tag.as_ref().to_vec());
+    let stored_key_digest = digest::digest(&digest::SHA256, &client_key);
+    let mut stored_key = [0u8; SHA256_OUTPUT_LEN];
+    stored_key.copy_from_slice(stored_key_digest.as_ref());
+
+    let server_key_tag = hmac::sign(&signing_key, b"Server Key");
+    let mut server_key = Zeroizing::new([0u8; SHA256_OUTPUT_LEN]);
+    server_key.copy_from_slice(server_key_tag.as_ref());
+
+    ScramSha256Hash {
+        iterations: hashed_password.iterations,
+        salt: hashed_password.salt,
+        server_key: *server_key,
+        stored_key,
+    }
+}
+
+fn hash_password_inner(
+    opts: &HashOpts,
+    password: &[u8],
+) -> Result<[u8; SHA256_OUTPUT_LEN], HashError> {
+    let mut salted_password = Zeroizing::new([0u8; SHA256_OUTPUT_LEN]);
+    aws_lc_rs::pbkdf2::derive(
+        aws_lc_rs::pbkdf2::PBKDF2_HMAC_SHA256,
+        opts.iterations,
+        &opts.salt,
+        password,
+        &mut *salted_password,
+    );
+    Ok(*salted_password)
+}
+
+#[cfg(test)]
+mod tests {
+    use itertools::Itertools;
+
+    use super::*;
+
+    const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(60).expect("Trust me on this");
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function on OS `linux`
+    fn test_hash_password() {
+        let password = "password".to_string();
+        let iterations = NonZeroU32::new(100).expect("Trust me on this");
+        let hashed_password =
+            hash_password(&password.into(), &iterations).expect("Failed to hash password");
+        assert_eq!(hashed_password.iterations, iterations);
+        assert_eq!(hashed_password.salt.len(), DEFAULT_SALT_SIZE);
+        assert_eq!(hashed_password.hash.len(), SHA256_OUTPUT_LEN);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function on OS `linux`
+    fn test_scram256_hash() {
+        let password = "password".into();
+        let scram_hash =
+            scram256_hash(&password, &DEFAULT_ITERATIONS).expect("Failed to hash password");
+
+        let res = scram256_verify(&password, &scram_hash);
+        assert!(res.is_ok());
+        let res = scram256_verify(&"wrong_password".into(), &scram_hash);
+        assert!(res.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_scram256_parse_opts() {
+        let salt = "9bkIQQjQ7f1OwPsXZGC/YfIkbZsOMDXK0cxxvPBaSfM=";
+        let hashed_password = format!("SCRAM-SHA-256$600000:{}$client-key:server-key", salt);
+        let opts = scram256_parse_opts(&hashed_password);
+
+        assert!(opts.is_ok());
+        let opts = opts.unwrap();
+        assert_eq!(
+            opts.iterations,
+            NonZeroU32::new(600_000).expect("known valid")
+        );
+        assert_eq!(opts.salt.len(), DEFAULT_SALT_SIZE);
+        let decoded_salt = BASE64_STANDARD.decode(salt).expect("Failed to decode salt");
+        assert_eq!(opts.salt, decoded_salt.as_ref());
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mock_sasl_challenge() {
+        let username = "alice";
+        let mock = "cnonce";
+        let opts1 = mock_sasl_challenge(username, mock, &DEFAULT_ITERATIONS);
+        let opts2 = mock_sasl_challenge(username, mock, &DEFAULT_ITERATIONS);
+        assert_eq!(opts1, opts2);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_sasl_verify_success() {
+        let password: Password = "password".into();
+        let hashed_password = scram256_hash(&password, &DEFAULT_ITERATIONS).expect("hash password");
+        let auth_message = "n=user,r=clientnonce,s=somesalt"; // arbitrary auth message
+
+        // Parse client_key and server_key from the SCRAM hash
+        // Format: SCRAM-SHA-256$<iterations>:<salt>$<stored_key>:<server_key>
+        let parts: Vec<&str> = hashed_password.split('$').collect();
+        assert_eq!(parts.len(), 3);
+        let key_parts: Vec<&str> = parts[2].split(':').collect();
+        assert_eq!(key_parts.len(), 2);
+        let stored_key = BASE64_STANDARD
+            .decode(key_parts[0])
+            .expect("decode stored key");
+        let server_key = BASE64_STANDARD
+            .decode(key_parts[1])
+            .expect("decode server key");
+
+        // Simulate client generating a proof
+        let client_proof: Vec<u8> = {
+            // client_key = HMAC(salted_password, "Client Key")
+            let opts = scram256_parse_opts(&hashed_password).expect("parse opts");
+            let salted_password = hash_password_with_opts(&opts, &password)
+                .expect("hash password")
+                .hash;
+            let signing_key = hmac::Key::new(hmac::HMAC_SHA256, &salted_password);
+            let client_key = hmac::sign(&signing_key, b"Client Key");
+            let client_key = client_key.as_ref();
+            // client_proof = client_key XOR client_signature
+            let client_signature =
+                generate_signature(&stored_key, auth_message).expect("client signature");
+            client_key
+                .iter()
+                .zip_eq(client_signature.iter())
+                .map(|(c, s)| c ^ s)
+                .collect::<Vec<u8>>()
+        };
+
+        let client_proof_b64 = BASE64_STANDARD.encode(&client_proof);
+
+        let verifier = sasl_verify(&hashed_password, &client_proof_b64, auth_message)
+            .expect("sasl_verify should succeed");
+
+        // Expected verifier: HMAC(server_key, auth_message)
+        let expected_verifier = BASE64_STANDARD
+            .encode(&generate_signature(&server_key, auth_message).expect("server verifier"));
+        assert_eq!(verifier, expected_verifier);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_sasl_verify_invalid_proof() {
+        let password: Password = "password".into();
+        let hashed_password = scram256_hash(&password, &DEFAULT_ITERATIONS).expect("hash password");
+        let auth_message = "n=user,r=clientnonce,s=somesalt";
+        // Provide an obviously invalid base64 proof (different size / random)
+        let bad_proof = BASE64_STANDARD.encode([0u8; 32]);
+        let res = sasl_verify(&hashed_password, &bad_proof, auth_message);
+        assert!(matches!(res, Err(VerifyError::InvalidPassword)));
+    }
+
+    #[mz_ore::test]
+    fn test_sasl_verify_malformed_hash() {
+        let malformed_hash = "NOT-SCRAM$bad"; // clearly malformed (wrong parts count)
+        let auth_message = "n=user,r=clientnonce,s=somesalt";
+        let bad_proof = BASE64_STANDARD.encode([0u8; 32]);
+        let res = sasl_verify(malformed_hash, &bad_proof, auth_message);
+        assert!(matches!(res, Err(VerifyError::MalformedHash)));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_sasl_verify_truncated_proof_no_panic() {
+        // A truncated client proof (not 32 bytes) should return InvalidPassword, not panic
+        let password: Password = "password".into();
+        let hashed_password = scram256_hash(&password, &DEFAULT_ITERATIONS).expect("hash password");
+        let auth_message = "n=user,r=clientnonce,s=somesalt";
+
+        // Truncated proof: 16 bytes instead of the expected 32 (SHA-256 output)
+        let truncated_proof = BASE64_STANDARD.encode([0u8; 16]);
+        let res = sasl_verify(&hashed_password, &truncated_proof, auth_message);
+        assert!(
+            matches!(res, Err(VerifyError::InvalidPassword)),
+            "truncated proof should return InvalidPassword, not panic"
+        );
+
+        // Oversized proof: 64 bytes instead of 32
+        let oversized_proof = BASE64_STANDARD.encode([0u8; 64]);
+        let res = sasl_verify(&hashed_password, &oversized_proof, auth_message);
+        assert!(
+            matches!(res, Err(VerifyError::InvalidPassword)),
+            "oversized proof should return InvalidPassword, not panic"
+        );
+
+        // Empty proof
+        let empty_proof = BASE64_STANDARD.encode([0u8; 0]);
+        let res = sasl_verify(&hashed_password, &empty_proof, auth_message);
+        assert!(
+            matches!(res, Err(VerifyError::InvalidPassword)),
+            "empty proof should return InvalidPassword, not panic"
+        );
+    }
+}

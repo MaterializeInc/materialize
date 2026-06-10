@@ -23,6 +23,7 @@ $ kafka-ingest format=avro topic=avro-decode-type-multi-record schema=${multi-re
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE avro_decode_type_multi_record
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-type-multi-record-${testdrive.seed}')
@@ -30,6 +31,7 @@ $ kafka-ingest format=avro topic=avro-decode-type-multi-record schema=${multi-re
 > CREATE TABLE avro_decode_type_multi_record_tbl FROM SOURCE avro_decode_type_multi_record (REFERENCE "testdrive-avro-decode-type-multi-record-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${multi-record}'
   ENVELOPE NONE
+> COMMIT
 
 > SELECT (f1).f1, (f2).f2 FROM avro_decode_type_multi_record_tbl
 123 <null>

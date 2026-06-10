@@ -15,14 +15,10 @@ fn main() {
         .btree_map(["."])
         .type_attribute(
             ".mz_proto.ProtoDuration",
-            "#[derive(Eq, serde::Serialize, serde::Deserialize, proptest_derive::Arbitrary)]",
+            "#[derive(serde::Serialize, serde::Deserialize, proptest_derive::Arbitrary)]",
         )
         .compile_protos(
-            &[
-                "proto/src/chrono.proto",
-                "proto/src/proto.proto",
-                "proto/src/tokio_postgres.proto",
-            ],
+            &["proto/src/chrono.proto", "proto/src/proto.proto"],
             &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )
         .unwrap_or_else(|e| panic!("{e}"))

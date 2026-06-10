@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys TO true
+ALTER SYSTEM SET unsafe_enable_table_keys TO true
 ----
 COMPLETE 0
 
@@ -41,7 +41,7 @@ CREATE INDEX t_idx1 ON t(a + 7);
 
 # EXPLAIN CREATE INDEX for an identical index that emits the optimizer notice.
 query T multiline
-EXPLAIN WITH(humanized expressions) CREATE INDEX t_idx2 ON t(a + 7);
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR CREATE INDEX t_idx2 ON t(a + 7);
 ----
 materialize.notices.t_idx2:
   ArrangeBy keys=[[(#0{a} + 7)]]
@@ -64,7 +64,7 @@ CREATE INDEX t_idx2 ON t(a + 7);
 
 # Verify that the notice is shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx2;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx2;
 ----
 materialize.notices.t_idx2:
   ArrangeBy keys=[[(#0{a} + 7)]]
@@ -114,6 +114,15 @@ FROM
   mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
 ----
 
+# Verify the notice row is actually retracted from the
+# underlying builtin table (not just hidden by the JOIN).
+query I
+SELECT count(*)
+FROM mz_internal.mz_optimizer_notices
+WHERE notice_type = 'An identical index already exists'
+----
+0
+
 
 # CREATE INDEX for an identical index that emits the optimizer notice.
 statement ok
@@ -121,7 +130,7 @@ CREATE INDEX t_idx3 ON t(a + 7);
 
 # Verify that the notice is shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx3;
 ----
 materialize.notices.t_idx3:
   ArrangeBy keys=[[(#0{a} + 7)]]
@@ -165,7 +174,7 @@ DROP INDEX t_idx1;
 
 # Verify that the notice is no longer shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx3;
 ----
 materialize.notices.t_idx3:
   ArrangeBy keys=[[(#0{a} + 7)]]
@@ -190,6 +199,31 @@ WHERE
   idx.name = 't_idx3'
 ----
 
-# This further tests `drop_plans_and_metainfos`
+# Create a new duplicate index that emits a notice, so that we can
+# test that DROP SCHEMA ... CASCADE retracts the notice along with
+# dropping the index via cascade.
+statement ok
+CREATE INDEX t_idx4 ON t(a + 7);
+
+# Sanity: the notice for `t_idx4` is present.
+query I
+SELECT count(*)
+FROM mz_internal.mz_optimizer_notices
+WHERE notice_type = 'An identical index already exists'
+----
+1
+
+# This further tests `drop_optimizer_notices`, specifically that it
+# works for `DROP ... CASCADE`, which drops the index (that has the
+# notice attached) indirectly via dropping the schema.
 statement ok
 DROP SCHEMA notices CASCADE;
+
+# Verify that the cascade drop retracted the notice from the
+# builtin table.
+query I
+SELECT count(*)
+FROM mz_internal.mz_optimizer_notices
+WHERE notice_type = 'An identical index already exists'
+----
+0

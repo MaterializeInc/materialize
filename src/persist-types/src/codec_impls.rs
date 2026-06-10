@@ -18,13 +18,18 @@ use arrow::array::{
     StructArray,
 };
 use bytes::{BufMut, Bytes};
-use timely::order::Product;
 
-use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
+use crate::arrow::ArrayOrd;
+use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 use crate::stats::{ColumnStatKinds, ColumnarStats, NoneStats, StructStats};
-use crate::{Codec, Codec64, Opaque, ShardId};
+use crate::{Codec, Codec64, ShardId};
 
-/// An implementation of [Schema2] for [()].
+/// All codecs that are compatible with a blob of bytes use that same name. This allows us to
+/// switch between the codecs without any incompatibility errors. The name is chosen for historical
+/// reasons.
+const BYTES_CODEC_NAME: &str = "Vec<u8>";
+
+/// An implementation of [Schema] for [()].
 #[derive(Debug, Default, PartialEq)]
 pub struct UnitSchema;
 
@@ -89,6 +94,10 @@ impl ColumnDecoder<()> for UnitColumnar {
         }
     }
 
+    fn goodbytes(&self) -> usize {
+        0
+    }
+
     fn stats(&self) -> StructStats {
         StructStats {
             len: self.len,
@@ -117,7 +126,7 @@ impl ColumnEncoder<()> for UnitColumnar {
     }
 }
 
-impl Schema2<()> for UnitSchema {
+impl Schema<()> for UnitSchema {
     type ArrowColumn = NullArray;
     type Statistics = NoneStats;
 
@@ -192,6 +201,25 @@ impl SimpleColumnarData for Vec<u8> {
     }
 }
 
+impl SimpleColumnarData for Bytes {
+    type ArrowBuilder = BinaryBuilder;
+    type ArrowColumn = BinaryArray;
+
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
+        builder.values_slice().len()
+    }
+
+    fn push(&self, builder: &mut Self::ArrowBuilder) {
+        builder.append_value(&self)
+    }
+    fn push_null(builder: &mut Self::ArrowBuilder) {
+        builder.append_null()
+    }
+    fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
+        *self = Bytes::copy_from_slice(column.value(idx));
+    }
+}
+
 impl SimpleColumnarData for ShardId {
     type ArrowBuilder = StringBuilder;
     type ArrowColumn = StringArray;
@@ -258,17 +286,20 @@ impl<T: SimpleColumnarData> ColumnDecoder<T> for SimpleColumnarDecoder<T> {
     fn is_null(&self, idx: usize) -> bool {
         self.0.is_null(idx)
     }
+    fn goodbytes(&self) -> usize {
+        ArrayOrd::new(&self.0).goodbytes()
+    }
 
     fn stats(&self) -> StructStats {
         ColumnarStats::one_column_struct(self.0.len(), ColumnStatKinds::None)
     }
 }
 
-/// An implementation of [Schema2] for [String].
+/// An implementation of [Schema] for [String].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StringSchema;
 
-impl Schema2<String> for StringSchema {
+impl Schema<String> for StringSchema {
     type ArrowColumn = StringArray;
     type Statistics = NoneStats;
 
@@ -313,11 +344,11 @@ impl Codec for String {
     }
 }
 
-/// An implementation of [Schema2] for [`Vec<u8>`].
+/// An implementation of [Schema] for [`Vec<u8>`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct VecU8Schema;
 
-impl Schema2<Vec<u8>> for VecU8Schema {
+impl Schema<Vec<u8>> for VecU8Schema {
     type ArrowColumn = BinaryArray;
     type Statistics = NoneStats;
 
@@ -333,12 +364,28 @@ impl Schema2<Vec<u8>> for VecU8Schema {
     }
 }
 
+impl Schema<Bytes> for VecU8Schema {
+    type ArrowColumn = BinaryArray;
+    type Statistics = NoneStats;
+
+    type Decoder = SimpleColumnarDecoder<Bytes>;
+    type Encoder = SimpleColumnarEncoder<Bytes>;
+
+    fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+        Ok(SimpleColumnarEncoder::default())
+    }
+
+    fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+        Ok(SimpleColumnarDecoder::new(col))
+    }
+}
+
 impl Codec for Vec<u8> {
     type Storage = ();
     type Schema = VecU8Schema;
 
     fn codec_name() -> String {
-        "Vec<u8>".into()
+        BYTES_CODEC_NAME.into()
     }
 
     fn encode<B>(&self, buf: &mut B)
@@ -350,6 +397,35 @@ impl Codec for Vec<u8> {
 
     fn decode<'a>(buf: &'a [u8], _schema: &VecU8Schema) -> Result<Self, String> {
         Ok(buf.to_owned())
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        VecU8Schema
+    }
+}
+
+impl Codec for Bytes {
+    type Storage = ();
+    type Schema = VecU8Schema;
+
+    fn codec_name() -> String {
+        BYTES_CODEC_NAME.into()
+    }
+
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        buf.put(self.into_iter().as_slice())
+    }
+
+    fn decode<'a>(buf: &'a [u8], _schema: &VecU8Schema) -> Result<Self, String> {
+        Ok(Bytes::copy_from_slice(buf))
     }
 
     fn encode_schema(_schema: &Self::Schema) -> Bytes {
@@ -384,11 +460,11 @@ impl Codec for ShardId {
     }
 }
 
-/// An implementation of [Schema2] for [ShardId].
+/// An implementation of [Schema] for [ShardId].
 #[derive(Debug, PartialEq)]
 pub struct ShardIdSchema;
 
-impl Schema2<ShardId> for ShardIdSchema {
+impl Schema<ShardId> for ShardIdSchema {
     type ArrowColumn = StringArray;
     type Statistics = NoneStats;
 
@@ -432,39 +508,7 @@ impl Codec64 for u64 {
     }
 }
 
-impl Opaque for u64 {
-    fn initial() -> Self {
-        u64::MIN
-    }
-}
-
-impl Codec64 for Product<u32, u32> {
-    fn codec_name() -> String {
-        "Product<u32, u32>".to_owned()
-    }
-
-    fn encode(&self) -> [u8; 8] {
-        let o = self.outer.to_le_bytes();
-        let i = self.inner.to_le_bytes();
-        [o[0], o[1], o[2], o[3], i[0], i[1], i[2], i[3]]
-    }
-
-    fn decode(buf: [u8; 8]) -> Self {
-        let outer = [buf[0], buf[1], buf[2], buf[3]];
-        let inner = [buf[4], buf[5], buf[6], buf[7]];
-        Product::new(u32::from_le_bytes(outer), u32::from_le_bytes(inner))
-    }
-}
-
-// TODO: Remove this once we wrap coord epochs in an `Epoch` struct and impl
-// Opaque on `Epoch` instead.
-impl Opaque for i64 {
-    fn initial() -> Self {
-        i64::MIN
-    }
-}
-
-/// A placeholder for a [Codec] impl that hasn't yet gotten a real [Schema2].
+/// A placeholder for a [Codec] impl that hasn't yet gotten a real [Schema].
 #[derive(Debug)]
 pub struct TodoSchema<T>(PhantomData<T>);
 
@@ -480,7 +524,7 @@ impl<T> PartialEq for TodoSchema<T> {
     }
 }
 
-impl<T: Debug + Send + Sync> Schema2<T> for TodoSchema<T> {
+impl<T: Debug + Send + Sync> Schema<T> for TodoSchema<T> {
     type ArrowColumn = StructArray;
     type Statistics = NoneStats;
 
@@ -530,6 +574,10 @@ impl<T> ColumnDecoder<T> for TodoColumnarDecoder<T> {
     }
 
     fn is_null(&self, _idx: usize) -> bool {
+        panic!("TODO")
+    }
+
+    fn goodbytes(&self) -> usize {
         panic!("TODO")
     }
 

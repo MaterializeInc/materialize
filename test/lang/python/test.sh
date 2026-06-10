@@ -19,6 +19,6 @@ cd "$(dirname "$0")/../../.."
 
 cd test/lang/python
 
-pip install -r requirements.txt --no-build-isolation
+pip install -r requirements.txt
 
 python -m unittest smoketest

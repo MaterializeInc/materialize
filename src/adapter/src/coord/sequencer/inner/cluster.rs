@@ -12,22 +12,21 @@ use std::time::{Duration, Instant};
 
 use itertools::Itertools;
 use maplit::btreeset;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::memory::objects::{
     ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged,
 };
-use mz_compute_client::controller::ComputeReplicaConfig;
+use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
     ReplicaLogging,
 };
-use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
-use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, ObjectType};
+use mz_sql::catalog::{CatalogCluster, ObjectType};
 use mz_sql::plan::{
     self, AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan,
@@ -36,16 +35,17 @@ use mz_sql::plan::{
 };
 use mz_sql::plan::{AlterClusterPlan, OnTimeoutAction};
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
-use tracing::{debug, Instrument, Span};
+use mz_sql::session::vars::{MAX_REPLICAS_PER_CLUSTER, SystemVars, Var};
+use tracing::{Instrument, Span, debug};
 
 use super::return_if_err;
+use crate::AdapterError::AlterClusterWhilePendingReplicas;
 use crate::catalog::{self, Op, ReplicaCreateDropReason};
 use crate::coord::{
     AlterCluster, AlterClusterFinalize, AlterClusterWaitForHydrated, ClusterStage, Coordinator,
     Message, PlanValidity, StageResult, Staged,
 };
-use crate::{session::Session, AdapterError, ExecuteContext, ExecuteResponse};
+use crate::{AdapterError, ExecuteContext, ExecuteResponse, session::Session};
 
 const PENDING_REPLICA_SUFFIX: &str = "-pending";
 
@@ -76,6 +76,7 @@ impl Staged for ClusterStage {
                     validity,
                     plan,
                     new_config,
+                    workload_class,
                     timeout_time,
                     on_timeout,
                 } = stage;
@@ -84,6 +85,7 @@ impl Staged for ClusterStage {
                         ctx.session(),
                         plan,
                         new_config,
+                        workload_class,
                         timeout_time,
                         on_timeout,
                         validity,
@@ -96,6 +98,7 @@ impl Staged for ClusterStage {
                         ctx.session(),
                         stage.plan.clone(),
                         stage.new_config.clone(),
+                        stage.workload_class.clone(),
                     )
                     .await
             }
@@ -128,7 +131,7 @@ impl Coordinator {
 
     #[instrument]
     async fn alter_cluster_validate(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::AlterClusterPlan,
     ) -> Result<ClusterStage, AdapterError> {
@@ -168,9 +171,8 @@ impl Coordinator {
             (Unmanaged, Reset) | (Unmanaged, Set(true)) => {
                 // Generate a minimal correct configuration
 
-                // Size and disk adjusted later when sequencing the actual configuration change.
+                // Size adjusted later when sequencing the actual configuration change.
                 let size = "".to_string();
-                let disk = false;
                 let logging = ReplicaLogging {
                     log_logging: false,
                     interval: Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
@@ -180,7 +182,6 @@ impl Coordinator {
                     availability_zones: Default::default(),
                     logging,
                     replication_factor: 1,
-                    disk,
                     optimizer_feature_overrides: Default::default(),
                     schedule: Default::default(),
                 });
@@ -193,18 +194,12 @@ impl Coordinator {
                 availability_zones,
                 logging,
                 replication_factor,
-                disk,
                 optimizer_feature_overrides: _,
                 schedule,
             }) => {
                 match &options.size {
                     Set(s) => size.clone_from(s),
                     Reset => coord_bail!("SIZE has no default value"),
-                    Unchanged => {}
-                }
-                match &options.disk {
-                    Set(d) => *disk = *d,
-                    Reset => *disk = self.catalog.system_config().disk_cluster_replicas_default(),
                     Unchanged => {}
                 }
                 match &options.availability_zones {
@@ -224,7 +219,12 @@ impl Coordinator {
                 }
                 match &options.replication_factor {
                     Set(rf) => *replication_factor = *rf,
-                    Reset => *replication_factor = 1,
+                    Reset => {
+                        *replication_factor = self
+                            .catalog
+                            .system_config()
+                            .default_cluster_replication_factor()
+                    }
                     Unchanged => {}
                 }
                 match &options.schedule {
@@ -269,7 +269,6 @@ impl Coordinator {
             )));
         }
 
-        let new_workload_class = new_config.workload_class.clone();
         match (&config.variant, &new_config.variant) {
             (Managed(_), Managed(new_config_managed)) => {
                 let alter_followup = self
@@ -281,56 +280,55 @@ impl Coordinator {
                         strategy.clone(),
                     )
                     .await?;
-                return match alter_followup {
-                    NeedsFinalization::Yes => {
-                        // For non backgrounded graceful alters,
-                        // store the cluster_id in the ConnMeta
-                        // to allow for cancellation.
-                        self.active_conns
-                            .get_mut(session.conn_id())
-                            .expect("There must be an active connection")
-                            .pending_cluster_alters
-                            .insert(cluster_id.clone());
-                        let new_config_managed = new_config_managed.clone();
-                        match &strategy {
-                            AlterClusterPlanStrategy::None => {
-                                return Err(AdapterError::Internal("AlterClusterPlanStrategy must not be None if NeedsFinalization is Yes".into()))
-                            }
-                            AlterClusterPlanStrategy::For(ref duration) => {
-                                let span = Span::current();
-                                let plan = plan.clone();
-                                let duration = duration.clone().to_owned();
-                                Ok(StageResult::Handle(mz_ore::task::spawn(
-                                    || "Finalize Alter Cluster",
-                                    async move {
-                                        tokio::time::sleep(duration).await;
-                                        let stage = ClusterStage::Finalize(AlterClusterFinalize {
-                                            validity,
-                                            plan,
-                                            new_config: new_config_managed,
-                                        });
-                                        Ok(Box::new(stage))
-                                    }
-                                    .instrument(span),
-                                )))
-                            }
-                            AlterClusterPlanStrategy::UntilReady{timeout, on_timeout} => {
-                                Ok(StageResult::Immediate(Box::new(
-                                    ClusterStage::WaitForHydrated(AlterClusterWaitForHydrated{
+                if alter_followup == NeedsFinalization::Yes {
+                    // For non backgrounded zero-downtime alters, store the
+                    // cluster_id in the ConnMeta to allow for cancellation.
+                    self.active_conns
+                        .get_mut(session.conn_id())
+                        .expect("There must be an active connection")
+                        .pending_cluster_alters
+                        .insert(cluster_id.clone());
+                    let new_config_managed = new_config_managed.clone();
+                    return match &strategy {
+                        AlterClusterPlanStrategy::None => Err(AdapterError::Internal(
+                            "AlterClusterPlanStrategy must not be None if NeedsFinalization is Yes"
+                                .into(),
+                        )),
+                        AlterClusterPlanStrategy::For(duration) => {
+                            let span = Span::current();
+                            let plan = plan.clone();
+                            let duration = duration.clone().to_owned();
+                            let workload_class = new_config.workload_class.clone();
+                            Ok(StageResult::Handle(mz_ore::task::spawn(
+                                || "Finalize Alter Cluster",
+                                async move {
+                                    tokio::time::sleep(duration).await;
+                                    let stage = ClusterStage::Finalize(AlterClusterFinalize {
                                         validity,
-                                        plan: plan.clone(),
-                                        new_config: new_config_managed.clone(),
-                                        timeout_time: Instant::now() + timeout.to_owned(),
-                                        on_timeout: on_timeout.to_owned(),
-                                    }),
-                                )))
-                            }
+                                        plan,
+                                        new_config: new_config_managed,
+                                        workload_class,
+                                    });
+                                    Ok(Box::new(stage))
+                                }
+                                .instrument(span),
+                            )))
                         }
-                    }
-                    NeedsFinalization::No => Ok(StageResult::Response(
-                        ExecuteResponse::AlteredObject(ObjectType::Cluster),
-                    )),
-                };
+                        AlterClusterPlanStrategy::UntilReady {
+                            timeout,
+                            on_timeout,
+                        } => Ok(StageResult::Immediate(Box::new(
+                            ClusterStage::WaitForHydrated(AlterClusterWaitForHydrated {
+                                validity,
+                                plan: plan.clone(),
+                                new_config: new_config_managed.clone(),
+                                workload_class: new_config.workload_class.clone(),
+                                timeout_time: Instant::now() + timeout.to_owned(),
+                                on_timeout: on_timeout.to_owned(),
+                            }),
+                        ))),
+                    };
+                }
             }
             (Unmanaged, Managed(_)) => {
                 self.sequence_alter_cluster_unmanaged_to_managed(
@@ -356,9 +354,6 @@ impl Coordinator {
             }
         }
 
-        self.controller
-            .update_cluster_workload_class(cluster_id, new_workload_class)?;
-
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Cluster,
         )))
@@ -373,6 +368,7 @@ impl Coordinator {
             ..
         }: AlterClusterPlan,
         new_config: ClusterVariantManaged,
+        workload_class: Option<String>,
     ) -> Result<StageResult<Box<ClusterStage>>, AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let mut ops = vec![];
@@ -438,7 +434,7 @@ impl Coordinator {
                     }) => {
                         *pending = false;
                     }
-                    _ => {}
+                    mz_controller::clusters::ReplicaLocation::Unmanaged(_) => {}
                 }
 
                 let mut replica_ops = vec![];
@@ -472,7 +468,7 @@ impl Coordinator {
             name: cluster_name,
             config: ClusterConfig {
                 variant: ClusterVariant::Managed(new_config),
-                workload_class: cluster.config.workload_class.clone(),
+                workload_class: workload_class.clone(),
             },
         });
         self.catalog_transact(Some(session), ops).await?;
@@ -483,6 +479,7 @@ impl Coordinator {
             .expect("There must be an active connection")
             .pending_cluster_alters
             .remove(&cluster_id);
+
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Cluster,
         )))
@@ -493,6 +490,7 @@ impl Coordinator {
         session: &Session,
         plan: AlterClusterPlan,
         new_config: ClusterVariantManaged,
+        workload_class: Option<String>,
         timeout_time: Instant,
         on_timeout: OnTimeoutAction,
         validity: PlanValidity,
@@ -538,6 +536,7 @@ impl Coordinator {
                                 validity,
                                 plan,
                                 new_config,
+                                workload_class,
                             });
                             Ok(Box::new(stage))
                         }
@@ -546,26 +545,33 @@ impl Coordinator {
                 }
             }
         }
-        let hydrated_fut = self
+        let compute_hydrated_fut = self
             .controller
             .compute
-            .collections_hydrated_for_replicas(cluster.id, pending_replicas, [].into())
+            .collections_hydrated_for_replicas(cluster.id, pending_replicas.clone(), [].into())
+            .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
+
+        let storage_hydrated = self
+            .controller
+            .storage
+            .collections_hydrated_on_replicas(Some(pending_replicas), &cluster.id, &[].into())
             .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "Alter Cluster: wait for hydrated",
             async move {
-                let hydrated = hydrated_fut
+                let compute_hydrated = compute_hydrated_fut
                     .await
                     .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
 
-                if hydrated {
+                if compute_hydrated && storage_hydrated {
                     // We're done
                     Ok(Box::new(ClusterStage::Finalize(AlterClusterFinalize {
                         validity,
                         plan,
-                        new_config,
+                        new_config: new_config.clone(),
+                        workload_class: workload_class.clone(),
                     })))
                 } else {
                     // Check later
@@ -574,6 +580,7 @@ impl Coordinator {
                         validity,
                         plan,
                         new_config,
+                        workload_class,
                         timeout_time,
                         on_timeout,
                     });
@@ -596,7 +603,8 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_cluster");
 
-        let id = self.catalog_mut().allocate_user_cluster_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let id = self.catalog().allocate_user_cluster_id(id_ts).await?;
         // The catalog items for the introspection sources are shared between all replicas
         // of a compute instance, so we create them unconditionally during instance creation.
         // Whether a replica actually maintains introspection arrangements is determined by the
@@ -617,7 +625,6 @@ impl Coordinator {
                     availability_zones: plan.availability_zones.clone(),
                     logging,
                     replication_factor: plan.replication_factor,
-                    disk: plan.disk,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                     schedule: plan.schedule.clone(),
                 })
@@ -657,7 +664,6 @@ impl Coordinator {
             compute,
             replication_factor,
             size,
-            disk,
             optimizer_feature_overrides: _,
             schedule: _,
         }: CreateClusterManagedPlan,
@@ -680,13 +686,15 @@ impl Coordinator {
         // `catalog_transact` will do this validation too, but allocating
         // replica IDs is expensive enough that we need to do this validation
         // before allocating replica IDs. See database-issues#6046.
-        self.validate_resource_limit(
-            0,
-            i64::from(replication_factor),
-            SystemVars::max_replicas_per_cluster,
-            "cluster replica",
-            MAX_REPLICAS_PER_CLUSTER.name(),
-        )?;
+        if cluster_id.is_user() {
+            self.validate_resource_limit(
+                0,
+                i64::from(replication_factor),
+                SystemVars::max_replicas_per_cluster,
+                "cluster replica",
+                MAX_REPLICAS_PER_CLUSTER.name(),
+            )?;
+        }
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
             self.create_managed_cluster_replica_op(
@@ -700,7 +708,6 @@ impl Coordinator {
                 } else {
                     Some(availability_zones.as_ref())
                 },
-                disk,
                 false,
                 *session.current_role_id(),
                 ReplicaCreateDropReason::Manual,
@@ -708,8 +715,6 @@ impl Coordinator {
         }
 
         self.catalog_transact(Some(session), ops).await?;
-
-        self.create_cluster(cluster_id).await;
 
         Ok(ExecuteResponse::CreatedCluster)
     }
@@ -722,7 +727,6 @@ impl Coordinator {
         size: &String,
         ops: &mut Vec<Op>,
         azs: Option<&[String]>,
-        disk: bool,
         pending: bool,
         owner_id: RoleId,
         reason: ReplicaCreateDropReason,
@@ -730,7 +734,6 @@ impl Coordinator {
         let location = mz_catalog::durable::ReplicaLocation::Managed {
             availability_zone: None,
             billed_as: None,
-            disk,
             internal: false,
             size: size.clone(),
             pending,
@@ -808,13 +811,15 @@ impl Coordinator {
         // `catalog_transact` will do this validation too, but allocating
         // replica IDs is expensive enough that we need to do this validation
         // before allocating replica IDs. See database-issues#6046.
-        self.validate_resource_limit(
-            0,
-            i64::try_from(replicas.len()).unwrap_or(i64::MAX),
-            SystemVars::max_replicas_per_cluster,
-            "cluster replica",
-            MAX_REPLICAS_PER_CLUSTER.name(),
-        )?;
+        if id.is_user() {
+            self.validate_resource_limit(
+                0,
+                i64::try_from(replicas.len()).unwrap_or(i64::MAX),
+                SystemVars::max_replicas_per_cluster,
+                "cluster replica",
+                MAX_REPLICAS_PER_CLUSTER.name(),
+            )?;
+        }
 
         for (replica_name, replica_config) in replicas {
             // If the AZ was not specified, choose one, round-robin, from the ones with
@@ -822,18 +827,12 @@ impl Coordinator {
             let (compute, location) = match replica_config {
                 mz_sql::plan::ReplicaConfig::Unorchestrated {
                     storagectl_addrs,
-                    storage_addrs,
                     computectl_addrs,
-                    compute_addrs,
-                    workers,
                     compute,
                 } => {
                     let location = mz_catalog::durable::ReplicaLocation::Unmanaged {
                         storagectl_addrs,
-                        storage_addrs,
                         computectl_addrs,
-                        compute_addrs,
-                        workers,
                     };
                     (compute, location)
                 }
@@ -841,7 +840,6 @@ impl Coordinator {
                     availability_zone,
                     billed_as,
                     compute,
-                    disk,
                     internal,
                     size,
                 } => {
@@ -857,7 +855,6 @@ impl Coordinator {
                     let location = mz_catalog::durable::ReplicaLocation::Managed {
                         availability_zone,
                         billed_as,
-                        disk,
                         internal,
                         size: size.clone(),
                         pending: false,
@@ -898,45 +895,7 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        self.create_cluster(id).await;
-
         Ok(ExecuteResponse::CreatedCluster)
-    }
-
-    async fn create_cluster(&mut self, cluster_id: ClusterId) {
-        let Coordinator {
-            catalog,
-            controller,
-            ..
-        } = self;
-        let cluster = catalog.get_cluster(cluster_id);
-        let cluster_id = cluster.id;
-        let introspection_source_ids: Vec<_> =
-            cluster.log_indexes.iter().map(|(_, id)| *id).collect();
-
-        controller
-            .create_cluster(
-                cluster_id,
-                mz_controller::clusters::ClusterConfig {
-                    arranged_logs: cluster.log_indexes.clone(),
-                    workload_class: cluster.config.workload_class.clone(),
-                },
-            )
-            .expect("creating cluster must not fail");
-
-        let replica_ids: Vec<_> = cluster.replicas().map(|r| r.replica_id).collect();
-        for replica_id in replica_ids {
-            self.create_cluster_replica(cluster_id, replica_id).await;
-        }
-
-        if !introspection_source_ids.is_empty() {
-            self.initialize_compute_read_policies(
-                introspection_source_ids,
-                cluster_id,
-                CompactionWindow::Default,
-            )
-            .await;
-        }
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -953,18 +912,12 @@ impl Coordinator {
         let (compute, location) = match config {
             mz_sql::plan::ReplicaConfig::Unorchestrated {
                 storagectl_addrs,
-                storage_addrs,
                 computectl_addrs,
-                compute_addrs,
-                workers,
                 compute,
             } => {
                 let location = mz_catalog::durable::ReplicaLocation::Unmanaged {
                     storagectl_addrs,
-                    storage_addrs,
                     computectl_addrs,
-                    compute_addrs,
-                    workers,
                 };
                 (compute, location)
             }
@@ -972,7 +925,6 @@ impl Coordinator {
                 availability_zone,
                 billed_as,
                 compute,
-                disk,
                 internal,
                 size,
             } => {
@@ -986,7 +938,6 @@ impl Coordinator {
                 let location = mz_catalog::durable::ReplicaLocation::Managed {
                     availability_zone,
                     billed_as,
-                    disk,
                     internal,
                     size,
                     pending: false,
@@ -1052,40 +1003,7 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), vec![op]).await?;
 
-        let id = self
-            .catalog()
-            .resolve_replica_in_cluster(&cluster_id, &name)
-            .expect("just created")
-            .replica_id();
-        self.create_cluster_replica(cluster_id, id).await;
-
         Ok(ExecuteResponse::CreatedClusterReplica)
-    }
-
-    async fn create_cluster_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        let cluster = self.catalog().get_cluster(cluster_id);
-        let role = cluster.role();
-        let replica_config = cluster
-            .replica(replica_id)
-            .expect("known to exist")
-            .config
-            .clone();
-
-        let enable_worker_core_affinity =
-            self.catalog().system_config().enable_worker_core_affinity();
-
-        self.controller
-            .create_replica(
-                cluster_id,
-                replica_id,
-                role,
-                replica_config,
-                enable_worker_core_affinity,
-            )
-            .expect("creating replicas must not fail");
-
-        self.install_introspection_subscribes(cluster_id, replica_id)
-            .await;
     }
 
     /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should
@@ -1109,7 +1027,6 @@ impl Coordinator {
         let owner_id = cluster.owner_id();
 
         let mut ops = vec![];
-        let mut create_cluster_replicas = vec![];
         let mut finalization_needed = NeedsFinalization::No;
 
         let ClusterVariant::Managed(ClusterVariantManaged {
@@ -1117,7 +1034,6 @@ impl Coordinator {
             availability_zones,
             logging,
             replication_factor,
-            disk,
             optimizer_feature_overrides: _,
             schedule: _,
         }) = &cluster.config.variant
@@ -1129,7 +1045,6 @@ impl Coordinator {
             replication_factor: new_replication_factor,
             availability_zones: new_availability_zones,
             logging: new_logging,
-            disk: new_disk,
             optimizer_feature_overrides: _,
             schedule: _,
         }) = &new_config.variant
@@ -1145,7 +1060,7 @@ impl Coordinator {
 
         // check for active updates
         if cluster.replicas().any(|r| r.config.location.pending()) {
-            coord_bail!("Cannot Alter clusters with pending updates.")
+            return Err(AlterClusterWhilePendingReplicas);
         }
 
         let compute = mz_sql::plan::ComputeReplicaConfig {
@@ -1162,25 +1077,25 @@ impl Coordinator {
         // replica IDs is expensive enough that we need to do this validation
         // before allocating replica IDs. See database-issues#6046.
         if new_replication_factor > replication_factor {
-            self.validate_resource_limit(
-                usize::cast_from(*replication_factor),
-                i64::from(*new_replication_factor) - i64::from(*replication_factor),
-                SystemVars::max_replicas_per_cluster,
-                "cluster replica",
-                MAX_REPLICAS_PER_CLUSTER.name(),
-            )?;
+            if cluster_id.is_user() {
+                self.validate_resource_limit(
+                    usize::cast_from(*replication_factor),
+                    i64::from(*new_replication_factor) - i64::from(*replication_factor),
+                    SystemVars::max_replicas_per_cluster,
+                    "cluster replica",
+                    MAX_REPLICAS_PER_CLUSTER.name(),
+                )?;
+            }
         }
 
         if new_size != size
             || new_availability_zones != availability_zones
             || new_logging != logging
-            || new_disk != disk
         {
             self.ensure_valid_azs(new_availability_zones.iter())?;
-            // If we're not doing a graceful reconfig
-            // tear down all replicas, create new ones
-            // else create the pending replicas and return
-            // early asking for finalization
+            // If we're not doing a zero-downtime reconfig tear down all
+            // replicas, create new ones else create the pending replicas and
+            // return early asking for finalization
             match strategy {
                 AlterClusterPlanStrategy::None => {
                     let replica_ids_and_reasons = (0..*replication_factor)
@@ -1203,12 +1118,10 @@ impl Coordinator {
                             new_size,
                             &mut ops,
                             Some(new_availability_zones.as_ref()),
-                            *new_disk,
                             false,
                             owner_id,
                             reason.clone(),
                         )?;
-                        create_cluster_replicas.push((cluster_id, name));
                     }
                 }
                 AlterClusterPlanStrategy::For(_) | AlterClusterPlanStrategy::UntilReady { .. } => {
@@ -1221,12 +1134,10 @@ impl Coordinator {
                             new_size,
                             &mut ops,
                             Some(new_availability_zones.as_ref()),
-                            *new_disk,
                             true,
                             owner_id,
                             reason.clone(),
                         )?;
-                        create_cluster_replicas.push((cluster_id, name));
                     }
                     finalization_needed = NeedsFinalization::Yes;
                 }
@@ -1259,12 +1170,10 @@ impl Coordinator {
                     // AVAILABILITY ZONES hasn't changed, so existing replicas don't need to be
                     // rescheduled.
                     Some(new_availability_zones.as_ref()),
-                    *new_disk,
                     false,
                     owner_id,
                     reason.clone(),
                 )?;
-                create_cluster_replicas.push((cluster_id, name))
             }
         }
 
@@ -1274,21 +1183,13 @@ impl Coordinator {
             NeedsFinalization::No => {
                 ops.push(catalog::Op::UpdateClusterConfig {
                     id: cluster_id,
-                    name,
+                    name: name.clone(),
                     config: new_config,
                 });
             }
-            _ => {}
+            NeedsFinalization::Yes => {}
         }
-        self.catalog_transact(session, ops.clone()).await?;
-        for (cluster_id, replica_name) in create_cluster_replicas {
-            let replica_id = self
-                .catalog()
-                .resolve_replica_in_cluster(&cluster_id, &replica_name)
-                .expect("just created")
-                .replica_id();
-            self.create_cluster_replica(cluster_id, replica_id).await;
-        }
+        self.catalog_transact(session, ops).await?;
         Ok(finalization_needed)
     }
 
@@ -1310,7 +1211,6 @@ impl Coordinator {
             replication_factor: new_replication_factor,
             availability_zones: new_availability_zones,
             logging: _,
-            disk: new_disk,
             optimizer_feature_overrides: _,
             schedule: _,
         }) = &mut new_config.variant
@@ -1328,7 +1228,9 @@ impl Coordinator {
             AlterOptionParameter::Set(_) => {
                 // Validate that the replication factor matches the current length only if specified.
                 if user_replica_count != *new_replication_factor {
-                    coord_bail!("REPLICATION FACTOR {new_replication_factor} does not match number of replicas ({user_replica_count})");
+                    coord_bail!(
+                        "REPLICATION FACTOR {new_replication_factor} does not match number of replicas ({user_replica_count})"
+                    );
                 }
             }
             _ => {
@@ -1338,7 +1240,6 @@ impl Coordinator {
 
         let mut names = BTreeSet::new();
         let mut sizes = BTreeSet::new();
-        let mut disks = BTreeSet::new();
 
         self.ensure_valid_azs(new_availability_zones.iter())?;
 
@@ -1351,7 +1252,6 @@ impl Coordinator {
                 ),
                 ReplicaLocation::Managed(location) => {
                     sizes.insert(location.size.clone());
-                    disks.insert(location.disk);
 
                     if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
                         &location.availability_zones
@@ -1377,7 +1277,7 @@ impl Coordinator {
                 AlterOptionParameter::Reset | AlterOptionParameter::Unchanged => {
                     coord_bail!("Missing SIZE for empty cluster")
                 }
-                _ => {} // Was set within the calling function.
+                AlterOptionParameter::Set(_) => {} // Was set within the calling function.
             }
         } else if sizes.len() == 1 {
             let size = sizes.into_iter().next().expect("must exist");
@@ -1410,22 +1310,6 @@ impl Coordinator {
                 .join(", ");
             coord_bail!(
                 "Cannot convert unmanaged cluster to managed, invalid replica names: {formatted}"
-            );
-        }
-
-        if disks.len() == 1 {
-            let disk = disks.into_iter().next().expect("must exist");
-            match &options.disk {
-                AlterOptionParameter::Set(ds) if *ds != disk => {
-                    coord_bail!(
-                        "Cluster replicas with DISK {disk} do not match expected DISK {ds}"
-                    );
-                }
-                _ => *new_disk = disk,
-            }
-        } else if !disks.is_empty() {
-            coord_bail!(
-                "Cannot convert unmanaged cluster to managed, non-unique replica DISK options"
             );
         }
 
@@ -1482,7 +1366,7 @@ impl Coordinator {
 
     pub(crate) async fn sequence_alter_cluster_rename(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         AlterClusterRenamePlan { id, name, to_name }: AlterClusterRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = Op::RenameCluster {
@@ -1492,7 +1376,7 @@ impl Coordinator {
             check_reserved_names: true,
         };
         match self
-            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
@@ -1502,7 +1386,7 @@ impl Coordinator {
 
     pub(crate) async fn sequence_alter_cluster_swap(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         AlterClusterSwapPlan {
             id_a,
             id_b,
@@ -1531,7 +1415,9 @@ impl Coordinator {
         };
 
         match self
-            .catalog_transact_with_ddl_transaction(session, vec![op_a, op_b, op_temp])
+            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_temp], |_, _| {
+                Box::pin(async {})
+            })
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
@@ -1587,6 +1473,7 @@ fn managed_cluster_replica_name(index: u32) -> String {
 
 /// The type of finalization needed after an
 /// operation such as alter_cluster_managed_to_managed.
+#[derive(PartialEq)]
 pub(crate) enum NeedsFinalization {
     /// Wait for the provided duration before finalizing
     Yes,

@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 # Verify that we can (and continue to do so) ingest debezium topics that don't
 # have a `before` field in their schema.
@@ -99,6 +101,7 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 {"id": 1} {"after": {"row": {"id": 1, "creature": "lizard"}}, "op": "c", "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
 > CREATE CLUSTER dbz_no_before_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE dbz_no_before
   IN CLUSTER dbz_no_before_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbz-no-before-${testdrive.seed}')
@@ -106,6 +109,7 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 > CREATE TABLE dbz_no_before_tbl FROM SOURCE dbz_no_before (REFERENCE "testdrive-dbz-no-before-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * FROM dbz_no_before_tbl
 id creature

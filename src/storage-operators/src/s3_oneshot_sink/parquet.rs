@@ -12,12 +12,14 @@ use std::sync::Arc;
 use aws_types::sdk_config::SdkConfig;
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_aws_util::s3_uploader::{
-    CompletedUpload, S3MultiPartUploader, S3MultiPartUploaderConfig, AWS_S3_MAX_PART_COUNT,
+    AWS_S3_MAX_PART_COUNT, CompletedUpload, S3MultiPartUploader, S3MultiPartUploaderConfig,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::future::OreFutureExt;
 use mz_repr::{GlobalId, RelationDesc, Row};
+use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
+use parquet::file::properties::EnabledStatistics;
 use parquet::{
     arrow::arrow_writer::ArrowWriter,
     basic::Compression,
@@ -25,7 +27,7 @@ use parquet::{
 };
 use tracing::{debug, info};
 
-use super::{CopyToParameters, CopyToS3Uploader, S3KeyManager};
+use super::{CopyToParameters, CopyToS3Uploader};
 
 /// Set the default capacity for the array builders inside the ArrowBuilder. This is the
 /// number of items each builder can hold before it needs to allocate more memory.
@@ -182,7 +184,7 @@ impl CopyToS3Uploader for ParquetUploader {
                 active_file: None,
                 params,
             }),
-            _ => anyhow::bail!("Expected Parquet format"),
+            S3SinkFormat::PgCopy(_) => anyhow::bail!("Expected Parquet format"),
         }
     }
 
@@ -210,6 +212,11 @@ impl CopyToS3Uploader for ParquetUploader {
                 .run_in_task(|| "ParquetFile::finish")
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn force_new_file(&mut self) -> Result<(), anyhow::Error> {
+        self.start_new_file().await?;
         Ok(())
     }
 }
@@ -284,6 +291,7 @@ impl ParquetFile {
             // Max compatibility
             .set_writer_version(WriterVersion::PARQUET_1_0)
             .set_compression(Compression::SNAPPY)
+            .set_statistics_enabled(EnabledStatistics::None)
             .build();
 
         // TODO: Consider using an lgalloc buffer here instead of a vec

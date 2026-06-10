@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE money_type (f1 MONEY);
 ALTER TABLE money_type REPLICA IDENTITY FULL;
 INSERT INTO money_type VALUES (NULL), (12.34);
+ANALYZE;
 
 # waiting for the subject fails with "subject not found"
 $ skip-if
@@ -28,12 +29,14 @@ $ schema-registry-wait topic=postgres.public.money_type
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE money_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.money_type');
 
 > CREATE TABLE money_type_tbl FROM SOURCE money_type (REFERENCE "postgres.public.money_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 ! SELECT * FROM money_type_tbl;
 contains:decimals with precision greater than 38 are not supported

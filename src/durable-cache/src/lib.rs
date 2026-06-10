@@ -13,11 +13,12 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
+use std::time::Duration;
 
-use differential_dataflow::consolidation::consolidate;
+use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use mz_ore::collections::{AssociativeExt, HashSet};
 use mz_ore::soft_panic_or_log;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{ListenEvent, Subscribe};
 use mz_persist_client::write::WriteHandle;
@@ -62,7 +63,7 @@ struct LocalVal<C: DurableCacheCodec> {
 
 #[derive(Debug)]
 pub struct DurableCache<C: DurableCacheCodec> {
-    since_handle: SinceHandle<C::KeyCodec, C::ValCodec, u64, i64, i64>,
+    since_handle: SinceHandle<C::KeyCodec, C::ValCodec, u64, i64>,
     write: WriteHandle<C::KeyCodec, C::ValCodec, u64, i64>,
     subscribe: Subscribe<C::KeyCodec, C::ValCodec, u64, i64>,
 
@@ -70,22 +71,23 @@ pub struct DurableCache<C: DurableCacheCodec> {
     local_progress: u64,
 }
 
+const USE_CRITICAL_SINCE: bool = true;
+
 impl<C: DurableCacheCodec> DurableCache<C> {
     /// Opens a [`DurableCache`] using shard `shard_id`.
     pub async fn new(persist: &PersistClient, shard_id: ShardId, purpose: &str) -> Self {
-        let use_critical_since = true;
-        let shard_name = format!("{purpose}_cache");
-        let handle_purpose = format!("durable persist cache: {purpose}");
+        let diagnostics = Diagnostics {
+            shard_name: format!("{purpose}_cache"),
+            handle_purpose: format!("durable persist cache: {purpose}"),
+        };
         let since_handle = persist
             .open_critical_since(
                 shard_id,
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                Diagnostics {
-                    shard_name: shard_name.clone(),
-                    handle_purpose: handle_purpose.clone(),
-                },
+                Opaque::encode(&i64::MIN),
+                diagnostics.clone(),
             )
             .await
             .expect("invalid usage");
@@ -95,17 +97,19 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 shard_id,
                 Arc::new(key_schema),
                 Arc::new(val_schema),
-                Diagnostics {
-                    shard_name,
-                    handle_purpose,
-                },
-                use_critical_since,
+                diagnostics,
+                USE_CRITICAL_SINCE,
             )
             .await
             .expect("shard codecs should not change");
         // Ensure that at least one ts is immediately readable, for convenience.
         let res = write
-            .compare_and_append_batch(&mut [], Antichain::from_elem(0), Antichain::from_elem(1))
+            .compare_and_append_batch(
+                &mut [],
+                Antichain::from_elem(0),
+                Antichain::from_elem(1),
+                true,
+            )
             .await
             .expect("usage was valid");
         match res {
@@ -133,44 +137,76 @@ impl<C: DurableCacheCodec> DurableCache<C> {
 
     async fn sync_to(&mut self, progress: Option<u64>) -> u64 {
         let progress = progress.expect("cache shard should not be closed");
+        let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
+
         while self.local_progress < progress {
             let events = self.subscribe.fetch_next().await;
             for event in events {
                 match event {
-                    ListenEvent::Updates(x) => {
-                        for ((k, v), t, d) in x {
-                            let encoded_key = k.unwrap();
-                            let encoded_val = v.unwrap();
-                            let (decoded_key, decoded_val) = C::decode(&encoded_key, &encoded_val);
-                            let val = LocalVal {
-                                encoded_key,
-                                decoded_val,
-                                encoded_val,
-                            };
-
-                            if d == 1 {
-                                self.local
-                                    .expect_insert(decoded_key, val, "duplicate cache entry");
-                            } else if d == -1 {
-                                let prev = self
-                                    .local
-                                    .expect_remove(&decoded_key, "entry does not exist");
-                                assert_eq!(val, prev, "removed val does not match expected val");
-                            } else {
-                                panic!(
-                                    "unexpected diff: (({:?}, {:?}), {}, {})",
-                                    decoded_key, val.decoded_val, t, d
-                                );
-                            }
+                    ListenEvent::Updates(batch_updates) => {
+                        debug!("syncing updates {batch_updates:?}");
+                        for update in batch_updates {
+                            updates.entry(update.1).or_default().push(update);
                         }
                     }
                     ListenEvent::Progress(x) => {
+                        debug!("synced up to {x:?}");
                         self.local_progress =
-                            x.into_option().expect("cache shard should not be closed")
+                            x.into_option().expect("cache shard should not be closed");
+                        // Apply updates in batches of complete timestamps so that we don't attempt
+                        // to apply a subset of the updates from a timestamp.
+                        while let Some((ts, mut updates)) = updates.pop_first() {
+                            assert!(
+                                ts < self.local_progress,
+                                "expected {} < {}",
+                                ts,
+                                self.local_progress
+                            );
+                            assert!(
+                                updates.iter().all(|(_, update_ts, _)| ts == *update_ts),
+                                "all updates should be for time {ts}, updates: {updates:?}"
+                            );
+
+                            consolidate_updates(&mut updates);
+                            updates.sort_by(|(_, _, d1), (_, _, d2)| d1.cmp(d2));
+                            for ((k, v), t, d) in updates {
+                                let encoded_key = k;
+                                let encoded_val = v;
+                                let (decoded_key, decoded_val) =
+                                    C::decode(&encoded_key, &encoded_val);
+                                let val = LocalVal {
+                                    encoded_key,
+                                    decoded_val,
+                                    encoded_val,
+                                };
+
+                                if d == 1 {
+                                    self.local.expect_insert(
+                                        decoded_key,
+                                        val,
+                                        "duplicate cache entry",
+                                    );
+                                } else if d == -1 {
+                                    let prev = self
+                                        .local
+                                        .expect_remove(&decoded_key, "entry does not exist");
+                                    assert_eq!(
+                                        val, prev,
+                                        "removed val does not match expected val"
+                                    );
+                                } else {
+                                    panic!(
+                                        "unexpected diff: (({:?}, {:?}), {}, {})",
+                                        decoded_key, val.decoded_val, t, d
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+        assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
         progress
     }
 
@@ -307,7 +343,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         // TODO(jkosh44) With the proper lifetime incantations, we might be able to accept
         // references to `C::KeyCodec` and `C::ValCodec`, since that's what
         // `WriteHandle::compare_and_append` wants. That would avoid some clones from callers of
-        // this method.i
+        // this method.
         I: IntoIterator<Item = ((C::KeyCodec, C::ValCodec), i64)>,
     {
         let expected_upper = write_ts;
@@ -329,16 +365,40 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         // (See the method documentation for details.)
         // That's not needed here, so we use the since handle's opaque token to avoid any comparison
         // failures.
-        let opaque = *self.since_handle.opaque();
+        let opaque = self.since_handle.opaque().clone();
         let ret = self
             .since_handle
             .compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
             .await;
         if let Err(e) = ret {
-            soft_panic_or_log!("found opaque value {e}, but expected {opaque}");
+            soft_panic_or_log!("found opaque value {e:?}, but expected {opaque:?}");
         }
 
         Ok(new_upper)
+    }
+
+    /// Forcibly compacts the shard backing this cache. See
+    /// [`mz_persist_client::cli::admin::dangerous_force_compaction_and_break_pushdown`].
+    pub async fn dangerous_compact_shard(
+        &self,
+        fuel: impl Fn() -> usize,
+        wait: impl Fn() -> Duration,
+    ) {
+        mz_persist_client::cli::admin::dangerous_force_compaction_and_break_pushdown(
+            &self.write,
+            fuel,
+            wait,
+        )
+        .await
+    }
+
+    /// Upgrade the version associated with the backing shard. This should only be done once
+    /// we've durably upgraded to the new version.
+    pub async fn upgrade_version(&self) {
+        self.since_handle
+            .upgrade_version()
+            .await
+            .expect("invalid usage")
     }
 }
 
@@ -346,8 +406,8 @@ impl<C: DurableCacheCodec> DurableCache<C> {
 mod tests {
     use mz_ore::assert_none;
     use mz_persist_client::cache::PersistClientCache;
-    use mz_persist_types::codec_impls::StringSchema;
     use mz_persist_types::PersistLocation;
+    use mz_persist_types::codec_impls::StringSchema;
 
     use super::*;
 
@@ -470,5 +530,10 @@ mod tests {
                 (&"k5".into(), &"v50".into()),
             ]
         );
+
+        // Test that compaction actually completes.
+        let fuel = || 131_072;
+        let wait = || Duration::from_millis(0);
+        cache1.dangerous_compact_shard(fuel, wait).await
     }
 }

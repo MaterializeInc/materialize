@@ -9,18 +9,20 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::num::NonZero;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, fmt};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
-use chrono::Utc;
-use clap::ArgEnum;
+use chrono::DateTime;
+use clap::ValueEnum;
 use cloud_resource_controller::KubernetesResourceReader;
-use futures::stream::{BoxStream, StreamExt};
 use futures::TryFutureExt;
-use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
+use futures::stream::{BoxStream, StreamExt};
+use k8s_openapi::DeepMerge;
+use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy};
 use k8s_openapi::api::core::v1::{
     Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
     NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector,
@@ -28,32 +30,34 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
     PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
     SeccompProfile, Secret, SecurityContext, Service as K8sService, ServicePort, ServiceSpec,
-    Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
+    Sysctl, Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
     WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
     LabelSelector, LabelSelectorRequirement, OwnerReference,
 };
-use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
+use k8s_openapi::jiff::Timestamp;
+use kube::ResourceExt;
+use kube::api::{Api, DeleteParams, ObjectMeta, PartialObjectMetaExt, Patch, PatchParams};
 use kube::client::Client;
 use kube::error::Error as K8sError;
-use kube::runtime::{watcher, WatchStreamExt};
-use kube::ResourceExt;
+use kube::runtime::{WatchStreamExt, watcher};
 use maplit::btreemap;
-use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::{
-    scheduling_config::*, DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector,
-    NamespacedOrchestrator, OfflineReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
-    ServiceProcessMetrics, ServiceStatus,
+    DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
+    OfflineReason, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
+    ServiceProcessMetrics, ServiceStatus, scheduling_config::*,
 };
+use mz_ore::cast::CastInto;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 pub mod cloud_resource_controller;
 pub mod secrets;
@@ -72,10 +76,16 @@ pub struct KubernetesOrchestratorConfig {
     pub context: String,
     /// The name of a non-default Kubernetes scheduler to use, if any.
     pub scheduler_name: Option<String>,
+    /// Annotations to install on every service created by the orchestrator.
+    pub service_annotations: BTreeMap<String, String>,
     /// Labels to install on every service created by the orchestrator.
     pub service_labels: BTreeMap<String, String>,
     /// Node selector to install on every service created by the orchestrator.
     pub service_node_selector: BTreeMap<String, String>,
+    /// Affinity to install on every service created by the orchestrator.
+    pub service_affinity: Option<String>,
+    /// Tolerations to install on every service created by the orchestrator.
+    pub service_tolerations: Option<String>,
     /// The service account that each service should run as, if any.
     pub service_account: Option<String>,
     /// The image pull policy to set for services created by the orchestrator.
@@ -93,10 +103,22 @@ pub struct KubernetesOrchestratorConfig {
     pub ephemeral_volume_storage_class: Option<String>,
     /// The optional fs group for service's pods' `securityContext`.
     pub service_fs_group: Option<i64>,
+    /// The prefix to prepend to all object names
+    pub name_prefix: Option<String>,
+    /// Whether we should attempt to collect metrics from kubernetes
+    pub collect_pod_metrics: bool,
+    /// Whether to annotate pods for prometheus service discovery.
+    pub enable_prometheus_scrape_annotations: bool,
+}
+
+impl KubernetesOrchestratorConfig {
+    pub fn name_prefix(&self) -> String {
+        self.name_prefix.clone().unwrap_or_default()
+    }
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
-#[derive(ArgEnum, Debug, Clone, Copy)]
+#[derive(ValueEnum, Debug, Clone, Copy)]
 pub enum KubernetesImagePullPolicy {
     /// Always pull the Docker image from the registry.
     Always,
@@ -170,12 +192,13 @@ impl Orchestrator for KubernetesOrchestrator {
             let (command_tx, command_rx) = mpsc::unbounded_channel();
             let worker = OrchestratorWorker {
                 metrics_api: Api::default_namespaced(self.client.clone()),
-                custom_metrics_api: Api::default_namespaced(self.client.clone()),
                 service_api: Api::default_namespaced(self.client.clone()),
                 stateful_set_api: Api::default_namespaced(self.client.clone()),
                 pod_api: Api::default_namespaced(self.client.clone()),
                 owner_references: vec![],
                 command_rx,
+                name_prefix: self.config.name_prefix.clone().unwrap_or_default(),
+                collect_pod_metrics: self.config.collect_pod_metrics,
             }
             .spawn(format!("kubernetes-orchestrator-worker:{namespace}"));
 
@@ -196,9 +219,7 @@ impl Orchestrator for KubernetesOrchestrator {
 
 #[derive(Clone, Copy)]
 struct ServiceInfo {
-    scale: u16,
-    disk: bool,
-    disk_limit: Option<DiskLimit>,
+    scale: NonZero<u16>,
 }
 
 struct NamespacedKubernetesOrchestrator {
@@ -249,7 +270,7 @@ enum WorkerCommand {
 #[derive(Debug, Clone)]
 struct ServiceDescription {
     name: String,
-    scale: u16,
+    scale: NonZero<u16>,
     service: K8sService,
     stateful_set: StatefulSet,
     pod_template_hash: String,
@@ -268,12 +289,13 @@ struct ServiceDescription {
 /// created with `ensure_service` and not yet dropped with `drop_service`.
 struct OrchestratorWorker {
     metrics_api: Api<PodMetrics>,
-    custom_metrics_api: Api<MetricValueList>,
     service_api: Api<K8sService>,
     stateful_set_api: Api<StatefulSet>,
     pod_api: Api<Pod>,
     owner_references: Vec<OwnerReference>,
     command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
+    name_prefix: String,
+    collect_pod_metrics: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -344,37 +366,13 @@ pub struct MetricValue {
     // We skip `windowSeconds`, as we don't need it
 }
 
-#[derive(Deserialize, Clone, Debug)]
-pub struct MetricValueList {
-    pub metadata: ObjectMeta,
-    pub items: Vec<MetricValue>,
-}
-
-impl k8s_openapi::Resource for MetricValueList {
-    const GROUP: &'static str = "custom.metrics.k8s.io";
-    const KIND: &'static str = "MetricValueList";
-    const VERSION: &'static str = "v1beta1";
-    const API_VERSION: &'static str = "custom.metrics.k8s.io/v1beta1";
-    const URL_PATH_SEGMENT: &'static str = "persistentvolumeclaims";
-
-    type Scope = k8s_openapi::NamespaceResourceScope;
-}
-
-impl k8s_openapi::Metadata for MetricValueList {
-    type Ty = ObjectMeta;
-
-    fn metadata(&self) -> &Self::Ty {
-        &self.metadata
-    }
-
-    fn metadata_mut(&mut self) -> &mut Self::Ty {
-        &mut self.metadata
-    }
-}
-
 impl NamespacedKubernetesOrchestrator {
     fn service_name(&self, id: &str) -> String {
-        format!("{}-{id}", self.namespace)
+        format!(
+            "{}{}-{id}",
+            self.config.name_prefix.as_deref().unwrap_or(""),
+            self.namespace
+        )
     }
 
     /// Return a `watcher::Config` instance that limits results to the namespace
@@ -384,7 +382,8 @@ impl NamespacedKubernetesOrchestrator {
             "environmentd.materialize.cloud/namespace={}",
             self.namespace
         );
-        watcher::Config::default().labels(&ns_selector)
+        // This watcher timeout must be shorter than the client read timeout.
+        watcher::Config::default().timeout(59).labels(&ns_selector)
     }
 
     /// Convert a higher-level label key to the actual one we
@@ -455,7 +454,7 @@ impl ScaledQuantity {
             }
         } else {
             for _ in 0..exponent {
-                result = result.checked_mul(2)?;
+                result = result.checked_mul(base)?;
             }
         }
         Some(result)
@@ -562,13 +561,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             args,
             ports: ports_in,
             memory_limit,
+            memory_request,
             cpu_limit,
+            cpu_request,
             scale,
             labels: labels_in,
+            annotations: annotations_in,
             availability_zones,
             other_replicas_selector,
             replicas_selector,
-            disk,
             disk_limit,
             node_selector,
         }: ServiceConfig,
@@ -576,7 +577,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // This is extremely cheap to clone, so just look into the lock once.
         let scheduling_config: ServiceSchedulingConfig =
             self.scheduling_config.read().expect("poisoned").clone();
-        let disk = scheduling_config.always_use_disk || disk;
+
+        // Enable disk if the size does not disable it.
+        let disk = disk_limit != Some(DiskLimit::ZERO);
 
         let name = self.service_name(id);
         // The match labels should be the minimal set of labels that uniquely
@@ -584,10 +587,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // `StatefulSet` is created is not permitted by Kubernetes, and we're
         // not yet smart enough to handle deleting and recreating the
         // `StatefulSet`.
-        let match_labels = btreemap! {
+        let mut match_labels = btreemap! {
             "environmentd.materialize.cloud/namespace".into() => self.namespace.clone(),
             "environmentd.materialize.cloud/service-id".into() => id.into(),
         };
+        for (key, value) in &self.config.service_labels {
+            match_labels.insert(key.clone(), value.clone());
+        }
+
         let mut labels = match_labels.clone();
         for (key, value) in labels_in {
             labels.insert(self.make_label_key(&key), value);
@@ -601,20 +608,38 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 "true".into(),
             );
         }
-        for (key, value) in &self.config.service_labels {
-            labels.insert(key.clone(), value.clone());
-        }
         let mut limits = BTreeMap::new();
+        let mut requests = BTreeMap::new();
         if let Some(memory_limit) = memory_limit {
             limits.insert(
                 "memory".into(),
                 Quantity(memory_limit.0.as_u64().to_string()),
+            );
+            requests.insert(
+                "memory".into(),
+                Quantity(memory_limit.0.as_u64().to_string()),
+            );
+        }
+        if let Some(memory_request) = memory_request {
+            requests.insert(
+                "memory".into(),
+                Quantity(memory_request.0.as_u64().to_string()),
             );
         }
         if let Some(cpu_limit) = cpu_limit {
             limits.insert(
                 "cpu".into(),
                 Quantity(format!("{}m", cpu_limit.as_millicpus())),
+            );
+            requests.insert(
+                "cpu".into(),
+                Quantity(format!("{}m", cpu_limit.as_millicpus())),
+            );
+        }
+        if let Some(cpu_request) = cpu_request {
+            requests.insert(
+                "cpu".into(),
+                Quantity(format!("{}m", cpu_request.as_millicpus())),
             );
         }
         let service = K8sService {
@@ -633,14 +658,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         })
                         .collect(),
                 ),
-                cluster_ip: None,
+                cluster_ip: Some("None".to_string()),
                 selector: Some(match_labels.clone()),
                 ..Default::default()
             }),
             status: None,
         };
 
-        let hosts = (0..scale)
+        let hosts = (0..scale.get())
             .map(|i| {
                 format!(
                     "{name}-{i}.{name}.{}.svc.cluster.local",
@@ -652,11 +677,19 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
             .collect::<BTreeMap<_, _>>();
-        let listen_addrs = ports_in
-            .iter()
-            .map(|p| (p.name.clone(), format!("0.0.0.0:{}", p.port_hint)))
-            .collect::<BTreeMap<_, _>>();
-        let mut args = args(&listen_addrs);
+
+        let mut listen_addrs = BTreeMap::new();
+        let mut peer_addrs = vec![BTreeMap::new(); hosts.len()];
+        for (name, port) in &ports {
+            listen_addrs.insert(name.clone(), format!("0.0.0.0:{port}"));
+            for (i, host) in hosts.iter().enumerate() {
+                peer_addrs[i].insert(name.clone(), format!("{host}:{port}"));
+            }
+        }
+        let mut args = args(ServiceAssignments {
+            listen_addrs: &listen_addrs,
+            peer_addrs: &peer_addrs,
+        });
 
         // This constrains the orchestrator (for those orchestrators that support
         // anti-affinity, today just k8s) to never schedule pods for different replicas
@@ -728,7 +761,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let topology_spread = if scheduling_config.topology_spread.enabled {
             let config = &scheduling_config.topology_spread;
 
-            if !config.ignore_non_singular_scale || scale <= 1 {
+            if !config.ignore_non_singular_scale || scale.get() == 1 {
                 let label_selector_requirements = (if config.ignore_non_singular_scale {
                     let mut replicas_selector_ignoring_scale = replicas_selector.clone();
 
@@ -751,9 +784,28 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 };
 
+                if config.soft && config.min_domains.is_some() {
+                    warn!(
+                        "topology spread is soft but min_domains is set; \
+                         Kubernetes rejects minDomains with ScheduleAnyway, \
+                         so min_domains will be ignored"
+                    );
+                }
+                if availability_zones.is_some() && config.min_domains.is_some() {
+                    warn!(
+                        "topology spread has min_domains set but availability_zones \
+                         constrains eligible topology domains via node affinity; \
+                         minDomains will be ignored to avoid preventing pod scheduling"
+                    );
+                }
+
                 let constraint = TopologySpreadConstraint {
                     label_selector: Some(ls),
-                    min_domains: None,
+                    min_domains: topology_spread_min_domains(
+                        config.soft,
+                        availability_zones.is_some(),
+                        config.min_domains,
+                    ),
                     max_skew: config.max_skew,
                     topology_key: "topology.kubernetes.io/zone".to_string(),
                     when_unsatisfiable: if config.soft {
@@ -783,7 +835,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
-        let pod_annotations = btreemap! {
+        let mut pod_annotations = btreemap! {
             // Prevent the cluster-autoscaler (or karpenter) from evicting these pods in attempts to scale down
             // and terminate nodes.
             // This will cost us more money, but should give us better uptime.
@@ -795,6 +847,26 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             // It's called do-not-disrupt in newer versions of karpenter, so adding for forward/backward compatibility
             "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
         };
+        for (key, value) in annotations_in {
+            // We want to use the same prefix as our labels keys
+            pod_annotations.insert(self.make_label_key(&key), value);
+        }
+        if self.config.enable_prometheus_scrape_annotations {
+            if let Some(internal_http_port) = ports_in
+                .iter()
+                .find(|port| port.name == "internal-http")
+                .map(|port| port.port_hint.to_string())
+            {
+                // Enable prometheus scrape discovery
+                pod_annotations.insert("prometheus.io/scrape".to_owned(), "true".to_string());
+                pod_annotations.insert("prometheus.io/port".to_owned(), internal_http_port);
+                pod_annotations.insert("prometheus.io/path".to_owned(), "/metrics".to_string());
+                pod_annotations.insert("prometheus.io/scheme".to_owned(), "http".to_string());
+            }
+        }
+        for (key, value) in &self.config.service_annotations {
+            pod_annotations.insert(key.clone(), value.clone());
+        }
 
         let default_node_selector = if disk {
             vec![("materialize.cloud/disk".to_string(), disk.to_string())]
@@ -843,12 +915,21 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
+        let mut affinity = Affinity {
+            pod_anti_affinity: anti_affinity,
+            pod_affinity,
+            node_affinity,
+            ..Default::default()
+        };
+        if let Some(service_affinity) = &self.config.service_affinity {
+            affinity.merge_from(serde_json::from_str(service_affinity)?);
+        }
+
         let container_name = image
-            .splitn(2, '/')
-            .skip(1)
-            .next()
-            .and_then(|name_version| name_version.splitn(2, ':').next())
+            .rsplit_once('/')
+            .and_then(|(_, name_version)| name_version.rsplit_once(':'))
             .context("`image` is not ORG/NAME:VERSION")?
+            .0
             .to_string();
 
         let container_security_context = if scheduling_config.security_context_enabled {
@@ -877,10 +958,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 image_pull_policy: Some(self.config.image_pull_policy.to_string()),
                 resources: Some(ResourceRequirements {
                     claims: None,
-                    // Set both limits and requests to the same values, to ensure a
-                    // `Guaranteed` QoS class for the pod.
                     limits: Some(limits.clone()),
-                    requests: Some(limits.clone()),
+                    requests: Some(requests.clone()),
                 }),
                 security_context: container_security_context.clone(),
                 env: Some(vec![
@@ -990,6 +1069,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             (false, _) => None,
         };
 
+        if let Some(name_prefix) = &self.config.name_prefix {
+            args.push(format!("--secrets-reader-name-prefix={}", name_prefix));
+        }
+
         let volume_claim_templates = if self.config.coverage {
             Some(vec![PersistentVolumeClaim {
                 metadata: ObjectMeta {
@@ -1013,18 +1096,37 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
+        let tcp_keepalive_sysctls = vec![
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_time".to_string(),
+                value: "300".to_string(),
+            },
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_intvl".to_string(),
+                value: "30".to_string(),
+            },
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_probes".to_string(),
+                value: "3".to_string(),
+            },
+        ];
+
         let security_context = if let Some(fs_group) = self.config.service_fs_group {
             Some(PodSecurityContext {
                 fs_group: Some(fs_group),
                 run_as_user: Some(fs_group),
                 run_as_group: Some(fs_group),
+                sysctls: Some(tcp_keepalive_sysctls),
                 ..Default::default()
             })
         } else {
-            None
+            Some(PodSecurityContext {
+                sysctls: Some(tcp_keepalive_sysctls),
+                ..Default::default()
+            })
         };
 
-        let tolerations = Some(vec![
+        let mut tolerations = vec![
             // When the node becomes `NotReady` it indicates there is a problem
             // with the node. By default Kubernetes waits 300s (5 minutes)
             // before descheduling the pod, but we tune this to 30s for faster
@@ -1043,12 +1145,17 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
                 value: None,
             },
-        ]);
+        ];
+        if let Some(service_tolerations) = &self.config.service_tolerations {
+            tolerations.extend(serde_json::from_str::<Vec<_>>(service_tolerations)?);
+        }
+        let tolerations = Some(tolerations);
 
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
-                annotations: Some(pod_annotations), // Do not delete, we insert into it below.
+                // Only set `annotations` _after_ we have computed the pod template hash, to
+                // avoid that annotation changes cause pod replacements.
                 ..Default::default()
             }),
             spec: Some(PodSpec {
@@ -1071,10 +1178,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     security_context: container_security_context.clone(),
                     resources: Some(ResourceRequirements {
                         claims: None,
-                        // Set both limits and requests to the same values, to ensure a
-                        // `Guaranteed` QoS class for the pod.
-                        limits: Some(limits.clone()),
-                        requests: Some(limits),
+                        limits: Some(limits),
+                        requests: Some(requests),
                     }),
                     volume_mounts: if !volume_mounts.is_empty() {
                         Some(volume_mounts)
@@ -1089,12 +1194,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
                 service_account: self.config.service_account.clone(),
-                affinity: Some(Affinity {
-                    pod_anti_affinity: anti_affinity,
-                    pod_affinity,
-                    node_affinity,
-                    ..Default::default()
-                }),
+                affinity: Some(affinity),
                 topology_spread_constraints: topology_spread,
                 tolerations,
                 // Setting a 0s termination grace period has the side effect of
@@ -1126,17 +1226,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let mut hasher = Sha256::new();
         hasher.update(pod_template_json);
         let pod_template_hash = format!("{:x}", hasher.finalize());
-        pod_template_spec
-            .metadata
-            .as_mut()
-            .unwrap()
-            .annotations
-            .as_mut()
-            .unwrap()
-            .insert(
-                POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
-                pod_template_hash.clone(),
-            );
+        pod_annotations.insert(
+            POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
+            pod_template_hash.clone(),
+        );
+
+        pod_template_spec.metadata.as_mut().unwrap().annotations = Some(pod_annotations);
 
         let stateful_set = StatefulSet {
             metadata: ObjectMeta {
@@ -1148,9 +1243,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     match_labels: Some(match_labels),
                     ..Default::default()
                 },
-                service_name: name.clone(),
-                replicas: Some(scale.into()),
+                service_name: Some(name.clone()),
+                replicas: Some(scale.cast_into()),
                 template: pod_template_spec,
+                update_strategy: Some(StatefulSetUpdateStrategy {
+                    type_: Some("OnDelete".to_owned()),
+                    ..Default::default()
+                }),
                 pod_management_policy: Some("Parallel".to_string()),
                 volume_claim_templates,
                 ..Default::default()
@@ -1168,14 +1267,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             },
         });
 
-        self.service_infos.lock().expect("poisoned lock").insert(
-            id.to_string(),
-            ServiceInfo {
-                scale,
-                disk,
-                disk_limit,
-            },
-        );
+        self.service_infos
+            .lock()
+            .expect("poisoned lock")
+            .insert(id.to_string(), ServiceInfo { scale });
 
         Ok(Box::new(KubernetesService { hosts, ports }))
     }
@@ -1206,7 +1301,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
-            let process_id = pod.name_any().split('-').last().unwrap().parse()?;
+            let process_id = pod.name_any().split('-').next_back().unwrap().parse()?;
             let service_id_label = "environmentd.materialize.cloud/service-id";
             let service_id = pod
                 .labels()
@@ -1227,12 +1322,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         let last_state = cs.last_state.as_ref().and_then(|s| s.terminated.as_ref());
                         let termination_state = current_state.or(last_state);
 
-                        // The interesting exit codes are 135 (SIGBUS) and 137 (SIGKILL). SIGKILL
-                        // occurs when the OOM killer terminates the container, SIGBUS occurs when
-                        // the container runs out of disk. We treat the latter as an OOM condition
-                        // too since we only use disk for spilling memory.
+                        // The interesting exit codes are:
+                        //  * 135 (SIGBUS): occurs when lgalloc runs out of disk
+                        //  * 137 (SIGKILL): occurs when the OOM killer terminates the container
+                        //  * 167: occurs when the lgalloc or memory limiter terminates the process
+                        // We treat the all of these as OOM conditions since swap and lgalloc use
+                        // disk only for spilling memory.
                         let exit_code = termination_state.map(|s| s.exit_code);
-                        exit_code == Some(135) || exit_code == Some(137)
+                        exit_code.is_some_and(|e| [135, 137, 167].contains(&e))
                     })
                 })
                 .unwrap_or(false);
@@ -1252,14 +1349,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let time = if let Some(time) = last_probe_time {
                 time.0
             } else {
-                Utc::now()
+                Timestamp::now()
             };
 
             Ok(ServiceEvent {
                 service_id,
                 process_id,
                 status,
-                time,
+                time: DateTime::from_timestamp_nanos(
+                    time.as_nanosecond().try_into().expect("must fit"),
+                ),
             })
         }
 
@@ -1305,6 +1404,12 @@ impl OrchestratorWorker {
                 .expect("always retries on error");
             self.owner_references
                 .extend(orchestrator_pod.owner_references().into_iter().cloned());
+
+            if !self.collect_pod_metrics {
+                info!(
+                    "pod metrics collection is disabled; resource usage graphs in the console will not be available"
+                );
+            }
 
             info!(
                 "Kubernetes orchestrator worker initialized in {:?}",
@@ -1368,6 +1473,21 @@ impl OrchestratorWorker {
         name: &str,
         info: &ServiceInfo,
     ) -> Vec<ServiceProcessMetrics> {
+        if !self.collect_pod_metrics {
+            return (0..info.scale.get())
+                .map(|_| ServiceProcessMetrics::default())
+                .collect();
+        }
+
+        /// Usage metrics reported by clusterd processes.
+        #[derive(Deserialize)]
+        pub(crate) struct ClusterdUsage {
+            disk_bytes: Option<u64>,
+            memory_bytes: Option<u64>,
+            swap_bytes: Option<u64>,
+            heap_limit: Option<u64>,
+        }
+
         /// Get metrics for a particular service and process, converting them into a sane (i.e., numeric) format.
         ///
         /// Note that we want to keep going even if a lookup fails for whatever reason,
@@ -1377,84 +1497,23 @@ impl OrchestratorWorker {
             self_: &OrchestratorWorker,
             service_name: &str,
             i: usize,
-            disk: bool,
-            disk_limit: Option<DiskLimit>,
         ) -> ServiceProcessMetrics {
             let name = format!("{service_name}-{i}");
 
-            let disk_usage_fut = async {
-                if disk {
-                    Some(
-                        self_
-                            .custom_metrics_api
-                            .get_subresource(
-                                "kubelet_volume_stats_used_bytes",
-                                // The CSI provider we use sets up persistentvolumeclaim's
-                                // with `{pod name}-scratch` as the name. It also provides
-                                // the metrics, and does so under the `persistentvolumeclaims`
-                                // resource type, instead of `pods`.
-                                &format!("{name}-scratch"),
-                            )
-                            .await,
-                    )
-                } else {
-                    None
-                }
-            };
-            let disk_capacity_fut = async {
-                if disk {
-                    Some(
-                        self_
-                            .custom_metrics_api
-                            .get_subresource(
-                                "kubelet_volume_stats_capacity_bytes",
-                                &format!("{name}-scratch"),
-                            )
-                            .await,
-                    )
-                } else {
-                    None
-                }
-            };
-            let (metrics, disk_usage, disk_capacity) = match futures::future::join3(
-                self_.metrics_api.get(&name),
-                disk_usage_fut,
-                disk_capacity_fut,
-            )
-            .await
-            {
-                (Ok(metrics), disk_usage, disk_capacity) => {
-                    // TODO(guswynn): don't tolerate errors here, when we are more
-                    // comfortable with `prometheus-adapter` in production
-                    // (And we run it in ci).
-
-                    let disk_usage = match disk_usage {
-                        Some(Ok(disk_usage)) => Some(disk_usage),
-                        Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
-                            warn!(
-                                "Failed to fetch `kubelet_volume_stats_used_bytes` for {name}: {e}"
-                            );
-                            None
-                        }
-                        _ => None,
-                    };
-
-                    let disk_capacity = match disk_capacity {
-                        Some(Ok(disk_capacity)) => Some(disk_capacity),
-                        Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
-                            warn!("Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}");
-                            None
-                        }
-                        _ => None,
-                    };
-
-                    (metrics, disk_usage, disk_capacity)
-                }
-                (Err(e), _, _) => {
-                    warn!("Failed to get metrics for {name}: {e}");
-                    return ServiceProcessMetrics::default();
-                }
-            };
+            let clusterd_usage_fut = get_clusterd_usage(self_, service_name, i);
+            let (metrics, clusterd_usage) =
+                match futures::future::join(self_.metrics_api.get(&name), clusterd_usage_fut).await
+                {
+                    (Ok(metrics), Ok(clusterd_usage)) => (metrics, Some(clusterd_usage)),
+                    (Ok(metrics), Err(e)) => {
+                        warn!("Failed to fetch clusterd usage for {name}: {e}");
+                        (metrics, None)
+                    }
+                    (Err(e), _) => {
+                        warn!("Failed to get metrics for {name}: {e}");
+                        return ServiceProcessMetrics::default();
+                    }
+                };
             let Some(PodMetricsContainer {
                 usage:
                     PodMetricsContainerUsage {
@@ -1468,137 +1527,96 @@ impl OrchestratorWorker {
                 return ServiceProcessMetrics::default();
             };
 
-            let cpu = match parse_k8s_quantity(cpu_str) {
+            let mut process_metrics = ServiceProcessMetrics::default();
+
+            match parse_k8s_quantity(cpu_str) {
                 Ok(q) => match q.try_to_integer(-9, true) {
-                    Some(i) => Some(i),
-                    None => {
-                        tracing::error!("CPU value {q:? }out of range");
-                        None
-                    }
+                    Some(nano_cores) => process_metrics.cpu_nano_cores = Some(nano_cores),
+                    None => error!("CPU value {q:?} out of range"),
                 },
-                Err(e) => {
-                    tracing::error!("Failed to parse CPU value {cpu_str}: {e}");
-                    None
-                }
-            };
-            let memory = match parse_k8s_quantity(mem_str) {
-                Ok(q) => match q.try_to_integer(0, false) {
-                    Some(i) => Some(i),
-                    None => {
-                        tracing::error!("Memory value {q:?} out of range");
-                        None
-                    }
-                },
-                Err(e) => {
-                    tracing::error!("Failed to parse memory value {mem_str}: {e}");
-                    None
-                }
-            };
-
-            let disk_usage = match (disk_usage, disk_capacity) {
-                (Some(disk_usage_metrics), Some(disk_capacity_metrics)) => {
-                    if !disk_usage_metrics.items.is_empty()
-                        && !disk_capacity_metrics.items.is_empty()
-                    {
-                        let disk_usage_str = &*disk_usage_metrics.items[0].value.0;
-                        let disk_usage = match parse_k8s_quantity(disk_usage_str) {
-                            Ok(q) => match q.try_to_integer(0, true) {
-                                Some(i) => Some(i),
-                                None => {
-                                    tracing::error!("Disk usage value {q:?} out of range");
-                                    None
-                                }
-                            },
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to parse disk usage value {disk_usage_str}: {e}"
-                                );
-                                None
-                            }
-                        };
-                        let disk_capacity_str = &*disk_capacity_metrics.items[0].value.0;
-                        let disk_capacity = match parse_k8s_quantity(disk_capacity_str) {
-                            Ok(q) => match q.try_to_integer(0, true) {
-                                Some(i) => Some(i),
-                                None => {
-                                    tracing::error!("Disk capacity value {q:?} out of range");
-                                    None
-                                }
-                            },
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to parse disk capacity value {disk_capacity_str}: {e}"
-                                );
-                                None
-                            }
-                        };
-
-                        // We only populate a `disk_usage` if we have all 5 of of:
-                        // - a disk limit (so it must be an actual managed cluster with a real limit)
-                        // - a reported disk capacity
-                        // - a reported disk usage
-                        //
-                        // There are 3 weird cases we have to handle here:
-                        // - Some instance types report a large disk capacity than the requested
-                        // limit. We clamp those capacities to the limit, which means we can
-                        // report 100% usage even if we have a bit of space left.
-                        // - Other instances report a smaller disk capacity than the limit, due to
-                        // overheads. In this case, we correct the usage by adding the overhead, so
-                        // we report a more accurate usage number.
-                        // - The disk limit can be more up-to-date (from `service_infos`) than the
-                        // reported metric. In that case, we report the minimum of the usage
-                        // and the limit, which means we can report 100% usage temporarily
-                        // if a replica is sized down.
-                        match (disk_usage, disk_capacity, disk_limit) {
-                            (
-                                Some(disk_usage),
-                                Some(disk_capacity),
-                                Some(DiskLimit(disk_limit)),
-                            ) => {
-                                let disk_capacity = if disk_limit.0 < disk_capacity {
-                                    // We issue a debug message instead
-                                    // of a warning or error because all the
-                                    // above cases are relatively common.
-                                    tracing::debug!(
-                                        "disk capacity {} is larger than the disk limit {}; \
-                                        disk usage will indicate 100% full before the disk is truly full; \
-                                        as long as the delta is small this is not a cause for concern",
-                                        disk_capacity,
-                                        disk_limit.0
-                                    );
-                                    // Clamp to the limit.
-                                    disk_limit.0
-                                } else {
-                                    disk_capacity
-                                };
-
-                                // If we overflow, just clamp to the disk limit
-                                let disk_usage = (disk_limit.0 - disk_capacity)
-                                    .checked_add(disk_usage)
-                                    .unwrap_or(disk_limit.0);
-
-                                // Clamp to the limit. Note that this can be clamped during
-                                // replica resizes of if the disk usage is ABOVE the
-                                // configured limit, as may occur on some instances.
-                                Some(std::cmp::min(disk_usage, disk_limit.0))
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-
-            ServiceProcessMetrics {
-                cpu_nano_cores: cpu,
-                memory_bytes: memory,
-                disk_usage_bytes: disk_usage,
+                Err(e) => error!("failed to parse CPU value {cpu_str}: {e}"),
             }
+            match parse_k8s_quantity(mem_str) {
+                Ok(q) => match q.try_to_integer(0, false) {
+                    Some(mem) => process_metrics.memory_bytes = Some(mem),
+                    None => error!("memory value {q:?} out of range"),
+                },
+                Err(e) => error!("failed to parse memory value {mem_str}: {e}"),
+            }
+
+            if let Some(usage) = clusterd_usage {
+                // clusterd may report disk usage as either `disk_bytes`, or `swap_bytes`, or both.
+                //
+                // For now the Console expects the swap size to be reported in `disk_bytes`.
+                // Once the Console has been ported to use `heap_bytes`/`heap_limit`, we can
+                // simplify things by setting `process_metrics.disk_bytes = usage.disk_bytes`.
+                process_metrics.disk_bytes = match (usage.disk_bytes, usage.swap_bytes) {
+                    (Some(disk), Some(swap)) => Some(disk + swap),
+                    (disk, swap) => disk.or(swap),
+                };
+
+                // clusterd may report heap usage as `memory_bytes` and optionally `swap_bytes`.
+                // If no `memory_bytes` is reported, we can't know the heap usage.
+                process_metrics.heap_bytes = match (usage.memory_bytes, usage.swap_bytes) {
+                    (Some(memory), Some(swap)) => Some(memory + swap),
+                    (Some(memory), None) => Some(memory),
+                    (None, _) => None,
+                };
+
+                process_metrics.heap_limit = usage.heap_limit;
+            }
+
+            process_metrics
         }
+
+        /// Get the current usage metrics exposed by a clusterd process.
+        ///
+        /// Usage metrics are collected by connecting to a metrics endpoint exposed by the process.
+        /// The endpoint is assumed to be reachable at the 'internal-http' under the HTTP path
+        /// `/api/usage-metrics`.
+        async fn get_clusterd_usage(
+            self_: &OrchestratorWorker,
+            service_name: &str,
+            i: usize,
+        ) -> anyhow::Result<ClusterdUsage> {
+            let service = self_
+                .service_api
+                .get(service_name)
+                .await
+                .with_context(|| format!("failed to get service {service_name}"))?;
+            let namespace = service
+                .metadata
+                .namespace
+                .context("missing service namespace")?;
+            let internal_http_port = service
+                .spec
+                .and_then(|spec| spec.ports)
+                .and_then(|ports| {
+                    ports
+                        .into_iter()
+                        .find(|p| p.name == Some("internal-http".into()))
+                })
+                .map(|p| p.port);
+            let Some(port) = internal_http_port else {
+                bail!("internal-http port missing in service spec");
+            };
+            let metrics_url = format!(
+                "http://{service_name}-{i}.{service_name}.{namespace}.svc.cluster.local:{port}\
+                 /api/usage-metrics"
+            );
+
+            let http_client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .context("error building HTTP client")?;
+            let resp = http_client.get(metrics_url).send().await?;
+            let usage = resp.json().await?;
+
+            Ok(usage)
+        }
+
         let ret = futures::future::join_all(
-            (0..info.scale).map(|i| get_metrics(self, name, i.into(), info.disk, info.disk_limit)),
+            (0..info.scale.cast_into()).map(|i| get_metrics(self, name, i)),
         );
 
         ret.await
@@ -1621,6 +1639,10 @@ impl OrchestratorWorker {
             .get_or_insert(vec![])
             .extend(self.owner_references.iter().cloned());
 
+        let ss_spec = desc.stateful_set.spec.as_ref().unwrap();
+        let pod_metadata = ss_spec.template.metadata.as_ref().unwrap();
+        let pod_annotations = pod_metadata.annotations.clone();
+
         self.service_api
             .patch(
                 &desc.name,
@@ -1636,11 +1658,17 @@ impl OrchestratorWorker {
             )
             .await?;
 
-        // Explicitly delete any pods in the stateful set that don't match the
-        // template. In theory, Kubernetes would do this automatically, but
-        // in practice we have observed that it does not.
-        // See: https://github.com/kubernetes/kubernetes/issues/67250
-        for pod_id in 0..desc.scale {
+        // We manage pod recreation manually, using the OnDelete StatefulSet update strategy, for
+        // two reasons:
+        //  * Kubernetes doesn't always automatically replace StatefulSet pods when their specs
+        //    change, see https://github.com/kubernetes/kubernetes#67250.
+        //  * Kubernetes replaces StatefulSet pods when their annotations change, which is not
+        //    something we want as it could cause unavailability.
+        //
+        // Our pod recreation policy is simple: If a pod's template hash changed, delete it, and
+        // let the StatefulSet controller recreate it. Otherwise, patch the existing pod's
+        // annotations to line up with the ones in the spec.
+        for pod_id in 0..desc.scale.get() {
             let pod_name = format!("{}-{pod_id}", desc.name);
             let pod = match self.pod_api.get(&pod_name).await {
                 Ok(pod) => pod,
@@ -1648,18 +1676,35 @@ impl OrchestratorWorker {
                 Err(kube::Error::Api(e)) if e.code == 404 => continue,
                 Err(e) => return Err(e),
             };
-            if pod.annotations().get(POD_TEMPLATE_HASH_ANNOTATION) != Some(&desc.pod_template_hash)
+
+            let result = if pod.annotations().get(POD_TEMPLATE_HASH_ANNOTATION)
+                != Some(&desc.pod_template_hash)
             {
-                match self
-                    .pod_api
+                self.pod_api
                     .delete(&pod_name, &DeleteParams::default())
                     .await
-                {
-                    Ok(_) => (),
-                    // Pod got deleted while we were looking at it.
-                    Err(kube::Error::Api(e)) if e.code == 404 => (),
-                    Err(e) => return Err(e),
+                    .map(|_| ())
+            } else {
+                let metadata = ObjectMeta {
+                    annotations: pod_annotations.clone(),
+                    ..Default::default()
                 }
+                .into_request_partial::<Pod>();
+                self.pod_api
+                    .patch_metadata(
+                        &pod_name,
+                        &PatchParams::apply(FIELD_MANAGER).force(),
+                        &Patch::Apply(&metadata),
+                    )
+                    .await
+                    .map(|_| ())
+            };
+
+            match result {
+                Ok(()) => (),
+                // Pod was deleted concurrently.
+                Err(kube::Error::Api(e)) if e.code == 404 => continue,
+                Err(e) => return Err(e),
             }
         }
 
@@ -1690,7 +1735,7 @@ impl OrchestratorWorker {
 
     async fn list_services(&self, namespace: &str) -> Result<Vec<String>, K8sError> {
         let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
-        let name_prefix = format!("{namespace}-");
+        let name_prefix = format!("{}{namespace}-", self.name_prefix);
         Ok(stateful_sets
             .into_iter()
             .filter_map(|ss| {
@@ -1717,5 +1762,85 @@ impl Service for KubernetesService {
             .iter()
             .map(|host| format!("{host}:{port}"))
             .collect()
+    }
+}
+
+/// Returns the `minDomains` value for a `TopologySpreadConstraint`.
+///
+/// `minDomains` must be suppressed when spread is soft (Kubernetes rejects
+/// `minDomains` with `ScheduleAnyway`) and when `availability_zones` is set
+/// (node affinity already constrains eligible domains; if `minDomains` exceeds
+/// the number of pinned zones the global minimum is treated as 0, causing all
+/// but one replica to remain pending with `maxSkew=1`).
+fn topology_spread_min_domains(
+    soft: bool,
+    az_pinned: bool,
+    min_domains: Option<i32>,
+) -> Option<i32> {
+    if soft || az_pinned { None } else { min_domains }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn topology_spread_min_domains_suppression() {
+        // min_domains is kept when neither soft nor az-pinned
+        assert_eq!(topology_spread_min_domains(false, false, Some(3)), Some(3));
+        // min_domains is None when not set regardless of flags
+        assert_eq!(topology_spread_min_domains(false, false, None), None);
+        // suppressed when soft (Kubernetes rejects minDomains with ScheduleAnyway)
+        assert_eq!(topology_spread_min_domains(true, false, Some(3)), None);
+        // suppressed when availability_zones pins to specific AZs
+        assert_eq!(topology_spread_min_domains(false, true, Some(3)), None);
+        // suppressed when both
+        assert_eq!(topology_spread_min_domains(true, true, Some(3)), None);
+    }
+
+    #[mz_ore::test]
+    fn k8s_quantity_base10_large() {
+        let cases = &[
+            ("42", 42),
+            ("42k", 42000),
+            ("42M", 42000000),
+            ("42G", 42000000000),
+            ("42T", 42000000000000),
+            ("42P", 42000000000000000),
+        ];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(0, true).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn k8s_quantity_base10_small() {
+        let cases = &[("42n", 42), ("42u", 42000), ("42m", 42000000)];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(-9, true).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn k8s_quantity_base2() {
+        let cases = &[
+            ("42Ki", 42 << 10),
+            ("42Mi", 42 << 20),
+            ("42Gi", 42 << 30),
+            ("42Ti", 42 << 40),
+            ("42Pi", 42 << 50),
+        ];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(0, false).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
     }
 }

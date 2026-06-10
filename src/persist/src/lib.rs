@@ -17,10 +17,13 @@
     clippy::clone_on_ref_ptr
 )]
 
+pub mod azure;
 pub mod cfg;
 pub mod error;
 pub mod file;
-pub mod gen;
+#[cfg(feature = "foundationdb")]
+pub mod foundationdb;
+pub mod generated;
 pub mod indexed;
 pub mod intercept;
 pub mod location;
@@ -29,5 +32,7 @@ pub mod metrics;
 pub mod postgres;
 pub mod retry;
 pub mod s3;
+#[cfg(feature = "turmoil")]
+pub mod turmoil;
 pub mod unreliable;
 pub mod workload;

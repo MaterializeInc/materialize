@@ -20,37 +20,37 @@ from textwrap import dedent
 from psycopg import Cursor
 
 from materialize import buildkite
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(),
+    Mz(app_password=""),
+    Materialized(default_replication_factor=2),
     Toxiproxy(),
     Testdrive(no_reset=True, seed=1),
 ]
 
 
 def workflow_default(c: Composition) -> None:
-    # Otherwise we are running all workflows
-    sharded_workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
-    print(
-        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
-    )
-    for name in sharded_workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
-
+            return
+        # TODO: Reenable when database-issues#8657 is fixed
+        if name == "multithreaded":
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
+    c.test_parts(workflows, process)
 
 
 #
@@ -58,11 +58,10 @@ def workflow_default(c: Composition) -> None:
 #
 def workflow_simple(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.up("kafka", "schema-registry", "materialized", "toxiproxy")
 
     seed = random.getrandbits(16)
     c.run_testdrive_files(
-        "--no-reset",
         "--max-errors=1",
         f"--seed={seed}",
         f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
@@ -74,7 +73,7 @@ def workflow_simple(c: Composition) -> None:
 
 def workflow_resumption(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.up("kafka", "schema-registry", "materialized", "toxiproxy")
 
     priv_cursor = c.sql_cursor(service="materialized", user="mz_system", port=6877)
     priv_cursor.execute("ALTER SYSTEM SET allow_real_time_recency = true;")
@@ -84,15 +83,13 @@ def workflow_resumption(c: Composition) -> None:
         cursor.execute("SET TRANSACTION_ISOLATION = 'STRICT SERIALIZABLE'")
         cursor.execute("SET REAL_TIME_RECENCY TO TRUE")
         cursor.execute("SET statement_timeout = '600s'")
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT sum(count)
               FROM (
                   SELECT count(*) FROM input_1_tbl
                   UNION ALL SELECT count(*) FROM input_2_tbl
                   UNION ALL SELECT count(*) FROM t
-              ) AS x;"""
-        )
+              ) AS x;""")
         return cursor
 
     def verify_ok():
@@ -121,7 +118,6 @@ def workflow_resumption(c: Composition) -> None:
         print(f"Running failure mode {failure_mode}...")
 
         c.run_testdrive_files(
-            "--no-reset",
             f"--seed={seed}{i}",
             f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
             "resumption/toxiproxy-setup.td",  # without toxify
@@ -133,7 +129,6 @@ def workflow_resumption(c: Composition) -> None:
         t1.start()
         time.sleep(10)
         c.run_testdrive_files(
-            "--no-reset",
             "resumption/toxiproxy-restore-connection.td",
         )
         t1.join()
@@ -148,15 +143,18 @@ def workflow_resumption(c: Composition) -> None:
         c.up("toxiproxy")
 
         c.run_testdrive_files(
-            "--no-reset",
             "resumption/mz-reset.td",
         )
 
 
 def workflow_multithreaded(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized")
-    c.up("testdrive", persistent=True)
+    c.up(
+        "kafka",
+        "schema-registry",
+        "materialized",
+        Service("testdrive", idle=True),
+    )
 
     value = [201]
     lock = threading.Lock()
@@ -169,36 +167,28 @@ def workflow_multithreaded(c: Composition) -> None:
         repeat = 1
         while running:
             with lock:
-                c.testdrive(
-                    dedent(
-                        f"""
+                c.testdrive(dedent(f"""
                     $ kafka-ingest topic=input_1 format=bytes repeat={repeat}
                     A,B,0
                     $ kafka-ingest topic=input_2 format=bytes repeat={repeat}
                     A,B,0
-                """
-                    )
-                )
+                """))
                 value[0] += repeat * 2
                 expected = value[0]
                 repeat *= 2
                 cursor.execute("BEGIN")
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT sum(count)
                   FROM (
                       SELECT count(*) FROM input_1_tbl
                       UNION ALL SELECT count(*) FROM input_2_tbl
                       UNION ALL SELECT count(*) FROM t
-                  ) AS x;"""
-            )
+                  ) AS x;""")
             result = cursor.fetchall()
             assert result[0][0] >= expected, f"Expected {expected}, got {result[0][0]}"
             cursor.execute("COMMIT")
 
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
         $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
         ALTER SYSTEM SET allow_real_time_recency = true
 
@@ -237,9 +227,7 @@ def workflow_multithreaded(c: Composition) -> None:
               UNION ALL SELECT count(*) FROM input_2_tbl
               UNION ALL SELECT count(*) FROM t
           ) AS x;
-    """
-        )
-    )
+    """))
     threads = [PropagatingThread(target=run, args=(value,)) for i in range(10)]
     for thread in threads:
         thread.start()

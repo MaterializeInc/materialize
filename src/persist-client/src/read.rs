@@ -10,53 +10,63 @@
 //! Read capabilities and handles
 
 use async_stream::stream;
-use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use differential_dataflow::Hashable;
 use differential_dataflow::consolidation::consolidate_updates;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Description;
 use futures::Stream;
-use futures_util::{stream, StreamExt};
-use itertools::Either;
+use futures_util::{StreamExt, stream};
 use mz_dyncfg::Config;
+use mz_ore::cast::CastLossy;
+use mz_ore::halt;
 use mz_ore::instrument;
-use mz_ore::now::EpochMillis;
-use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
+use mz_ore::task::JoinHandle;
 use mz_persist::location::{Blob, SeqNo};
-use mz_persist_types::columnar::{ColumnDecoder, Schema2};
+use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tokio::runtime::Handle;
-use tracing::{debug_span, warn, Instrument};
+use timely::order::TotalOrder;
+use timely::progress::{Antichain, Timestamp};
+use tracing::warn;
 use uuid::Uuid;
 
-use crate::batch::{BLOB_TARGET_SIZE, STRUCTURED_ORDER, STRUCTURED_ORDER_UNTIL_SHARD};
-use crate::cfg::RetryParameters;
-use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
+use crate::batch::BLOB_TARGET_SIZE;
+use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, RetryParameters};
+use crate::fetch::FetchConfig;
+use crate::fetch::{FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart, fetch_leased_part};
 use crate::internal::encoding::Schemas;
-use crate::internal::machine::{ExpireFn, Machine};
-use crate::internal::metrics::Metrics;
-use crate::internal::state::{BatchPart, HollowBatch};
-use crate::internal::watch::StateWatch;
-use crate::iter::{CodecSort, Consolidator, StructuredSort};
+use crate::internal::machine::{Machine, next_listen_batch_retry_params};
+use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
+use crate::internal::state::{HollowBatch, LeasedReaderState, SnapshotErr};
+use crate::internal::watch::{AwaitableState, StateWatch};
+use crate::iter::{Consolidator, StructuredSort};
 use crate::schema::SchemaCache;
 use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
-use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
+use crate::{GarbageCollector, PersistConfig, ShardId, parse_id};
 
 pub use crate::internal::encoding::LazyPartStats;
 pub use crate::internal::state::Since;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
-#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct LeasedReaderId(pub(crate) [u8; 16]);
 
@@ -76,7 +86,7 @@ impl std::str::FromStr for LeasedReaderId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('r', "LeasedReaderId", s).map(LeasedReaderId)
+        parse_id("r", "LeasedReaderId", s).map(LeasedReaderId)
     }
 }
 
@@ -114,8 +124,8 @@ impl<K, V, T, D> Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     fn new(snapshot_parts: Vec<LeasedBatchPart<T>>, listen: Listen<K, V, T, D>) -> Self {
         Subscribe {
@@ -151,15 +161,13 @@ impl<K, V, T, D> Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
     /// fetches and returns the data from within it.
     #[instrument(level = "debug", fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn fetch_next(
-        &mut self,
-    ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
+    pub async fn fetch_next(&mut self) -> Vec<ListenEvent<T, ((K, V), T, D)>> {
         let events = self.next(None).await;
         let new_len = events
             .iter()
@@ -196,17 +204,15 @@ impl<K, V, T, D> Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Politely expires this subscribe, releasing its lease.
     ///
-    /// There is a best-effort impl in Drop for [`ReadHandle`] to expire the
+    /// There is a best-effort impl in Drop to expire the
     /// [`ReadHandle`] held by the subscribe that wasn't explicitly expired
     /// with this method. When possible, explicit expiry is still preferred
-    /// because the Drop one is best effort and is dependant on a tokio
-    /// [Handle] being available in the TLC at the time of drop (which is a bit
-    /// subtle). Also, explicit expiry allows for control over when it happens.
+    /// because it also ensures that the background task is complete.
     pub async fn expire(mut self) {
         let _ = self.snapshot.take(); // Drop all leased parts.
         self.listen.expire().await;
@@ -228,8 +234,6 @@ pub enum ListenEvent<T, D> {
 #[derive(Debug)]
 pub struct Listen<K: Codec, V: Codec, T, D> {
     handle: ReadHandle<K, V, T, D>,
-    watch: StateWatch<K, V, T, D>,
-
     as_of: Antichain<T>,
     since: Antichain<T>,
     frontier: Antichain<T>,
@@ -239,24 +243,31 @@ impl<K, V, T, D> Listen<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
-    async fn new(mut handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
+    async fn new(
+        mut handle: ReadHandle<K, V, T, D>,
+        as_of: Antichain<T>,
+    ) -> Result<Self, Since<T>> {
+        let () = handle.machine.verify_listen(&as_of)?;
+
         let since = as_of.clone();
+        if !PartialOrder::less_equal(handle.since(), &since) {
+            // We can't guarantee that the as-of will be available by the time we start reading,
+            // since our handle is already downgraded too far.
+            return Err(Since(handle.since().clone()));
+        }
         // This listen only needs to distinguish things after its frontier
         // (initially as_of although the frontier is inclusive and the as_of
         // isn't). Be a good citizen and downgrade early.
         handle.downgrade_since(&since).await;
-
-        let watch = handle.machine.applier.watch();
-        Listen {
+        Ok(Listen {
             handle,
-            watch,
             since,
             frontier: as_of.clone(),
             as_of,
-        }
+        })
     }
 
     /// An exclusive upper bound on the progress of this Listen.
@@ -276,39 +287,79 @@ where
         // If Some, an override for the default listen sleep retry parameters.
         retry: Option<RetryParameters>,
     ) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
-        let batch = self
-            .handle
+        // Wait until the upper is past our frontier - ie. there is another batch for us to process.
+        let retry = retry
+            .unwrap_or_else(|| next_listen_batch_retry_params(&self.handle.machine.applier.cfg));
+        self.handle
             .machine
-            .next_listen_batch(
+            .wait_for_upper_past(
                 &self.frontier,
-                &mut self.watch,
+                &mut self.handle.watch,
                 Some(&self.handle.reader_id),
+                &self.handle.metrics.retries.next_listen_batch,
                 retry,
             )
             .await;
 
+        // Obtain a lease before grabbing the upcoming batch from state.
+        let lease = self.handle.lease_seqno().await;
+        let batch = match self
+            .handle
+            .machine
+            .applier
+            .next_listen_batch(&self.frontier)
+        {
+            Ok(batch) => batch,
+            Err(seqno) => {
+                panic!(
+                    "waited for upper past {frontier:?}, but no listen batch was available at {seqno:?}!",
+                    frontier = self.frontier.elements()
+                );
+            }
+        };
+
         // A lot of things across mz have to line up to hold the following
         // invariant and violations only show up as subtle correctness errors,
-        // so explictly validate it here. Better to panic and roll back a
+        // so explicitly validate it here. Better to panic and roll back a
         // release than be incorrect (also potentially corrupting a sink).
         //
         // Note that the since check is intentionally less_than, not less_equal.
         // If a batch's since is X, that means we can no longer distinguish X
         // (beyond self.frontier) from X-1 (not beyond self.frontier) to keep
         // former and filter out the latter.
-        assert!(
-            PartialOrder::less_than(batch.desc.since(), &self.frontier)
-                // Special case when the frontier == the as_of (i.e. the first
-                // time this is called on a new Listen). Because as_of is
-                // _exclusive_, we don't need to be able to distinguish X from
-                // X-1.
-                || (self.frontier == self.as_of
-                    && PartialOrder::less_equal(batch.desc.since(), &self.frontier)),
-            "Listen on {} received a batch {:?} advanced past the listen frontier {:?}",
-            self.handle.machine.shard_id(),
-            batch.desc,
-            self.frontier
-        );
+        let acceptable_desc = PartialOrder::less_than(batch.desc.since(), &self.frontier)
+            // Special case when the frontier == the as_of (i.e. the first
+            // time this is called on a new Listen). Because as_of is
+            // _exclusive_, we don't need to be able to distinguish X from
+            // X-1.
+            || (self.frontier == self.as_of
+            && PartialOrder::less_equal(batch.desc.since(), &self.frontier));
+        if !acceptable_desc {
+            let lease_state = self
+                .handle
+                .machine
+                .applier
+                .reader_lease(self.handle.reader_id.clone());
+            if let Some(lease) = lease_state {
+                panic!(
+                    "Listen on {} received a batch {:?} advanced past the listen frontier {:?}, but the lease has not expired: {:?}",
+                    self.handle.machine.shard_id(),
+                    batch.desc,
+                    self.frontier,
+                    lease
+                )
+            } else {
+                // Ideally we'd percolate this error up, so callers could eg. restart a dataflow
+                // instead of restarting a process...
+                halt!(
+                    "Listen on {} received a batch {:?} advanced past the listen frontier {:?} after the reader has expired. \
+                     This can happen in exceptional cases: a machine goes to sleep or is running out of memory or CPU, for example.",
+                    self.handle.machine.shard_id(),
+                    batch.desc,
+                    self.frontier
+                )
+            }
+        }
 
         let new_frontier = batch.desc.upper().clone();
 
@@ -329,8 +380,7 @@ where
         // batch the last time we called this) that are strictly less_than the
         // batch upper to compute a new since. For totally ordered times
         // (currently always the case in mz) self.frontier will always have a
-        // single element and it will be less_than upper, but the following
-        // logic is (hopefully) correct for partially order times as well. We
+        // single element and it will be less_than upper. We
         // could also abuse the fact that every time we actually emit is
         // guaranteed by definition to be less_than upper to be a bit more
         // prompt, but this would involve a lot more temporary antichains and
@@ -350,7 +400,11 @@ where
             as_of: self.as_of.clone(),
             lower: self.frontier.clone(),
         };
-        let parts = self.handle.lease_batch_parts(batch, filter).collect().await;
+        let parts = self
+            .handle
+            .lease_batch_parts(lease, batch, filter)
+            .collect()
+            .await;
 
         self.handle.maybe_downgrade_since(&self.since).await;
 
@@ -366,8 +420,8 @@ impl<K, V, T, D> Listen<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Attempt to pull out the next values of this subscription.
     ///
@@ -380,9 +434,7 @@ where
     /// If you have a use for consolidated listen output, given that snapshots can't be
     /// consolidated, come talk to us!
     #[instrument(level = "debug", name = "listen::next", fields(shard = %self.handle.machine.shard_id()))]
-    pub async fn fetch_next(
-        &mut self,
-    ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
+    pub async fn fetch_next(&mut self) -> Vec<ListenEvent<T, ((K, V), T, D)>> {
         let (parts, progress) = self.next(None).await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
@@ -397,9 +449,7 @@ where
     }
 
     /// Convert listener into futures::Stream
-    pub fn into_stream(
-        mut self,
-    ) -> impl Stream<Item = ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
+    pub fn into_stream(mut self) -> impl Stream<Item = ListenEvent<T, ((K, V), T, D)>> {
         async_stream::stream!({
             loop {
                 for msg in self.fetch_next().await {
@@ -414,13 +464,7 @@ where
     /// return the final progress info.
     #[cfg(test)]
     #[track_caller]
-    pub async fn read_until(
-        &mut self,
-        ts: &T,
-    ) -> (
-        Vec<((Result<K, String>, Result<V, String>), T, D)>,
-        Antichain<T>,
-    ) {
+    pub async fn read_until(&mut self, ts: &T) -> (Vec<((K, V), T, D)>, Antichain<T>) {
         let mut updates = Vec::new();
         let mut frontier = Antichain::from_elem(T::minimum());
         while self.frontier.less_than(ts) {
@@ -441,8 +485,8 @@ impl<K, V, T, D> Listen<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Fetches the contents of `part` and returns its lease.
     ///
@@ -466,14 +510,66 @@ where
 
     /// Politely expires this listen, releasing its lease.
     ///
-    /// There is a best-effort impl in Drop for [`ReadHandle`] to expire the
+    /// There is a best-effort impl in to expire the
     /// [`ReadHandle`] held by the listen that wasn't explicitly expired with
     /// this method. When possible, explicit expiry is still preferred because
-    /// the Drop one is best effort and is dependant on a tokio [Handle] being
-    /// available in the TLC at the time of drop (which is a bit subtle). Also,
-    /// explicit expiry allows for control over when it happens.
+    /// it also ensures that the background task is complete.
     pub async fn expire(self) {
         self.handle.expire().await
+    }
+}
+
+/// The state for read holds shared between the heartbeat task and the main client,
+/// including the since frontier and the seqno hold.
+#[derive(Debug)]
+pub(crate) struct ReadHolds<T> {
+    /// The frontier we should hold the time-based lease back to.
+    held_since: Antichain<T>,
+    /// The since hold we've actually committed to state. Should always be <=
+    /// the since hold.
+    applied_since: Antichain<T>,
+    /// The largest seqno we've observed in the state.
+    recent_seqno: SeqNo,
+    /// The set of active leases. We hold back the seqno to the minimum lease or
+    /// the recent_seqno, whichever is earlier.
+    leases: BTreeMap<SeqNo, Lease>,
+    /// True iff this state is expired.
+    expired: bool,
+    /// Used to trigger the background task to heartbeat state, instead of waiting for
+    /// the next tick.
+    request_sync: bool,
+}
+
+impl<T> ReadHolds<T>
+where
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+{
+    pub fn downgrade_since(&mut self, since: &Antichain<T>) {
+        self.held_since.join_assign(since);
+    }
+
+    pub fn observe_seqno(&mut self, seqno: SeqNo) {
+        self.recent_seqno = seqno.max(self.recent_seqno);
+    }
+
+    pub fn lease_seqno(&mut self) -> Lease {
+        let seqno = self.recent_seqno;
+        let lease = self
+            .leases
+            .entry(seqno)
+            .or_insert_with(|| Lease::new(seqno));
+        lease.clone()
+    }
+
+    pub fn outstanding_seqno(&mut self) -> SeqNo {
+        while let Some(first) = self.leases.first_entry() {
+            if first.get().count() <= 1 {
+                first.remove();
+            } else {
+                return *first.key();
+            }
+        }
+        self.recent_seqno
     }
 }
 
@@ -504,13 +600,14 @@ pub struct ReadHandle<K: Codec, V: Codec, T, D> {
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob>,
+    watch: StateWatch<K, V, T, D>,
+
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) read_schemas: Schemas<K, V>,
     pub(crate) schema_cache: SchemaCache<K, V, T, D>,
 
     since: Antichain<T>,
-    pub(crate) last_heartbeat: EpochMillis,
-    pub(crate) leased_seqnos: BTreeMap<SeqNo, Lease>,
+    pub(crate) hold_state: AwaitableState<ReadHolds<T>>,
     pub(crate) unexpired_state: Option<UnexpiredReadHandleState>,
 }
 
@@ -526,9 +623,10 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
+    #[allow(clippy::unused_async)]
     pub(crate) async fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
@@ -537,32 +635,151 @@ where
         blob: Arc<dyn Blob>,
         reader_id: LeasedReaderId,
         read_schemas: Schemas<K, V>,
-        since: Antichain<T>,
-        last_heartbeat: EpochMillis,
+        state: LeasedReaderState<T>,
     ) -> Self {
         let schema_cache = machine.applier.schema_cache();
-        let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), reader_id.clone());
+        let hold_state = AwaitableState::new(ReadHolds {
+            held_since: state.since.clone(),
+            applied_since: state.since.clone(),
+            recent_seqno: state.seqno,
+            leases: Default::default(),
+            expired: false,
+            request_sync: false,
+        });
         ReadHandle {
             cfg,
             metrics: Arc::clone(&metrics),
             machine: machine.clone(),
             gc: gc.clone(),
             blob,
+            watch: machine.applier.watch(),
             reader_id: reader_id.clone(),
             read_schemas,
             schema_cache,
-            since,
-            last_heartbeat,
-            leased_seqnos: BTreeMap::new(),
+            since: state.since,
+            hold_state: hold_state.clone(),
             unexpired_state: Some(UnexpiredReadHandleState {
-                expire_fn,
-                _heartbeat_tasks: machine
-                    .start_reader_heartbeat_tasks(reader_id, gc)
-                    .await
-                    .into_iter()
-                    .map(JoinHandle::abort_on_drop)
-                    .collect(),
+                heartbeat_task: Self::start_reader_heartbeat_task(
+                    machine, reader_id, gc, hold_state,
+                ),
             }),
+        }
+    }
+
+    fn start_reader_heartbeat_task(
+        machine: Machine<K, V, T, D>,
+        reader_id: LeasedReaderId,
+        gc: GarbageCollector<K, V, T, D>,
+        leased_seqnos: AwaitableState<ReadHolds<T>>,
+    ) -> JoinHandle<()> {
+        let metrics = Arc::clone(&machine.applier.metrics);
+        let name = format!(
+            "persist::heartbeat_read({},{})",
+            machine.shard_id(),
+            reader_id
+        );
+        mz_ore::task::spawn(|| name, {
+            metrics.tasks.heartbeat_read.instrument_task(async move {
+                Self::reader_heartbeat_task(machine, reader_id, gc, leased_seqnos).await
+            })
+        })
+    }
+
+    async fn reader_heartbeat_task(
+        machine: Machine<K, V, T, D>,
+        reader_id: LeasedReaderId,
+        gc: GarbageCollector<K, V, T, D>,
+        leased_seqnos: AwaitableState<ReadHolds<T>>,
+    ) {
+        let sleep_duration = READER_LEASE_DURATION.get(&machine.applier.cfg) / 4;
+        // Jitter the first tick to avoid a thundering herd when many readers are started around
+        // the same instant, like during deploys.
+        let jitter: f64 = f64::cast_lossy(reader_id.hashed()) / f64::cast_lossy(u64::MAX);
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + sleep_duration.mul_f64(jitter),
+            sleep_duration,
+        );
+        let mut held_since = leased_seqnos.read(|s| s.held_since.clone());
+        loop {
+            let before_sleep = Instant::now();
+            let _woke_by_tick = tokio::select! {
+                _tick = interval.tick() => {
+                    true
+                }
+                _whatever = leased_seqnos.wait_while(|s| !s.request_sync) => {
+                    false
+                }
+            };
+
+            let elapsed_since_before_sleeping = before_sleep.elapsed();
+            if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                warn!(
+                    "reader ({}) of shard ({}) went {}s between heartbeats",
+                    reader_id,
+                    machine.shard_id(),
+                    elapsed_since_before_sleeping.as_secs_f64()
+                );
+            }
+
+            let before_heartbeat = Instant::now();
+            let heartbeat_ms = (machine.applier.cfg.now)();
+            let current_seqno = machine.seqno();
+            let result = leased_seqnos.modify(|s| {
+                if s.expired {
+                    Err(())
+                } else {
+                    s.observe_seqno(current_seqno);
+                    s.request_sync = false;
+                    held_since.join_assign(&s.held_since);
+                    Ok(s.outstanding_seqno())
+                }
+            });
+            let actual_since = match result {
+                Ok(held_seqno) => {
+                    let (seqno, actual_since, maintenance) = machine
+                        .downgrade_since(&reader_id, held_seqno, &held_since, heartbeat_ms)
+                        .await;
+                    leased_seqnos.modify(|s| {
+                        s.applied_since.clone_from(&actual_since.0);
+                        s.observe_seqno(seqno)
+                    });
+                    maintenance.start_performing(&machine, &gc);
+                    actual_since
+                }
+                Err(()) => {
+                    let (seqno, maintenance) = machine.expire_leased_reader(&reader_id).await;
+                    leased_seqnos.modify(|s| s.observe_seqno(seqno));
+                    maintenance.start_performing(&machine, &gc);
+                    break;
+                }
+            };
+
+            let elapsed_since_heartbeat = before_heartbeat.elapsed();
+            if elapsed_since_heartbeat > Duration::from_secs(60) {
+                warn!(
+                    "reader ({}) of shard ({}) heartbeat call took {}s",
+                    reader_id,
+                    machine.shard_id(),
+                    elapsed_since_heartbeat.as_secs_f64(),
+                );
+            }
+
+            if PartialOrder::less_than(&held_since, &actual_since.0) {
+                // If the read handle was intentionally expired, this task
+                // *should* be aborted before it observes the expiration. So if
+                // we get here, this task somehow failed to keep the read lease
+                // alive. Warn loudly, because there's now a live read handle to
+                // an expired shard that will panic if used, but don't panic,
+                // just in case there is some edge case that results in this
+                // task observing the intentional expiration of a read handle.
+                warn!(
+                    "heartbeat task for reader ({}) of shard ({}) exiting due to expired lease \
+                     while read handle is live",
+                    reader_id,
+                    machine.shard_id(),
+                );
+                return;
+            }
         }
     }
 
@@ -578,15 +795,13 @@ where
         &self.since
     }
 
-    fn outstanding_seqno(&mut self) -> Option<SeqNo> {
-        while let Some(first) = self.leased_seqnos.first_entry() {
-            if first.get().count() <= 1 {
-                first.remove();
-            } else {
-                return Some(*first.key());
-            }
-        }
-        None
+    #[cfg(test)]
+    fn outstanding_seqno(&self) -> SeqNo {
+        let current_seqno = self.machine.seqno();
+        self.hold_state.modify(|s| {
+            s.observe_seqno(current_seqno);
+            s.outstanding_seqno()
+        })
     }
 
     /// Forwards the since frontier of this handle, giving up the ability to
@@ -595,47 +810,16 @@ where
     /// This may trigger (asynchronous) compaction and consolidation in the
     /// system. A `new_since` of the empty antichain "finishes" this shard,
     /// promising that no more data will ever be read by this handle.
-    ///
-    /// This also acts as a heartbeat for the reader lease (including if called
-    /// with `new_since` equal to something like `self.since()` or the minimum
-    /// timestamp, making the call a no-op).
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
-        // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
-        let outstanding_seqno = self.outstanding_seqno();
-
-        let heartbeat_ts = (self.cfg.now)();
-        let (_seqno, current_reader_since, maintenance) = self
-            .machine
-            .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
+        self.since = new_since.clone();
+        self.hold_state.modify(|s| {
+            s.downgrade_since(new_since);
+            s.request_sync = true;
+        });
+        self.hold_state
+            .wait_while(|s| PartialOrder::less_than(&s.applied_since, new_since))
             .await;
-
-        // Debugging for database-issues#4590.
-        if let Some(outstanding_seqno) = outstanding_seqno {
-            let seqnos_held = _seqno.0.saturating_sub(outstanding_seqno.0);
-            // We get just over 1 seqno-per-second on average for a shard in
-            // prod, so this is about an hour.
-            const SEQNOS_HELD_THRESHOLD: u64 = 60 * 60;
-            if seqnos_held >= SEQNOS_HELD_THRESHOLD {
-                tracing::info!(
-                    "{} reader {} holding an unexpected number of seqnos {} vs {}: {:?}. bt: {:?}",
-                    self.machine.shard_id(),
-                    self.reader_id,
-                    outstanding_seqno,
-                    _seqno,
-                    self.leased_seqnos.keys().take(10).collect::<Vec<_>>(),
-                    // The Debug impl of backtrace is less aesthetic, but will put the trace
-                    // on a single line and play more nicely with our Honeycomb quota
-                    Backtrace::capture(),
-                );
-            }
-        }
-
-        self.since = current_reader_since.0;
-        // A heartbeat is just any downgrade_since traffic, so update the
-        // internal rate limiter here to play nicely with `maybe_heartbeat`.
-        self.last_heartbeat = heartbeat_ts;
-        maintenance.start_performing(&self.machine, &self.gc);
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -656,8 +840,35 @@ where
     /// `as_of` that would have been accepted.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
-        let () = self.machine.verify_listen(&as_of)?;
-        Ok(Listen::new(self, as_of).await)
+        Listen::new(self, as_of).await
+    }
+
+    async fn snapshot_batches(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<(Lease, Vec<HollowBatch<T>>), Since<T>> {
+        self.machine
+            .wait_for_upper_past(
+                &as_of,
+                &mut self.watch,
+                Some(&self.reader_id),
+                &self.metrics.retries.snapshot,
+                RetryParameters::persist_defaults(),
+            )
+            .await;
+        let lease = self.lease_seqno().await;
+        let batches = match self.machine.applier.snapshot(&as_of) {
+            Ok(data) => data,
+            Err(SnapshotErr::AsOfHistoricalDistinctionsLost(since)) => return Err(since),
+            Err(SnapshotErr::AsOfNotYetAvailable(seqno, upper)) => {
+                panic!(
+                    "waited for upper past {as_of:?}, but at latest seqno {seqno:?} the frontier was only {upper:?}",
+                    as_of = as_of.elements(),
+                    upper = upper.0.elements(),
+                )
+            }
+        };
+        Ok((lease, batches))
     }
 
     /// Returns all of the contents of the shard TVC at `as_of` broken up into
@@ -678,7 +889,7 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<LeasedBatchPart<T>>, Since<T>> {
-        let batches = self.machine.snapshot(&as_of).await?;
+        let (lease, batches) = self.snapshot_batches(as_of.clone()).await?;
 
         if !PartialOrder::less_equal(self.since(), &as_of) {
             return Err(Since(self.since().clone()));
@@ -692,7 +903,7 @@ where
             // to distribute work by parts (smallish, more even size) instead of
             // batches (arbitrarily large).
             leased_parts.extend(
-                self.lease_batch_parts(batch, filter.clone())
+                self.lease_batch_parts(lease.clone(), batch, filter.clone())
                     .collect::<Vec<_>>()
                     .await,
             );
@@ -715,27 +926,9 @@ where
         Ok(Subscribe::new(snapshot_parts, listen))
     }
 
-    fn lease_batch_part(
-        &mut self,
-        desc: Description<T>,
-        part: BatchPart<T>,
-        filter: FetchBatchFilter<T>,
-    ) -> LeasedBatchPart<T> {
-        LeasedBatchPart {
-            metrics: Arc::clone(&self.metrics),
-            shard_id: self.machine.shard_id(),
-            reader_id: self.reader_id.clone(),
-            filter,
-            desc,
-            part,
-            leased_seqno: self.machine.seqno(),
-            lease: Some(self.lease_seqno()),
-            filter_pushdown_audit: false,
-        }
-    }
-
     fn lease_batch_parts(
         &mut self,
+        lease: Lease,
         batch: HollowBatch<T>,
         filter: FetchBatchFilter<T>,
     ) -> impl Stream<Item = LeasedBatchPart<T>> + '_ {
@@ -744,18 +937,41 @@ where
             let metrics = Arc::clone(&self.metrics);
             let desc = batch.desc.clone();
             for await part in batch.part_stream(self.shard_id(), &*blob, &*metrics) {
-                yield self.lease_batch_part(desc.clone(), part.expect("leased part").into_owned(), filter.clone())
+                yield LeasedBatchPart {
+                    metrics: Arc::clone(&self.metrics),
+                    shard_id: self.machine.shard_id(),
+                    filter: filter.clone(),
+                    desc: desc.clone(),
+                    part: part.expect("leased part").into_owned(),
+                    lease: lease.clone(),
+                    reader_id: self.reader_id.clone(),
+                    filter_pushdown_audit: false,
+                }
             }
         }
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
-    /// "leased out" to a `LeasedBatchPart`, and cannot be garbage
-    /// collected until its lease has been returned.
-    fn lease_seqno(&mut self) -> Lease {
-        let seqno = self.machine.seqno();
-        let lease = self.leased_seqnos.entry(seqno).or_default();
-        lease.clone()
+    /// "leased out" to a `LeasedBatchPart`. This ensures that until the reader is expired or the
+    /// [Lease] is dropped, we will hold onto all versions of the state with this sequence number
+    /// or larger. In particular, this means that any batches that are present in the state at
+    /// the leased seqno _or in any future state_ will be preserved as long as the lease is active.
+    ///
+    /// Note that this doesn't present batches from earlier versions of state from being GCed,
+    /// even if they were observed just before the lease call. Callers should generally take a lease
+    /// first, and then inspect state to find any batches to return or process.
+    async fn lease_seqno(&mut self) -> Lease {
+        let current_seqno = self.machine.seqno();
+        let lease = self.hold_state.modify(|s| {
+            s.observe_seqno(current_seqno);
+            s.lease_seqno()
+        });
+        // The seqno we've leased may be the seqno observed by our heartbeat task, which could be
+        // ahead of the last state we saw. Ensure we only observe states in the future of our hold.
+        // (Since these are backed by the same state in the same process, this should all be pretty
+        // fast.)
+        self.watch.wait_for_seqno_ge(lease.seqno()).await;
+        lease
     }
 
     /// Returns an independent [ReadHandle] with a new [LeasedReaderId] but the
@@ -788,8 +1004,7 @@ where
             Arc::clone(&self.blob),
             new_reader_id,
             self.read_schemas.clone(),
-            reader_state.since,
-            heartbeat_ts,
+            reader_state,
         )
         .await;
         new_reader
@@ -797,100 +1012,31 @@ where
 
     /// A rate-limited version of [Self::downgrade_since].
     ///
-    /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or Self::maybe_heartbeat_reader on some interval that is "frequent"
-    /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    ///
-    /// This is communicating actual progress information, so is given
-    /// preferential treatment compared to Self::maybe_heartbeat_reader.
+    /// Users can call this as frequently as they wish; changes will be periodically
+    /// flushed to state by the heartbeat task.
+    #[allow(clippy::unused_async)]
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
-        // NB: min_elapsed is intentionally smaller than the one in
-        // maybe_heartbeat_reader (this is the preferential treatment mentioned
-        // above).
-        let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 4;
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            self.downgrade_since(new_since).await;
-        }
-    }
-
-    /// Heartbeats the read lease if necessary.
-    ///
-    /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
-    /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    #[allow(dead_code)]
-    pub(crate) async fn maybe_heartbeat_reader(&mut self) {
-        let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 2;
-        let heartbeat_ts = (self.cfg.now)();
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > READER_LEASE_DURATION.get(&self.machine.applier.cfg) {
-                warn!(
-                    "reader ({}) of shard ({}) went {}s between heartbeats",
-                    self.reader_id,
-                    self.machine.shard_id(),
-                    elapsed_since_last_heartbeat.as_secs_f64()
-                );
-            }
-
-            let (_, existed, maintenance) = self
-                .machine
-                .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
-                .await;
-            if !existed && !self.machine.applier.is_finalized() {
-                // It's probably surprising to the caller that the shard
-                // becoming a tombstone expired this reader. Possibly the right
-                // thing to do here is pass up a bool to the caller indicating
-                // whether the LeasedReaderId it's trying to heartbeat has been
-                // expired, but that happening on a tombstone vs not is very
-                // different. As a medium-term compromise, pretend we did the
-                // heartbeat here.
-                panic!(
-                    "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
-                    self.reader_id
-                )
-            }
-            self.last_heartbeat = heartbeat_ts;
-            maintenance.start_performing(&self.machine, &self.gc);
-        }
+        self.since = new_since.clone();
+        self.hold_state.modify(|s| {
+            s.downgrade_since(new_since);
+        });
     }
 
     /// Politely expires this reader, releasing its lease.
     ///
     /// There is a best-effort impl in Drop to expire a reader that wasn't
     /// explictly expired with this method. When possible, explicit expiry is
-    /// still preferred because the Drop one is best effort and is dependant on
-    /// a tokio [Handle] being available in the TLC at the time of drop (which
-    /// is a bit subtle). Also, explicit expiry allows for control over when it
-    /// happens.
+    /// still preferred because it also ensures that the background task is complete.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        // We drop the unexpired state before expiring the reader to ensure the
-        // heartbeat tasks can never observe the expired state. This doesn't
-        // matter for correctness, but avoids confusing log output if the
-        // heartbeat task were to discover that its lease has been expired.
+        self.hold_state.modify(|s| {
+            s.expired = true;
+            s.request_sync = true;
+        });
         let Some(unexpired_state) = self.unexpired_state.take() else {
             return;
         };
-        unexpired_state.expire_fn.0().await;
-    }
-
-    fn expire_fn(
-        machine: Machine<K, V, T, D>,
-        gc: GarbageCollector<K, V, T, D>,
-        reader_id: LeasedReaderId,
-    ) -> ExpireFn {
-        ExpireFn(Box::new(move || {
-            Box::pin(async move {
-                let (_, maintenance) = machine.expire_leased_reader(&reader_id).await;
-                maintenance.start_performing(&machine, &gc);
-            })
-        }))
+        unexpired_state.heartbeat_task.await;
     }
 
     /// Test helper for a [Self::listen] call that is expected to succeed.
@@ -906,8 +1052,7 @@ where
 /// State for a read handle that has not been explicitly expired.
 #[derive(Debug)]
 pub(crate) struct UnexpiredReadHandleState {
-    expire_fn: ExpireFn,
-    pub(crate) _heartbeat_tasks: Vec<AbortOnDropHandle<()>>,
+    pub(crate) heartbeat_task: JoinHandle<()>,
 }
 
 /// An incremental cursor through a particular shard, returned from [ReadHandle::snapshot_cursor].
@@ -916,85 +1061,64 @@ pub(crate) struct UnexpiredReadHandleState {
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
-    consolidator: CursorConsolidator<K, V, T, D>,
-    _lease: Lease,
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L = Lease> {
+    consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
+    max_len: usize,
+    max_bytes: usize,
+    _lease: L,
     read_schemas: Schemas<K, V>,
 }
 
-#[derive(Debug)]
-enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
-    Codec {
-        consolidator: Consolidator<T, D, CodecSort<T, D>>,
-    },
-    Structured {
-        consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
-        max_len: usize,
-        max_bytes: usize,
-    },
+impl<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L> Cursor<K, V, T, D, L> {
+    /// Extracts and returns the lease from the cursor. Allowing the caller to
+    /// do any necessary cleanup associated with the lease.
+    pub fn into_lease(self: Self) -> L {
+        self._lease
+    }
 }
 
-impl<K, V, T, D> Cursor<K, V, T, D>
+impl<K, V, T, D, L> Cursor<K, V, T, D, L>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    T: Timestamp + Lattice + Codec64 + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     /// Grab the next batch of consolidated data.
-    pub async fn next(
-        &mut self,
-    ) -> Option<impl Iterator<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_> {
-        match &mut self.consolidator {
-            CursorConsolidator::Structured {
-                consolidator,
-                max_len,
-                max_bytes,
-            } => {
-                let mut iter = consolidator
-                    .next_chunk(*max_len, *max_bytes)
-                    .await
-                    .expect("fetching a leased part")?;
-                let structured = iter.get_or_make_structured::<K, V>(
-                    self.read_schemas.key.as_ref(),
-                    self.read_schemas.val.as_ref(),
-                );
-                let key_decoder = self
-                    .read_schemas
-                    .key
-                    .decoder_any(structured.key.as_ref())
-                    .expect("ok");
-                let val_decoder = self
-                    .read_schemas
-                    .val
-                    .decoder_any(structured.val.as_ref())
-                    .expect("ok");
-                let iter = (0..iter.len()).map(move |i| {
-                    let mut k = K::default();
-                    let mut v = V::default();
-                    key_decoder.decode(i, &mut k);
-                    val_decoder.decode(i, &mut v);
-                    let t = T::decode(iter.records().timestamps().value(i).to_le_bytes());
-                    let d = D::decode(iter.records().diffs().value(i).to_le_bytes());
-                    ((Ok(k), Ok(v)), t, d)
-                });
+    pub async fn next(&mut self) -> Option<impl Iterator<Item = ((K, V), T, D)> + '_> {
+        let Self {
+            consolidator,
+            max_len,
+            max_bytes,
+            _lease,
+            read_schemas: _,
+        } = self;
 
-                Some(Either::Left(iter))
-            }
-            CursorConsolidator::Codec { consolidator } => {
-                let iter = consolidator
-                    .next()
-                    .await
-                    .expect("fetching a leased part")?
-                    .map(|((k, v), t, d)| {
-                        let key = K::decode(k, &self.read_schemas.key);
-                        let val = V::decode(v, &self.read_schemas.val);
-                        ((key, val), t, d)
-                    });
+        let part = consolidator
+            .next_chunk(*max_len, *max_bytes)
+            .await
+            .expect("fetching a leased part")?;
+        let key_decoder = self
+            .read_schemas
+            .key
+            .decoder_any(part.key.as_ref())
+            .expect("ok");
+        let val_decoder = self
+            .read_schemas
+            .val
+            .decoder_any(part.val.as_ref())
+            .expect("ok");
+        let iter = (0..part.len()).map(move |i| {
+            let mut k = K::default();
+            let mut v = V::default();
+            key_decoder.decode(i, &mut k);
+            val_decoder.decode(i, &mut v);
+            let t = T::decode(part.time.value(i).to_le_bytes());
+            let d = D::decode(part.diff.value(i).to_le_bytes());
+            ((k, v), t, d)
+        });
 
-                Some(Either::Right(iter))
-            }
-        }
+        Some(iter)
     }
 }
 
@@ -1002,8 +1126,8 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     /// Generates a [Self::snapshot], and fetches all of the batches it
     /// contains.
@@ -1021,7 +1145,7 @@ where
     pub async fn snapshot_and_fetch(
         &mut self,
         as_of: Antichain<T>,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+    ) -> Result<Vec<((K, V), T, D)>, Since<T>> {
         let mut cursor = self.snapshot_cursor(as_of, |_| true).await?;
         let mut contents = Vec::new();
         while let Some(iter) = cursor.next().await {
@@ -1055,78 +1179,79 @@ where
         as_of: Antichain<T>,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
-        let batches = self.machine.snapshot(&as_of).await?;
+        let (lease, batches) = self.snapshot_batches(as_of.clone()).await?;
 
-        let context = format!("{}[as_of={:?}]", self.shard_id(), as_of.elements());
+        Self::read_batches_consolidated(
+            &self.cfg,
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
+            self.metrics.read.snapshot.clone(),
+            Arc::clone(&self.blob),
+            self.shard_id(),
+            as_of,
+            self.read_schemas.clone(),
+            &batches,
+            lease,
+            should_fetch_part,
+            COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
+        )
+    }
+
+    pub(crate) fn read_batches_consolidated<L>(
+        persist_cfg: &PersistConfig,
+        metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
+        read_metrics: ReadMetrics,
+        blob: Arc<dyn Blob>,
+        shard_id: ShardId,
+        as_of: Antichain<T>,
+        schemas: Schemas<K, V>,
+        batches: &[HollowBatch<T>],
+        lease: L,
+        should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
+        memory_budget_bytes: usize,
+    ) -> Result<Cursor<K, V, T, D, L>, Since<T>> {
+        let context = format!("{}[as_of={:?}]", shard_id, as_of.elements());
         let filter = FetchBatchFilter::Snapshot {
             as_of: as_of.clone(),
         };
-        let lease = self.lease_seqno();
 
-        let structured_order = STRUCTURED_ORDER.get(&self.cfg) && {
-            self.shard_id().to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(&self.cfg)
-        };
-        let consolidator = if structured_order {
-            let mut consolidator = Consolidator::new(
-                context,
-                self.shard_id(),
-                StructuredSort::new(self.read_schemas.clone()),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.machine.applier.shard_metrics),
-                self.metrics.read.snapshot.clone(),
-                filter,
-                self.cfg.dynamic.compaction_memory_bound_bytes(),
-            );
-            for batch in batches {
-                for (meta, run) in batch.runs() {
-                    consolidator.enqueue_run(
-                        &batch.desc,
-                        meta,
-                        run.into_iter()
-                            .filter(|p| should_fetch_part(p.stats()))
-                            .cloned(),
-                    );
-                }
+        let mut consolidator = Consolidator::new(
+            context,
+            FetchConfig::from_persist_config(persist_cfg),
+            shard_id,
+            StructuredSort::new(schemas.clone()),
+            blob,
+            metrics,
+            shard_metrics,
+            read_metrics,
+            filter,
+            None,
+            memory_budget_bytes,
+        );
+        for batch in batches {
+            for (meta, run) in batch.runs() {
+                consolidator.enqueue_run(
+                    &batch.desc,
+                    meta,
+                    run.into_iter()
+                        .filter(|p| should_fetch_part(p.stats()))
+                        .cloned(),
+                );
             }
-            CursorConsolidator::Structured {
-                consolidator,
-                // This default may end up consolidating more records than previously
-                // for cases like fast-path peeks, where only the first few entries are used.
-                // If this is a noticeable performance impact, thread the max-len in from the caller.
-                max_len: self.cfg.compaction_yield_after_n_updates,
-                max_bytes: BLOB_TARGET_SIZE.get(&self.cfg).max(1),
-            }
-        } else {
-            let mut consolidator = Consolidator::new(
-                context,
-                self.shard_id(),
-                CodecSort::default(),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.machine.applier.shard_metrics),
-                self.metrics.read.snapshot.clone(),
-                filter,
-                self.cfg.dynamic.compaction_memory_bound_bytes(),
-            );
-            for batch in batches {
-                for (meta, run) in batch.runs() {
-                    consolidator.enqueue_run(
-                        &batch.desc,
-                        meta,
-                        run.into_iter()
-                            .filter(|p| should_fetch_part(p.stats()))
-                            .cloned(),
-                    );
-                }
-            }
-            CursorConsolidator::Codec { consolidator }
-        };
+        }
+        // This default may end up consolidating more records than previously
+        // for cases like fast-path peeks, where only the first few entries are used.
+        // If this is a noticeable performance impact, thread the max-len in from the caller.
+        let max_len = persist_cfg.compaction_yield_after_n_updates;
+        let max_bytes = BLOB_TARGET_SIZE.get(persist_cfg).max(1);
 
         Ok(Cursor {
             consolidator,
+            max_len,
+            max_bytes,
             _lease: lease,
-            read_schemas: self.read_schemas.clone(),
+            read_schemas: schemas,
         })
     }
 
@@ -1148,7 +1273,7 @@ where
         let machine = self.machine.clone();
         async move {
             let batches = match as_of {
-                Some(as_of) => machine.snapshot(&as_of).await?,
+                Some(as_of) => machine.unleased_snapshot(&as_of).await?,
                 None => machine.applier.all_batches(),
             };
             let num_updates = batches.iter().map(|b| b.len).sum();
@@ -1173,7 +1298,7 @@ where
         &self,
         as_of: Antichain<T>,
     ) -> Result<SnapshotPartsStats, Since<T>> {
-        let batches = self.machine.snapshot(&as_of).await?;
+        let batches = self.machine.unleased_snapshot(&as_of).await?;
         let parts = stream::iter(&batches)
             .flat_map(|b| b.part_stream(self.shard_id(), &*self.blob, &*self.metrics))
             .map(|p| {
@@ -1197,8 +1322,8 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Generates a [Self::snapshot], and streams out all of the updates
     /// it contains in bounded memory.
@@ -1207,7 +1332,7 @@ where
     pub async fn snapshot_and_stream(
         &mut self,
         as_of: Antichain<T>,
-    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+    ) -> Result<impl Stream<Item = ((K, V), T, D)> + use<K, V, T, D>, Since<T>> {
         let snap = self.snapshot(as_of).await?;
 
         let blob = Arc::clone(&self.blob);
@@ -1247,17 +1372,14 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64 + Ord,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     /// Test helper to generate a [Self::snapshot] call that is expected to
     /// succeed, process its batches, and then return its data sorted.
     #[cfg(test)]
     #[track_caller]
-    pub async fn expect_snapshot_and_fetch(
-        &mut self,
-        as_of: T,
-    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)> {
+    pub async fn expect_snapshot_and_fetch(&mut self, as_of: T) -> Vec<((K, V), T, D)> {
         let mut ret = self
             .snapshot_and_fetch(Antichain::from_elem(as_of))
             .await
@@ -1270,31 +1392,10 @@ where
 
 impl<K: Codec, V: Codec, T, D> Drop for ReadHandle<K, V, T, D> {
     fn drop(&mut self) {
-        // We drop the unexpired state before expiring the reader to ensure the
-        // heartbeat tasks can never observe the expired state. This doesn't
-        // matter for correctness, but avoids confusing log output if the
-        // heartbeat task were to discover that its lease has been expired.
-        let Some(unexpired_state) = self.unexpired_state.take() else {
-            return;
-        };
-
-        let handle = match Handle::try_current() {
-            Ok(x) => x,
-            Err(_) => {
-                warn!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
-                return;
-            }
-        };
-        // Spawn a best-effort task to expire this read handle. It's fine if
-        // this doesn't run to completion, we'd just have to wait out the lease
-        // before the shard-global since is unblocked.
-        //
-        // Intentionally create the span outside the task to set the parent.
-        let expire_span = debug_span!("drop::expire");
-        handle.spawn_named(
-            || format!("ReadHandle::expire ({})", self.reader_id),
-            unexpired_state.expire_fn.0().instrument(expire_span),
-        );
+        self.hold_state.modify(|s| {
+            s.expired = true;
+            s.request_sync = true;
+        });
     }
 }
 
@@ -1396,10 +1497,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(
-            updates,
-            &[((Ok("k".to_owned()), Ok("v".to_owned())), 4u64, 3i64)],
-        )
+        assert_eq!(updates, &[(("k".to_owned(), "v".to_owned()), 4u64, 3i64)],)
     }
 
     #[mz_persist_proc::test(tokio::test)]
@@ -1430,7 +1528,7 @@ mod tests {
 
         let mut snapshot_rows = vec![];
         while let Some(((k, v), t, d)) = snapshot.next().await {
-            snapshot_rows.push(((k.expect("valid key"), v.expect("valid key")), t, d));
+            snapshot_rows.push(((k, v), t, d));
         }
 
         for ((_k, _v), t, _d) in data.as_mut_slice() {
@@ -1488,8 +1586,16 @@ mod tests {
             .await
             .expect("cannot serve requested as_of");
 
-        // Determine sequence number at outset.
-        let original_seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
+        // Determine the sequence number held by our subscribe.
+        let original_seqno_since = subscribe.listen.handle.outstanding_seqno();
+        if let Some(snapshot) = &subscribe.snapshot {
+            for part in snapshot {
+                assert!(
+                    part.lease.seqno() >= original_seqno_since,
+                    "our seqno hold must cover all parts"
+                );
+            }
+        }
 
         let mut parts = vec![];
 
@@ -1542,21 +1648,21 @@ mod tests {
 
         // Repeat the same process as above, more or less, while fetching + returning parts
         for (mut i, part) in parts.into_iter().enumerate() {
-            let part_seqno = part.leased_seqno;
+            let part_seqno = part.lease.seqno();
             let last_seqno = this_seqno;
             this_seqno = part_seqno;
             assert!(this_seqno >= last_seqno);
 
-            let _ = fetcher.fetch_leased_part(&part).await;
-            drop(part);
+            let (part, lease) = part.into_exchangeable_part();
+            let _ = fetcher.fetch_leased_part(part).await;
+            drop(lease);
 
             // Simulates an exchange
             for event in subscribe.next(None).await {
                 if let ListenEvent::Updates(parts) = event {
                     for part in parts {
-                        if let (_, Some(lease)) = part.into_exchangeable_part() {
-                            subsequent_parts.push(lease);
-                        }
+                        let (_, lease) = part.into_exchangeable_part();
+                        subsequent_parts.push(lease);
                     }
                 }
             }
@@ -1579,7 +1685,7 @@ mod tests {
 
             // We should expect the SeqNo to be downgraded if this part's SeqNo
             // is no longer leased to any other parts, either.
-            let expect_downgrade = subscribe.listen.handle.outstanding_seqno() > Some(part_seqno);
+            let expect_downgrade = subscribe.listen.handle.outstanding_seqno() > part_seqno;
 
             let new_seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
             if expect_downgrade {
@@ -1656,7 +1762,7 @@ mod tests {
             blob,
             consensus,
             metrics,
-            Arc::new(IsolatedRuntime::default()),
+            Arc::new(IsolatedRuntime::new_for_tests()),
             Arc::new(StateCache::new_no_metrics()),
             pubsub_sender,
         )

@@ -22,7 +22,7 @@ SET TRANSACTION_ISOLATION TO "strong session serializable";
 COMPLETE 0
 
 simple conn=materialize,user=materialize
-CREATE CLUSTER stuck SIZE '1';
+CREATE CLUSTER stuck SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 

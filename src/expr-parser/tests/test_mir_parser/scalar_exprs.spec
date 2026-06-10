@@ -35,3 +35,19 @@ Map (((#0 AND #1 AND #5) OR (#2 AND #3) OR ((#4 = #5) AND (#6) IS NULL)))
 ~~~
 ----
 ----
+
+# Simple case when
+roundtrip
+Map (case when (#0 = 1) then 10 else 0 end)
+  Constant // { types: "(bigint)" }
+    - (1)
+----
+roundtrip OK
+
+# Nested case when
+roundtrip
+Map (case when (#0 = 1) then 10 else case when (#0 = 2) then 20 else 0 end end)
+  Constant // { types: "(bigint)" }
+    - (1)
+----
+roundtrip OK

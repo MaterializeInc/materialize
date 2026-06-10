@@ -20,9 +20,11 @@ mod dns;
 mod framed;
 mod read_exact;
 mod socket;
+mod timeout;
 
 pub use crate::netio::async_ready::AsyncReady;
-pub use crate::netio::dns::{resolve_address, DnsResolutionError};
+pub use crate::netio::dns::{DnsResolutionError, ensure_url_ip_global, resolve_address};
 pub use crate::netio::framed::{FrameTooBig, MAX_FRAME_SIZE};
-pub use crate::netio::read_exact::{read_exact_or_eof, ReadExactOrEof};
+pub use crate::netio::read_exact::{ReadExactOrEof, read_exact_or_eof};
 pub use crate::netio::socket::{Listener, SocketAddr, SocketAddrType, Stream, UnixSocketAddr};
+pub use crate::netio::timeout::{TimedReader, TimedWriter};

@@ -9,25 +9,29 @@
 
 //! Fuses multiple `Union` operators into one.
 
-use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+use mz_expr::visit::Visit;
 
 /// Fuses multiple `Union` operators into one.
 #[derive(Debug)]
 pub struct Union;
 
 impl crate::Transform for Union {
+    fn name(&self) -> &'static str {
+        "UnionFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "union")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut crate::TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_post(&mut Self::action)?;
+        relation.visit_mut_post(&mut Self::action);
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }

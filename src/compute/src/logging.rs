@@ -11,35 +11,55 @@
 
 pub mod compute;
 mod differential;
-mod initialize;
+pub(super) mod initialize;
+mod prometheus;
 mod reachability;
 mod timely;
 
-use ::timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto, SizableContainer};
-use ::timely::Container;
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
 
+use ::timely::container::{CapacityContainerBuilder, PushInto};
+use ::timely::dataflow::Stream;
+use ::timely::dataflow::channels::pact::Pipeline;
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
+use ::timely::dataflow::operators::generic::Session;
+use ::timely::dataflow::operators::{InputCapability, Operator};
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
+use ::timely::{Container, ContainerBuilder};
+use differential_dataflow::trace::Batcher;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_repr::{Datum, Diff, Row, RowPacker, SharedRow, Timestamp};
+use mz_expr::{MirScalarExpr, permutation_for_arrangement};
+use mz_repr::{Datum, Diff, Row, RowPacker, RowRef, Timestamp};
 use mz_timely_util::activator::RcActivator;
+use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::operator::consolidate_pact;
 
 use crate::logging::compute::Logger as ComputeLogger;
 use crate::typedefs::RowRowAgent;
 
 pub use crate::logging::initialize::initialize;
 
+/// An update of value `D` at a time and with a diff.
+pub(super) type Update<D> = (D, Timestamp, Diff);
+/// A pusher for containers `C`.
+/// An output session for the specified container builder.
+pub(super) type OutputSession<'a, 'b, CB> =
+    Session<'a, 'b, Timestamp, CB, InputCapability<Timestamp>>;
+/// An output session for vector-based containers of updates `D`, using a capacity container builder.
+pub(super) type OutputSessionVec<'a, 'b, D> =
+    OutputSession<'a, 'b, CapacityContainerBuilder<Vec<D>>>;
+/// An output session for columnar containers of updates `D`, using a column builder.
+pub(super) type OutputSessionColumnar<'a, 'b, D> = OutputSession<'a, 'b, ColumnBuilder<D>>;
+
 /// Logs events as a timely stream, with progress statements.
-struct BatchLogger<CB, P>
+struct BatchLogger<C, P>
 where
-    CB: ContainerBuilder,
-    P: EventPusher<Timestamp, CB::Container>,
+    P: EventPusher<Timestamp, C>,
 {
     /// Time in milliseconds of the current expressed capability.
     time_ms: Timestamp,
@@ -49,14 +69,12 @@ where
     /// This means we should be able to perform the same action on timestamp capabilities, and only
     /// flush buffers when this timestamp advances.
     interval_ms: u128,
-    /// A stash for data that does not yet need to be sent.
-    builder: CB,
+    _marker: PhantomData<C>,
 }
 
-impl<CB, P> BatchLogger<CB, P>
+impl<C, P> BatchLogger<C, P>
 where
-    CB: ContainerBuilder,
-    P: EventPusher<Timestamp, CB::Container>,
+    P: EventPusher<Timestamp, C>,
 {
     /// Creates a new batch logger.
     fn new(event_pusher: P, interval_ms: u128) -> Self {
@@ -64,68 +82,41 @@ where
             time_ms: Timestamp::minimum(),
             event_pusher,
             interval_ms,
-            builder: CB::default(),
+            _marker: PhantomData,
         }
     }
+}
 
-    /// Flushes the contents of the builder through the current time and sends
-    /// appropriate progress statements.
-    fn flush_through(&mut self, time: &Duration) {
+impl<C, P> BatchLogger<C, P>
+where
+    P: EventPusher<Timestamp, C>,
+    C: Container,
+{
+    /// Publishes a batch of logged events.
+    fn publish_batch(&mut self, data: C) {
+        self.event_pusher.push(Event::Messages(self.time_ms, data));
+    }
+
+    /// Indicate progress up to `time`, advances the capability.
+    ///
+    /// Returns `true` if the capability was advanced.
+    fn report_progress(&mut self, time: Duration) -> bool {
         let time_ms = ((time.as_millis() / self.interval_ms) + 1) * self.interval_ms;
         let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
         if self.time_ms < new_time_ms {
-            while let Some(finished) = self.builder.finish() {
-                let finished = std::mem::take(finished);
-                self.event_pusher
-                    .push(Event::Messages(self.time_ms, finished));
-            }
-
-            // In principle we can buffer up until this point, if that is appealing to us.
-            // We could buffer more aggressively if the logging interval were exposed
-            // here, as the forward ticks would be that much less frequent.
             self.event_pusher
                 .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));
             self.time_ms = new_time_ms;
-        }
-    }
-
-    /// Extracts and sends all messages that are ready to be sent.
-    fn extract_and_send(&mut self) {
-        while let Some(extracted) = self.builder.extract() {
-            let extracted = std::mem::take(extracted);
-            self.event_pusher
-                .push(Event::Messages(self.time_ms, extracted));
+            true
+        } else {
+            false
         }
     }
 }
 
-impl<CB, P, D> PushInto<D> for BatchLogger<CB, P>
+impl<C, P> Drop for BatchLogger<C, P>
 where
-    CB: ContainerBuilder + PushInto<D>,
-    P: EventPusher<Timestamp, CB::Container>,
-{
-    fn push_into(&mut self, item: D) {
-        self.builder.push_into(item);
-    }
-}
-
-impl<C, P> BatchLogger<CapacityContainerBuilder<C>, P>
-where
-    C: SizableContainer,
     P: EventPusher<Timestamp, C>,
-{
-    /// Publishes a batch of logged events and advances the capability.
-    fn publish_batch(&mut self, time: &Duration, data: &mut C) {
-        self.builder.push_container(data);
-        self.extract_and_send();
-        self.flush_through(time);
-    }
-}
-
-impl<CB, P> Drop for BatchLogger<CB, P>
-where
-    CB: ContainerBuilder,
-    P: EventPusher<Timestamp, CB::Container>,
 {
     fn drop(&mut self) {
         self.event_pusher
@@ -137,24 +128,29 @@ where
 ///
 /// This is just a bundle-type intended to make passing around its contents in the logging
 /// initialization code more convenient.
+///
+/// The `N` type parameter specifies the number of links to create for the event queue. We need
+/// separate links for queues that feed from multiple loggers because the `EventLink` type is not
+/// multi-producer safe (it is a linked-list, and multiple writers would blindly append, replacing
+/// existing new data, and cutting off other writers).
 #[derive(Clone)]
-struct EventQueue<C> {
-    link: Rc<EventLink<Timestamp, C>>,
+struct EventQueue<C, const N: usize = 1> {
+    links: [Rc<EventLink<Timestamp, C>>; N],
     activator: RcActivator,
 }
 
-impl<C> EventQueue<C> {
+impl<C, const N: usize> EventQueue<C, N> {
     fn new(name: &str) -> Self {
         let activator_name = format!("{name}_activator");
         let activate_after = 128;
         Self {
-            link: Rc::new(EventLink::new()),
+            links: [(); N].map(|_| Rc::new(EventLink::new())),
             activator: RcActivator::new(activator_name, activate_after),
         }
     }
 }
 
-/// State shared between different logging dataflows.
+/// State shared between different logging dataflow fragments.
 #[derive(Default)]
 struct SharedLoggingState {
     /// Activators for arrangement heap size operators.
@@ -167,6 +163,8 @@ struct SharedLoggingState {
 pub(crate) struct PermutedRowPacker {
     key: Vec<usize>,
     value: Vec<usize>,
+    key_row: Row,
+    value_row: Row,
 }
 
 impl PermutedRowPacker {
@@ -177,36 +175,39 @@ impl PermutedRowPacker {
         let (_, value) = permutation_for_arrangement(
             &key.iter()
                 .cloned()
-                .map(MirScalarExpr::Column)
+                .map(MirScalarExpr::column)
                 .collect::<Vec<_>>(),
             variant.desc().arity(),
         );
-        Self { key, value }
+        Self {
+            key,
+            value,
+            key_row: Row::default(),
+            value_row: Row::default(),
+        }
     }
 
     /// Pack a slice of datums suitable for the key columns in the log variant.
-    pub(crate) fn pack_slice(&self, datums: &[Datum]) -> (Row, Row) {
+    pub(crate) fn pack_slice(&mut self, datums: &[Datum]) -> (&RowRef, &RowRef) {
         self.pack_by_index(|packer, index| packer.push(datums[index]))
     }
 
     /// Pack using a callback suitable for the key columns in the log variant.
-    pub(crate) fn pack_by_index<F: Fn(&mut RowPacker, usize)>(&self, logic: F) -> (Row, Row) {
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
-
-        let mut packer = row_builder.packer();
+    pub(crate) fn pack_by_index<F: Fn(&mut RowPacker, usize)>(
+        &mut self,
+        logic: F,
+    ) -> (&RowRef, &RowRef) {
+        let mut packer = self.key_row.packer();
         for index in &self.key {
             logic(&mut packer, *index);
         }
-        let key_row = row_builder.clone();
 
-        let mut packer = row_builder.packer();
+        let mut packer = self.value_row.packer();
         for index in &self.value {
             logic(&mut packer, *index);
         }
-        let value_row = row_builder.clone();
 
-        (key_row, value_row)
+        (&self.key_row, &self.value_row)
     }
 }
 
@@ -216,6 +217,42 @@ struct LogCollection {
     trace: RowRowAgent<Timestamp, Diff>,
     /// Token that should be dropped to drop this collection.
     token: Rc<dyn Any>,
-    /// Index of the dataflow exporting this collection.
-    dataflow_index: usize,
+}
+
+/// A single-purpose function to consolidate and pack updates for log collection.
+///
+/// The function first consolidates worker-local updates using the [`Pipeline`] pact, then converts
+/// the updates into `(Row, Row)` pairs using the provided logic function. It is crucial that the
+/// data is not exchanged between workers, as the consolidation would not function as desired
+/// otherwise.
+pub(super) fn consolidate_and_pack<'scope, Chu, B, CB, L, F, C>(
+    input: Stream<'scope, Timestamp, C>,
+    log: L,
+    mut logic: F,
+) -> Stream<'scope, Timestamp, CB::Container>
+where
+    B: Batcher<Time = Timestamp> + 'static,
+    Chu: ContainerBuilder<Container = B::Output> + for<'a> PushInto<&'a mut C> + 'static,
+    C: Container + Clone + 'static,
+    B::Output: Clone,
+    CB: ContainerBuilder,
+    L: Into<LogVariant>,
+    F: for<'a> FnMut(B::Output, &mut PermutedRowPacker, &mut OutputSession<CB>) + 'static,
+{
+    let log = log.into();
+    // TODO: Use something other than the debug representation of the log variant as a name.
+    let c_name = &format!("Consolidate {log:?}");
+    let u_name = &format!("ToRow {log:?}");
+    let mut packer = PermutedRowPacker::new(log);
+    let consolidated = consolidate_pact::<Chu, B, _, _>(input, Pipeline, c_name);
+    consolidated.unary::<CB, _, _, _>(Pipeline, u_name, |_, _| {
+        move |input, output| {
+            input.for_each_time(|time, data| {
+                let mut session = output.session_with_builder(&time);
+                for item in data.flatten().flat_map(|data| data.drain(..)) {
+                    logic(item, &mut packer, &mut session);
+                }
+            });
+        }
+    })
 }

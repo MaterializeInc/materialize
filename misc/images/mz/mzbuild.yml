@@ -13,6 +13,4 @@ mainline: false
 pre-image:
   - type: cargo-build
     bin: [mz]
-    bazel-bin:
-      mz: "@//src/mz:mz_bin"
     strip: false

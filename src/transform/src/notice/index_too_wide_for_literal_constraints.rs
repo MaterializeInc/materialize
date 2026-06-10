@@ -13,12 +13,12 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use itertools::zip_eq;
-use mz_expr::explain::{HumanizedNotice, HumanizerMode};
 use mz_expr::MirScalarExpr;
+use mz_expr::explain::{HumanizedNotice, HumanizerMode};
 use mz_ore::str::separated;
-use mz_repr::explain::ExprHumanizer;
 use mz_repr::GlobalId;
 use mz_repr::Row;
+use mz_repr::explain::ExprHumanizer;
 
 use crate::notice::{ActionKind, OptimizerNoticeApi};
 

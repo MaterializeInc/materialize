@@ -96,7 +96,7 @@
 //!
 //! For more information about schemas and what kind of information you can encapsulate in them,
 //! please refer to the appropriate section of the
-//! [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas).
+//! [Avro Specification](https://avro.apache.org/docs/++version++/specification/#schema-declaration).
 //!
 //! # Writing data
 //!
@@ -271,7 +271,7 @@
 //! The library will also automatically perform schema resolution while reading the data.
 //!
 //! For more information about schema compatibility and resolution, please refer to the
-//! [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas).
+//! [Avro Specification](https://avro.apache.org/docs/++version++/specification/#schema-declaration).
 //!
 //! There are two ways to handle deserializing Avro data in Rust, as you can see below.
 //!
@@ -345,15 +345,15 @@ pub mod types;
 pub use crate::codec::Codec;
 pub use crate::decode::public_decoders::*;
 pub use crate::decode::{
-    give_value, AvroArrayAccess, AvroDecodable, AvroDecode, AvroDeserializer, AvroFieldAccess,
-    AvroMapAccess, AvroRead, AvroRecordAccess, GeneralDeserializer, Skip, StatefulAvroDecodable,
-    ValueOrReader,
+    AvroArrayAccess, AvroDecodable, AvroDecode, AvroDeserializer, AvroFieldAccess, AvroMapAccess,
+    AvroRead, AvroRecordAccess, GeneralDeserializer, Skip, StatefulAvroDecodable, ValueOrReader,
+    give_value,
 };
 pub use crate::encode::encode as encode_unchecked;
-pub use crate::reader::{from_avro_datum, Block, BlockIter, Reader};
+pub use crate::reader::{Block, BlockIter, Reader, from_avro_datum};
 pub use crate::schema::{ParseSchemaError, Schema};
 pub use crate::types::SchemaResolutionError;
-pub use crate::writer::{to_avro_datum, write_avro_datum, ValidationError, Writer};
+pub use crate::writer::{ValidationError, Writer, to_avro_datum, write_avro_datum};
 
 #[cfg(test)]
 mod tests {

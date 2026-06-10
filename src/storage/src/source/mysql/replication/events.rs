@@ -8,16 +8,17 @@
 // by the Apache License, Version 2.0.
 
 use maplit::btreemap;
+use mysql_async::binlog::events::OptionalMetaExtractor;
 use mysql_common::binlog::events::{QueryEvent, RowsEventData};
-use mz_mysql_util::{pack_mysql_row, MySqlError};
+use mz_mysql_util::{MySqlError, pack_mysql_row};
 use mz_ore::iter::IteratorExt;
-use mz_repr::Row;
+use mz_repr::{Diff, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::mysql::GtidPartition;
 use timely::progress::Timestamp;
 use tracing::trace;
 
-use crate::source::types::SourceMessage;
+use crate::source::types::{FuelSize, SourceMessage};
 
 use super::super::schemas::verify_schemas;
 use super::super::{DefiniteError, MySqlTableName, TransientError};
@@ -93,20 +94,17 @@ pub(super) async fn handle_query_event(
                 for (err_output, err) in
                     verify_schemas(&mut *conn, btreemap! { &table => info }).await?
                 {
-                    trace!(%id, "timely-{worker_id} DDL change \
+                    tracing::warn!(%id, "timely-{worker_id} DDL change \
                            verification error for {table:?}[{}]: {err:?}",
                            err_output.output_index);
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                    ctx.data_output
-                        .give_fueled(
-                            &gtid_cap,
-                            (
-                                (err_output.output_index, Err(err.into())),
-                                new_gtid.clone(),
-                                1,
-                            ),
-                        )
-                        .await;
+                    let update = (
+                        (err_output.output_index, Err(err.into())),
+                        new_gtid.clone(),
+                        Diff::ONE,
+                    );
+                    let size = update.fuel_size();
+                    ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                     ctx.errored_outputs.insert(err_output.output_index);
                 }
             }
@@ -135,19 +133,16 @@ pub(super) async fn handle_query_event(
             let schema_errors = verify_schemas(&mut *conn, expected).await?;
             is_complete_event = true;
             for (dropped_output, err) in schema_errors {
-                trace!(%id, "timely-{worker_id} DDL change \
+                tracing::info!(%id, "timely-{worker_id} DDL change \
                            dropped output: {dropped_output:?}: {err:?}");
                 let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                ctx.data_output
-                    .give_fueled(
-                        &gtid_cap,
-                        (
-                            (dropped_output.output_index, Err(err.into())),
-                            new_gtid.clone(),
-                            1,
-                        ),
-                    )
-                    .await;
+                let update = (
+                    (dropped_output.output_index, Err(err.into())),
+                    new_gtid.clone(),
+                    Diff::ONE,
+                );
+                let size = std::mem::size_of_val(&update);
+                ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                 ctx.errored_outputs.insert(dropped_output.output_index);
             }
         }
@@ -172,21 +167,18 @@ pub(super) async fn handle_query_event(
                 if let Some(info) = ctx.table_info.get(&table) {
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                     for output in info {
-                        ctx.data_output
-                            .give_fueled(
-                                &gtid_cap,
-                                (
-                                    (
-                                        output.output_index,
-                                        Err(DataflowError::from(DefiniteError::TableTruncated(
-                                            table.to_string(),
-                                        ))),
-                                    ),
-                                    new_gtid.clone(),
-                                    1,
-                                ),
-                            )
-                            .await;
+                        let update = (
+                            (
+                                output.output_index,
+                                Err(DataflowError::from(DefiniteError::TableTruncated(
+                                    table.to_string(),
+                                ))),
+                            ),
+                            new_gtid.clone(),
+                            Diff::ONE,
+                        );
+                        let size = update.fuel_size();
+                        ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                         ctx.errored_outputs.insert(output.output_index);
                     }
                 }
@@ -196,6 +188,26 @@ pub(super) async fn handle_query_event(
         // storage engines
         (Some("commit"), None) => {
             is_complete_event = true;
+        }
+        // Detect `CREATE TABLE <tbl>` statements which don't affect existing tables but do
+        // signify a complete event (e.g. for the purposes of advancing the GTID)
+        (Some("create"), Some("table")) => {
+            // CREATE TABLE ... SELECT will have subsequent `RowEvent`s, to account for this, the statement contains the clause "START TRANSACTION".
+            // https://dev.mysql.com/worklog/task/?id=13355
+
+            let mut peek_stream = query_iter.peekable();
+            let mut ctas = false;
+            while let Some(token) = peek_stream.next() {
+                if token.eq_ignore_ascii_case("start")
+                    && peek_stream
+                        .peek()
+                        .is_some_and(|t| t.eq_ignore_ascii_case("transaction"))
+                {
+                    ctas = true;
+                    break;
+                }
+            }
+            is_complete_event = !ctas;
         }
         _ => {}
     }
@@ -210,7 +222,7 @@ pub(super) async fn handle_query_event(
 /// frontier with which to advance the dataflow's progress.
 pub(super) async fn handle_rows_event(
     event: RowsEventData<'_>,
-    ctx: &ReplContext<'_>,
+    ctx: &mut ReplContext<'_>,
     new_gtid: &GtidPartition,
     event_buffer: &mut Vec<(
         (usize, Result<SourceMessage, DataflowError>),
@@ -251,6 +263,11 @@ pub(super) async fn handle_rows_event(
     // Capability for this event.
     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
 
+    // We can check here if the binlog has full row metadata by looking at the column name optional
+    // metadata, which is only present if full metadata is enabled.
+    let optional_metadata = OptionalMetaExtractor::new(table_map_event.iter_optional_meta())?;
+    let has_full_metadata = optional_metadata.iter_column_name().next().is_some();
+
     // Iterate over the rows in this RowsEvent. Each row is a pair of 'before_row', 'after_row',
     // to accomodate for updates and deletes (which include a before_row),
     // and updates and inserts (which inclued an after row).
@@ -274,21 +291,41 @@ pub(super) async fn handle_rows_event(
             }
         }
 
-        let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
+        let updates = [
+            before_row.map(|r| (r, Diff::MINUS_ONE)),
+            after_row.map(|r| (r, Diff::ONE)),
+        ];
+        let gtid_str = format!("{new_gtid:?}");
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
             for (output, row_val) in outputs.iter().repeat_clone(row) {
-                let event = match pack_mysql_row(&mut final_row, row_val, &output.desc) {
-                    Ok(row) => Ok(SourceMessage {
-                        key: Row::default(),
-                        value: row,
-                        metadata: Row::default(),
-                    }),
-                    // Produce a DefiniteError in the stream for any rows that fail to decode
-                    Err(err @ MySqlError::ValueDecodeError { .. }) => Err(DataflowError::from(
-                        DefiniteError::ValueDecodeError(err.to_string()),
-                    )),
-                    Err(err) => Err(err)?,
+                let event = if !has_full_metadata && output.binlog_full_metadata {
+                    ctx.errored_outputs.insert(output.output_index);
+                    Err(DataflowError::from(DefiniteError::ValueDecodeError(
+                        format!(
+                            "Table {0} was created with binlog_row_metadata=FULL but binlog_row_metadata has since been set to a different value, meaning we cannot reliably decode the columns",
+                            output.table_name
+                        ),
+                    )))
+                } else {
+                    match pack_mysql_row(
+                        &mut final_row,
+                        row_val,
+                        &output.desc,
+                        Some(&gtid_str),
+                        output.binlog_full_metadata,
+                    ) {
+                        Ok(row) => Ok(SourceMessage {
+                            key: Row::default(),
+                            value: row,
+                            metadata: Row::default(),
+                        }),
+                        // Produce a DefiniteError in the stream for any rows that fail to decode
+                        Err(err @ MySqlError::ValueDecodeError { .. }) => Err(DataflowError::from(
+                            DefiniteError::ValueDecodeError(err.to_string()),
+                        )),
+                        Err(err) => Err(err)?,
+                    }
                 };
 
                 let data = (output.output_index, event);
@@ -301,14 +338,14 @@ pub(super) async fn handle_rows_event(
                         event_buffer.push((data.clone(), GtidPartition::minimum(), -diff));
                     }
                 }
-                if diff > 0 {
+                if diff.is_positive() {
                     additions += 1;
                 } else {
                     retractions += 1;
                 }
-                ctx.data_output
-                    .give_fueled(&gtid_cap, (data, new_gtid.clone(), diff))
-                    .await;
+                let update = (data, new_gtid.clone(), diff);
+                let size = update.fuel_size();
+                ctx.data_output.give_fueled(&gtid_cap, update, size).await;
             }
         }
     }
@@ -321,8 +358,9 @@ pub(super) async fn handle_rows_event(
 
     if !event_buffer.is_empty() {
         for d in event_buffer.drain(..) {
-            let (rewind_data_cap, _) = ctx.rewinds.get(&d.0 .0).unwrap();
-            ctx.data_output.give_fueled(rewind_data_cap, d).await;
+            let (rewind_data_cap, _) = ctx.rewinds.get(&d.0.0).unwrap();
+            let size = d.fuel_size();
+            ctx.data_output.give_fueled(rewind_data_cap, d, size).await;
         }
     }
 

@@ -1,0 +1,14 @@
+- name: "syntax"
+  code: |
+    <aggregate_name> ( <expression> )
+    FILTER (WHERE <filter_clause>)
+  syntax_elements:
+    - name: "`<aggregate_name>`"
+      description: |
+        The name of the aggregate function.
+    - name: "`<expression>`"
+      description: |
+        The expression to aggregate.
+    - name: "**FILTER** (WHERE `<filter_clause>`)"
+      description: |
+        Specifies which rows are sent to the aggregate function. Rows for which the `<filter_clause>` evaluates to true contribute to the aggregation. Temporal filters cannot be used in aggregate function filters.

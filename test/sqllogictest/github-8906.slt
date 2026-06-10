@@ -1,0 +1,215 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/8906
+
+# The setup is based on https://github.com/MaterializeInc/RQG/blob/main/conf/mz/simple.sql
+
+statement ok
+DROP TABLE IF EXISTS t1 CASCADE;
+
+statement ok
+DROP TABLE IF EXISTS t2 CASCADE;
+
+statement ok
+DROP TABLE IF EXISTS t3 CASCADE;
+
+statement ok
+CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE INDEX t1i1 ON t1(f1);
+
+statement ok
+CREATE INDEX t1i2 ON t1(f2, f1);
+
+# one NULL row in t1
+
+statement ok
+INSERT INTO t1 VALUES (NULL, 0);
+
+# values 1 and 2 have 2 rows each in t1
+
+statement ok
+INSERT INTO t1 VALUES (1, 1);
+
+statement ok
+INSERT INTO t1 VALUES (1, 1);
+
+statement ok
+INSERT INTO t1 VALUES (2, 2);
+
+statement ok
+INSERT INTO t1 VALUES (2, 2);
+
+statement ok
+INSERT INTO t1 VALUES (3, 3);
+
+statement ok
+INSERT INTO t1 VALUES (4, 4);
+
+statement ok
+INSERT INTO t1 VALUES (5, 5);
+
+statement ok
+INSERT INTO t1 VALUES (6, 6);
+
+statement ok
+INSERT INTO t1 VALUES (7, 7);
+
+statement ok
+INSERT INTO t1 VALUES (8, 8);
+
+# value 9 not present in either table
+
+statement ok
+CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE INDEX t2i1 ON t2(f1);
+
+statement ok
+CREATE INDEX i2i2 ON t2(f2, f1);
+
+# two NULL rows in t2
+
+statement ok
+INSERT INTO t2 VALUES (NULL, 0);
+
+statement ok
+INSERT INTO t2 VALUES (NULL, 0);
+
+statement ok
+INSERT INTO t2 VALUES (1, 1);
+
+# value 2 has 2 rows in t2
+
+statement ok
+INSERT INTO t2 VALUES (2, 2);
+
+statement ok
+INSERT INTO t2 VALUES (2, 2);
+
+# value 3 has no rows in t2
+
+statement ok
+INSERT INTO t2 VALUES (4, 4);
+
+statement ok
+INSERT INTO t2 VALUES (5, 5);
+
+statement ok
+INSERT INTO t2 VALUES (6, 6);
+
+statement ok
+INSERT INTO t2 VALUES (7, 7);
+
+statement ok
+INSERT INTO t2 VALUES (8, 8);
+
+# value 9 not present in either table
+
+statement ok
+CREATE TABLE t3 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE MATERIALIZED VIEW pk1 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t1 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+statement ok
+CREATE MATERIALIZED VIEW pk2 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t2 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+statement ok
+CREATE MATERIALIZED VIEW pk3 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t3 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+query RRRR
+SELECT
+    (
+        SELECT inner2.f2
+        FROM t1 AS inner1 RIGHT JOIN t2 AS inner2 ON (inner2.f2 + 1 = inner2.f2)
+        WHERE outer2.f2 BETWEEN 0 AND 0 AND outer1.f2 = outer1.f1
+        ORDER BY 1
+        LIMIT 1
+    ),
+    (
+        SELECT inner1.f1 + 1
+        FROM t1 AS inner1 LEFT JOIN t2 AS inner2 ON (inner1.f2 + 1 BETWEEN inner2.f2 AND inner1.f2)
+        WHERE outer1.f2 + 1 IS NULL AND inner2.f2 IS NULL
+        ORDER BY 1
+        LIMIT 1
+    ),
+    (
+        SELECT inner1.f1 + 1
+        FROM pk1 AS inner1, pk2 AS inner2
+        WHERE inner2.f1 + 1 IS NOT NULL AND inner2.f2 IS NULL
+        ORDER BY 1
+        LIMIT 0
+    ),
+    (
+        SELECT inner1.f1
+        FROM t1 AS inner1 JOIN t2 AS inner2 ON (inner2.f2 + 1 BETWEEN 1 AND 1)
+        WHERE inner2.f1 IS NOT NULL OR inner1.f1 IS NOT NULL
+        ORDER BY 1
+        LIMIT 1
+    )
+FROM
+    t1 AS outer1
+        JOIN
+            (
+                    SELECT DISTINCT inner1.f2 AS f1, inner1.f2 + 1 AS f2
+                    FROM pk2 AS inner1, pk2 AS inner2
+                    WHERE inner2.f1 IS NOT NULL
+                )
+                AS outer2
+            ON (outer2.f1 BETWEEN 1 AND 8)
+WHERE
+    outer1.f2 BETWEEN outer1.f1 AND outer2.f2 + 1
+        AND
+    outer2.f2
+    = (
+            SELECT inner2.f2
+            FROM t1 AS inner1 JOIN t2 AS inner2 ON (inner2.f1 BETWEEN inner1.f1 AND 1)
+            WHERE inner2.f1 + 1 IS NOT NULL AND outer2.f1 + 1 IS NULL
+            ORDER BY 1
+            LIMIT 0
+        )
+        AND
+    outer1.f1 + 1
+    = (
+            SELECT inner1.f2 FROM t1 AS inner1, pk1 AS inner2 WHERE outer2.f2 > outer2.f1 + 1
+            ORDER BY 1
+            LIMIT 1
+        )
+        AND
+    outer2.f2 + 1
+    = (
+            SELECT inner1.f1 + 1
+            FROM t1 AS inner1 LEFT JOIN t2 AS inner2 ON (inner1.f2 IS NULL)
+            WHERE inner1.f2 + 1 BETWEEN 1 AND outer2.f2
+            ORDER BY 1
+            LIMIT 1
+        )
+        AND
+    NOT
+    EXISTS (
+        SELECT DISTINCT inner2.f1
+        FROM t1 AS inner1 LEFT JOIN t2 AS inner2 ON (inner1.f2 BETWEEN inner1.f2 AND 1)
+        WHERE inner1.f2 + 1 BETWEEN 8 AND inner1.f1 AND outer1.f2 BETWEEN 9 AND 1
+    )
+        OR
+    outer2.f2 + 1 = outer1.f2 + 1;
+----
+NULL  NULL  NULL  1
+NULL  NULL  NULL  1
+NULL  NULL  NULL  1
+NULL  NULL  NULL  1
+NULL  NULL  NULL  1
+NULL  NULL  NULL  1
+NULL  NULL  NULL  1

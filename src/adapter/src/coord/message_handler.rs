@@ -10,36 +10,36 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use std::collections::{btree_map, BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map};
 use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use maplit::btreemap;
+use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
-use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
+use mz_controller::clusters::{ClusterEvent, ClusterStatus};
+use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
-use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
-use rand::{rngs, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs};
 use serde_json::json;
-use tracing::{event, info_span, warn, Instrument, Level};
+use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{BuiltinTableUpdate, Op};
+use crate::catalog::BuiltinTableUpdate;
 use crate::command::Command;
-use crate::coord::appends::Deferred;
 use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
@@ -63,7 +63,7 @@ impl Coordinator {
                 span.in_scope(|| otel_ctx.attach_as_parent());
                 self.message_command(cmd).instrument(span).await
             }
-            Message::ControllerReady => {
+            Message::ControllerReady { controller: _ } => {
                 let Coordinator {
                     controller,
                     catalog,
@@ -92,11 +92,10 @@ impl Coordinator {
                     .boxed_local()
                     .await
             }
-            Message::WriteLockGrant(write_lock_guard) => {
-                self.message_write_lock_grant(write_lock_guard)
-                    .boxed_local()
-                    .await;
-            }
+            Message::TryDeferred {
+                conn_id,
+                acquired_lock,
+            } => self.try_deferred(conn_id, acquired_lock).await,
             Message::GroupCommitInitiate(span, permit) => {
                 // Add an OpenTelemetry link to our current span.
                 tracing::Span::current().add_link(span.context().span().span_context().clone());
@@ -115,6 +114,13 @@ impl Coordinator {
             Message::LinearizeReads => {
                 self.message_linearize_reads().boxed_local().await;
             }
+            Message::StagedBatches {
+                conn_id,
+                table_id,
+                batches,
+            } => {
+                self.commit_staged_batches(conn_id, table_id, batches);
+            }
             Message::StorageUsageSchedule => {
                 self.schedule_storage_usage_collection().boxed_local().await;
             }
@@ -126,6 +132,17 @@ impl Coordinator {
             }
             Message::StorageUsagePrune(expired) => {
                 self.storage_usage_prune(expired).boxed_local().await;
+            }
+            Message::ArrangementSizesSchedule => {
+                self.schedule_arrangement_sizes_collection()
+                    .boxed_local()
+                    .await;
+            }
+            Message::ArrangementSizesSnapshot => {
+                self.arrangement_sizes_snapshot().boxed_local().await;
+            }
+            Message::ArrangementSizesPrune(expired) => {
+                self.arrangement_sizes_prune(expired).boxed_local().await;
             }
             Message::RetireExecute {
                 otel_ctx,
@@ -178,15 +195,13 @@ impl Coordinator {
             }
             Message::PrivateLinkVpcEndpointEvents(events) => {
                 if !self.controller.read_only() {
-                    self.controller
-                            .storage
-                            .append_introspection_updates(
-                                mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
-                                events
-                                    .into_iter()
-                                    .map(|e| (mz_repr::Row::from(e), 1))
-                                    .collect(),
-                            );
+                    self.controller.storage.append_introspection_updates(
+                        IntrospectionType::PrivatelinkConnectionStatusHistory,
+                        events
+                            .into_iter()
+                            .map(|e| (mz_repr::Row::from(e), Diff::ONE))
+                            .collect(),
+                    );
                 }
             }
             Message::CheckSchedulingPolicies => {
@@ -204,7 +219,21 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    pub async fn storage_usage_fetch(&mut self) {
+    pub async fn storage_usage_fetch(&self) {
+        // In read-only mode (e.g. a standby coordinator during a zero-downtime
+        // deployment) we cannot durably write the per-batch allocator bump or
+        // append to `mz_storage_usage_by_shard`, and we also don't want to do
+        // the slow shard scan on a process that isn't going to record the
+        // results. Skip the whole cycle and reschedule so we resume
+        // automatically once the coordinator transitions out of read-only.
+        if self.controller.read_only() {
+            tracing::info!("skipping storage usage collection in read-only mode");
+            if let Err(e) = self.internal_cmd_tx.send(Message::StorageUsageSchedule) {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
+            return;
+        }
+
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 
@@ -214,31 +243,10 @@ impl Coordinator {
             .storage
             .active_collection_metadatas()
             .into_iter()
-            .flat_map(|(_id, collection_metadata)| {
-                let CollectionMetadata {
-                    data_shard,
-                    remap_shard,
-                    status_shard,
-                    // No wildcards, to improve the odds that the addition of a
-                    // new shard type results in a compiler error here.
-                    //
-                    // ATTENTION: If you add a new type of shard that is
-                    // associated with a collection, almost surely you should
-                    // return it below, so that its usage is recorded in the
-                    // `mz_storage_usage_by_shard` table.
-                    persist_location: _,
-                    relation_desc: _,
-                    txns_shard: _,
-                } = collection_metadata;
-                [remap_shard, status_shard, Some(data_shard)].into_iter()
-            })
-            .filter_map(|shard| shard)
+            .map(|(_id, m)| m.data_shard)
             .collect();
 
-        let collection_metric = self
-            .metrics
-            .storage_usage_collection_time_seconds
-            .with_label_values(&[]);
+        let collection_metric = self.metrics.storage_usage_collection_time_seconds.clone();
 
         // Spawn an asynchronous task to compute the storage usage, which
         // requires a slow scan of the underlying storage engine.
@@ -261,40 +269,51 @@ impl Coordinator {
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
         // timestamp in the past.
-        let collection_timestamp = if self.controller.read_only() {
-            self.peek_local_write_ts().await.into()
-        } else {
-            // Getting a write timestamp bumps the write timestamp in the
-            // oracle, which we're not allowed in read-only mode.
-            self.get_local_write_ts().await.timestamp.into()
+        //
+        // `storage_usage_fetch` skips this path in read-only mode, so we can
+        // unconditionally bump the oracle write ts here.
+        let write_ts = self.get_local_write_ts().await.timestamp;
+        let collection_timestamp: EpochMillis = write_ts.into();
+
+        // All rows in this collection cycle share `batch_id` so consumers can
+        // identify rows that were collected together. We use one durable
+        // allocator bump per cycle (rather than per shard) so the id is
+        // monotonic across coordinator restarts while still keeping the
+        // coord-blocking cost proportional to one round-trip, not N.
+        let batch_id = match self.catalog().allocate_storage_usage_id(write_ts).await {
+            Ok(id) => id,
+            Err(err) => {
+                tracing::warn!("failed to allocate storage usage batch id: {:?}", err);
+                return;
+            }
         };
 
-        let ops = shards_usage
+        let updates: Vec<_> = shards_usage
             .by_shard
             .into_iter()
-            .map(|(shard_id, shard_usage)| Op::WeirdStorageUsageUpdates {
-                object_id: Some(shard_id.to_string()),
-                size_bytes: shard_usage.size_bytes(),
-                collection_timestamp,
+            .map(|(shard_id, shard_usage)| {
+                let event = VersionedStorageUsage::new(
+                    batch_id,
+                    Some(shard_id.to_string()),
+                    shard_usage.size_bytes(),
+                    collection_timestamp,
+                );
+                self.catalog().pack_storage_usage_update(event, Diff::ONE)
             })
             .collect();
 
-        match self.catalog_transact_inner(None, ops).await {
-            Ok(table_updates) => {
-                let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let task_span =
-                    info_span!(parent: None, "coord::storage_usage_update::table_updates");
-                OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
-                task::spawn(|| "storage_usage_update_table_updates", async move {
-                    table_updates.instrument(task_span).await;
-                    // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                    if let Err(e) = internal_cmd_tx.send(Message::StorageUsageSchedule) {
-                        warn!("internal_cmd_rx dropped before we could send: {e:?}");
-                    }
-                });
+        let (table_updates, _) = self.builtin_table_update().execute(updates).await;
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let task_span = info_span!(parent: None, "coord::storage_usage_update::table_updates");
+        OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
+        task::spawn(|| "storage_usage_update_table_updates", async move {
+            table_updates.instrument(task_span).await;
+            // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
+            if let Err(e) = internal_cmd_tx.send(Message::StorageUsageSchedule) {
+                warn!("internal_cmd_rx dropped before we could send: {e:?}");
             }
-            Err(err) => tracing::warn!("Failed to update storage metrics: {:?}", err),
-        }
+        });
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -332,7 +351,7 @@ impl Coordinator {
             EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())
                 .expect("storage usage collection interval must fit into u64");
         let offset =
-            rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
+            rngs::SmallRng::from_seed(seed).random_range(0..storage_usage_collection_interval_ms);
         let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
 
         // 2) Determine the amount of ms between now and the next collection time.
@@ -352,6 +371,286 @@ impl Coordinator {
             if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
                 // If sending fails, the main thread has shutdown.
             }
+        });
+    }
+
+    /// Schedules the next per-object arrangement sizes snapshot.
+    ///
+    /// Aligns each fire to an `organization_id`-seeded offset within the
+    /// interval so collections stay consistent across restarts and don't
+    /// synchronize across environments. Sleeps are capped at `MAX_SLEEP`,
+    /// so dyncfg changes (interval edits or the `0s` disable sentinel) take
+    /// effect within one cap rather than after the full interval.
+    pub async fn schedule_arrangement_sizes_collection(&self) {
+        const MAX_SLEEP: Duration = Duration::from_secs(60);
+
+        let interval_duration =
+            mz_adapter_types::dyncfgs::ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL
+                .get(self.catalog().system_config().dyncfgs());
+
+        // `0s` disables collection. Keep polling so re-enabling takes effect
+        // within `MAX_SLEEP` rather than requiring an envd restart.
+        if interval_duration.is_zero() {
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            task::spawn(|| "arrangement_sizes_collection_disabled", async move {
+                tokio::time::sleep(MAX_SLEEP).await;
+                let _ = internal_cmd_tx.send(Message::ArrangementSizesSchedule);
+            });
+            return;
+        }
+
+        const SEED_LEN: usize = 32;
+        let mut seed = [0; SEED_LEN];
+        for (i, byte) in self
+            .catalog()
+            .state()
+            .config()
+            .environment_id
+            .organization_id()
+            .as_bytes()
+            .into_iter()
+            .take(SEED_LEN)
+            .enumerate()
+        {
+            seed[i] = *byte;
+        }
+        let interval_ms: EpochMillis = EpochMillis::try_from(interval_duration.as_millis())
+            .expect("arrangement_size_history_collection_interval must fit into u64");
+        // `rand::random_range` panics on an empty range.
+        let interval_ms = interval_ms.max(1);
+        let offset = rngs::SmallRng::from_seed(seed).random_range(0..interval_ms);
+        let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
+
+        let previous_collection_ts = (now_ts - (now_ts % interval_ms)) + offset;
+        let next_collection_ts = if previous_collection_ts > now_ts {
+            previous_collection_ts
+        } else {
+            previous_collection_ts + interval_ms
+        };
+        let sleep_for = Duration::from_millis(next_collection_ts - now_ts);
+
+        // Within one cap of the next fire we sleep the remainder and snapshot;
+        // further out we sleep the cap and re-enter so a dyncfg change is
+        // picked up before committing to a long sleep.
+        let (capped_sleep, fire_snapshot) = if sleep_for <= MAX_SLEEP {
+            (sleep_for, true)
+        } else {
+            (MAX_SLEEP, false)
+        };
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        task::spawn(|| "arrangement_sizes_collection", async move {
+            tokio::time::sleep(capped_sleep).await;
+            let msg = if fire_snapshot {
+                Message::ArrangementSizesSnapshot
+            } else {
+                Message::ArrangementSizesSchedule
+            };
+            // Send is best-effort: if the coordinator is shutting down, drop.
+            let _ = internal_cmd_tx.send(msg);
+        });
+    }
+
+    /// Snapshots the current contents of `mz_object_arrangement_sizes` and
+    /// appends them to `mz_object_arrangement_size_history`, tagged with a
+    /// shared `collection_timestamp`. Reschedules on completion.
+    ///
+    /// Each `(replica_id, object_id)` pair is recorded with a
+    /// `hydration_complete` flag derived from `mz_compute_hydration_times`:
+    /// `true` once the pair's initial hydration on that replica is finished,
+    /// `false` while still building. Consumers that want only stable sizes
+    /// should filter `WHERE hydration_complete`.
+    #[mz_ore::instrument(level = "debug")]
+    async fn arrangement_sizes_snapshot(&mut self) {
+        // The catalog server is not writable in read-only mode.
+        if self.controller.read_only() {
+            self.schedule_arrangement_sizes_collection().await;
+            return;
+        }
+
+        let collection_timer = self
+            .metrics
+            .arrangement_sizes_collection_time_seconds
+            .start_timer();
+
+        let live_item_id = self.catalog().resolve_builtin_storage_collection(
+            &mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED,
+        );
+        let live_global_id = self.catalog.get_entry(&live_item_id).latest_global_id();
+        let hydration_item_id = self
+            .catalog()
+            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_COMPUTE_HYDRATION_TIMES);
+        let hydration_global_id = self
+            .catalog
+            .get_entry(&hydration_item_id)
+            .latest_global_id();
+        let history_item_id = self
+            .catalog()
+            .resolve_builtin_table(&mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY);
+
+        let read_ts = self.get_local_read_ts().await;
+        let snapshot = match self
+            .controller
+            .storage_collections
+            .snapshot(live_global_id, read_ts)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("arrangement sizes snapshot failed: {e:?}");
+                drop(collection_timer);
+                self.schedule_arrangement_sizes_collection().await;
+                return;
+            }
+        };
+        let mut hydration_snapshot = match self
+            .controller
+            .storage_collections
+            .snapshot(hydration_global_id, read_ts)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("arrangement sizes hydration snapshot failed: {e:?}");
+                drop(collection_timer);
+                self.schedule_arrangement_sizes_collection().await;
+                return;
+            }
+        };
+        differential_dataflow::consolidation::consolidate(&mut hydration_snapshot);
+
+        // Build the set of pairs whose initial hydration has finished
+        // (`time_ns IS NOT NULL`). The set drives the `hydration_complete`
+        // flag for each row we emit below.
+        let mut datum_vec = mz_repr::DatumVec::new();
+        let mut hydrated: BTreeSet<(String, String)> = BTreeSet::new();
+        const HYDRATION_COL_REPLICA_ID: usize = 0;
+        const HYDRATION_COL_OBJECT_ID: usize = 1;
+        const HYDRATION_COL_TIME_NS: usize = 2;
+        const HYDRATION_COL_COUNT: usize = 3;
+        for (row, diff) in &hydration_snapshot {
+            if *diff != 1 {
+                continue;
+            }
+            let datums = datum_vec.borrow_with(row);
+            if datums.len() < HYDRATION_COL_COUNT {
+                continue;
+            }
+            if datums[HYDRATION_COL_TIME_NS].is_null() {
+                continue;
+            }
+            hydrated.insert((
+                datums[HYDRATION_COL_REPLICA_ID].unwrap_str().to_string(),
+                datums[HYDRATION_COL_OBJECT_ID].unwrap_str().to_string(),
+            ));
+        }
+
+        // `collection_ts` is stamped after the snapshot so it's always >= the
+        // state the rows describe, and monotone across restarts. The snapshot
+        // read and this stamp aren't atomic, but the resulting skew is bounded
+        // by snapshot latency and negligible at this cadence.
+        let collection_ts: EpochMillis = self.get_local_write_ts().await.timestamp.into();
+        let collection_datum = Datum::TimestampTz(
+            mz_ore::now::to_datetime(collection_ts)
+                .try_into()
+                .expect("collection_timestamp must fit into TimestampTz"),
+        );
+
+        let mut consolidated = snapshot;
+        differential_dataflow::consolidation::consolidate(&mut consolidated);
+
+        // Column positions in `mz_object_arrangement_sizes`.
+        const LIVE_COL_REPLICA_ID: usize = 0;
+        const LIVE_COL_OBJECT_ID: usize = 1;
+        const LIVE_COL_SIZE: usize = 2;
+        const LIVE_COL_COUNT: usize = 3;
+
+        let mut skipped_malformed: u64 = 0;
+        let mut skipped_null_size: u64 = 0;
+        let mut updates: Vec<BuiltinTableUpdate> = Vec::with_capacity(consolidated.len());
+        for (row, diff) in consolidated.iter() {
+            if *diff != 1 {
+                continue;
+            }
+            let datums = datum_vec.borrow_with(row);
+            // Surface schema drift via a warn log below rather than silently
+            // skipping entire snapshots.
+            if datums.len() != LIVE_COL_COUNT {
+                skipped_malformed += 1;
+                continue;
+            }
+            let replica_id = datums[LIVE_COL_REPLICA_ID].unwrap_str();
+            let object_id = datums[LIVE_COL_OBJECT_ID].unwrap_str();
+            let size_datum = datums[LIVE_COL_SIZE];
+            // The history table's `size` is non-null; fabricating zero would
+            // be misleading, so drop.
+            if size_datum.is_null() {
+                skipped_null_size += 1;
+                continue;
+            }
+            let size = size_datum.unwrap_int64();
+            // Pairs whose hydration hasn't completed yet are still recorded,
+            // tagged with `hydration_complete = false`. Consumers that care
+            // only about stable sizes can filter on `hydration_complete`.
+            let hydration_complete =
+                hydrated.contains(&(replica_id.to_string(), object_id.to_string()));
+            let new_row = Row::pack_slice(&[
+                Datum::String(replica_id),
+                Datum::String(object_id),
+                Datum::Int64(size),
+                collection_datum,
+                Datum::from(hydration_complete),
+            ]);
+            updates.push(BuiltinTableUpdate::row(history_item_id, new_row, Diff::ONE));
+        }
+        if skipped_malformed > 0 {
+            warn!(
+                "mz_object_arrangement_sizes schema drift: skipped {skipped_malformed} rows \
+                 with unexpected arity"
+            );
+        }
+        if skipped_null_size > 0 {
+            tracing::debug!("skipped {skipped_null_size} live rows with null size");
+        }
+
+        let row_count = updates.len();
+        // Captures snapshot + row construction. The async table-apply below
+        // is captured separately by `mz_append_table_duration_seconds`.
+        collection_timer.observe_duration();
+
+        if !updates.is_empty() {
+            self.metrics
+                .arrangement_sizes_rows_written
+                .inc_by(u64::cast_from(row_count));
+            // TODO(arrangement-sizes): when the writeable-catalog-server plumbing
+            // in https://github.com/MaterializeInc/materialize/pull/35436 lands,
+            // append directly on `mz_catalog_server` instead of going through
+            // the environmentd builtin-table-update path.
+            let (fut, _) = self.builtin_table_update().execute(updates).await;
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let task_span =
+                info_span!(parent: None, "coord::arrangement_sizes_snapshot::table_updates");
+            OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
+            task::spawn(|| "arrangement_sizes_snapshot_apply", async move {
+                fut.instrument(task_span).await;
+                if let Err(e) = internal_cmd_tx.send(Message::ArrangementSizesSchedule) {
+                    warn!("internal_cmd_rx dropped before we could send: {e:?}");
+                }
+            });
+        } else {
+            self.schedule_arrangement_sizes_collection().await;
+        }
+
+        tracing::debug!(
+            "appended {row_count} rows to mz_object_arrangement_size_history at ts {collection_ts}"
+        );
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn arrangement_sizes_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
+        let (fut, _) = self.builtin_table_update().execute(expired).await;
+        task::spawn(|| "arrangement_sizes_pruning_apply", async move {
+            fut.await;
         });
     }
 
@@ -403,42 +702,6 @@ impl Coordinator {
                     }
                 }
             }
-            ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
-                let m = match self
-                    .transient_replica_metadata
-                    .entry(replica_id)
-                    .or_insert_with(|| Some(Default::default()))
-                {
-                    // `None` is the tombstone for a removed replica
-                    None => return,
-                    Some(md) => &mut md.metrics,
-                };
-                let old = std::mem::replace(m, Some(new.clone()));
-                if old.as_ref() != Some(&new) {
-                    let retractions = old.map(|old| {
-                        self.catalog()
-                            .state()
-                            .pack_replica_metric_updates(replica_id, &old, -1)
-                    });
-                    let insertions = self
-                        .catalog()
-                        .state()
-                        .pack_replica_metric_updates(replica_id, &new, 1);
-                    let updates = if let Some(retractions) = retractions {
-                        retractions
-                            .into_iter()
-                            .chain(insertions.into_iter())
-                            .collect()
-                    } else {
-                        insertions
-                    };
-                    let updates = self
-                        .catalog()
-                        .state()
-                        .resolve_builtin_table_updates(updates);
-                    self.builtin_table_update().background(updates);
-                }
-            }
             ControllerResponse::WatchSetFinished(ws_ids) => {
                 let now = self.now();
                 for ws_id in ws_ids {
@@ -459,6 +722,10 @@ impl Coordinator {
                         }
                         WatchSetResponse::AlterSinkReady(ctx) => {
                             self.sequence_alter_sink_finish(ctx).await;
+                        }
+                        WatchSetResponse::AlterMaterializedViewReady(ctx) => {
+                            self.sequence_alter_materialized_view_apply_replacement_finish(ctx)
+                                .await;
                         }
                     }
                 }
@@ -506,8 +773,8 @@ impl Coordinator {
                 create_source_stmt,
                 subsources,
                 available_source_references,
-            } => {
-                self.plan_purified_create_source(
+            } => self
+                .plan_purified_create_source(
                     &ctx,
                     params,
                     create_progress_subsource_stmt,
@@ -516,13 +783,13 @@ impl Coordinator {
                     available_source_references,
                 )
                 .await
-            }
+                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
             PurifiedStatement::PurifiedAlterSourceAddSubsources {
                 source_name,
                 options,
                 subsources,
-            } => {
-                self.plan_purified_alter_source_add_subsource(
+            } => self
+                .plan_purified_alter_source_add_subsource(
                     ctx.session(),
                     params,
                     source_name,
@@ -530,16 +797,18 @@ impl Coordinator {
                     subsources,
                 )
                 .await
-            }
+                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
             PurifiedStatement::PurifiedAlterSourceRefreshReferences {
                 source_name,
                 available_source_references,
-            } => self.plan_purified_alter_source_refresh_references(
-                ctx.session(),
-                params,
-                source_name,
-                available_source_references,
-            ),
+            } => self
+                .plan_purified_alter_source_refresh_references(
+                    ctx.session(),
+                    params,
+                    source_name,
+                    available_source_references,
+                )
+                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
             | PurifiedStatement::PurifiedCreateSink(..)
             | PurifiedStatement::PurifiedCreateTableFromSource { .. }) => {
@@ -561,14 +830,18 @@ impl Coordinator {
 
                 // Determine all dependencies, not just those in the statement
                 // itself.
-                let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+                let catalog = self.catalog().for_session(ctx.session());
+                let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &stmt);
                 self.plan_statement(ctx.session(), stmt, &params, &resolved_ids)
-                    .map(|plan| (plan, resolved_ids))
+                    .map(|(plan, sql_impl_ids)| (plan, resolved_ids, sql_impl_ids))
             }
         };
 
         match plan {
-            Ok((plan, resolved_ids)) => self.sequence_plan(ctx, plan, resolved_ids).await,
+            Ok((plan, resolved_ids, sql_impl_ids)) => {
+                self.sequence_plan(ctx, plan, resolved_ids, sql_impl_ids)
+                    .await
+            }
             Err(e) => ctx.retire(Err(e)),
         }
     }
@@ -579,10 +852,11 @@ impl Coordinator {
         CreateConnectionValidationReady {
             mut ctx,
             result,
+            connection_id,
             connection_gid,
             mut plan_validity,
             otel_ctx,
-            dependency_ids,
+            resolved_ids,
         }: CreateConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -593,24 +867,29 @@ impl Coordinator {
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
         if let Err(e) = plan_validity.check(self.catalog()) {
-            let _ = self.secrets_controller.delete(connection_gid).await;
+            if self.secrets_controller.delete(connection_id).await.is_ok() {
+                self.caching_secrets_reader.invalidate(connection_id);
+            }
             return ctx.retire(Err(e));
         }
 
         let plan = match result {
             Ok(ok) => ok,
             Err(e) => {
-                let _ = self.secrets_controller.delete(connection_gid).await;
+                if self.secrets_controller.delete(connection_id).await.is_ok() {
+                    self.caching_secrets_reader.invalidate(connection_id);
+                }
                 return ctx.retire(Err(e));
             }
         };
 
         let result = self
             .sequence_create_connection_stage_finish(
-                ctx.session_mut(),
+                &mut ctx,
+                connection_id,
                 connection_gid,
                 plan,
-                ResolvedIds(dependency_ids),
+                resolved_ids,
             )
             .await;
         ctx.retire(result);
@@ -622,10 +901,11 @@ impl Coordinator {
         AlterConnectionValidationReady {
             mut ctx,
             result,
-            connection_gid,
+            connection_id,
+            connection_gid: _,
             mut plan_validity,
             otel_ctx,
-            dependency_ids: _,
+            resolved_ids: _,
         }: AlterConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -647,39 +927,9 @@ impl Coordinator {
         };
 
         let result = self
-            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_gid, conn)
+            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_id, conn)
             .await;
         ctx.retire(result);
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn message_write_lock_grant(
-        &mut self,
-        write_lock_guard: tokio::sync::OwnedMutexGuard<()>,
-    ) {
-        // It's possible to have more incoming write lock grants
-        // than pending writes because of cancellations.
-        if let Some(ready) = self.write_lock_wait_group.pop_front() {
-            match ready {
-                Deferred::Plan(mut ready) => {
-                    ready.ctx.session_mut().grant_write_lock(write_lock_guard);
-                    if let Err(e) = ready.validity.check(self.catalog()) {
-                        ready.ctx.retire(Err(e))
-                    } else {
-                        // Write statements never need to track resolved IDs (NOTE: This is not the
-                        // same thing as plan dependencies, which we do need to re-validate).
-                        let resolved_ids = ResolvedIds(BTreeSet::new());
-                        self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
-                            .await;
-                    }
-                }
-                Deferred::GroupCommit => {
-                    self.group_commit(Some(write_lock_guard), None).await;
-                }
-            }
-        }
-        // N.B. if no deferred plans, write lock is released by drop
-        // here.
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -743,56 +993,23 @@ impl Coordinator {
                 ]);
                 self.controller.storage.append_introspection_updates(
                     IntrospectionType::ReplicaStatusHistory,
-                    vec![(row, 1)],
+                    vec![(row, Diff::ONE)],
                 );
             }
 
             let old_replica_status =
                 ClusterReplicaStatuses::cluster_replica_status(replica_statues);
-            let old_process_status = replica_statues
-                .get(&event.process_id)
-                .expect("Process exists");
-            let builtin_table_retraction =
-                self.catalog().state().pack_cluster_replica_status_update(
-                    event.replica_id,
-                    event.process_id,
-                    old_process_status,
-                    -1,
-                );
-            let builtin_table_retraction = self
-                .catalog()
-                .state()
-                .resolve_builtin_table_update(builtin_table_retraction);
 
             let new_process_status = ClusterReplicaProcessStatus {
                 status: event.status,
                 time: event.time,
             };
-            let builtin_table_addition = self.catalog().state().pack_cluster_replica_status_update(
-                event.replica_id,
-                event.process_id,
-                &new_process_status,
-                1,
-            );
-            let builtin_table_addition = self
-                .catalog()
-                .state()
-                .resolve_builtin_table_update(builtin_table_addition);
             self.cluster_replica_statuses.ensure_cluster_status(
                 event.cluster_id,
                 event.replica_id,
                 event.process_id,
                 new_process_status,
             );
-
-            let builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
-
-            self.builtin_table_update()
-                .execute(builtin_table_updates)
-                .await
-                .0
-                .instrument(info_span!("coord::message_cluster_event::table_updates"))
-                .await;
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
@@ -801,12 +1018,14 @@ impl Coordinator {
                 .get_cluster_replica_status(event.cluster_id, event.replica_id);
 
             if old_replica_status != new_replica_status {
-                self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
+                let notifier = self.broadcast_notice_tx();
+                let notice = AdapterNotice::ClusterReplicaStatusChanged {
                     cluster: cluster.name.clone(),
                     replica: replica.name.clone(),
                     status: new_replica_status,
                     time: event.time,
-                });
+                };
+                notifier(notice);
             }
         }
     }

@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use tokio::time::{self, Duration};
-use tokio_postgres::{error::SqlState, Client, Error, NoTls, Row};
+use tokio_postgres::{Client, Error, NoTls, Row, error::SqlState};
 use tracing::{debug, info};
 
 use mz_ore::task;

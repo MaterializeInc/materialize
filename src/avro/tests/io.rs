@@ -31,7 +31,7 @@ use chrono::{DateTime, NaiveDate};
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::resolve_schemas;
 use mz_avro::types::{DecimalValue, Value};
-use mz_avro::{from_avro_datum, to_avro_datum, Schema, ValidationError};
+use mz_avro::{Schema, ValidationError, from_avro_datum, to_avro_datum};
 use mz_ore::assert_err;
 
 static SCHEMAS_TO_VALIDATE: LazyLock<Vec<(&'static str, Value)>> = LazyLock::new(|| {
@@ -223,7 +223,7 @@ fn test_schema_promotion() {
     // Each schema is present in order of promotion (int -> long, long -> float, float -> double)
     // Each value represents the expected decoded value when promoting a value previously encoded with a promotable schema
     let promotable_schemas = [r#""int""#, r#""long""#, r#""float""#, r#""double""#];
-    let promotable_values = vec![
+    let promotable_values = [
         Value::Int(219),
         Value::Long(219),
         Value::Float(219.0),
@@ -1094,7 +1094,9 @@ fn test_partially_broken_union() {
     };
     let err_encoded = to_avro_datum(&writer_schema, err_datum_to_write).unwrap();
     let err_read = from_avro_datum(&resolved_schema, &mut err_encoded.as_slice()).unwrap_err();
-    assert!(err_read
-        .to_string()
-        .contains("Reader field `s.a` not found in writer"));
+    assert!(
+        err_read
+            .to_string()
+            .contains("Reader field `s.a` not found in writer")
+    );
 }

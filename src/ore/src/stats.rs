@@ -20,9 +20,10 @@
 /// see `histogram_seconds_buckets` below.
 ///
 /// Note that any changes to this range may modify buckets for existing metrics.
-const HISTOGRAM_SECOND_BUCKETS: [f64; 19] = [
-    0.000_128, 0.000_256, 0.000_512, 0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256,
-    0.512, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0,
+const HISTOGRAM_SECOND_BUCKETS: [f64; 31] = [
+    0.000_008, 0.000_016, 0.000_032, 0.000_064, 0.000_128, 0.000_256, 0.000_512, 0.001, 0.002,
+    0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256, 0.512, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0,
+    128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0,
 ];
 
 /// Returns a `Vec` of time buckets that are both present in our standard
@@ -45,9 +46,9 @@ pub fn histogram_seconds_buckets(from: f64, to: f64) -> Vec<f64> {
 /// see `histogram_seconds_buckets` below.
 ///
 /// Note that any changes to this range may modify buckets for existing metrics.
-const HISTOGRAM_MILLISECOND_BUCKETS: [f64; 19] = [
+const HISTOGRAM_MILLISECOND_BUCKETS: [f64; 23] = [
     0.128, 0.256, 0.512, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512., 1000., 2000., 4000.,
-    8000., 16000., 32000.,
+    8000., 16000., 32000., 64000., 128000., 256000., 512000.,
 ];
 
 /// Returns a `Vec` of time buckets that are both present in our standard
@@ -197,22 +198,14 @@ where
 ///
 /// If `a` and `b` are not comparable, `b` is returned.
 fn po_min<T: PartialOrd>(a: T, b: T) -> T {
-    if a < b {
-        a
-    } else {
-        b
-    }
+    if a < b { a } else { b }
 }
 
 /// Like `std::cmp::max`, but works with `PartialOrd` values.
 ///
 /// If `a` and `b` are not comparable, `b` is returned.
 fn po_max<T: PartialOrd>(a: T, b: T) -> T {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 
 #[cfg(test)]

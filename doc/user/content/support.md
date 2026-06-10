@@ -7,31 +7,54 @@ menu:
     weight: 10
 ---
 
-## Getting help
-
-### Trials
-
-If you run into a snag or need support during the trial period, join the [Materialize Slack community](https://materialize.com/s/chat) or [open a discussion](https://github.com/MaterializeInc/materialize/discussions). Slack is the best place to get timely help from Materialize employees and other users!
-
-### Customers
-
-If you're a paying customer, you can access Materialize support via a shared
-channel within your company's Slack or Microsoft Teams workspace.
-
-To file a support ticket:
-
-1. Send a message to the shared channel describing your issue.
-2. Apply the `:ticket:` (🎫) emoji to your message.
-3. Click the **File a ticket** button that appears.
-4. Select the priority that corresponds to the severity of the issue you are
-   experiencing. Consult the table below for definitions of error severities.
-5. Materialize will respond to the ticket within the response time specified
-   in your support contract.
+Whether you're building, scaling, or debugging, we're here to help.
 
 {{< note >}}
-Materialize only guarantees response times if you follow the above steps to
-convert a message into a support ticket.
+We're retiring access to Slack and Microsoft Teams workspaces. We've introduced the messenger app to streamline and scale how users engage with support — starting with AI-first assistance and seamless escalation paths when needed.
 {{< /note >}}
+
+## Materialize Support
+
+We offer multiple support pathways depending on your platform and plan:
+
+### Messenger App
+
+You can reach us directly from:
+- **materialize.com**
+- **Materialize Console** (for Cloud customers)
+
+Our messenger now features Matty, our AI-powered support agent. Matty can help
+answer questions, suggest documentation, and assist with troubleshooting. You
+can also submit a request to **Talk to a human**. Just look for the messenger
+widget on the bottom right.
+
+{{< tip >}}
+If you are an SLA Supported Customer who is experiencing an [**urgent** issue](#urgent-issues-for-sla-supported-customers-only),
+you can use the **Report Production Outage** option for fastest response.
+{{</ tip >}}
+
+### Email
+
+You can also email us your questions at `support@materialize.com`. For
+Materialize Cloud SLA Supported Customer, email from your Materialize login
+email address.
+
+### Join the Materialize Slack community
+
+Connect with other users, share ideas, and get informal help from the [Materialize user community](https://materialize.com/s/chat) on Slack.
+
+## Urgent Issues (For SLA Supported Customers Only)
+
+If you are an SLA Supported Customer who is experiencing an **urgent** issue,
+
+- Use the [messenger's](#messenger-app) **Report Production Outage** option for
+  fastest response.
+
+- Alternatively, you can email `support@materialize.com`. To ensure priority
+  handling, include **urgent** in the subject line.
+
+  - For Materialize Cloud SLA Supported Customer, email from your Materialize
+  login email address.
 
 Use the following definitions to determine what priority to assign to
 your support ticket:
@@ -49,14 +72,14 @@ your support ticket:
         <td>Urgent</td>
         <td>Refer to your support contract</td>
         <td>
-            <strong>Critical severity error:</strong> an Error in the Platform that: (a) renders the Platform completely inoperative, or (b) makes Customer’s use of material features of the Platform impossible, with no alternative available.
+            <strong>Critical severity error:</strong> an Error in the Platform that: (a) renders the Platform completely inoperative, or (b) makes Customer's use of material features of the Platform impossible, with no alternative available.
         </td>
     </tr>
     <tr>
         <td>High</td>
         <td>Refer to your support contract</td>
         <td>
-            <strong>High severity error:</strong> an Error in the Platform that (a) has a high impact to key portions of the Platform, or (b) seriously impairs Customer’s use of material features of the Platform and Customer cannot reasonably circumvent or avoid the Error on a temporary basis without the expenditure of significant time or effort.
+            <strong>High severity error:</strong> an Error in the Platform that (a) has a high impact to key portions of the Platform, or (b) seriously impairs Customer's use of material features of the Platform and Customer cannot reasonably circumvent or avoid the Error on a temporary basis without the expenditure of significant time or effort.
         </td>
     </tr>
     <tr>
@@ -70,22 +93,21 @@ your support ticket:
         <td>Low</td>
         <td>Refer to your support contract</td>
         <td>
-            <strong>Low severity error:</strong> an Error that has low-to-no impact on Customer’s access to and use of the Platform.
+            <strong>Low severity error:</strong> an Error that has low-to-no impact on Customer's access to and use of the Platform.
         </td>
     </tr>
 </tbody>
 </table>
 
-The following screen recording demonstrates the process of filing a support
-ticket:
+## Share your feedback
 
-<div style="padding: 2em">
-<img
-    src="https://github.com/MaterializeInc/materialize/assets/882976/1c8acb98-35a6-4f4b-bace-cf454c8193c8"
-    alt="Instructions for filing a support ticket"
-    style="box-shadow: 0 0 10px #333; border-radius: 3px;">
-</div>
+Have ideas to improve Materialize? Use the messenger to start a conversation — you'll be guided to submit feature requests or report bugs. Your input goes straight to our Product and Engineering teams.
 
-## Checking service status
+## Questions about your support plan?
 
-Check the current status of our services on the [status page](https://status.materialize.com), where we announce both planned and unplanned maintenance windows. You can also use the [status page API](https://status.materialize.com/api) to programmatically access the information on the status page.
+We tailor support experiences based on your workspace and plan. To learn more about what's available to your team, reach out via the messenger or email us.
+
+## Checking Materialize Cloud service status
+
+Check the current status of Materialize Cloud on the [status
+page](https://status.materialize.com).

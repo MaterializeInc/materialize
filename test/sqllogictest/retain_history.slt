@@ -137,11 +137,9 @@ ORDER BY o.name
 ----
 accounts  FOR  1000
 auction_house  FOR  1000
-auction_house_progress  FOR  1000
 auctions  FOR  1000
 bids  FOR  1000
 counter  FOR  1000
-counter_progress  FOR  1000
 idx_a  FOR  420000
 idx_b  FOR  360000
 idx_c  FOR  240000
@@ -163,19 +161,17 @@ JOIN mz_objects o ON o.id = h.id
 WHERE o.id LIKE 'u%'
 ORDER BY o.name
 ----
-accounts  FOR  60000
+accounts  FOR  1000
 auction_house  FOR  60000
-auction_house_progress  FOR  1000
-auctions  FOR  60000
-bids  FOR  60000
+auctions  FOR  1000
+bids  FOR  1000
 counter  FOR  60000
-counter_progress  FOR  1000
 idx_a  FOR  420000
 idx_b  FOR  360000
 idx_c  FOR  240000
-organizations  FOR  60000
+organizations  FOR  1000
 tab_a  FOR  1000
-users  FOR  60000
+users  FOR  1000
 
 statement ok
 ALTER SOURCE counter RESET (RETAIN HISTORY)
@@ -197,11 +193,9 @@ ORDER BY o.name
 ----
 accounts  FOR  1000
 auction_house  FOR  1000
-auction_house_progress  FOR  1000
 auctions  FOR  1000
 bids  FOR  1000
 counter  FOR  1000
-counter_progress  FOR  1000
 idx_a  FOR  420000
 idx_b  FOR  1000
 idx_c  FOR  1000
@@ -210,14 +204,14 @@ tab_a  FOR  1000
 users  FOR  1000
 
 # Check retain history lower bounds.
-statement error db error: ERROR: RETAIN HISTORY cannot be set lower than 1000ms
+statement error RETAIN HISTORY cannot be set lower than 1000ms
 ALTER SOURCE counter SET (RETAIN HISTORY FOR '1ms')
 
-statement error db error: ERROR: RETAIN HISTORY cannot be disabled or set to 0
+statement error RETAIN HISTORY cannot be disabled or set to 0
 ALTER SOURCE counter SET (RETAIN HISTORY FOR '0')
 
-statement error db error: ERROR: RETAIN HISTORY cannot be set lower than 1000ms
+statement error RETAIN HISTORY cannot be set lower than 1000ms
 CREATE SOURCE low_rh FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '1ms')
 
-statement error db error: ERROR: RETAIN HISTORY cannot be disabled or set to 0
+statement error RETAIN HISTORY cannot be disabled or set to 0
 CREATE SOURCE low_rh FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '0')

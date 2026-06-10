@@ -29,13 +29,13 @@ REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
 
 # CREATE CLUSTER
 
-! CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+! CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 contains:permission denied for SYSTEM
 
 $ postgres-execute connection=mz_system
 GRANT CREATECLUSTER ON SYSTEM TO materialize;
 
-> CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 $ postgres-execute connection=mz_system
 REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
@@ -43,7 +43,7 @@ REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
 # CREATE SINK
 
 $ postgres-execute connection=mz_system
-CREATE CLUSTER sink_cluster REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER sink_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 ! CREATE SINK s
   IN CLUSTER sink_cluster
@@ -204,7 +204,7 @@ $ kafka-ingest format=avro topic=rbac schema=${int-schema} timestamp=1
 $ postgres-execute connection=mz_system
 GRANT CREATECLUSTER ON SYSTEM TO materialize;
 
-> CREATE CLUSTER source_cluster REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER source_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 ! CREATE SOURCE s
   IN CLUSTER source_cluster

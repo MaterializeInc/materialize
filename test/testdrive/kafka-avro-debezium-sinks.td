@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_envelope_materialize = true
@@ -124,12 +126,14 @@ $ kafka-create-topic topic=input
 # input is processed in consistency batches and not all at once
 
 > CREATE CLUSTER input_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE input
   IN CLUSTER input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
 
 > CREATE TABLE input_tbl FROM SOURCE input (REFERENCE "testdrive-input-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+> COMMIT
 
 > CREATE CLUSTER non_keyed_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK non_keyed_sink

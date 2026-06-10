@@ -16,8 +16,8 @@
 use std::path::PathBuf;
 use std::{env, fs};
 
-use anyhow::{bail, Context, Result};
-use mz_ore::codegen::CodegenBuf;
+use anyhow::{Context, Result, bail};
+use mz_ore_build::codegen::CodegenBuf;
 use uncased::UncasedStr;
 
 const KEYWORDS_LIST: &str = "src/keywords.txt";
@@ -71,7 +71,7 @@ fn main() -> Result<()> {
 
         let mut phf = phf_codegen::Map::new();
         for kw in &keywords {
-            phf.entry(UncasedStr::new(kw), &format!("Keyword::{}", kw));
+            phf.entry(UncasedStr::new(kw), format!("Keyword::{kw}"));
         }
         buf.writeln(format!(
             "pub static KEYWORDS: phf::Map<&'static UncasedStr, Keyword> = {};",

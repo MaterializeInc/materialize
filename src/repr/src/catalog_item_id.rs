@@ -10,19 +10,17 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use crate::GlobalId;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
 
 /// The identifier for an item within the Catalog.
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Debug,
@@ -33,11 +31,14 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum CatalogItemId {
     /// System namespace.
     System(u64),
+    /// Introspection Source Index namespace.
+    IntrospectionSourceIndex(u64),
     /// User namespace.
     User(u64),
     /// Transient item.
@@ -47,7 +48,10 @@ pub enum CatalogItemId {
 impl CatalogItemId {
     /// Reports whether this ID is in the system namespace.
     pub fn is_system(&self) -> bool {
-        matches!(self, CatalogItemId::System(_))
+        matches!(
+            self,
+            CatalogItemId::System(_) | CatalogItemId::IntrospectionSourceIndex(_)
+        )
     }
 
     /// Reports whether this ID is in the user namespace.
@@ -59,33 +63,32 @@ impl CatalogItemId {
     pub fn is_transient(&self) -> bool {
         matches!(self, CatalogItemId::Transient(_))
     }
-
-    /// Converts a [`CatalogItemId`] to a [`GlobalId`].
-    ///
-    /// TODO(alter_table): Remove this method.
-    pub fn to_global_id(&self) -> GlobalId {
-        match self {
-            CatalogItemId::User(x) => GlobalId::User(*x),
-            CatalogItemId::System(x) => GlobalId::System(*x),
-            CatalogItemId::Transient(x) => GlobalId::Transient(*x),
-        }
-    }
 }
 
 impl FromStr for CatalogItemId {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(mut s: &str) -> Result<Self, Self::Err> {
         if s.len() < 2 {
             return Err(anyhow!("couldn't parse id {}", s));
         }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next().unwrap() {
-            's' => Ok(CatalogItemId::System(val)),
-            'u' => Ok(CatalogItemId::User(val)),
-            't' => Ok(CatalogItemId::Transient(val)),
-            _ => Err(anyhow!("couldn't parse id {}", s)),
-        }
+        let tag = s.chars().next().unwrap();
+        s = &s[1..];
+        let variant = match tag {
+            's' => {
+                if Some('i') == s.chars().next() {
+                    s = &s[1..];
+                    CatalogItemId::IntrospectionSourceIndex
+                } else {
+                    CatalogItemId::System
+                }
+            }
+            'u' => CatalogItemId::User,
+            't' => CatalogItemId::Transient,
+            _ => return Err(anyhow!("couldn't parse id {}", s)),
+        };
+        let val: u64 = s.parse()?;
+        Ok(variant(val))
     }
 }
 
@@ -93,6 +96,7 @@ impl fmt::Display for CatalogItemId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CatalogItemId::System(id) => write!(f, "s{}", id),
+            CatalogItemId::IntrospectionSourceIndex(id) => write!(f, "si{}", id),
             CatalogItemId::User(id) => write!(f, "u{}", id),
             CatalogItemId::Transient(id) => write!(f, "t{}", id),
         }
@@ -105,6 +109,7 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
         ProtoCatalogItemId {
             kind: Some(match self {
                 CatalogItemId::System(x) => System(*x),
+                CatalogItemId::IntrospectionSourceIndex(x) => IntrospectionSourceIndex(*x),
                 CatalogItemId::User(x) => User(*x),
                 CatalogItemId::Transient(x) => Transient(*x),
             }),
@@ -115,6 +120,7 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
         use proto_catalog_item_id::Kind::*;
         match proto.kind {
             Some(System(x)) => Ok(CatalogItemId::System(x)),
+            Some(IntrospectionSourceIndex(x)) => Ok(CatalogItemId::IntrospectionSourceIndex(x)),
             Some(User(x)) => Ok(CatalogItemId::User(x)),
             Some(Transient(x)) => Ok(CatalogItemId::Transient(x)),
             None => Err(TryFromProtoError::missing_field("ProtoCatalogItemId::kind")),
@@ -124,8 +130,9 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use proptest::prelude::*;
+
+    use super::*;
 
     #[mz_ore::test]
     fn proptest_catalog_item_id_roundtrips() {

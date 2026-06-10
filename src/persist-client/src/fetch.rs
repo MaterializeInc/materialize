@@ -12,48 +12,50 @@
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use arrow::array::{Array, AsArray, BooleanArray};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array};
 use arrow::compute::FilterBuilder;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use itertools::EitherOrBoth;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::{soft_panic_no_log, soft_panic_or_log};
+use mz_ore::{soft_assert_or_log, soft_panic_no_log, soft_panic_or_log};
 use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist::metrics::ColumnarMetrics;
-use mz_persist_types::columnar::{ColumnDecoder, Schema2};
+use mz_persist_types::arrow::ArrayOrd;
+use mz_persist_types::columnar::{ColumnDecoder, Schema, data_type};
+use mz_persist_types::part::Codec64Mut;
+use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::RustType;
 use serde::{Deserialize, Serialize};
+use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tracing::{debug_span, trace_span, Instrument};
+use tracing::{Instrument, debug, debug_span, trace_span};
 
-use crate::batch::{
-    proto_fetch_batch_filter, ProtoFetchBatchFilter, ProtoFetchBatchFilterListen, ProtoLease,
-    ProtoLeasedBatchPart,
-};
+use crate::ShardId;
 use crate::cfg::PersistConfig;
 use crate::error::InvalidUsage;
+use crate::internal::apply::Applier;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, MetricsPermits, ReadMetrics, ShardMetrics};
 use crate::internal::paths::BlobKey;
-use crate::internal::state::{BatchPart, HollowBatchPart};
-use crate::project::ProjectionPushdown;
+use crate::internal::state::{
+    BatchPart, HollowBatchPart, ProtoHollowBatchPart, ProtoInlineBatchPart,
+};
 use crate::read::LeasedReaderId;
 use crate::schema::{PartMigration, SchemaCache};
-use crate::ShardId;
 
 pub(crate) const FETCH_SEMAPHORE_COST_ADJUSTMENT: Config<f64> = Config::new(
     "persist_fetch_semaphore_cost_adjustment",
@@ -84,15 +86,43 @@ pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
     'row_with_validate', or 'arrow' (Materialize).",
 );
 
+pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
+    "persist_optimize_ignored_data_fetch",
+    true,
+    "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
+);
+
+pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
+    "persist_validate_part_bounds_on_read",
+    false,
+    "Validate the part lower <= the batch lower and the part upper <= batch upper,\
+    for the batch containing that part",
+);
+
+#[derive(Debug, Clone)]
+pub(crate) struct FetchConfig {
+    pub(crate) validate_bounds_on_read: bool,
+}
+
+impl FetchConfig {
+    pub fn from_persist_config(cfg: &PersistConfig) -> Self {
+        Self {
+            validate_bounds_on_read: VALIDATE_PART_BOUNDS_ON_READ.get(cfg),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct BatchFetcherConfig {
     pub(crate) part_decode_format: ConfigValHandle<String>,
+    pub(crate) fetch_config: FetchConfig,
 }
 
 impl BatchFetcherConfig {
     pub fn new(value: &PersistConfig) -> Self {
-        BatchFetcherConfig {
+        Self {
             part_decode_format: PART_DECODE_FORMAT.handle(value),
+            fetch_config: FetchConfig::from_persist_config(value),
         }
     }
 
@@ -109,7 +139,7 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     pub(crate) cfg: BatchFetcherConfig,
     pub(crate) blob: Arc<dyn Blob>,
@@ -129,45 +159,46 @@ impl<K, V, T, D> BatchFetcher<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    T: Timestamp + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
-    /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
-    pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
-        x.decode(Arc::clone(&self.metrics))
-    }
-
     /// Trade in an exchange-able [LeasedBatchPart] for the data it represents.
     ///
     /// Note to check the `LeasedBatchPart` documentation for how to handle the
     /// returned value.
     pub async fn fetch_leased_part(
         &mut self,
-        part: &LeasedBatchPart<T>,
-    ) -> Result<FetchedBlob<K, V, T, D>, InvalidUsage<T>> {
-        if &part.shard_id != &self.shard_id {
-            let batch_shard = part.shard_id.clone();
+        part: ExchangeableBatchPart<T>,
+    ) -> Result<Result<FetchedBlob<K, V, T, D>, BlobKey>, InvalidUsage<T>> {
+        let ExchangeableBatchPart {
+            shard_id,
+            encoded_size_bytes: _,
+            desc,
+            filter,
+            filter_pushdown_audit,
+            part,
+            reader_id: _,
+        } = part;
+        let part: BatchPart<T> = part.decode_to().expect("valid part");
+        if shard_id != self.shard_id {
             return Err(InvalidUsage::BatchNotFromThisShard {
-                batch_shard,
+                batch_shard: shard_id,
                 handle_shard: self.shard_id.clone(),
             });
         }
 
-        let migration = PartMigration::new(
-            part.part.schema_id(),
-            self.read_schemas.clone(),
-            &mut self.schema_cache,
-        )
-        .await
-        .unwrap_or_else(|read_schemas| {
-            panic!(
-                "could not decode part {:?} with schema: {:?}",
-                part.part.schema_id(),
-                read_schemas
-            )
-        });
+        let migration =
+            PartMigration::new(&part, self.read_schemas.clone(), &mut self.schema_cache)
+                .await
+                .unwrap_or_else(|read_schemas| {
+                    panic!(
+                        "could not decode part {:?} with schema: {:?}",
+                        part.schema_id(),
+                        read_schemas
+                    )
+                });
 
-        let (buf, fetch_permit) = match &part.part {
+        let (buf, fetch_permit) = match &part {
             BatchPart::Hollow(x) => {
                 let fetch_permit = self
                     .metrics
@@ -180,25 +211,18 @@ where
                     &self.metrics.read.batch_fetcher
                 };
                 let buf = fetch_batch_part_blob(
-                    &part.shard_id,
+                    &shard_id,
                     self.blob.as_ref(),
                     &self.metrics,
                     &self.shard_metrics,
                     read_metrics,
                     x,
                 )
-                .await
-                .unwrap_or_else(|blob_key| {
-                    // Ideally, readers should never encounter a missing blob. They place a seqno
-                    // hold as they consume their snapshot/listen, preventing any blobs they need
-                    // from being deleted by garbage collection, and all blob implementations are
-                    // linearizable so there should be no possibility of stale reads.
-                    //
-                    // If we do have a bug and a reader does encounter a missing blob, the state
-                    // cannot be recovered, and our best option is to panic and retry the whole
-                    // process.
-                    panic!("batch fetcher could not fetch batch part: {}", blob_key)
-                });
+                .await;
+                let buf = match buf {
+                    Ok(buf) => buf,
+                    Err(key) => return Ok(Err(key)),
+                };
                 let buf = FetchedBlobBuf::Hollow {
                     buf,
                     part: x.clone(),
@@ -211,7 +235,7 @@ where
                 ..
             } => {
                 let buf = FetchedBlobBuf::Inline {
-                    desc: part.desc.clone(),
+                    desc: desc.clone(),
                     updates: updates.clone(),
                     ts_rewrite: ts_rewrite.clone(),
                 };
@@ -222,19 +246,72 @@ where
             metrics: Arc::clone(&self.metrics),
             read_metrics: self.metrics.read.batch_fetcher.clone(),
             buf,
-            registered_desc: part.desc.clone(),
+            registered_desc: desc.clone(),
             migration,
-            filter: part.filter.clone(),
-            filter_pushdown_audit: part.filter_pushdown_audit,
+            filter: filter.clone(),
+            filter_pushdown_audit,
             structured_part_audit: self.cfg.part_decode_format(),
             fetch_permit,
             _phantom: PhantomData,
+            fetch_config: self.cfg.fetch_config.clone(),
         };
-        Ok(fetched_blob)
+        Ok(Ok(fetched_blob))
+    }
+
+    /// Diagnoses a missing-blob fetch failure for a part leased by the given
+    /// reader. See the free function `missing_blob_diagnostics`.
+    pub async fn missing_blob_diagnostics(&self, reader_id: &LeasedReaderId) -> String {
+        missing_blob_diagnostics(self.schema_cache.applier(), reader_id).await
     }
 }
 
-#[derive(Debug, Clone)]
+/// Diagnoses a missing-blob fetch failure: refreshes the shard state and
+/// reports whether the reader that leased the part is still present in it.
+///
+/// A missing blob means garbage collection deleted a blob that the part's
+/// lease (a seqno hold in shard state) should have protected. If the reader
+/// has been expired out of state, the lease was lost: this can happen when the
+/// process fails to heartbeat the reader for longer than the lease duration,
+/// e.g. because the machine went to sleep, was starved of CPU or memory, or
+/// was partitioned from consensus. If the reader is still present, the hold
+/// did not protect the blob, which points at a GC or lease-tracking bug.
+pub(crate) async fn missing_blob_diagnostics<K, V, T, D>(
+    applier: &Applier<K, V, T, D>,
+    reader_id: &LeasedReaderId,
+) -> String
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64,
+{
+    // Refreshing state talks to consensus; this runs on an already-fatal path
+    // and a partition from consensus may be the very reason the lease was
+    // lost, so don't let the diagnosis block the restart indefinitely.
+    let refresh = applier.fetch_and_update_state(None);
+    if tokio::time::timeout(Duration::from_secs(30), refresh)
+        .await
+        .is_err()
+    {
+        return format!(
+            "reader {reader_id}: could not refresh state within 30s to diagnose the lease; \
+             partitioned from consensus?"
+        );
+    }
+    match applier.reader_lease(reader_id.clone()) {
+        Some(lease_state) => format!(
+            "reader {reader_id} is still present in state ({lease_state:?}); \
+             a missing blob despite a live lease indicates a GC bug"
+        ),
+        None => format!(
+            "reader {reader_id} has been expired out of state; \
+             the process likely failed to heartbeat it within the lease duration \
+             (machine sleep, CPU/memory starvation, or a partition from consensus?)"
+        ),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum FetchBatchFilter<T> {
     Snapshot {
         as_of: Antichain<T>,
@@ -285,42 +362,6 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoFetchBatchFilter> for FetchBatchFilter<T> {
-    fn into_proto(&self) -> ProtoFetchBatchFilter {
-        let kind = match self {
-            FetchBatchFilter::Snapshot { as_of } => {
-                proto_fetch_batch_filter::Kind::Snapshot(as_of.into_proto())
-            }
-            FetchBatchFilter::Listen { as_of, lower } => {
-                proto_fetch_batch_filter::Kind::Listen(ProtoFetchBatchFilterListen {
-                    as_of: Some(as_of.into_proto()),
-                    lower: Some(lower.into_proto()),
-                })
-            }
-            FetchBatchFilter::Compaction { .. } => unreachable!("not serialized"),
-        };
-        ProtoFetchBatchFilter { kind: Some(kind) }
-    }
-
-    fn from_proto(proto: ProtoFetchBatchFilter) -> Result<Self, TryFromProtoError> {
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoFetchBatchFilter::kind"))?;
-        match kind {
-            proto_fetch_batch_filter::Kind::Snapshot(as_of) => Ok(FetchBatchFilter::Snapshot {
-                as_of: as_of.into_rust()?,
-            }),
-            proto_fetch_batch_filter::Kind::Listen(ProtoFetchBatchFilterListen {
-                as_of,
-                lower,
-            }) => Ok(FetchBatchFilter::Listen {
-                as_of: as_of.into_rust_if_some("ProtoFetchBatchFilterListen::as_of")?,
-                lower: lower.into_rust_if_some("ProtoFetchBatchFilterListen::lower")?,
-            }),
-        }
-    }
-}
-
 /// Trade in an exchange-able [LeasedBatchPart] for the data it represents.
 ///
 /// Note to check the `LeasedBatchPart` documentation for how to handle the
@@ -339,10 +380,12 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    T: Timestamp + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
-    let encoded_part = EncodedPart::fetch(
+    let fetch_config = FetchConfig::from_persist_config(cfg);
+    let encoded_part = match EncodedPart::fetch(
+        &fetch_config,
         &part.shard_id,
         blob,
         &metrics,
@@ -352,19 +395,23 @@ where
         &part.part,
     )
     .await
-    .unwrap_or_else(|blob_key| {
-        // Ideally, readers should never encounter a missing blob. They place a seqno
-        // hold as they consume their snapshot/listen, preventing any blobs they need
-        // from being deleted by garbage collection, and all blob implementations are
-        // linearizable so there should be no possibility of stale reads.
-        //
-        // If we do have a bug and a reader does encounter a missing blob, the state
-        // cannot be recovered, and our best option is to panic and retry the whole
-        // process.
-        panic!("{} could not fetch batch part: {}", reader_id, blob_key)
-    });
+    {
+        Ok(x) => x,
+        Err(blob_key) => {
+            // Ideally, readers should never encounter a missing blob. They place a seqno
+            // hold as they consume their snapshot/listen, preventing any blobs they need
+            // from being deleted by garbage collection, and all blob implementations are
+            // linearizable so there should be no possibility of stale reads.
+            //
+            // If we do have a bug and a reader does encounter a missing blob, the state
+            // cannot be recovered, and our best option is to panic and retry the whole
+            // process.
+            let diagnostics = missing_blob_diagnostics(schema_cache.applier(), reader_id).await;
+            panic!("could not fetch batch part {}: {}", blob_key, diagnostics)
+        }
+    };
     let part_cfg = BatchFetcherConfig::new(cfg);
-    let migration = PartMigration::new(part.part.schema_id(), read_schemas, schema_cache)
+    let migration = PartMigration::new(&part.part, read_schemas, schema_cache)
         .await
         .unwrap_or_else(|read_schemas| {
             panic!(
@@ -413,6 +460,7 @@ pub(crate) async fn fetch_batch_part_blob<T>(
 }
 
 pub(crate) fn decode_batch_part_blob<T>(
+    cfg: &FetchConfig,
     metrics: &Metrics,
     read_metrics: &ReadMetrics,
     registered_desc: Description<T>,
@@ -435,12 +483,13 @@ where
             .expect("internal error: invalid encoded state");
         read_metrics
             .part_goodbytes
-            .inc_by(u64::cast_from(parsed.updates.records().goodbytes()));
-        EncodedPart::from_hollow(read_metrics.clone(), registered_desc, part, parsed)
+            .inc_by(u64::cast_from(parsed.updates.goodbytes()));
+        EncodedPart::from_hollow(cfg, read_metrics.clone(), registered_desc, part, parsed)
     })
 }
 
 pub(crate) async fn fetch_batch_part<T>(
+    cfg: &FetchConfig,
     shard_id: &ShardId,
     blob: &dyn Blob,
     metrics: &Metrics,
@@ -454,7 +503,14 @@ where
 {
     let buf =
         fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
-    let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
+    let part = decode_batch_part_blob(
+        cfg,
+        metrics,
+        read_metrics,
+        registered_desc.clone(),
+        part,
+        &buf,
+    );
     Ok(part)
 }
 
@@ -464,10 +520,20 @@ where
 ///
 /// Generally the state and lease are bundled together, as in [LeasedBatchPart]... but sometimes
 /// it's necessary to handle them separately, so this struct is exposed as well. Handle with care.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Lease(Arc<()>);
+#[derive(Clone, Debug)]
+pub struct Lease(Arc<SeqNo>);
 
 impl Lease {
+    /// Creates a new [Lease] that holds the given [SeqNo].
+    pub fn new(seqno: SeqNo) -> Self {
+        Self(Arc::new(seqno))
+    }
+
+    /// Returns the inner [SeqNo] of this [Lease].
+    pub fn seqno(&self) -> SeqNo {
+        *self.0
+    }
+
     /// Returns the number of live copies of this lease, including this one.
     pub fn count(&self) -> usize {
         Arc::strong_count(&self.0)
@@ -483,8 +549,8 @@ impl Lease {
 ///
 /// You can exchange `LeasedBatchPart`:
 /// - If `leased_seqno.is_none()`
-/// - By converting it to [`SerdeLeasedBatchPart`] through
-///   `Self::into_exchangeable_part`. [`SerdeLeasedBatchPart`] is exchangeable,
+/// - By converting it to [`ExchangeableBatchPart`] through
+///   `Self::into_exchangeable_part`. [`ExchangeableBatchPart`] is exchangeable,
 ///   including over the network.
 ///
 /// n.b. `Self::into_exchangeable_part` is known to be equivalent to
@@ -503,17 +569,16 @@ impl Lease {
 pub struct LeasedBatchPart<T> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
-    pub(crate) reader_id: LeasedReaderId,
     pub(crate) filter: FetchBatchFilter<T>,
     pub(crate) desc: Description<T>,
     pub(crate) part: BatchPart<T>,
-    /// The `SeqNo` from which this part originated; we track this value as
-    /// to ensure the `SeqNo` isn't garbage collected while a
-    /// read still depends on it.
-    pub(crate) leased_seqno: SeqNo,
     /// The lease that prevents this part from being GCed. Code should ensure that this lease
     /// lives as long as the part is needed.
-    pub(crate) lease: Option<Lease>,
+    pub(crate) lease: Lease,
+    /// The id of the reader that leased this part, for diagnostics: if the
+    /// blob backing the part goes missing, knowing whether this reader is
+    /// still present in state distinguishes a lost lease from a GC bug.
+    pub(crate) reader_id: LeasedReaderId,
     pub(crate) filter_pushdown_audit: bool,
 }
 
@@ -521,7 +586,7 @@ impl<T> LeasedBatchPart<T>
 where
     T: Timestamp + Codec64,
 {
-    /// Takes `self` into a [`SerdeLeasedBatchPart`], which allows `self` to be
+    /// Takes `self` into a [`ExchangeableBatchPart`], which allows `self` to be
     /// exchanged (potentially across the network).
     ///
     /// !!!WARNING!!!
@@ -530,13 +595,17 @@ where
     /// that can't travel across process boundaries. The caller is responsible for
     /// ensuring that the lease is held for as long as the batch part may be in use:
     /// dropping it too early may cause a fetch to fail.
-    pub(crate) fn into_exchangeable_part(mut self) -> (SerdeLeasedBatchPart, Option<Lease>) {
-        let (proto, _metrics) = self.into_proto();
+    pub(crate) fn into_exchangeable_part(self) -> (ExchangeableBatchPart<T>, Lease) {
         // If `x` has a lease, we've effectively transferred it to `r`.
-        let lease = self.lease.take();
-        let part = SerdeLeasedBatchPart {
+        let lease = self.lease.clone();
+        let part = ExchangeableBatchPart {
+            shard_id: self.shard_id,
             encoded_size_bytes: self.part.encoded_size_bytes(),
-            proto: LazyProto::from(&proto),
+            desc: self.desc.clone(),
+            filter: self.filter.clone(),
+            part: LazyProto::from(&self.part.into_proto()),
+            reader_id: self.reader_id.clone(),
+            filter_pushdown_audit: self.filter_pushdown_audit,
         };
         (part, lease)
     }
@@ -559,25 +628,80 @@ where
         self.part.stats().map(|x| x.decode())
     }
 
-    /// Apply any relevant projection pushdown optimizations.
-    ///
-    /// NB: Until we implement full projection pushdown, this doesn't guarantee
-    /// any projection.
-    pub fn maybe_optimize(&mut self, cfg: &ConfigSet, project: &ProjectionPushdown) {
+    /// Apply any relevant projection pushdown optimizations, assuming that the data in the part
+    /// is equivalent to the provided key and value.
+    pub fn maybe_optimize(&mut self, cfg: &ConfigSet, key: ArrayRef, val: ArrayRef) {
+        assert_eq!(key.len(), 1, "expect a single-row key array");
+        assert_eq!(val.len(), 1, "expect a single-row val array");
         let as_of = match &self.filter {
             FetchBatchFilter::Snapshot { as_of } => as_of,
             FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,
         };
-        let faked_part = project.try_optimize_ignored_data_fetch(
-            cfg,
-            &self.metrics,
-            as_of,
-            &self.desc,
-            &self.part,
-        );
-        if let Some(faked_part) = faked_part {
-            self.part = faked_part;
+        if !OPTIMIZE_IGNORED_DATA_FETCH.get(cfg) {
+            return;
         }
+        let (diffs_sum, _stats) = match &self.part {
+            BatchPart::Hollow(x) => (x.diffs_sum, x.stats.as_ref()),
+            BatchPart::Inline { .. } => return,
+        };
+        debug!(
+            "try_optimize_ignored_data_fetch diffs_sum={:?} as_of={:?} lower={:?} upper={:?}",
+            // This is only used for debugging, so hack to assume that D is i64.
+            diffs_sum.map(i64::decode),
+            as_of.elements(),
+            self.desc.lower().elements(),
+            self.desc.upper().elements()
+        );
+        let as_of = match &as_of.elements() {
+            &[as_of] => as_of,
+            _ => return,
+        };
+        let eligible = self.desc.upper().less_equal(as_of) && self.desc.since().less_equal(as_of);
+        if !eligible {
+            return;
+        }
+        let Some(diffs_sum) = diffs_sum else {
+            return;
+        };
+
+        debug!(
+            "try_optimize_ignored_data_fetch faked {:?} diffs at ts {:?} skipping fetch of {} bytes",
+            // This is only used for debugging, so hack to assume that D is i64.
+            i64::decode(diffs_sum),
+            as_of,
+            self.part.encoded_size_bytes(),
+        );
+        self.metrics.pushdown.parts_faked_count.inc();
+        self.metrics
+            .pushdown
+            .parts_faked_bytes
+            .inc_by(u64::cast_from(self.part.encoded_size_bytes()));
+        let timestamps = {
+            let mut col = Codec64Mut::with_capacity(1);
+            col.push(as_of);
+            col.finish()
+        };
+        let diffs = {
+            let mut col = Codec64Mut::with_capacity(1);
+            col.push_raw(diffs_sum);
+            col.finish()
+        };
+        let updates = BlobTraceUpdates::Structured {
+            key_values: ColumnarRecordsStructuredExt { key, val },
+            timestamps,
+            diffs,
+        };
+        let faked_data = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
+            desc: Some(self.desc.into_proto()),
+            index: 0,
+            updates: Some(updates.into_proto()),
+        });
+        self.part = BatchPart::Inline {
+            updates: faked_data,
+            ts_rewrite: None,
+            schema_id: None,
+            deprecated_schema_id: None,
+        };
     }
 }
 
@@ -603,6 +727,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     filter_pushdown_audit: bool,
     structured_part_audit: PartDecodeFormat,
     fetch_permit: Option<Arc<MetricsPermits>>,
+    fetch_config: FetchConfig,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -631,6 +756,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             fetch_permit: self.fetch_permit.clone(),
             structured_part_audit: self.structured_part_audit.clone(),
+            fetch_config: self.fetch_config.clone(),
             _phantom: self._phantom.clone(),
         }
     }
@@ -642,15 +768,6 @@ pub struct ShardSourcePart<K: Codec, V: Codec, T, D> {
     /// The underlying [FetchedPart].
     pub part: FetchedPart<K, V, T, D>,
     fetch_permit: Option<Arc<MetricsPermits>>,
-}
-
-impl<K: Codec, V: Codec, T: Clone, D> Clone for ShardSourcePart<K, V, T, D> {
-    fn clone(&self) -> Self {
-        Self {
-            part: self.part.clone(),
-            fetch_permit: self.fetch_permit.clone(),
-        }
-    }
 }
 
 impl<K, V, T: Debug, D: Debug> Debug for ShardSourcePart<K, V, T, D>
@@ -672,9 +789,15 @@ where
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, T, D> {
     /// Partially decodes this blob into a [FetchedPart].
     pub fn parse(&self) -> ShardSourcePart<K, V, T, D> {
+        self.parse_internal(&self.fetch_config)
+    }
+
+    /// Partially decodes this blob into a [FetchedPart].
+    pub(crate) fn parse_internal(&self, cfg: &FetchConfig) -> ShardSourcePart<K, V, T, D> {
         let (part, stats) = match &self.buf {
             FetchedBlobBuf::Hollow { buf, part } => {
                 let parsed = decode_batch_part_blob(
+                    cfg,
                     &self.metrics,
                     &self.read_metrics,
                     self.registered_desc.clone(),
@@ -689,6 +812,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                 ts_rewrite,
             } => {
                 let parsed = EncodedPart::from_inline(
+                    cfg,
                     &self.metrics,
                     self.read_metrics.clone(),
                     desc.clone(),
@@ -730,43 +854,29 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
 pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
     ts_filter: FetchBatchFilter<T>,
-    part: EncodedPart<T>,
     // If migration is Either, then the columnar one will have already been
-    // applied here.
-    structured_part: (
-        Option<Arc<<K::Schema as Schema2<K>>::Decoder>>,
-        Option<Arc<<V::Schema as Schema2<V>>::Decoder>>,
-    ),
-    part_decode_format: PartDecodeFormat,
+    // applied here on the structured data only.
+    part: EitherOrBoth<
+        ColumnarRecords,
+        (
+            <K::Schema as Schema<K>>::Decoder,
+            <V::Schema as Schema<V>>::Decoder,
+        ),
+    >,
+    timestamps: Int64Array,
+    diffs: Int64Array,
     migration: PartMigration<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
-    part_cursor: Cursor,
+    peek_stash: Option<((K, V), T, D)>,
+    part_cursor: usize,
     key_storage: Option<K::Storage>,
     val_storage: Option<V::Storage>,
 
     _phantom: PhantomData<fn() -> D>,
 }
 
-impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
-    fn clone(&self) -> Self {
-        Self {
-            metrics: Arc::clone(&self.metrics),
-            ts_filter: self.ts_filter.clone(),
-            part: self.part.clone(),
-            structured_part: self.structured_part.clone(),
-            part_decode_format: self.part_decode_format,
-            migration: self.migration.clone(),
-            filter_pushdown_audit: self.filter_pushdown_audit.clone(),
-            part_cursor: self.part_cursor.clone(),
-            key_storage: None,
-            val_storage: None,
-            _phantom: self._phantom.clone(),
-        }
-    }
-}
-
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, T, D> {
-    fn new(
+    pub(crate) fn new(
         metrics: Arc<Metrics>,
         part: EncodedPart<T>,
         migration: PartMigration<K, V>,
@@ -775,10 +885,10 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         part_decode_format: PartDecodeFormat,
         stats: Option<&LazyPartStats>,
     ) -> Self {
-        let part_len = u64::cast_from(part.part.updates.records().len());
+        let part_len = u64::cast_from(part.part.updates.len());
         match &migration {
             PartMigration::SameSchema { .. } => metrics.schema.migration_count_same.inc(),
-            PartMigration::Codec { .. } => {
+            PartMigration::Schemaless { .. } => {
                 metrics.schema.migration_count_codec.inc();
                 metrics.schema.migration_len_legacy_codec.inc_by(part_len);
             }
@@ -807,75 +917,105 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             None
         };
 
-        // TODO(parkmycar): We should probably refactor this since these columns are duplicated
-        // (via a smart pointer) in EncodedPart.
-        //
-        // For structured columnar data we need to downcast from `dyn Array`s to concrete types.
-        // Downcasting is relatively expensive so we want to do this once, which is why we do it
-        // when creating a FetchedPart.
-        let should_downcast = match part_decode_format {
-            PartDecodeFormat::Row {
-                validate_structured,
-            } => validate_structured,
-            PartDecodeFormat::Arrow => true,
-        };
-        let structured_part = match (&part.part.updates, should_downcast) {
-            // Only downcast and create decoders if we have structured data AND
-            // (an audit of the data is requested OR we'd like to decode
-            // directly from the structured data).
-            (BlobTraceUpdates::Both(_codec, structured), true) => {
-                fn decode<C: Codec>(
-                    name: &str,
-                    schema: &C::Schema,
-                    array: &Arc<dyn Array>,
-                ) -> Option<Arc<<C::Schema as Schema2<C>>::Decoder>> {
-                    match Schema2::decoder_any(schema, array) {
-                        Ok(x) => Some(Arc::new(x)),
-                        Err(err) => {
-                            tracing::error!(?err, "failed to create {} decoder", name);
-                            None
-                        }
-                    }
-                }
-                match &migration {
-                    PartMigration::SameSchema { both } => (
-                        decode::<K>("key", &*both.key, &structured.key),
-                        decode::<V>("val", &*both.val, &structured.val),
-                    ),
-                    PartMigration::Codec { .. } => (None, None),
-                    PartMigration::Either {
-                        _write,
-                        read,
-                        key_migration,
-                        val_migration,
-                    } => {
-                        let start = Instant::now();
-                        let key = key_migration.migrate(Arc::clone(&structured.key));
-                        let val = val_migration.migrate(Arc::clone(&structured.val));
-                        metrics
-                            .schema
-                            .migration_migrate_seconds
-                            .inc_by(start.elapsed().as_secs_f64());
+        let downcast_structured = |structured: ColumnarRecordsStructuredExt,
+                                   structured_only: bool| {
+            let key_size_before = ArrayOrd::new(&structured.key).goodbytes();
 
-                        (
-                            decode::<K>("key", &*read.key, &key),
-                            decode::<V>("val", &*read.val, &val),
-                        )
-                    }
+            let structured = match &migration {
+                PartMigration::SameSchema { .. } => structured,
+                PartMigration::Schemaless { read } if structured_only => {
+                    // We don't know the source schema, but we do know the source datatype; migrate it directly.
+                    let start = Instant::now();
+                    let read_key = data_type::<K>(&*read.key).ok()?;
+                    let read_val = data_type::<V>(&*read.val).ok()?;
+                    let key_migration = backward_compatible(structured.key.data_type(), &read_key)?;
+                    let val_migration = backward_compatible(structured.val.data_type(), &read_val)?;
+                    let key = key_migration.migrate(structured.key);
+                    let val = val_migration.migrate(structured.val);
+                    metrics
+                        .schema
+                        .migration_migrate_seconds
+                        .inc_by(start.elapsed().as_secs_f64());
+                    ColumnarRecordsStructuredExt { key, val }
+                }
+                PartMigration::Schemaless { .. } => return None,
+                PartMigration::Either {
+                    write: _,
+                    read: _,
+                    key_migration,
+                    val_migration,
+                } => {
+                    let start = Instant::now();
+                    let key = key_migration.migrate(structured.key);
+                    let val = val_migration.migrate(structured.val);
+                    metrics
+                        .schema
+                        .migration_migrate_seconds
+                        .inc_by(start.elapsed().as_secs_f64());
+                    ColumnarRecordsStructuredExt { key, val }
+                }
+            };
+
+            let read_schema = migration.codec_read();
+            let key = K::Schema::decoder_any(&*read_schema.key, &*structured.key);
+            let val = V::Schema::decoder_any(&*read_schema.val, &*structured.val);
+
+            match &key {
+                Ok(key_decoder) => {
+                    let key_size_after = key_decoder.goodbytes();
+                    let key_diff = key_size_before.saturating_sub(key_size_after);
+                    metrics
+                        .pushdown
+                        .parts_projection_trimmed_bytes
+                        .inc_by(u64::cast_from(key_diff));
+                }
+                Err(e) => {
+                    soft_panic_or_log!("failed to create decoder: {e:#?}");
                 }
             }
-            _ => (None, None),
+
+            Some((key.ok()?, val.ok()?))
+        };
+
+        let updates = part.normalize(&metrics.columnar);
+        let timestamps = updates.timestamps().clone();
+        let diffs = updates.diffs().clone();
+        let part = match updates {
+            // If only one encoding is available, decode via that encoding.
+            BlobTraceUpdates::Row(records) => EitherOrBoth::Left(records),
+            BlobTraceUpdates::Structured { key_values, .. } => EitherOrBoth::Right(
+                // The structured-only data format was added after schema ids were recorded everywhere,
+                // so we expect this data to be present.
+                downcast_structured(key_values, true).expect("valid schemas for structured data"),
+            ),
+            // If both are available, respect the specified part decode format.
+            BlobTraceUpdates::Both(records, ext) => match part_decode_format {
+                PartDecodeFormat::Row {
+                    validate_structured: false,
+                } => EitherOrBoth::Left(records),
+                PartDecodeFormat::Row {
+                    validate_structured: true,
+                } => match downcast_structured(ext, false) {
+                    Some(decoders) => EitherOrBoth::Both(records, decoders),
+                    None => EitherOrBoth::Left(records),
+                },
+                PartDecodeFormat::Arrow => match downcast_structured(ext, false) {
+                    Some(decoders) => EitherOrBoth::Right(decoders),
+                    None => EitherOrBoth::Left(records),
+                },
+            },
         };
 
         FetchedPart {
             metrics,
             ts_filter,
             part,
-            structured_part,
-            part_decode_format,
+            peek_stash: None,
+            timestamps,
+            diffs,
             migration,
             filter_pushdown_audit,
-            part_cursor: Cursor::default(),
+            part_cursor: 0,
             key_storage: None,
             val_storage: None,
             _phantom: PhantomData,
@@ -887,18 +1027,18 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
     ///
     /// If set, the value in the Option is for debugging and should be included
     /// in any error messages.
-    pub fn is_filter_pushdown_audit(&self) -> Option<impl std::fmt::Debug> {
+    pub fn is_filter_pushdown_audit(&self) -> Option<impl std::fmt::Debug + use<K, V, T, D>> {
         self.filter_pushdown_audit.clone()
     }
 }
 
 /// A [Blob] object that has been fetched, but has no associated decoding
 /// logic.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct EncodedPart<T> {
     metrics: ReadMetrics,
     registered_desc: Description<T>,
-    part: Arc<BlobTraceBatchPart<T>>,
+    part: BlobTraceBatchPart<T>,
     needs_truncation: bool,
     ts_rewrite: Option<Antichain<T>>,
 }
@@ -908,7 +1048,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// [Self::next] but optionally providing a `K` and `V` for alloc reuse.
     ///
@@ -918,76 +1058,75 @@ where
         &mut self,
         key: &mut Option<K>,
         val: &mut Option<V>,
-        result_override: Option<(K, V)>,
-    ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
-        while let Some(((k, v, mut t, d), idx)) = self.part_cursor.pop(&self.part) {
-            if !self.ts_filter.filter_ts(&mut t) {
-                continue;
-            }
+    ) -> Option<((K, V), T, D)> {
+        let mut consolidated = self.peek_stash.take();
+        loop {
+            // Fetch and decode the next tuple in the sequence. (Or break if there is none.)
+            let next = if self.part_cursor < self.timestamps.len() {
+                let next_idx = self.part_cursor;
+                self.part_cursor += 1;
+                // These `to_le_bytes` calls were previously encapsulated by `ColumnarRecords`.
+                // TODO(structured): re-encapsulate these once we've finished the structured migration.
+                let mut t = T::decode(self.timestamps.values()[next_idx].to_le_bytes());
+                if !self.ts_filter.filter_ts(&mut t) {
+                    continue;
+                }
+                let d = D::decode(self.diffs.values()[next_idx].to_le_bytes());
+                if d.is_zero() {
+                    continue;
+                }
+                let kv = self.decode_kv(next_idx, key, val);
+                (kv, t, d)
+            } else {
+                break;
+            };
 
-            let mut d = D::decode(d);
-
-            // If `filter_ts` advances our timestamp, we may end up with the same K, V, T in successive
-            // records. If so, opportunistically consolidate those out.
-            while let Some((k_next, v_next, mut t_next, d_next)) = self.part_cursor.peek(&self.part)
-            {
-                if (k, v) != (k_next, v_next) {
+            // Attempt to consolidate in the next tuple, stashing it if that's not possible.
+            if let Some((kv, t, d)) = &mut consolidated {
+                let (kv_next, t_next, d_next) = &next;
+                if kv == kv_next && t == t_next {
+                    d.plus_equals(d_next);
+                    if d.is_zero() {
+                        consolidated = None;
+                    }
+                } else {
+                    self.peek_stash = Some(next);
                     break;
                 }
-
-                if !self.ts_filter.filter_ts(&mut t_next) {
-                    break;
-                }
-                if t != t_next {
-                    break;
-                }
-
-                // All equal... consolidate!
-                self.part_cursor.idx += 1;
-                d.plus_equals(&D::decode(d_next));
+            } else {
+                consolidated = Some(next);
             }
+        }
 
-            // If multiple updates consolidate out entirely, drop the record.
-            if d.is_zero() {
-                continue;
-            }
+        let (kv, t, d) = consolidated?;
 
-            if let Some((key, val)) = result_override {
-                return Some(((Ok(key), Ok(val)), t, d));
-            }
+        Some((kv, t, d))
+    }
 
-            // TODO: Putting this here relies on the Codec data still being
-            // populated (i.e. for the consolidate optimization above).
-            // Eventually we'll have to rewrite this path to work entirely
-            // without Codec data, but in the meantime, putting in here allows
-            // us to see the performance impact of decoding from arrow instead
-            // of Codec.
-            //
-            // Plus, it'll likely be easier to port all the logic here to work
-            // solely on arrow data once we finish migrating things like the
-            // ConsolidatingIter.
-            if let ((Some(keys), Some(vals)), PartDecodeFormat::Arrow) =
-                (&self.structured_part, self.part_decode_format)
-            {
-                let (k, v) = self.decode_structured(idx, keys, vals, key, val);
-                return Some(((k, v), t, d));
-            }
+    fn decode_kv(&mut self, index: usize, key: &mut Option<K>, val: &mut Option<V>) -> (K, V) {
+        let decoded = self
+            .part
+            .as_ref()
+            .map_left(|codec| {
+                let ((ck, cv), _, _) = codec.get(index).expect("valid index");
+                let (k, v) = Self::decode_codec(
+                    &*self.metrics,
+                    self.migration.codec_read(),
+                    ck,
+                    cv,
+                    key,
+                    val,
+                    &mut self.key_storage,
+                    &mut self.val_storage,
+                );
+                (k.expect("valid legacy key"), v.expect("valid legacy value"))
+            })
+            .map_right(|(structured_key, structured_val)| {
+                self.decode_structured(index, structured_key, structured_val, key, val)
+            });
 
-            let (k, v) = Self::decode_codec(
-                &self.metrics,
-                self.migration.codec_read(),
-                k,
-                v,
-                key,
-                val,
-                &mut self.key_storage,
-                &mut self.val_storage,
-            );
-            // Note: We only provide structured columns, if they were originally written, and a
-            // dyncfg was specified to run validation.
-            if let (Some(keys), Some(vals)) = &self.structured_part {
-                let (k_s, v_s) = self.decode_structured(idx, keys, vals, &mut None, &mut None);
-
+        match decoded {
+            EitherOrBoth::Both((k, v), (k_s, v_s)) => {
                 // Purposefully do not trace to prevent blowing up Sentry.
                 let is_valid = self
                     .metrics
@@ -1008,11 +1147,12 @@ where
                 if !is_valid {
                     soft_panic_no_log!("structured val did not match, {v_s:?} != {v:?}");
                 }
-            }
 
-            return Some(((k, v), t, d));
+                (k, v)
+            }
+            EitherOrBoth::Left(kv) => kv,
+            EitherOrBoth::Right(kv) => kv,
         }
-        None
     }
 
     fn decode_codec(
@@ -1049,22 +1189,18 @@ where
     fn decode_structured(
         &self,
         idx: usize,
-        keys: &<K::Schema as Schema2<K>>::Decoder,
-        vals: &<V::Schema as Schema2<V>>::Decoder,
+        keys: &<K::Schema as Schema<K>>::Decoder,
+        vals: &<V::Schema as Schema<V>>::Decoder,
         key: &mut Option<K>,
         val: &mut Option<V>,
-    ) -> (Result<K, String>, Result<V, String>) {
-        let key = self.metrics.columnar.arrow().key().measure_decoding(|| {
-            let mut key = key.take().unwrap_or_default();
-            keys.decode(idx, &mut key);
-            key
-        });
-        let val = self.metrics.columnar.arrow().val().measure_decoding(|| {
-            let mut val = val.take().unwrap_or_default();
-            vals.decode(idx, &mut val);
-            val
-        });
-        (Ok(key), Ok(val))
+    ) -> (K, V) {
+        let mut key = key.take().unwrap_or_default();
+        keys.decode(idx, &mut key);
+
+        let mut val = val.take().unwrap_or_default();
+        vals.decode(idx, &mut val);
+
+        (key, val)
     }
 }
 
@@ -1073,17 +1209,17 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
-    type Item = ((Result<K, String>, Result<V, String>), T, D);
+    type Item = ((K, V), T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_with_storage(&mut None, &mut None, None)
+        self.next_with_storage(&mut None, &mut None)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         // We don't know in advance how restrictive the filter will be.
-        let max_len = self.part.part.updates.records().len();
+        let max_len = self.timestamps.len();
         (0, Some(max_len))
     }
 }
@@ -1093,6 +1229,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     pub async fn fetch(
+        cfg: &FetchConfig,
         shard_id: &ShardId,
         blob: &dyn Blob,
         metrics: &Metrics,
@@ -1104,6 +1241,7 @@ where
         match part {
             BatchPart::Hollow(x) => {
                 fetch_batch_part(
+                    cfg,
                     shard_id,
                     blob,
                     metrics,
@@ -1119,6 +1257,7 @@ where
                 ts_rewrite,
                 ..
             } => Ok(EncodedPart::from_inline(
+                cfg,
                 metrics,
                 read_metrics.clone(),
                 registered_desc.clone(),
@@ -1129,6 +1268,7 @@ where
     }
 
     pub(crate) fn from_inline(
+        cfg: &FetchConfig,
         metrics: &Metrics,
         read_metrics: ReadMetrics,
         desc: Description<T>,
@@ -1136,16 +1276,18 @@ where
         ts_rewrite: Option<&Antichain<T>>,
     ) -> Self {
         let parsed = x.decode(&metrics.columnar).expect("valid inline part");
-        Self::new(read_metrics, desc, "inline", ts_rewrite, parsed)
+        Self::new(cfg, read_metrics, desc, "inline", ts_rewrite, parsed)
     }
 
     pub(crate) fn from_hollow(
+        cfg: &FetchConfig,
         metrics: ReadMetrics,
         registered_desc: Description<T>,
         part: &HollowBatchPart<T>,
         parsed: BlobTraceBatchPart<T>,
     ) -> Self {
         Self::new(
+            cfg,
             metrics,
             registered_desc,
             &part.key.0,
@@ -1155,6 +1297,7 @@ where
     }
 
     pub(crate) fn new(
+        cfg: &FetchConfig,
         metrics: ReadMetrics,
         registered_desc: Description<T>,
         printable_name: &str,
@@ -1170,31 +1313,37 @@ where
         //   truncated bounds must be ignored. Not every user batch is
         //   truncated.
         // - Batches written by compaction. These always have an inline desc
-        //   that exactly matches the one they are registered with. The since
-        //   can be anything.
+        //   lower and upper that matches the registered desc lower and upper,
+        //   and a since that is less than or equal to the registered desc.
+        //   The inline since may be less than the registered desc since,
+        //   this is because of incremental compaction, where we might rewrite
+        //   certain runs in a batch but not others.
         let inline_desc = &parsed.desc;
         let needs_truncation = inline_desc.lower() != registered_desc.lower()
             || inline_desc.upper() != registered_desc.upper();
         if needs_truncation {
-            assert!(
-                PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
-                "key={} inline={:?} registered={:?}",
-                printable_name,
-                inline_desc,
-                registered_desc
-            );
-            if ts_rewrite.is_none() {
-                // The ts rewrite feature allows us to advance the registered
-                // upper of a batch that's already been staged (the inline
-                // upper), so if it's been used, then there's no useful
-                // invariant that we can assert here.
-                assert!(
-                    PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
+            if cfg.validate_bounds_on_read {
+                soft_assert_or_log!(
+                    PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
                     "key={} inline={:?} registered={:?}",
                     printable_name,
                     inline_desc,
                     registered_desc
                 );
+
+                if ts_rewrite.is_none() {
+                    // The ts rewrite feature allows us to advance the registered
+                    // upper of a batch that's already been staged (the inline
+                    // upper), so if it's been used, then there's no useful
+                    // invariant that we can assert here.
+                    soft_assert_or_log!(
+                        PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
+                        "key={} inline={:?} registered={:?}",
+                        printable_name,
+                        inline_desc,
+                        registered_desc
+                    );
+                }
             }
             // As mentioned above, batches that needs truncation will always have a
             // since of the minimum timestamp. Technically we could truncate any
@@ -1209,17 +1358,35 @@ where
                 registered_desc
             );
         } else {
-            assert_eq!(
-                inline_desc, &registered_desc,
+            soft_assert_or_log!(
+                PartialOrder::less_equal(inline_desc.since(), registered_desc.since()),
                 "key={} inline={:?} registered={:?}",
-                printable_name, inline_desc, registered_desc
+                printable_name,
+                inline_desc,
+                registered_desc
+            );
+            assert_eq!(
+                inline_desc.lower(),
+                registered_desc.lower(),
+                "key={} inline={:?} registered={:?}",
+                printable_name,
+                inline_desc,
+                registered_desc
+            );
+            assert_eq!(
+                inline_desc.upper(),
+                registered_desc.upper(),
+                "key={} inline={:?} registered={:?}",
+                printable_name,
+                inline_desc,
+                registered_desc
             );
         }
 
         EncodedPart {
             metrics,
             registered_desc,
-            part: Arc::new(parsed),
+            part: parsed,
             needs_truncation,
             ts_rewrite: ts_rewrite.cloned(),
         }
@@ -1231,6 +1398,10 @@ where
         self.part.desc.since().borrow() == AntichainRef::new(&[T::minimum()])
     }
 
+    pub(crate) fn updates(&self) -> &BlobTraceUpdates {
+        &self.part.updates
+    }
+
     /// Returns the updates with all truncation / timestamp rewriting applied.
     pub(crate) fn normalize(&self, metrics: &ColumnarMetrics) -> BlobTraceUpdates {
         let updates = self.part.updates.clone();
@@ -1238,32 +1409,23 @@ where
             return updates;
         }
 
-        let (records, ext) = match updates {
-            BlobTraceUpdates::Row(r) => (r, None),
-            BlobTraceUpdates::Both(r, e) => (r, Some(e)),
-        };
+        let mut codec = updates
+            .records()
+            .map(|r| (r.keys().clone(), r.vals().clone()));
+        let mut structured = updates.structured().cloned();
+        let mut timestamps = updates.timestamps().clone();
+        let mut diffs = updates.diffs().clone();
 
-        let records = match self.ts_rewrite.as_ref() {
-            Some(rewrite) => {
-                let timestamps = records.timestamps().clone();
-                let rewrite = |i: i64| {
-                    let mut t = T::decode(i.to_le_bytes());
-                    t.advance_by(rewrite.borrow());
-                    i64::from_le_bytes(T::encode(&t))
-                };
-                let timestamps = arrow::compute::unary_mut(timestamps, rewrite)
-                    .unwrap_or_else(|i| arrow::compute::unary(&i, rewrite));
-                ColumnarRecords::new(
-                    records.keys().clone(),
-                    records.vals().clone(),
-                    realloc_array(&timestamps, metrics),
-                    records.diffs().clone(),
-                )
-            }
-            None => records,
-        };
-        let (records, ext) = if self.needs_truncation {
-            let filter = BooleanArray::from_unary(records.timestamps(), |i| {
+        if let Some(rewrite) = self.ts_rewrite.as_ref() {
+            timestamps = arrow::compute::unary(&timestamps, |i: i64| {
+                let mut t = T::decode(i.to_le_bytes());
+                t.advance_by(rewrite.borrow());
+                i64::from_le_bytes(T::encode(&t))
+            });
+        }
+
+        let reallocated = if self.needs_truncation {
+            let filter = BooleanArray::from_unary(&timestamps, |i| {
                 let t = T::decode(i.to_le_bytes());
                 let truncate_t = {
                     !self.registered_desc.lower().less_equal(&t)
@@ -1273,121 +1435,53 @@ where
             });
             if filter.false_count() == 0 {
                 // If we're not filtering anything in practice, skip filtering and reallocating.
-                (records, ext)
+                false
             } else {
                 let filter = FilterBuilder::new(&filter).optimize().build();
                 let do_filter = |array: &dyn Array| filter.filter(array).expect("valid filter len");
-                let keys = realloc_array(do_filter(records.keys()).as_binary(), metrics);
-                let values = realloc_array(do_filter(records.vals()).as_binary(), metrics);
-                let timestamps =
-                    realloc_array(do_filter(records.timestamps()).as_primitive(), metrics);
-                let diffs = realloc_array(do_filter(records.diffs()).as_primitive(), metrics);
-                let records = ColumnarRecords::new(keys, values, timestamps, diffs);
-                let ext = ext.map(|ext| ColumnarRecordsStructuredExt {
-                    key: realloc_any(do_filter(&ext.key), metrics),
-                    val: realloc_any(do_filter(&ext.val), metrics),
-                });
-                (records, ext)
+                if let Some((keys, vals)) = codec {
+                    codec = Some((
+                        realloc_array(do_filter(&keys).as_binary(), metrics),
+                        realloc_array(do_filter(&vals).as_binary(), metrics),
+                    ));
+                }
+                if let Some(ext) = structured {
+                    structured = Some(ColumnarRecordsStructuredExt {
+                        key: realloc_any(do_filter(&*ext.key), metrics),
+                        val: realloc_any(do_filter(&*ext.val), metrics),
+                    });
+                }
+                timestamps = realloc_array(do_filter(&timestamps).as_primitive(), metrics);
+                diffs = realloc_array(do_filter(&diffs).as_primitive(), metrics);
+                true
             }
         } else {
-            (records, ext)
+            false
         };
 
-        match ext {
-            Some(ext) => BlobTraceUpdates::Both(records, ext),
-            None => BlobTraceUpdates::Row(records),
-        }
-    }
-}
-
-/// A pointer into a particular encoded part, with methods for fetching an update and
-/// scanning forward to the next. It is an error to use the same cursor for distinct
-/// parts.
-///
-/// We avoid implementing copy to make it hard to accidentally duplicate a cursor. However,
-/// clone is very cheap.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Cursor {
-    idx: usize,
-}
-
-impl Cursor {
-    /// Get the tuple at the specified pair of indices. If there is no such tuple,
-    /// either because we are out of range or because this tuple has been filtered out,
-    /// this returns `None`.
-    pub fn get<'a, T: Timestamp + Lattice + Codec64>(
-        &self,
-        encoded: &'a EncodedPart<T>,
-    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
-        let part = encoded.part.updates.records();
-        let ((k, v), t, d) = part.get(self.idx)?;
-
-        let mut t = T::decode(t);
-        // We assert on the write side that at most one of rewrite or
-        // truncation is used, so it shouldn't matter which is run first.
-        //
-        // That said, my (Dan's) intuition here is that rewrite goes first,
-        // though I don't particularly have a justification for it.
-        if let Some(ts_rewrite) = encoded.ts_rewrite.as_ref() {
-            t.advance_by(ts_rewrite.borrow());
-            encoded.metrics.ts_rewrite.inc();
+        if self.ts_rewrite.is_some() && !reallocated {
+            timestamps = realloc_array(&timestamps, metrics);
         }
 
-        // This filtering is really subtle, see the comment above for
-        // what's going on here.
-        let truncated_t = encoded.needs_truncation && {
-            !encoded.registered_desc.lower().less_equal(&t)
-                || encoded.registered_desc.upper().less_equal(&t)
-        };
-        if truncated_t {
-            return None;
+        if self.ts_rewrite.is_some() {
+            self.metrics
+                .ts_rewrite
+                .inc_by(u64::cast_from(timestamps.len()));
         }
-        Some((k, v, t, d))
-    }
 
-    /// A cursor points to a particular update in the backing part data.
-    /// If the update it points to is not valid, advance it to the next valid update
-    /// if there is one, and return the pointed-to data.
-    pub fn peek<'a, T: Timestamp + Lattice + Codec64>(
-        &mut self,
-        part: &'a EncodedPart<T>,
-    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
-        while !self.is_exhausted(part) {
-            let current = self.get(part);
-            if current.is_some() {
-                return current;
+        match (codec, structured) {
+            (Some((key, value)), None) => {
+                BlobTraceUpdates::Row(ColumnarRecords::new(key, value, timestamps, diffs))
             }
-            self.advance(part);
-        }
-        None
-    }
-
-    /// Similar to peek, but advance the cursor just past the end of the most recent update.
-    /// Returns the update and the `(part_idx, idx)` that is was popped at.
-    pub fn pop<'a, T: Timestamp + Lattice + Codec64>(
-        &mut self,
-        part: &'a EncodedPart<T>,
-    ) -> Option<((&'a [u8], &'a [u8], T, [u8; 8]), usize)> {
-        while !self.is_exhausted(part) {
-            let current = self.get(part);
-            let popped_idx = self.idx;
-            self.advance(part);
-            if current.is_some() {
-                return current.map(|p| (p, popped_idx));
+            (Some((key, value)), Some(ext)) => {
+                BlobTraceUpdates::Both(ColumnarRecords::new(key, value, timestamps, diffs), ext)
             }
-        }
-        None
-    }
-
-    /// Returns true if the cursor is past the end of the part data.
-    pub fn is_exhausted<T: Timestamp + Codec64>(&self, part: &EncodedPart<T>) -> bool {
-        self.idx >= part.part.updates.records().len()
-    }
-
-    /// Advance the cursor just past the end of the most recent update, if there is one.
-    pub fn advance<T: Timestamp + Codec64>(&mut self, part: &EncodedPart<T>) {
-        if !self.is_exhausted(part) {
-            self.idx += 1;
+            (None, Some(ext)) => BlobTraceUpdates::Structured {
+                key_values: ext,
+                timestamps,
+                diffs,
+            },
+            (None, None) => unreachable!(),
         }
     }
 }
@@ -1401,74 +1495,34 @@ impl Cursor {
 /// - [`LeasedBatchPart`]
 /// - `From<SerdeLeasedBatchPart>` for `LeasedBatchPart<T>`
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SerdeLeasedBatchPart {
+pub struct ExchangeableBatchPart<T> {
+    shard_id: ShardId,
     // Duplicated with the one serialized in the proto for use in backpressure.
     encoded_size_bytes: usize,
-    // We wrap this in a LazyProto because it guarantees that we use the proto
-    // encoding for the serde impls.
-    proto: LazyProto<ProtoLeasedBatchPart>,
+    desc: Description<T>,
+    filter: FetchBatchFilter<T>,
+    part: LazyProto<ProtoHollowBatchPart>,
+    /// The id of the reader that leased this part. See the corresponding field
+    /// on [LeasedBatchPart].
+    reader_id: LeasedReaderId,
+    filter_pushdown_audit: bool,
 }
 
-impl SerdeLeasedBatchPart {
+impl<T> ExchangeableBatchPart<T> {
     /// Returns the encoded size of the given part.
     pub fn encoded_size_bytes(&self) -> usize {
         self.encoded_size_bytes
     }
 
-    pub(crate) fn decode<T: Timestamp + Codec64>(
-        &self,
-        metrics: Arc<Metrics>,
-    ) -> LeasedBatchPart<T> {
-        let proto = self.proto.decode().expect("valid leased batch part");
-        (proto, metrics)
-            .into_rust()
-            .expect("valid leased batch part")
+    /// Returns the id of the reader that leased this part.
+    pub fn reader_id(&self) -> &LeasedReaderId {
+        &self.reader_id
     }
 }
 
-// TODO: The way we're smuggling the metrics through here is a bit odd. Perhaps
-// we could refactor `LeasedBatchPart` into some proto-able struct plus the
-// metrics for the Drop bit?
-impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for LeasedBatchPart<T> {
-    fn into_proto(&self) -> (ProtoLeasedBatchPart, Arc<Metrics>) {
-        let proto = ProtoLeasedBatchPart {
-            shard_id: self.shard_id.into_proto(),
-            filter: Some(self.filter.into_proto()),
-            desc: Some(self.desc.into_proto()),
-            part: Some(self.part.into_proto()),
-            lease: Some(ProtoLease {
-                reader_id: self.reader_id.into_proto(),
-                seqno: Some(self.leased_seqno.into_proto()),
-            }),
-            filter_pushdown_audit: self.filter_pushdown_audit,
-        };
-        (proto, Arc::clone(&self.metrics))
-    }
-
-    fn from_proto(proto: (ProtoLeasedBatchPart, Arc<Metrics>)) -> Result<Self, TryFromProtoError> {
-        let (proto, metrics) = proto;
-        let lease = proto
-            .lease
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoLeasedBatchPart::lease"))?;
-        Ok(LeasedBatchPart {
-            metrics,
-            shard_id: proto.shard_id.into_rust()?,
-            filter: proto
-                .filter
-                .into_rust_if_some("ProtoLeasedBatchPart::filter")?,
-            desc: proto.desc.into_rust_if_some("ProtoLeasedBatchPart::desc")?,
-            part: proto.part.into_rust_if_some("ProtoLeasedBatchPart::part")?,
-            reader_id: lease.reader_id.into_rust()?,
-            leased_seqno: lease.seqno.into_rust_if_some("ProtoLease::seqno")?,
-            lease: None,
-            filter_pushdown_audit: proto.filter_pushdown_audit,
-        })
-    }
-}
-
-/// Format we'll use when decoding a [`Part2`].
+/// Format we'll use when decoding a [`Part`].
 ///
-/// [`Part2`]: mz_persist_types::part::Part2
+/// [`Part`]: mz_persist_types::part::Part
 #[derive(Debug, Copy, Clone)]
 pub enum PartDecodeFormat {
     /// Decode from opaque `Codec` data.
@@ -1483,11 +1537,7 @@ pub enum PartDecodeFormat {
 impl PartDecodeFormat {
     /// Returns a default value for [`PartDecodeFormat`].
     pub const fn default() -> Self {
-        // IMPORTANT: By default we will not decode or validate our structured format until it's
-        // more stable.
-        PartDecodeFormat::Row {
-            validate_structured: false,
-        }
+        PartDecodeFormat::Arrow
     }
 
     /// Parses a [`PartDecodeFormat`] from the provided string, falling back to the default if the
@@ -1535,6 +1585,6 @@ fn client_exchange_data() {
     // between timely workers, including over the network. Enforce then that it
     // implements ExchangeData.
     fn is_exchange_data<T: timely::ExchangeData>() {}
-    is_exchange_data::<SerdeLeasedBatchPart>();
-    is_exchange_data::<SerdeLeasedBatchPart>();
+    is_exchange_data::<ExchangeableBatchPart<u64>>();
+    is_exchange_data::<ExchangeableBatchPart<u64>>();
 }

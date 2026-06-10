@@ -9,40 +9,88 @@ menu:
     parent: 'sql-patterns'
 ---
 
-A _temporal filter_ is a `WHERE` or `HAVING` clause which uses the [`mz_now()`](/sql/functions/now_and_mz_now) function.
-This function returns Materialize's current virtual timestamp, which works to keep up with real time as data is processed.
-Applying a temporal filter reduces the working dataset, saving memory resources and focusing results on the recent past.
+A **temporal filter** is a query condition/predicate that uses the
+[`mz_now()`](/sql/functions/now_and_mz_now) function to filter data based on a
+time-related condition. Using a temporal filter reduces the working dataset,
+saving memory resources and focusing on results that meet the condition.
 
-Here is a typical temporal filter that considers records whose timestamps are within the last 5 minutes.
+In Materialize, you implement temporal filters using the
+[`mz_now()`](/sql/functions/now_and_mz_now) function (which returns
+Materialize's current virtual timestamp) in a `WHERE` or `HAVING` clause;
+specifically, you compare [`mz_now()`](/sql/functions/now_and_mz_now) to a
+numeric or timestamp column expression. As
+[`mz_now()`](/sql/functions/now_and_mz_now) progresses (every millisecond),
+records for which the condition is no longer true are retracted from the working
+dataset while records for which the condition becomes true are included in the
+working dataset. When using temporal filters, Materialize must be prepared to
+retract updates in the near future and will need resources to maintain these
+retractions.
+
+For example, the following temporal filter reduces the working dataset to those
+records whose event timestamp column (`event_ts`) is no more than 5 minutes ago:
 
 ```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '5min'
 ```
 
-Consider this diagram that shows a record `B` falling out of the result set as time moves forward:
+{{< note >}}
+It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
+However, there are currently no valid operators for the [`mz_timestamp`
+type](/sql/types/mz_timestamp) that would allow this.  See [`mz_now()` requirements and restrictions](#mz_now-requirements-and-restrictions).
+{{< /note >}}
+
+The following diagram shows record `B` falling out of the result set as time
+moves forward:
+
+- In the first timeline, record `B` occurred less than 5 minutes ago (occurred
+  less than 5 minutes from `mz_now()`).
+
+- In the second timeline, as `mz_now()` progresses, record `B` occurred more
+  than 5 minutes from `mz_now()`.
 
 ![temporal filter diagram](/images/temporal-filter.svg)
 
-{{< note >}}
-It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
-However, there are currently no valid operators for the [`mz_timestamp` type](/sql/types/mz_timestamp) that would allow this.
-{{< /note >}}
+## `mz_now()` requirements and restrictions
 
-## Requirements
+### `mz_now()` requirements
 
-You can only use `mz_now()` to establish a temporal filter under the following conditions:
+{{< tip >}}
 
-- `mz_now()` appears in a `WHERE` or `HAVING` clause.
-- The clause must compare `mz_now()` to a [`numeric`](/sql/types/numeric) or [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`
-- The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN...AND...`).
-    At the moment, you can't use the `!=` operator with `mz_now()`.
+When possible, prefer materialized views when using temporal filter to take
+advantage of custom consolidation.
 
-You cannot use temporal filters in the `WHERE` clause of an [aggregate `FILTER` expression](/sql/functions/filters).
+{{</ tip >}}
+
+When creating a temporal filter using
+[`mz_now()`](/sql/functions/now_and_mz_now) in a `WHERE` or `HAVING` clause, the
+clause has the following shape:
+
+{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+
+### `mz_now()` restrictions
+
+The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
+restrictions:
+
+- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+
+  To rewrite the query, see [Disjunction (OR)
+  alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).
+
+- If part of a  `WHERE` clause, the `WHERE` clause cannot be an [aggregate
+ `FILTER` expression](/sql/functions/filters).
 
 ## Examples
 
 These examples create real objects.
 After you have tried the examples, make sure to drop these objects and spin down any resources you may have created.
+
+{{< tip >}}
+
+When possible, prefer materialized views when using temporal filter to take
+advantage of custom consolidation.
+
+{{</ tip >}}
 
 ### Sliding window
 
@@ -85,7 +133,12 @@ In this case, we will filter a table to only include only records from the last 
     ```
     Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
 
-You can materialize the `last_30_sec` view by [creating an index](/sql/create-index/) on it (results stored in memory) or by [recreating it as a `MATERIALIZED VIEW`](/sql/create-materialized-view/) (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
+You can materialize the `last_30_sec` view by [recreating it as a `MATERIALIZED
+VIEW`](/sql/create-materialized-view/) (results persisted to storage). When
+you do so, Materialize will keep the results up to date with records expiring
+automatically according to the temporal filter.
+
+
 
 ### Time-to-Live (TTL)
 
@@ -267,3 +320,7 @@ Source materialize.public.events
 The filter in our query appears in the `pushdown=` list at the bottom of the output, so the filter pushdown optimization will be able to filter out irrelevant ranges of data in that source and make the overall query more efficient.
 
 Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).
+
+{{< note >}}
+See the guide on [partitioning and filter pushdown](/transform-data/patterns/partition-by/) for a **private preview** feature that can make the filter pushdown optimization more predictable.
+{{< /note >}}

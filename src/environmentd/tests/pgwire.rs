@@ -9,22 +9,26 @@
 
 //! Integration tests for pgwire functionality.
 
+#![recursion_limit = "256"]
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Duration;
 
 use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
+use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
 use mz_ore::{assert_err, assert_ok};
 use mz_pgrepr::{Numeric, Record};
+use postgres::SimpleQueryMessage;
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
 use postgres::types::Type;
-use postgres::SimpleQueryMessage;
 use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
 
@@ -39,19 +43,25 @@ fn test_bind_params() {
     match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
         Err(err) => assert!(
-            err.to_string().contains("operator does not exist"),
+            err.to_string_with_causes()
+                .contains("operator does not exist"),
             "unexpected error: {err}"
         ),
     }
 
-    assert!(client
-        .query_one("SELECT ROW(1, 2) = ROW(1, $1)", &[&2_i32])
-        .unwrap()
-        .get::<_, bool>(0));
+    assert!(
+        client
+            .query_one("SELECT ROW(1, 2) = ROW(1, $1)", &[&2_i32])
+            .unwrap()
+            .get::<_, bool>(0)
+    );
 
     // Just ensure it does not panic (see database-issues#871).
     client
-        .query("EXPLAIN PLAN FOR SELECT $1::int", &[&42_i32])
+        .query(
+            "EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT $1::int",
+            &[&42_i32],
+        )
         .unwrap();
 
     // Ensure that a type hint provided by the client is respected.
@@ -73,7 +83,7 @@ fn test_bind_params() {
     // Ensure that the fractional component of a decimal is not lost.
     {
         let mut num = Numeric::from(mz_repr::adt::numeric::Numeric::from(123));
-        num.0 .0.set_exponent(-2);
+        num.0.0.set_exponent(-2);
         let stmt = client
             .prepare_typed("SELECT $1 + 2.34", &[Type::NUMERIC])
             .unwrap();
@@ -95,6 +105,21 @@ fn test_bind_params() {
         assert_eq!(vals, &[1, 2]);
     }
 
+    // Ensure that parameters in a `SELECT .. OFFSET` clause are supported.
+    // See also in `order_by.slt`.
+    {
+        let stmt = client
+            .prepare("SELECT generate_series(1, 5) OFFSET $1")
+            .unwrap();
+        let vals = client
+            .query(&stmt, &[&2_i64])
+            .unwrap()
+            .iter()
+            .map(|r| r.get(0))
+            .collect::<Vec<i32>>();
+        assert_eq!(vals, &[3, 4, 5]);
+    }
+
     // Ensure that parameters in a `VALUES .. LIMIT` clause are supported.
     {
         let stmt = client.prepare("VALUES (1), (2), (3) LIMIT $1").unwrap();
@@ -107,14 +132,60 @@ fn test_bind_params() {
         assert_eq!(vals, &[1, 2]);
     }
 
-    // A `CREATE` statement with parameters should be rejected.
-    let err = client
-        .query_one("CREATE VIEW v AS SELECT $3", &[])
-        .unwrap_db_error();
-    // TODO(benesch): this should be `UNDEFINED_PARAMETER`, but blocked
-    // on database-issues#1031.
-    assert_eq!(err.message(), "there is no parameter $3");
-    assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
+    // Some statement types can't have parameters at all.
+    //
+    // TODO: We should harmonize whether `describe` returns parameters for statement types that
+    // can't have parameters. For example, currently it does return parameters for
+    // EXPLAIN TIMESTAMP,
+    // but it doesn't return parameters for
+    // CREATE VIEW, CREATE MATERIALIZED VIEW.
+    // (It also returns parameters for EXPLAIN SELECT and EXPLAIN FILTER PUSHDOWN, but these are
+    // weird special cases currently, see below.)
+    {
+        let err = client
+            .query_one("CREATE VIEW v AS SELECT $3", &[])
+            .unwrap_db_error();
+        assert_eq!(err.message(), "views cannot have parameters");
+        assert_eq!(err.code(), &SqlState::UNDEFINED_PARAMETER);
+    }
+    {
+        let err = client
+            .query_one("CREATE MATERIALIZED VIEW mv AS SELECT $3", &[])
+            .unwrap_db_error();
+        assert_eq!(err.message(), "materialized views cannot have parameters");
+        assert_eq!(err.code(), &SqlState::UNDEFINED_PARAMETER);
+    }
+    {
+        let err = client
+            // We need to actually supply a parameter here, or we fail inside tokio-postgres,
+            // because then the parameter list returned by `describe` doesn't match the supplied
+            // params.
+            .query_one("EXPLAIN TIMESTAMP FOR SELECT $1::int", &[&42_i32])
+            .unwrap_db_error();
+        assert_eq!(err.message(), "EXPLAIN TIMESTAMP cannot have parameters");
+        assert_eq!(err.code(), &SqlState::UNDEFINED_PARAMETER);
+    }
+    {
+        let err = client
+            .query_one("EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT $3", &[])
+            .unwrap_db_error();
+        assert_eq!(err.message(), "materialized views cannot have parameters");
+        assert_eq!(err.code(), &SqlState::UNDEFINED_PARAMETER);
+    }
+
+    // Surprisingly, the following are allowed. The weirdness is that it is only allowed through a
+    // pgwire "Extended Query", but not through PREPARE, e.g., `PREPARE EXPLAIN SELECT $1::int`.
+    {
+        client
+            .query_one("EXPLAIN SELECT $1::int", &[&42_i32])
+            .expect_element(|| "expected plan");
+    }
+    {
+        let result = client
+            .query("EXPLAIN FILTER PUSHDOWN FOR SELECT $1::int", &[&42_i32])
+            .unwrap();
+        assert!(result.is_empty());
+    }
 
     // Test that `INSERT` statements support prepared statements.
     {
@@ -124,6 +195,29 @@ fn test_bind_params() {
             .unwrap();
         let val: i32 = client.query_one("SELECT * FROM t", &[]).unwrap().get(0);
         assert_eq!(val, 42);
+    }
+
+    // Test that `varchar_to_text` is properly handled (whether eliminated or no).
+    {
+        client.batch_execute("CREATE TABLE v (w varchar)").unwrap();
+        client.query("INSERT INTO v VALUES ($1)", &[&"aa"]).unwrap();
+        let stmt = client
+            .prepare("SELECT w, w::text, w::text::varchar FROM v WHERE w = $1")
+            .unwrap();
+        assert_eq!(stmt.columns().len(), 3);
+        assert_eq!(stmt.columns()[0].type_(), &Type::VARCHAR);
+        assert_eq!(stmt.columns()[1].type_(), &Type::TEXT);
+        assert_eq!(stmt.columns()[2].type_(), &Type::VARCHAR);
+        let row = client.query_one(&stmt, &[&"aa"]).unwrap();
+        assert_eq!(row.get::<_, String>(0), "aa");
+        assert_eq!(row.get::<_, String>(1), "aa");
+        assert_eq!(row.get::<_, String>(2), "aa");
+
+        let stmt = client
+            .prepare_typed("SELECT 'aa'::varchar::text = $1", &[Type::TEXT])
+            .unwrap();
+        let val: bool = client.query_one(&stmt, &[&"aa"]).unwrap().get(0);
+        assert_eq!(val, true);
     }
 }
 
@@ -292,7 +386,7 @@ async fn test_conn_startup() {
     {
         use postgres_protocol::message::backend::Message;
 
-        let mut stream = TcpStream::connect(server.inner.sql_local_addr()).unwrap();
+        let mut stream = TcpStream::connect(server.sql_local_addr()).unwrap();
 
         // Send a startup packet for protocol version two, which Materialize
         // does not support.
@@ -546,19 +640,26 @@ fn test_record_types() {
     assert_eq!(rows.len(), 2);
 }
 
-fn pg_test_inner(dir: PathBuf, flags: &[&'static str]) {
-    // We want a new server per file, so we can't use pgtest::walk.
-    datadriven::walk(dir.to_str().unwrap(), |tf| {
+fn pg_test_inner(path: &Path, mz_flags: bool) {
+    datadriven::walk(path.to_str().unwrap(), |tf| {
         let server = test_util::TestHarness::default()
             .unsafe_mode()
             .start_blocking();
-        server.enable_feature_flags(flags);
+        if mz_flags {
+            server.enable_feature_flags(&[
+                "enable_create_table_from_source",
+                "enable_load_generator_datums",
+                "enable_raise_statement",
+                "unsafe_enable_unorchestrated_cluster_replicas",
+                "unsafe_enable_unsafe_functions",
+            ]);
+        }
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {
             tokio_postgres::config::Host::Tcp(host) => {
                 format!("{}:{}", host, config.get_ports()[0])
             }
-            _ => panic!("only tcp connections supported"),
+            tokio_postgres::config::Host::Unix(_) => panic!("only tcp connections supported"),
         };
         let user = config.get_user().unwrap();
         let timeout = Duration::from_secs(120);
@@ -568,22 +669,251 @@ fn pg_test_inner(dir: PathBuf, flags: &[&'static str]) {
 }
 
 #[mz_ore::test]
-fn test_pgtest() {
-    let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
-    pg_test_inner(dir, &[]);
+fn test_pgtest_binary() {
+    pg_test_inner(Path::new("../../test/pgtest/binary.pt"), false);
 }
 
 #[mz_ore::test]
+fn test_pgtest_chr() {
+    pg_test_inner(Path::new("../../test/pgtest/chr.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_client_min_messages() {
+    pg_test_inner(Path::new("../../test/pgtest/client_min_messages.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy_from_2() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from-2.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy_from_fail() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from-fail.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy_from_null() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from-null.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy_from() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy_from_range() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from-range.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy() {
+    pg_test_inner(Path::new("../../test/pgtest/copy.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_cursors() {
+    pg_test_inner(Path::new("../../test/pgtest/cursors.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_ddl_extended() {
+    pg_test_inner(Path::new("../../test/pgtest/ddl-extended.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_desc() {
+    pg_test_inner(Path::new("../../test/pgtest/desc.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_empty() {
+    pg_test_inner(Path::new("../../test/pgtest/empty.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_notice() {
+    pg_test_inner(Path::new("../../test/pgtest/notice.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_params() {
+    pg_test_inner(Path::new("../../test/pgtest/params.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_portals() {
+    pg_test_inner(Path::new("../../test/pgtest/portals.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_prepare() {
+    pg_test_inner(Path::new("../../test/pgtest/prepare.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_range() {
+    pg_test_inner(Path::new("../../test/pgtest/range.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_transactions() {
+    pg_test_inner(Path::new("../../test/pgtest/transactions.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_vars() {
+    pg_test_inner(Path::new("../../test/pgtest/vars.pt"), false);
+}
+
 // Materialize's differences from Postgres' responses.
-fn test_pgtest_mz() {
-    let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
+#[mz_ore::test]
+fn test_pgtest_mz_affected() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/affected.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_copy_binary_unsupported() {
     pg_test_inner(
-        dir,
-        &[
-            "enable_raise_statement",
-            "enable_unorchestrated_cluster_replicas",
-            "enable_unsafe_functions",
-            "enable_copy_to_expr",
-        ],
+        Path::new("../../test/pgtest-mz/copy-binary-unsupported.pt"),
+        true,
     );
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_copy_from_csv() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/copy-from-csv.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_copy_to() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/copy-to.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_datums() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/datums.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_ddl_extended() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/ddl-extended.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_desc() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/desc.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_notice() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/notice.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_parse_started() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/parse-started.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_portals() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/portals.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_raise() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/raise.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_startup() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/startup.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_transactions() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/transactions.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_vars() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/vars.pt"), true);
+}
+
+// Guard against .pt files silently losing test coverage when new files are
+// added to test/pgtest/ or test/pgtest-mz/ without a corresponding test wrapper.
+#[mz_ore::test]
+fn test_all_pt_files_have_test_wrappers() {
+    let source = include_str!("pgwire.rs");
+    for (dir, prefix) in [
+        ("../../test/pgtest", "test_pgtest_"),
+        ("../../test/pgtest-mz", "test_pgtest_mz_"),
+    ] {
+        let dir_path = Path::new(dir);
+        for entry in
+            std::fs::read_dir(dir_path).unwrap_or_else(|e| panic!("failed to read {dir}: {e}"))
+        {
+            let entry = entry.unwrap();
+            let file_name = entry.file_name();
+            let name = file_name.to_str().unwrap();
+            if !name.ends_with(".pt") {
+                continue;
+            }
+            let stem = name.trim_end_matches(".pt").replace('-', "_");
+            let expected_fn = format!("fn {prefix}{stem}(");
+            assert!(
+                source.contains(&expected_fn),
+                "no test wrapper found for {dir}/{name} — expected `{expected_fn})`",
+            );
+        }
+    }
+}
+
+// Test that encoding a message with too many columns (> i16::MAX) doesn't
+// corrupt the connection. The codec truncates the buffer when encoding fails,
+// ensuring no partial message is left in the buffer. See
+// https://github.com/MaterializeInc/database-issues/issues/9496
+#[mz_ore::test]
+fn test_many_columns() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    let cols = (1..=32769)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!("SELECT {cols}");
+
+    // The query must fail because the server can't encode a RowDescription
+    // with more than i16::MAX columns. When encoding fails, `machine.run()`
+    // returns an error, and the catch-all handler in `protocol.rs` sends a
+    // FATAL ErrorResponse with "fields in row description, which exceeds ..."
+    // before closing the connection.
+    //
+    // However, the client non-deterministically sees either the FATAL
+    // ErrorResponse or just "connection closed". This is because the
+    // rust-postgres client's `poll_block_on` drains connection-level events
+    // before polling the query future: if the ErrorResponse and the TCP
+    // close (FIN) arrive in the same read, `poll_read` processes the
+    // ErrorResponse but then immediately hits EOF and returns
+    // `Err(Error::closed)`, which short-circuits `poll_block_on` before the
+    // query future can read the ErrorResponse from the channel.
+    //
+    // Both outcomes indicate the server handled the overflow gracefully (no
+    // partial/corrupt message in the buffer).
+    match client.simple_query(&query) {
+        Ok(_) => panic!("query with too many columns should have failed"),
+        Err(err) => {
+            let err_str = err.to_string_with_causes();
+            assert!(
+                err_str.contains("fields in row description, which exceeds")
+                    || err_str.contains("connection closed"),
+                "unexpected error: {err}"
+            );
+        }
+    }
 }

@@ -13,14 +13,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use mz_dyncfg::{Config, ConfigSet};
-use mz_persist::indexed::columnar::ColumnarRecordsStructuredExt;
-use mz_persist::indexed::encoding::BlobTraceUpdates;
-use mz_persist_types::columnar::{codec_to_schema2, ColumnDecoder, Schema2};
-use mz_persist_types::stats::PartStats;
-use mz_persist_types::Codec;
 
 use crate::batch::UntrimmableColumns;
-use crate::internal::encoding::Schemas;
 use crate::metrics::Metrics;
 use crate::read::LazyPartStats;
 
@@ -29,8 +23,17 @@ use crate::ShardId;
 /// Percent of filtered data to opt in to correctness auditing.
 pub(crate) const STATS_AUDIT_PERCENT: Config<usize> = Config::new(
     "persist_stats_audit_percent",
-    0,
+    1,
     "Percent of filtered data to opt in to correctness auditing (Materialize).",
+);
+
+/// See description for usage.
+pub const STATS_AUDIT_PANIC: Config<bool> = Config::new(
+    "persist_stats_audit_panic",
+    true,
+    "If set (as it is by default), panic on any auditing failure. If not, report an error but \
+    pass along the data as normal. This should almost certainly be paired with an audit rate of 100%, \
+    so all parts are audited, for consistency.",
 );
 
 /// Computes and stores statistics about each batch part.
@@ -120,36 +123,6 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
         prefixes: split(STATS_UNTRIMMABLE_COLUMNS_PREFIX.get(cfg)),
         suffixes: split(STATS_UNTRIMMABLE_COLUMNS_SUFFIX.get(cfg)),
     }
-}
-
-/// Encodes a [`BlobTraceUpdates`] and calculates [`PartStats`].
-pub(crate) fn encode_updates<K, V>(
-    write_schemas: &Schemas<K, V>,
-    updates: &BlobTraceUpdates,
-) -> Result<(Option<ColumnarRecordsStructuredExt>, PartStats), String>
-where
-    K: Codec,
-    V: Codec,
-{
-    let records = updates.records();
-
-    let ext = match updates.structured() {
-        Some(ext) => ext.clone(),
-        None => ColumnarRecordsStructuredExt {
-            key: codec_to_schema2::<K>(write_schemas.key.as_ref(), records.keys())
-                .map_err(|e| e.to_string())?,
-            val: codec_to_schema2::<V>(write_schemas.val.as_ref(), records.vals())
-                .map_err(|e| e.to_string())?,
-        },
-    };
-
-    let key_stats = write_schemas
-        .key
-        .decoder_any(ext.key.as_ref())
-        .map_err(|e| e.to_string())?
-        .stats();
-
-    Ok((Some(ext), PartStats { key: key_stats }))
 }
 
 /// Statistics about the contents of a shard as_of some time.

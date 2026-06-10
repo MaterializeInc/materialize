@@ -19,6 +19,6 @@ cd "$(dirname "$0")/../../../.."
 
 rust_files=$(sort -u <(git_files '*.rs'))
 
-try xargs misc/lint/test-attribute.sh <<< "$rust_files"
+try xargs misc/lint/test-attribute.py <<< "$rust_files"
 
 try_status_report

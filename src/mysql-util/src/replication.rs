@@ -7,18 +7,29 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mysql_async::prelude::Queryable;
 use mysql_async::Conn;
+use mysql_async::prelude::Queryable;
 
 use crate::MySqlError;
 
 /// Query a MySQL System Variable
 pub async fn query_sys_var(conn: &mut Conn, name: &str) -> Result<String, MySqlError> {
-    let value: String = conn
-        .query_first(format!("SELECT @@{}", name))
-        .await?
-        .unwrap();
+    if !is_safe_sys_var_name(name) {
+        return Err(anyhow::anyhow!("invalid MySQL system variable name: {name}").into());
+    }
+
+    let value: String = conn.query_first(format!("SELECT @@{name}")).await?.unwrap();
     Ok(value)
+}
+
+fn is_safe_sys_var_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        })
 }
 
 /// Verify a MySQL System Variable matches the expected value

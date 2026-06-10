@@ -21,16 +21,13 @@ files=$(git_files "$@")
 
 copyright_files=$(grep -vE \
     -e '(^|/)LICENSE$' \
-    -e '(^|/)\.(docker|git|vscode|bazel)ignore$' \
-    -e '(^|/)\.bazelrc$' \
-    -e '(^|/)\.bazelversion$' \
+    -e '(^|/)\.(docker|git|vscode)ignore$' \
     -e '(^|/)\.gitattributes$' \
     -e '(^|/)\.github/(dependabot\.yml|CODEOWNERS)$' \
     -e '(^|/)\.gitmodules$' \
     -e '(^|/)go\.sum$' \
     -e '(^|/)(Cargo|askama|config)\.toml$' \
     -e '^\.cargo/config$' \
-    -e '^\.config/hakari.toml$' \
     -e '^.devcontainer/.*' \
     -e '(^|/)Cargo\.lock$' \
     -e '^about\.toml$' \
@@ -42,16 +39,15 @@ copyright_files=$(grep -vE \
     -e '^\.config/nextest\.toml$' \
     -e '(^|/)yarn\.lock$' \
     -e '(^|/)requirements.*\.txt$' \
-    -e '\.(md|json|asc|png|jpe?g|svg|avro|avsc|pb|ico|html|so|uxf)$' \
+    -e '\.(md|json|asc|png|jpe?g|svg|avro|avsc|pb|ico|html|so|uxf|woff2?)$' \
     -e '^doc/user/.*(\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^ci/builder/(ssh_known_hosts|crosstool-.+\.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
     -e '^ci/test/lint-deps/' \
-    -e '^misc/cargo-vet/config.toml$' \
-    -e '^misc/cargo-vet/audits.toml$' \
-    -e '^misc/cargo-vet/imports.toml$' \
-    -e '^misc/cargo-vet/imports.lock$' \
     -e '^misc/completions/.*' \
+    -e '^misc/mcp-materialize/uv.lock' \
+    -e '^misc/mcp-materialize-agents/uv.lock' \
+    -e '^misc/mcp-materialize-agents/mcp_materialize_agents/system_prompt.md' \
     -e '^misc/python/MANIFEST\.in' \
     -e '^test/chbench/chbench' \
     -e '^src/pgtz/tznames/.*' \
@@ -64,13 +60,20 @@ copyright_files=$(grep -vE \
     -e '^src/catalog/tests/snapshots/.*\.snap' \
     -e '^src/catalog/src/durable/upgrade/snapshots/.*' \
     -e '^src/catalog/src/durable/upgrade/persist/snapshots/.*\.snap' \
+    -e '^src/expr-derive-impl/src/snapshots.*' \
+    -e '^src/expr/src/scalar/func/impls/snapshots/.*' \
+    -e '^src/expr/src/scalar/func/snapshots/.*' \
+    -e '^src/expr/src/scalar/snapshots/.*' \
+    -e '^src/license-keys/src/license_keys/.*\.pub' \
     -e '^src/storage-types/src/snapshots/.*' \
     -e '^src/repr/src/adt/snapshots/.*' \
     -e '^src/environmentd/tests/testdata/timezones/.*\.csv' \
-    -e '^test/fivetran-destination/.*\/00-README$' \
+    -e '^console/CLOUD_REF$' \
+    -e '^console/login_examples$' \
+    -e '^console/.*__snapshots__/.*' \
     <<< "$files"
 )
 
-try xargs -n1 awk -f misc/lint/copyright.awk <<< "$copyright_files"
+try xargs misc/lint/copyright.py <<< "$copyright_files"
 
 try_status_report

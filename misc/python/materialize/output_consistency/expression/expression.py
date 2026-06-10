@@ -187,9 +187,6 @@ class LeafExpression(Expression):
     def hash(self) -> int:
         return stable_int_hash(self.column_name)
 
-    def resolve_data_type_category(self) -> DataTypeCategory:
-        return self.data_type.category
-
     def try_resolve_exact_data_type(self) -> DataType | None:
         return self.data_type
 

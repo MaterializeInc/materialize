@@ -8,9 +8,11 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 1000
 
-> CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE '2'))
+> CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE 'scale=1,workers=2'))
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
@@ -20,7 +22,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 > INSERT INTO t VALUES ('key1', 'value')
 
 # Setup various sinks and sources
-> CREATE CLUSTER sink_size_cluster SIZE '2';
+> CREATE CLUSTER sink_size_cluster SIZE 'scale=1,workers=2';
 > CREATE SINK sink_size
   IN CLUSTER sink_size_cluster
   FROM simple_view
@@ -41,7 +43,8 @@ $ kafka-create-topic topic=upsert partitions=1
 $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
 one:two
 
-> CREATE CLUSTER upsert_size_cluster SIZE '2';
+> CREATE CLUSTER upsert_size_cluster SIZE 'scale=1,workers=2';
+> BEGIN
 > CREATE SOURCE upsert_size
   IN CLUSTER upsert_size_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -52,7 +55,9 @@ one:two
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE upsert_cluster
   IN CLUSTER cluster1
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -63,11 +68,19 @@ one:two
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
+> COMMIT
+
+> SELECT * FROM upsert_size_tbl
+one two
+
+> SELECT * FROM upsert_cluster_tbl
+one two
 
 > CREATE SCHEMA subsources_size;
 > CREATE SCHEMA subsources_cluster;
-> CREATE CLUSTER subsource_size_s_cluster SIZE '2';
+> CREATE CLUSTER subsource_size_s_cluster SIZE 'scale=1,workers=2';
 > CREATE SOURCE subsources_size.s IN CLUSTER subsource_size_s_cluster FROM LOAD GENERATOR AUCTION (UP TO 100);
+> BEGIN
 > CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION (UP TO 100);
 
 > CREATE TABLE subsources_size.accounts FROM SOURCE subsources_size.s (REFERENCE accounts);
@@ -81,9 +94,14 @@ one:two
 > CREATE TABLE subsources_cluster.bids FROM SOURCE subsources_cluster.s (REFERENCE bids);
 > CREATE TABLE subsources_cluster.organizations FROM SOURCE subsources_cluster.s (REFERENCE organizations);
 > CREATE TABLE subsources_cluster.users FROM SOURCE subsources_cluster.s (REFERENCE users);
+> COMMIT
 
-# NOTE: These queries are slow to succeed because the default metrics scraping
-# interval is 30 seconds. Here we are just ensuring metrics were populated.
+# The `CREATE TABLE ... FROM SOURCE` commands caused a recreation of the
+# respective source dataflows, during which we might have lost the statistics
+# about committed updates from the snapshot. Ingest some more data to ensure we
+# see some `updates_committed`.
+$ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
+two:three
 
 > SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
   FROM mz_sinks s
@@ -96,13 +114,13 @@ sink_cluster 1 1 true true
 > SELECT s.name,
   SUM(u.updates_committed) > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert_size', 'upsert_cluster', 's', 'bids')
   GROUP BY s.id, s.name
 upsert_size true
 upsert_cluster true
-s false
-s false
+s true
+s true
 
 # We have to obtain these before we delete the sink.
 $ set-from-sql var=sink-size-id

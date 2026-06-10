@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# check-package-isolation — for each workspace package in isolation, runs
+# both `cargo check --all-targets` and `cargo check` (lib+bins only) with
+# warnings treated as errors.
+#
+# The second invocation (without `--all-targets`) catches imports that are
+# only used under cfg gates like `#[cfg(any(test, feature = "proptest"))]`.
+# `--all-targets` pulls in dev-dependencies, which often re-enable such
+# features via feature unification (e.g. `mz-repr = { ..., features =
+# ["proptest"] }` as a dev-dep), masking the warning.
+#
+# Buildkite parallelism: if BUILDKITE_PARALLEL_JOB_COUNT is set, this script
+# only checks the slice of packages assigned to its BUILDKITE_PARALLEL_JOB
+# index (round-robin partitioning).
+
+set -uo pipefail
+
+cd "$(dirname "$0")/.." || exit
+
+. misc/shlib/shlib.bash
+
+mapfile -t packages < <(
+    cargo metadata --no-deps --format-version=1 \
+        | python3 -c 'import json, sys; [print(p["name"]) for p in json.load(sys.stdin)["packages"]]' \
+        | sort
+)
+
+shard_count="${BUILDKITE_PARALLEL_JOB_COUNT:-1}"
+shard_index="${BUILDKITE_PARALLEL_JOB:-0}"
+
+failed=()
+checked=0
+for i in "${!packages[@]}"; do
+    if (( i % shard_count != shard_index )); then
+        continue
+    fi
+    pkg="${packages[$i]}"
+    checked=$((checked + 1))
+    echo "--- :rust: cargo check --all-targets -p $pkg"
+    if ! cargo check --all-targets --package "$pkg"; then
+        failed+=("$pkg (--all-targets)")
+    fi
+    echo "--- :rust: cargo check -p $pkg (lib+bins, -D warnings)"
+    if ! RUSTFLAGS="--cfg=tokio_unstable -D warnings" cargo check --package "$pkg"; then
+        failed+=("$pkg (lib+bins, -D warnings)")
+    fi
+done
+
+echo
+echo "Checked $checked package(s) on shard $shard_index/$shard_count."
+if (( ${#failed[@]} > 0 )); then
+    echo "FAILED: ${#failed[@]} package(s) failed isolated check:"
+    printf '  - %s\n' "${failed[@]}"
+    exit 1
+fi
+echo "All packages on this shard compiled in isolation."

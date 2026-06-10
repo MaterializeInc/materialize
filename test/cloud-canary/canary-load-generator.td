@@ -11,9 +11,9 @@
 
 > CREATE CLUSTER canary_load_generator SIZE '3xsmall';
 
-> CREATE SOURCE generator1 IN CLUSTER canary_load_generator FROM LOAD GENERATOR COUNTER;
+> CREATE SOURCE generator1 IN CLUSTER canary_load_generator FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
-> CREATE MATERIALIZED VIEW generator_view1 AS SELECT COUNT(*) AS cnt FROM generator1;
+> CREATE MATERIALIZED VIEW generator_view1 AS SELECT COUNT(*) AS cnt FROM bids;
 
 > CREATE DEFAULT INDEX ON generator_view1;
 

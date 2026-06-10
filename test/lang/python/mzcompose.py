@@ -11,7 +11,8 @@
 Basic test for Postgres-compatible connections from Python programming language.
 """
 
-from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
@@ -19,7 +20,7 @@ SERVICES = [
     Service(
         name="python",
         config={
-            "image": "python:3.9.0-buster",
+            "image": "python:3.14.1-trixie",
             "volumes": [
                 "../../../:/workdir",
             ],

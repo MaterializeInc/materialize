@@ -19,21 +19,23 @@ use std::net::IpAddr;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
-use futures::{sink, SinkExt, TryStreamExt};
+use futures::{SinkExt, TryStreamExt, sink};
+use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
-    input_err, parse_frame_len, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, Pgbuf,
-    MAX_REQUEST_SIZE,
+    ChannelBinding, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, GS2Header,
+    MAX_REQUEST_SIZE, Pgbuf, SASLClientFinalResponse, SASLInitialResponse, input_err,
+    parse_frame_len,
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
 use tokio::time::{self, Duration};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 use tracing::trace;
 
-use crate::message::{BackendMessage, BackendMessageKind};
+use crate::message::{BackendMessage, BackendMessageKind, SASLServerFinalMessageKinds};
 
 /// A connection that manages the encoding and decoding of pgwire frames.
 pub struct FramedConn<A> {
@@ -143,6 +145,15 @@ where
         self.inner.get_mut().codec_mut().encode_state = encode_state;
     }
 
+    /// Enables or disables copy mode on the codec.
+    ///
+    /// When copy mode is enabled, the aggregate buffer size check in the
+    /// decoder is skipped. This is needed during COPY FROM STDIN because
+    /// many small CopyData frames can accumulate in the TCP read buffer.
+    pub fn set_copy_mode(&mut self, enabled: bool) {
+        self.inner.get_mut().codec_mut().in_copy_mode = enabled;
+    }
+
     /// Waits for the connection to be closed.
     ///
     /// Returns a "connection closed" error when the connection is closed. If
@@ -206,6 +217,12 @@ where
 struct Codec {
     decode_state: DecodeState,
     encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
+    /// When true, skip the aggregate buffer size check in `decode()`.
+    /// During COPY FROM STDIN, many small CopyData frames accumulate in the
+    /// TCP read buffer and can exceed MAX_REQUEST_SIZE even though individual
+    /// frames are small. Individual frame lengths are still validated by
+    /// `parse_frame_len()`.
+    in_copy_mode: bool,
 }
 
 impl Codec {
@@ -214,6 +231,7 @@ impl Codec {
         Codec {
             decode_state: DecodeState::Head,
             encode_state: vec![],
+            in_copy_mode: false,
         }
     }
 }
@@ -227,11 +245,34 @@ impl Default for Codec {
 impl Encoder<BackendMessage> for Codec {
     type Error = io::Error;
 
+    /// Encode a backend message into `dst`.
+    /// If this function returns an error result, `dst` is left unmodified.
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // Record the starting position so we can truncate on error.
+        // This prevents partial messages from being left in the buffer,
+        // which could be sent to the client and cause "lost synchronization" errors.
+        let start = dst.len();
+        match self.encode_inner(msg, dst) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                dst.truncate(start);
+                Err(e)
+            }
+        }
+    }
+}
+
+impl Codec {
+    /// This is the meat of the encoding logic. It's a separate function so that errors returned by
+    /// `?` can be handled in the outer `encode` function.
+    fn encode_inner(&self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
         // Write type byte.
         let byte = match &msg {
             BackendMessage::AuthenticationOk => b'R',
-            BackendMessage::AuthenticationCleartextPassword => b'R',
+            BackendMessage::AuthenticationCleartextPassword
+            | BackendMessage::AuthenticationSASL
+            | BackendMessage::AuthenticationSASLContinue(_)
+            | BackendMessage::AuthenticationSASLFinal(_) => b'R',
             BackendMessage::RowDescription(_) => b'T',
             BackendMessage::DataRow(_) => b'D',
             BackendMessage::CommandComplete { .. } => b'C',
@@ -274,6 +315,16 @@ impl Encoder<BackendMessage> for Codec {
                 column_formats,
             } => {
                 dst.put_format_i8(overall_format);
+                if column_formats.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} columns in COPY response, which exceeds {}",
+                            column_formats.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(column_formats.len())?;
                 for format in column_formats {
                     dst.put_format_i16(format);
@@ -289,7 +340,43 @@ impl Encoder<BackendMessage> for Codec {
             BackendMessage::AuthenticationCleartextPassword => {
                 dst.put_u32(3);
             }
+            BackendMessage::AuthenticationSASL => {
+                dst.put_u32(10);
+                dst.put_string("SCRAM-SHA-256");
+                dst.put_u8(b'\0');
+            }
+            BackendMessage::AuthenticationSASLContinue(data) => {
+                dst.put_u32(11);
+                let data = format!(
+                    "r={},s={},i={}",
+                    data.nonce, data.salt, data.iteration_count
+                );
+                dst.put_slice(data.as_bytes());
+            }
+            BackendMessage::AuthenticationSASLFinal(data) => {
+                dst.put_u32(12);
+                let res = match data.kind {
+                    SASLServerFinalMessageKinds::Verifier(verifier) => {
+                        format!("v={}", verifier)
+                    }
+                };
+                dst.put_slice(res.as_bytes());
+                if !data.extensions.is_empty() {
+                    dst.put_slice(b",");
+                    dst.put_slice(data.extensions.join(",").as_bytes());
+                }
+            }
             BackendMessage::RowDescription(fields) => {
+                if fields.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} fields in row description, which exceeds {}",
+                            fields.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(fields.len())?;
                 for f in &fields {
                     dst.put_string(&f.name.to_string());
@@ -303,8 +390,18 @@ impl Encoder<BackendMessage> for Codec {
                 }
             }
             BackendMessage::DataRow(fields) => {
+                if fields.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} fields in data row, which exceeds {}",
+                            fields.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(fields.len())?;
-                for (f, (ty, format)) in fields.iter().zip(&self.encode_state) {
+                for (f, (ty, format)) in fields.iter().zip_eq(&self.encode_state) {
                     if let Some(f) = f {
                         let base = dst.len();
                         dst.put_u32(0);
@@ -312,7 +409,7 @@ impl Encoder<BackendMessage> for Codec {
                         let len = dst.len() - base - 4;
                         let len = i32::try_from(len).map_err(|_| {
                             io::Error::new(
-                                io::ErrorKind::Other,
+                                io::ErrorKind::InvalidData,
                                 "length of encoded data row field does not fit into an i32",
                             )
                         })?;
@@ -346,6 +443,16 @@ impl Encoder<BackendMessage> for Codec {
                 dst.put_u32(secret_key);
             }
             BackendMessage::ParameterDescription(params) => {
+                if params.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} params in parameter description, which exceeds {}",
+                            params.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(params.len())?;
                 for param in params {
                     dst.put_u32(param.oid());
@@ -386,7 +493,7 @@ impl Encoder<BackendMessage> for Codec {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;
@@ -401,7 +508,7 @@ impl Decoder for Codec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<FrontendMessage>, io::Error> {
-        if src.len() > MAX_REQUEST_SIZE {
+        if !self.in_copy_mode && src.len() > MAX_REQUEST_SIZE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
@@ -446,7 +553,7 @@ impl Decoder for Codec {
                         b'X' => decode_terminate(buf)?,
 
                         // Authentication.
-                        b'p' => decode_password(buf)?,
+                        b'p' => decode_auth(buf)?,
 
                         // Copy from flow.
                         b'f' => decode_copy_fail(buf)?,
@@ -475,7 +582,223 @@ fn decode_terminate(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(FrontendMessage::Terminate)
 }
 
-fn decode_password(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn decode_auth(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    let mut value = Vec::new();
+    while let Ok(b) = buf.read_byte() {
+        value.push(b);
+    }
+    Ok(FrontendMessage::RawAuthentication(value))
+}
+
+fn expect(buf: &mut Cursor, expected: &[u8]) -> Result<(), io::Error> {
+    for i in 0..expected.len() {
+        if buf.read_byte()? != expected[i] {
+            return Err(input_err(format!(
+                "Invalid SASL initial response: expected '{}'",
+                std::str::from_utf8(expected).unwrap_or("invalid UTF-8")
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn read_until_comma(buf: &mut Cursor) -> Result<Vec<u8>, io::Error> {
+    let mut v = Vec::new();
+    while let Ok(b) = buf.peek_byte() {
+        if b == b',' {
+            break;
+        }
+        v.push(buf.read_byte()?);
+    }
+    Ok(v)
+}
+
+// All SASL parsing is based on RFC 5802, [section 7](https://datatracker.ietf.org/doc/html/rfc5802#section-7)
+
+//   extensions = attr-val *("," attr-val)
+//                     ;; All extensions are optional,
+//                     ;; i.e., unrecognized attributes
+//                     ;; not defined in this document
+//                     ;; MUST be ignored.
+//   reserved-mext  = "m=" 1*(value-char)
+//                     ;; Reserved for signaling mandatory extensions.
+//                     ;; The exact syntax will be defined in
+//                     ;; the future.
+//   gs2-cbind-flag  = ("p=" cb-name) / "n" / "y"
+//                     ;; "n" -> client doesn't support channel binding.
+//                     ;; "y" -> client does support channel binding
+//                     ;;        but thinks the server does not.
+//                     ;; "p" -> client requires channel binding.
+//                     ;; The selected channel binding follows "p=".
+//
+//   gs2-header      = gs2-cbind-flag "," [ authzid ] ","
+//                     ;; GS2 header for SCRAM
+//                     ;; (the actual GS2 header includes an optional
+//                     ;; flag to indicate that the GSS mechanism is not
+//                     ;; "standard", but since SCRAM is "standard", we
+//                     ;; don't include that flag).
+//   client-first-message-bare =
+//                     [reserved-mext ","]
+//                     username "," nonce ["," extensions]
+//
+//   client-first-message =
+//                     gs2-header client-first-message-bare
+pub fn decode_sasl_client_first_message(mut buf: Cursor) -> Result<SASLInitialResponse, io::Error> {
+    // 1) GS2 cbind flag
+    let cbind_flag = match buf.read_byte()? {
+        b'n' => ChannelBinding::None,
+        b'y' => ChannelBinding::ClientSupported,
+        b'p' => {
+            // must be "p=" then cbname up to next comma
+            expect(&mut buf, b"=")?;
+            let cbname = String::from_utf8(read_until_comma(&mut buf)?)
+                .map_err(|_| input_err("invalid cbname utf8"))?;
+            ChannelBinding::Required(cbname)
+        }
+        other => {
+            return Err(input_err(format!(
+                "Invalid channel binding flag: {}",
+                other
+            )));
+        }
+    };
+    expect(&mut buf, b",")?;
+
+    // 2) Optional authzid: either empty, or "a=" up to next comma
+    let mut authzid = None;
+    if buf.peek_byte()? == b'a' {
+        expect(&mut buf, b"a=")?;
+        let a = String::from_utf8(read_until_comma(&mut buf)?)
+            .map_err(|_| input_err("invalid authzid utf8"))?;
+        authzid = Some(a);
+    }
+    expect(&mut buf, b",")?;
+
+    let mut client_first_message_bare_raw = String::new();
+
+    // 3) Optional reserved "m=" extension before n=
+    let mut reserved_mext = None;
+    if buf.peek_byte()? == b'm' {
+        expect(&mut buf, b"m=")?;
+        let mext_val = String::from_utf8(read_until_comma(&mut buf)?)
+            .map_err(|_| input_err("invalid m ext utf8"))?;
+        client_first_message_bare_raw.push_str(&format!("m={},", mext_val));
+        reserved_mext = Some(mext_val);
+        expect(&mut buf, b",")?;
+    }
+
+    // 4) Username: must be "n=" then saslname
+    expect(&mut buf, b"n=")?;
+    // Postgres doesn't use the username here, so we just consume
+    let username = String::from_utf8(read_until_comma(&mut buf)?)
+        .map_err(|_| input_err("invalid username utf8"))?;
+    expect(&mut buf, b",")?;
+    client_first_message_bare_raw.push_str(&format!("n={},", username));
+
+    // 5) Nonce: must be "r=" then value up to next comma or end
+    expect(&mut buf, b"r=")?;
+    let nonce = String::from_utf8(read_until_comma(&mut buf)?)
+        .map_err(|_| input_err("invalid nonce utf8"))?;
+    client_first_message_bare_raw.push_str(&format!("r={}", nonce));
+
+    // 6) Optional extensions: "," key=value chunks
+    let mut extensions = Vec::new();
+    while let Ok(b',') = buf.peek_byte().map(|b| b) {
+        expect(&mut buf, b",")?;
+        let ext = String::from_utf8(read_until_comma(&mut buf)?)
+            .map_err(|_| input_err("invalid ext utf8"))?;
+        if !ext.is_empty() {
+            client_first_message_bare_raw.push_str(&format!(",{}", ext));
+            extensions.push(ext);
+        }
+    }
+
+    Ok(SASLInitialResponse {
+        gs2_header: GS2Header {
+            cbind_flag,
+            authzid,
+        },
+        nonce,
+        extensions,
+        reserved_mext,
+        client_first_message_bare_raw,
+    })
+}
+
+pub fn decode_sasl_initial_response(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    let mechanism = buf.read_cstr()?;
+    let initial_resp_len = buf.read_i32()?;
+    if initial_resp_len < 0 {
+        // -1 means no response? We bail here
+        return Err(input_err("No initial response"));
+    }
+
+    let initial_response = decode_sasl_client_first_message(buf)?;
+    Ok(FrontendMessage::SASLInitialResponse {
+        gs2_header: initial_response.gs2_header.clone(),
+        mechanism: mechanism.to_owned(),
+        initial_response,
+    })
+}
+
+//   proof           = "p=" base64
+//
+//   channel-binding = "c=" base64
+//                     ;; base64 encoding of cbind-input.
+//   client-final-message-without-proof =
+//                     channel-binding "," nonce [","
+//                     extensions]
+//
+//   client-final-message =
+//                     client-final-message-without-proof "," proof
+pub fn decode_sasl_response(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    // --- client-final-message-without-proof ---
+    let mut client_final_message_bare_raw = String::new();
+    // channel-binding: "c=" <base64>, up to the next comma
+    expect(&mut buf, b"c=")?;
+    let channel_binding = String::from_utf8(read_until_comma(&mut buf)?)
+        .map_err(|_| input_err("invalid channel-binding utf8"))?;
+    expect(&mut buf, b",")?;
+    client_final_message_bare_raw.push_str(&format!("c={},", channel_binding));
+
+    // nonce: "r=" <printable>, up to the next comma
+    expect(&mut buf, b"r=")?;
+    let nonce = String::from_utf8(read_until_comma(&mut buf)?)
+        .map_err(|_| input_err("invalid nonce utf8"))?;
+    client_final_message_bare_raw.push_str(&format!("r={}", nonce));
+
+    // after reading channel-binding and nonce
+    let mut extensions = Vec::new();
+
+    // Keep reading ",<token>" until we see ",p="
+    while buf.peek_byte()? == b',' {
+        expect(&mut buf, b",")?;
+        if buf.peek_byte()? == b'p' {
+            break;
+        }
+        let ext = String::from_utf8(read_until_comma(&mut buf)?)
+            .map_err(|_| input_err("invalid extension utf8"))?;
+        if !ext.is_empty() {
+            client_final_message_bare_raw.push_str(&format!(",{}", ext));
+            extensions.push(ext);
+        }
+    }
+
+    // Proof is mandatory and last
+    expect(&mut buf, b"p=")?;
+    let proof = String::from_utf8(read_until_comma(&mut buf)?)
+        .map_err(|_| input_err("invalid proof utf8"))?;
+
+    Ok(FrontendMessage::SASLResponse(SASLClientFinalResponse {
+        channel_binding,
+        nonce,
+        extensions,
+        proof,
+        client_final_message_bare_raw,
+    }))
+}
+
+pub fn decode_password(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(FrontendMessage::Password {
         password: buf.read_cstr()?.to_owned(),
     })

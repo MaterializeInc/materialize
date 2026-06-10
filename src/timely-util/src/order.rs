@@ -19,13 +19,12 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 
+use columnation::CopyRegion;
 use serde::{Deserialize, Serialize};
-use timely::communication::Data;
-use timely::container::columnation::CopyRegion;
 use timely::order::Product;
-use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::progress::Antichain;
-use timely::PartialOrder;
+use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
+use timely::{ExchangeData, PartialOrder};
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
@@ -47,7 +46,18 @@ use mz_ore::cast::CastFrom;
 /// partitions have gaps between them, the produced antichain has twice as many elements as
 /// partitions. This is because the "dead space" between the selected partitions must have a
 /// representative timestamp in order for that space to be useable in the future.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct Partitioned<P, T>(Product<Interval<P>, T>);
 
 impl<P: Clone + PartialOrd, T> Partitioned<P, T> {
@@ -104,7 +114,7 @@ impl<P: fmt::Display, T: fmt::Display> fmt::Display for Partitioned<P, T> {
 
 impl<P, T: Timestamp> Timestamp for Partitioned<P, T>
 where
-    P: Extrema + Clone + Debug + Data + Hash + Ord,
+    P: Extrema + Clone + Debug + ExchangeData + Hash + Ord,
 {
     type Summary = ();
     fn minimum() -> Self {
@@ -113,7 +123,7 @@ where
 }
 impl<P, T: Timestamp> Refines<()> for Partitioned<P, T>
 where
-    P: Extrema + Clone + Debug + Data + Hash + Ord,
+    P: Extrema + Clone + Debug + ExchangeData + Hash + Ord,
 {
     fn to_inner(_other: ()) -> Self {
         Self::minimum()
@@ -205,7 +215,18 @@ impl Step for Uuid {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 /// A type representing an inclusive interval of type `P`, ordered under the subset relation.
 pub struct Interval<P> {
     pub lower: P,
@@ -272,7 +293,7 @@ impl<P: Clone> PathSummary<Interval<P>> for () {
 
 impl<P> Timestamp for Interval<P>
 where
-    P: Extrema + Clone + Debug + Data + Hash + Ord,
+    P: Extrema + Clone + Debug + ExchangeData + Hash + Ord,
 {
     type Summary = ();
 

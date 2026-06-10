@@ -12,7 +12,6 @@ from typing import Generic, TypeVar
 from materialize.output_consistency.data_value.source_column_identifier import (
     SourceColumnIdentifier,
 )
-from materialize.output_consistency.query.data_source import DataSource
 
 T = TypeVar("T")
 
@@ -52,17 +51,6 @@ class TableColumnByNameSelection(SelectionByKey[SourceColumnIdentifier]):
         :param column_identifiers: identifiers of selected columns; all columns if not specified
         """
         super().__init__(column_identifiers)
-
-    def requires_data_source(self, data_source: DataSource) -> bool:
-        if self.includes_all():
-            return True
-
-        assert self.keys is not None
-        for column_identifier in self.keys:
-            if data_source.alias() == column_identifier.data_source_alias:
-                return True
-
-        return False
 
 
 ALL_QUERY_COLUMNS_BY_INDEX_SELECTION = QueryColumnByIndexSelection()

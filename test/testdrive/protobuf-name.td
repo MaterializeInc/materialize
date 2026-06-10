@@ -31,12 +31,14 @@ $ kafka-ingest topic=name format=protobuf descriptor-file=name.pb message=some.w
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 # Ingesting with the fully-qualified absolute path should work.
+> BEGIN
 > CREATE SOURCE qualified_absolute_path
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-name-${testdrive.seed}')
 
 > CREATE TABLE qualified_absolute_path_tbl FROM SOURCE qualified_absolute_path (REFERENCE "testdrive-name-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.some.where.Name' USING SCHEMA '${name-schema}'
+> COMMIT
 
 > SELECT i FROM qualified_absolute_path_tbl
 i
@@ -44,12 +46,14 @@ i
 42
 
 # Ingesting with the absolute path should work without the leading dot.
+> BEGIN
 > CREATE SOURCE absolute_path
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-name-${testdrive.seed}')
 
 > CREATE TABLE absolute_path_tbl FROM SOURCE absolute_path (REFERENCE "testdrive-name-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE 'some.where.Name' USING SCHEMA '${name-schema}'
+> COMMIT
 
 > SELECT i FROM absolute_path_tbl
 i

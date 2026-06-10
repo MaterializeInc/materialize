@@ -12,9 +12,10 @@
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
+use mz_orchestratord::controller::materialize::generation::DeploymentStatus;
 use mz_ore::channel::trigger::{self, Trigger};
-use serde::{Deserialize, Serialize};
 
+#[derive(Debug)]
 enum DeploymentStateInner {
     Initializing,
     CatchingUp { _skip_trigger: Option<Trigger> },
@@ -128,7 +129,7 @@ impl DeploymentState {
 /// `environmentd` (e.g., the HTTP server). It provides methods to inspect the
 /// current leadership state, and to promote the deployment to the leader if it
 /// is ready to do so.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DeploymentStateHandle {
     inner: Arc<Mutex<DeploymentStateInner>>,
 }
@@ -191,21 +192,4 @@ impl DeploymentStateHandle {
             DeploymentStateInner::IsLeader => Ok(()),
         }
     }
-}
-
-/// Describes the status of a deployment.
-///
-/// This is a simplified representation of `DeploymentState`, suitable for
-/// announcement to the external orchestrator.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DeploymentStatus {
-    /// This deployment is not the leader. It is initializing and is not yet
-    /// ready to become the leader.
-    Initializing,
-    /// This deployment is not the leader, but it is ready to become the leader.
-    ReadyToPromote,
-    /// This deployment is in the process of becoming the leader.
-    Promoting,
-    /// This deployment is the leader.
-    IsLeader,
 }

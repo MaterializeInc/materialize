@@ -88,6 +88,10 @@ rules:
   resources:
   - materializes
   - materializes/status
+  - balancers
+  - balancers/status
+  - consoles
+  - consoles/status
   - vpcendpoints
   verbs:
   - create
@@ -109,5 +113,16 @@ rules:
   verbs:
   - get
   - list
+- apiGroups: ["cert-manager.io"]
+  resources:
+  - certificates
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
 
 {{- end }}

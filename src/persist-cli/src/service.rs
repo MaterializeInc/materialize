@@ -19,15 +19,15 @@ use futures::StreamExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{SeqNo, VersionedData};
+use mz_persist_client::ShardId;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::rpc::{
     GrpcPubSubClient, PersistGrpcPubSubServer, PersistPubSubClient, PersistPubSubClientConfig,
 };
-use mz_persist_client::ShardId;
 use tracing::info;
 
-#[derive(clap::ArgEnum, Copy, Clone, Debug)]
+#[derive(clap::ValueEnum, Copy, Clone, Debug)]
 pub enum Role {
     Server,
     Writer,
@@ -39,7 +39,7 @@ pub struct Args {
     #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6878")]
     listen_addr: SocketAddr,
 
-    #[clap(long, arg_enum)]
+    #[clap(long, value_enum)]
     role: Role,
 
     connect_addrs: Vec<String>,

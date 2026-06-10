@@ -13,7 +13,9 @@ use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, Unmaterial
 use mz_persist_types::stats::{
     BytesStats, ColumnStatKinds, JsonStats, PartStats, PartStatsMetrics,
 };
-use mz_repr::{ColumnType, Datum, RelationDesc, RowArena, ScalarType};
+use mz_repr::{
+    ColumnIndex, Datum, RelationDesc, ReprRelationType, RowArena, SqlColumnType, SqlScalarType,
+};
 
 /// Bundles together a relation desc with the stats for a specific part, and translates between
 /// Persist's stats representation and the `ResultSpec`s that are used for eg. filter pushdown.
@@ -44,7 +46,8 @@ impl<'a> RelationPartStats<'a> {
 impl RelationPartStats<'_> {
     pub fn may_match_mfp<'a>(&'a self, time_range: ResultSpec<'a>, mfp: &MapFilterProject) -> bool {
         let arena = RowArena::new();
-        let mut ranges = ColumnSpecs::new(self.desc.typ(), &arena);
+        let relation = ReprRelationType::from(self.desc.typ());
+        let mut ranges = ColumnSpecs::new(&relation, &arena);
         ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
         if self.err_count().into_iter().any(|count| count > 0) {
@@ -52,9 +55,9 @@ impl RelationPartStats<'_> {
             return true;
         }
 
-        for (id, _) in self.desc.typ().column_types.iter().enumerate() {
-            let result_spec = self.col_stats(id, &arena);
-            ranges.push_column(id, result_spec);
+        for (pos, (idx, _name, _typ)) in self.desc.iter_all().enumerate() {
+            let result_spec = self.col_stats(idx, &arena);
+            ranges.push_column(pos, result_spec);
         }
         let result = ranges.mfp_filter(mfp).range;
         result.may_contain(Datum::True) || result.may_fail()
@@ -71,7 +74,7 @@ impl RelationPartStats<'_> {
                 Datum::String(strings.upper.as_str()),
             ),
             JsonStats::Numerics(numerics) => {
-                match mz_repr::stats2::decode_numeric(numerics, arena) {
+                match mz_repr::stats::decode_numeric(numerics, arena) {
                     Ok((lower, upper)) => ResultSpec::value_between(lower, upper),
                     Err(err) => {
                         tracing::error!(%err, "failed to decode Json Numeric stats!");
@@ -100,21 +103,23 @@ impl RelationPartStats<'_> {
         }
     }
 
-    pub fn col_stats<'a>(&'a self, id: usize, arena: &'a RowArena) -> ResultSpec<'a> {
-        let value_range = match self.col_values(id, arena) {
+    pub fn col_stats<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> ResultSpec<'a> {
+        let value_range = match self.col_values(idx, arena) {
             Some(spec) => spec,
             None => ResultSpec::anything(),
         };
-        let json_range = self.col_json(id, arena).unwrap_or(ResultSpec::anything());
+        let json_range = self
+            .col_json(idx, arena)
+            .unwrap_or_else(ResultSpec::anything);
 
         // If this is not a JSON column or we don't have JSON stats, json_range is
         // [ResultSpec::anything] and this is a noop.
         value_range.intersect(json_range)
     }
 
-    fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
+    fn col_json<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
+        let name = self.desc.get_name_idx(idx);
+        let typ = &self.desc.get_type(idx);
 
         let ok_stats = self.stats.key.col("ok")?;
         let ok_stats = ok_stats
@@ -122,8 +127,8 @@ impl RelationPartStats<'_> {
             .expect("ok column should be nullable struct");
         let col_stats = ok_stats.some.cols.get(name.as_str())?;
 
-        if let ColumnType {
-            scalar_type: ScalarType::Jsonb,
+        if let SqlColumnType {
+            scalar_type: SqlScalarType::Jsonb,
             nullable,
         } = typ
         {
@@ -149,7 +154,10 @@ impl RelationPartStats<'_> {
                 (true, Some(_)) => ResultSpec::null(),
                 (col_null, stats_null) => {
                     self.metrics.mismatched_count.inc();
-                    tracing::error!("JSON column nullability mismatch, col {} null: {col_null}, stats: {stats_null:?}", self.name);
+                    tracing::error!(
+                        "JSON column nullability mismatch, col {} null: {col_null}, stats: {stats_null:?}",
+                        self.name
+                    );
                     return None;
                 }
             };
@@ -185,9 +193,9 @@ impl RelationPartStats<'_> {
         num_oks.map(|num_oks| num_results - num_oks)
     }
 
-    fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
+    fn col_values<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
+        let name = self.desc.get_name_idx(idx);
+        let typ = self.desc.get_type(idx);
 
         let ok_stats = self.stats.key.cols.get("ok")?;
         let ColumnStatKinds::Struct(ok_stats) = &ok_stats.values else {
@@ -195,13 +203,13 @@ impl RelationPartStats<'_> {
         };
         let col_stats = ok_stats.cols.get(name.as_str())?;
 
-        let (min, max) = mz_repr::stats2::col_values(&typ.scalar_type, &col_stats.values, arena);
+        let min_max = mz_repr::stats::col_values(&typ.scalar_type, &col_stats.values, arena);
         let null_count = col_stats.nulls.as_ref().map_or(0, |nulls| nulls.count);
         let total_count = self.len();
 
-        let values = match (total_count, min, max) {
-            (Some(total_count), _, _) if total_count == null_count => ResultSpec::nothing(),
-            (_, Some(min), Some(max)) => ResultSpec::value_between(min, max),
+        let values = match (total_count, min_max) {
+            (Some(total_count), _) if total_count == null_count => ResultSpec::nothing(),
+            (_, Some((min, max))) => ResultSpec::value_between(min, max),
             _ => ResultSpec::value_all(),
         };
         let nulls = if null_count > 0 {
@@ -219,23 +227,23 @@ mod tests {
     use arrow::array::AsArray;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{ColumnDecoder, Schema2};
-    use mz_persist_types::part::PartBuilder2;
+    use mz_persist_types::columnar::{ColumnDecoder, Schema};
+    use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::PartStats;
-    use mz_repr::{arb_datum_for_column, RelationType};
-    use mz_repr::{ColumnType, Datum, RelationDesc, Row, RowArena, ScalarType};
+    use mz_repr::{Datum, RelationDesc, Row, RowArena, SqlColumnType, SqlScalarType};
+    use mz_repr::{SqlRelationType, arb_datum_for_column};
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
     use super::*;
     use crate::sources::SourceData;
 
-    fn validate_stats(column_type: &ColumnType, datums: &[Datum<'_>]) -> Result<(), String> {
+    fn validate_stats(column_type: &SqlColumnType, datums: &[Datum<'_>]) -> Result<(), String> {
         let schema = RelationDesc::builder()
             .with_column("col", column_type.clone())
             .finish();
 
-        let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
         let mut row = SourceData(Ok(Row::default()));
         for datum in datums {
             row.as_mut().unwrap().packer().push(datum);
@@ -244,7 +252,7 @@ mod tests {
         let part = builder.finish();
 
         let key_col = part.key.as_struct();
-        let decoder = <RelationDesc as Schema2<SourceData>>::decoder(&schema, key_col.clone())
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(&schema, key_col.clone())
             .expect("success");
         let key_stats = decoder.stats();
 
@@ -259,14 +267,14 @@ mod tests {
 
         // Validate that the stats would include all of the provided datums.
         for datum in datums {
-            let spec = stats.col_stats(0, &arena);
+            let spec = stats.col_stats(&ColumnIndex::from_raw(0), &arena);
             assert!(spec.may_contain(*datum));
         }
 
         Ok(())
     }
 
-    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
+    fn scalar_type_stats_roundtrip(scalar_type: SqlScalarType) {
         // Non-nullable version of the column.
         let column_type = scalar_type.clone().nullable(false);
         for datum in scalar_type.interesting_datums() {
@@ -284,7 +292,7 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_scalar_types_stats_roundtrip() {
-        proptest!(|(scalar_type in any::<ScalarType>())| {
+        proptest!(|(scalar_type in any::<SqlScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_stats_roundtrip(scalar_type)
         });
@@ -293,9 +301,9 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_datums_produce_valid_stats() {
-        // A strategy that will return a Vec of Datums for an arbitrary ColumnType.
-        let datums = any::<ColumnType>().prop_flat_map(|ty| {
-            prop::collection::vec(arb_datum_for_column(&ty), 0..128)
+        // A strategy that will return a Vec of Datums for an arbitrary SqlColumnType.
+        let datums = any::<SqlColumnType>().prop_flat_map(|ty| {
+            prop::collection::vec(arb_datum_for_column(ty.clone()), 0..128)
                 .prop_map(move |datums| (ty.clone(), datums))
         });
 
@@ -310,7 +318,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
+    #[ignore] // TODO(parkmycar): Re-enable this test with a smaller sample size.
     fn statistics_stability() {
         /// This is the seed [`proptest`] uses for their deterministic RNG. We
         /// copy it here to prevent breaking this test if [`proptest`] changes.
@@ -339,16 +347,17 @@ mod tests {
 
         // Note: We don't use the `Arbitrary` impl for `RelationDesc` because
         // it generates large column names which is not interesting to us.
-        let strat = proptest::collection::vec(any::<ColumnType>(), 1..max_cols)
+        let strat = proptest::collection::vec(any::<SqlColumnType>(), 1..max_cols)
             .prop_map(|cols| {
                 let col_names = (0..cols.len()).map(|i| i.to_string());
-                RelationDesc::new(RelationType::new(cols), col_names)
+                RelationDesc::new(SqlRelationType::new(cols), col_names)
             })
             .prop_flat_map(|desc| {
                 let rows = desc
                     .typ()
                     .columns()
                     .iter()
+                    .cloned()
                     .map(arb_datum_for_column)
                     .collect::<Vec<_>>()
                     .prop_map(|datums| Row::pack(datums.iter().map(Datum::from)));
@@ -361,14 +370,14 @@ mod tests {
             let value_tree = strat.new_tree(&mut runner).unwrap();
             let (desc, rows) = value_tree.current();
 
-            let mut builder = PartBuilder2::new(&desc, &UnitSchema);
+            let mut builder = PartBuilder::new(&desc, &UnitSchema);
             for row in &rows {
                 builder.push(&SourceData(Ok(row.clone())), &(), 1u64, 1i64);
             }
             let part = builder.finish();
 
             let key_col = part.key.as_struct();
-            let decoder = <RelationDesc as Schema2<SourceData>>::decoder(&desc, key_col.clone())
+            let decoder = <RelationDesc as Schema<SourceData>>::decoder(&desc, key_col.clone())
                 .expect("success");
             let key_stats = decoder.stats();
 

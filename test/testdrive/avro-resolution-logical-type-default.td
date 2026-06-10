@@ -31,6 +31,7 @@ $ kafka-ingest format=avro topic=resolution schema=${reader} timestamp=2
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE resolution
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-${testdrive.seed}')
@@ -38,6 +39,7 @@ $ kafka-ingest format=avro topic=resolution schema=${reader} timestamp=2
 > CREATE TABLE resolution_tbl FROM SOURCE resolution (REFERENCE "testdrive-resolution-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 > SELECT f1 FROM resolution_tbl
 "1970-01-01 00:00:00"

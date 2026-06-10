@@ -8,9 +8,9 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
-$ kafka-create-topic topic=topic
+$ kafka-create-topic topic=topic partitions=1
 
 $ kafka-ingest format=bytes topic=topic
 one

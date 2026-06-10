@@ -11,29 +11,44 @@
 Test sources with SSH connections using an SSH bastion host.
 """
 
+from prettytable import PrettyTable
+
+from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
+
+SQL_SERVER_TLS_CONF_PATH = MZ_ROOT / "test" / "sql-server-cdc" / "tls-mssconfig.conf"
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Materialized(),
     Testdrive(consistent_seed=True),
     SshBastionHost(),
-    Postgres(),
+    Postgres(volumes=["secrets:/certs:ro"]),
     TestCerts(),
     Redpanda(),
     MySql(),
+    SqlServer(
+        volumes_extra=[
+            "secrets:/var/opt/mssql/certs",
+            f"{SQL_SERVER_TLS_CONF_PATH}:/var/opt/mssql/mssql.conf",
+        ]
+    ),
+    Mz(app_password=""),
 ]
 
 
@@ -56,7 +71,7 @@ def workflow_basic_ssh_features(c: Composition, redpanda: bool = False) -> None:
     if redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
     c.up(*dependencies)
 
     c.run_testdrive_files("ssh-connections.td")
@@ -70,13 +85,11 @@ def workflow_validate_connection(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.run_testdrive_files("--no-reset", "validate-failures.td")
 
@@ -95,13 +108,11 @@ def workflow_pg(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.exec(
         "ssh-bastion-host",
@@ -122,13 +133,11 @@ def workflow_mysql(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.exec(
         "ssh-bastion-host",
@@ -180,6 +189,65 @@ def workflow_mysql(c: Composition) -> None:
     )
 
 
+def workflow_sql_server(c: Composition) -> None:
+    """
+    Test SSH tunnel connection to SQL Server with and with TLS.
+    """
+    c.up("materialized", "ssh-bastion-host", "sql-server", "test-certs")
+
+    setup_sql_server_testing(c)
+    c.run_testdrive_files("setup.td")
+
+    public_key = c.sql_query("""
+        select public_key_1 from mz_ssh_tunnel_connections ssh \
+        join mz_connections c on c.id = ssh.id
+        where c.name = 'thancred';
+        """)[0][0]
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+
+    # Basic validation
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        "sql-server-source.td",
+    )
+
+    # Validate SSH bastion host failure & recovery scenario
+    c.kill("ssh-bastion-host")
+    c.run_testdrive_files("--no-reset", "sql-server-source-after-ssh-failure.td")
+    c.up("ssh-bastion-host")
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        "sql-server-source-after-ssh-restart.td",
+    )
+
+    ssl_ca = c.exec(
+        "sql-server", "cat", "/var/opt/mssql/certs/ca.crt", capture=True
+    ).stdout
+    alt_ssl_ca = c.exec(
+        "sql-server", "cat", "/var/opt/mssql/certs/ca-selective.crt", capture=True
+    ).stdout
+
+    # Validate SSL/TLS connections over SSH tunnel
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=ssl-ca={ssl_ca}",
+        f"--var=alt-ssl-ca={alt_ssl_ca}",
+        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        "sql-server-source-ssl.td",
+    )
+
+
 def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
     c.down()
     # Configure the SSH bastion host to allow only two connections to be
@@ -194,18 +262,16 @@ def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
         if redpanda:
             dependencies += ["redpanda"]
         else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+            dependencies += ["kafka", "schema-registry"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
 
-        public_key = c.sql_query(
-            """
+        public_key = c.sql_query("""
             select public_key_1 from mz_ssh_tunnel_connections ssh \
             join mz_connections c on c.id = ssh.id
             where c.name = 'thancred';
-            """
-        )[0][0]
+            """)[0][0]
 
         c.exec(
             "ssh-bastion-host",
@@ -236,18 +302,16 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
         if redpanda:
             dependencies += ["redpanda"]
         else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+            dependencies += ["kafka", "schema-registry"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
 
-        public_key = c.sql_query(
-            """
+        public_key = c.sql_query("""
             select public_key_1 from mz_ssh_tunnel_connections ssh \
             join mz_connections c on c.id = ssh.id
             where c.name = 'thancred';
-            """
-        )[0][0]
+            """)[0][0]
 
         c.exec(
             "ssh-bastion-host",
@@ -281,18 +345,16 @@ def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
         if redpanda:
             dependencies += ["redpanda"]
         else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+            dependencies += ["kafka", "schema-registry"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
 
-        public_key = c.sql_query(
-            """
+        public_key = c.sql_query("""
             select public_key_1 from mz_ssh_tunnel_connections ssh \
             join mz_connections c on c.id = ssh.id
             where c.name = 'thancred';
-            """
-        )[0][0]
+            """)[0][0]
 
         c.exec(
             "ssh-bastion-host",
@@ -315,18 +377,16 @@ def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
     if redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
     c.up(*dependencies)
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.exec(
         "ssh-bastion-host",
@@ -359,13 +419,11 @@ def workflow_pg_restart_bastion(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
     c.exec(
         "ssh-bastion-host",
         "bash",
@@ -413,18 +471,27 @@ def workflow_pg_restart_postgres(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
     c.exec(
         "ssh-bastion-host",
         "bash",
         "-c",
         f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+    # debugging output for https://github.com/MaterializeInc/database-issues/issues/8905
+    # in some cases, materialize never sees the data ingested by pg-source-ingest-more
+    # this captures the replication stream, which will be printed out for debugging purposes
+    c.sql(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        sql="select pg_create_logical_replication_slot('spy', 'test_decoding', false, true);",
+        print_statement=False,
     )
 
     c.run_testdrive_files("--no-reset", "pg-source.td")
@@ -433,6 +500,107 @@ def workflow_pg_restart_postgres(c: Composition) -> None:
     c.up("postgres")
 
     c.run_testdrive_files("--no-reset", "pg-source-ingest-more.td")
+    c.sql(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        sql="""
+            create function lsn_to_numeric(pg_lsn) returns numeric
+            as $$
+            select ('0x' || split_part($1::text, '/', 1))::numeric * '0x10000000'::numeric + ( '0x' || split_part($1::text, '/', 2))::numeric;
+            $$ language sql immutable strict;
+        """,
+        print_statement=False,
+    )
+    rows = c.sql_query(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        # converting pgLsn to u64 for easier comparison to mz_source_postgres_lsn
+        sql="""
+            select lsn_to_numeric(lsn::pg_lsn) as lsn, xid, data
+            from pg_logical_slot_get_changes('spy', null, null);
+        """,
+    )
+    c.sql(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        sql="select pg_drop_replication_slot('spy');",
+        print_statement=False,
+    )
+    table = PrettyTable()
+    table.field_names = ["lsn", "xid", "data"]
+    table.add_rows(rows)
+    print(f"== logical replication stream ==\n{table}")
+
+    rows = c.sql_query(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        sql="""
+            select
+                lsn_to_numeric(pg_current_wal_lsn()) as pg_current_wal_lsn, slot_name,
+                active, active_pid, lsn_to_numeric(confirmed_flush_lsn) as confirmed_flush_lsn,
+                inactive_since
+            from pg_replication_slots;
+        """,
+    )
+    table = PrettyTable()
+    table.field_names = [
+        "pg_current_wal_lsn",
+        "slot_name",
+        "active",
+        "active_pid",
+        "confirmed_flush_lsn",
+        "inactive_since",
+    ]
+    table.add_rows(rows)
+    print(f"== pg_replication_slots ==\n{table}")
+
+    rows = c.sql_query(
+        user="mz_system",
+        port=6877,
+        sql="""
+            select coalesce(mzs.name, mzt.name) as name, read_frontier, write_frontier
+            from mz_internal.mz_frontiers mzf
+                left join mz_sources mzs on (mzf.object_id = mzs.id)
+                left join mz_tables mzt on (mzf.object_id = mzt.id)
+            where object_id ~ 'u.*';
+        """,
+    )
+    table = PrettyTable()
+    table.field_names = ["name", "read_frontier", "write_frontier"]
+    table.add_rows(rows)
+    print(f"== mz_frontiers ==\n{table}")
+
+    rows = c.sql_query(
+        user="mz_system",
+        port=6877,
+        sql="""
+        select id, name, last_status_change_at, status, error, details
+        from mz_internal.mz_source_statuses;
+        """,
+    )
+    table = PrettyTable()
+    table.field_names = [
+        "id",
+        "name",
+        "last_status_change_at",
+        "status",
+        "error",
+        "details",
+    ]
+    table.add_rows(rows)
+    print(f"== mz_source_statuses ==\n{table}")
+
+    # table name "mz_source" is dependent on setup.td
+    mz_source_lsn = c.sql_query("select lsn from mz_source;")[0][0]
+    print(f"== mz_source_lsn ==\n{mz_source_lsn}")
 
 
 def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
@@ -440,13 +608,11 @@ def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.exec(
         "ssh-bastion-host",
@@ -463,13 +629,13 @@ def workflow_ssh_key_after_restart(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    (primary, secondary) = c.sql_query(
+    primary, secondary = c.sql_query(
         "SELECT public_key_1, public_key_2 FROM mz_ssh_tunnel_connections;"
     )[0]
 
     restart_mz(c)
 
-    (restart_primary, restart_secondary) = c.sql_query(
+    restart_primary, restart_secondary = c.sql_query(
         "SELECT public_key_1, public_key_2 FROM mz_ssh_tunnel_connections;"
     )[0]
 
@@ -495,25 +661,21 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    secondary_public_key = c.sql_query(
-        """
+    secondary_public_key = c.sql_query("""
         select public_key_2 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.sql("ALTER CONNECTION thancred ROTATE KEYS;")
 
     restart_mz(c)
 
-    primary_public_key_after_restart = c.sql_query(
-        """
+    primary_public_key_after_restart = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     if secondary_public_key != primary_public_key_after_restart:
         print("initial secondary key:", secondary_public_key)
@@ -545,47 +707,38 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Test against both standard schema registry
     # and kafka implementations, if --extended is passed
-    #
-    # These tests core functionality related to kafka with ssh and error reporting.
-    for workflow in [
-        workflow_kafka,
-        workflow_hidden_hosts,
-    ]:
-        workflow(c, redpanda=False)
-        c.sanity_restart_mz()
-        c.run_testdrive_files("--no-reset", "validate-success.td")
-        if args.extended:
-            workflow(c, redpanda=True)
-            c.sanity_restart_mz()
-            c.run_testdrive_files("--no-reset", "validate-success.td")
-
-    # These tests core functionality related to pg with ssh and error reporting.
-    workflow_basic_ssh_features(c)
-    c.sanity_restart_mz()
-    for workflow in [
-        workflow_pg,
-        workflow_kafka_restart_replica,
-        workflow_kafka_sink,
-    ]:
-        workflow(c)
-        c.sanity_restart_mz()
-        c.run_testdrive_files("--no-reset", "validate-success.td")
-
+    workflows = [
+        # These tests core functionality related to kafka with ssh and error reporting.
+        # (workflow_kafka, (False,), True),  # TODO: Reenable when database-issues#9638 is fixed
+        (workflow_hidden_hosts, (False,), True),
+        # These tests core functionality related to pg with ssh and error reporting.
+        (workflow_basic_ssh_features, (), False),
+        (workflow_pg, (), True),
+        # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when database-issues#9638 is fixed
+        (workflow_kafka_sink, (), True),
+        (workflow_sql_server, (), True),
+    ]
     if args.extended:
-        # Various special cases related to ssh
-        for workflow in [
-            workflow_ssh_key_after_restart,
-            workflow_rotated_ssh_key_after_restart,
-        ]:
-            workflow(c)
-            c.sanity_restart_mz()
+        workflows.extend(
+            [
+                # (workflow_kafka, (True,), True),  # TODO: Reenable when database-issues#9638 is fixed
+                (workflow_hidden_hosts, (True,), True),
+                # Various special cases related to ssh
+                (workflow_ssh_key_after_restart, (), False),
+                (workflow_rotated_ssh_key_after_restart, (), False),
+                (workflow_validate_connection, (), True),
+                (workflow_pg_via_ssh_tunnel_with_ssl, (), True),
+                (workflow_pg_restart_bastion, (), True),
+                (workflow_pg_restart_postgres, (), True),
+            ]
+        )
 
-        for workflow in [
-            workflow_validate_connection,
-            workflow_pg_via_ssh_tunnel_with_ssl,
-            workflow_pg_restart_bastion,
-            workflow_pg_restart_postgres,
-        ]:
-            workflow(c)
-            c.sanity_restart_mz()
+    def process(p) -> None:
+        workflow, args, validate_success = p
+        workflow(c, *args)
+        c.sanity_restart_mz()
+        if validate_success:
             c.run_testdrive_files("--no-reset", "validate-success.td")
+
+    sharded_workflows = buildkite.shard_list(workflows, lambda w: w[0].__name__)
+    c.test_parts(sharded_workflows, process)

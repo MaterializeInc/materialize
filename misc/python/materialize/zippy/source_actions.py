@@ -95,8 +95,7 @@ class CreateSource(Action):
         envelope = str(self.source.topic.envelope).split(".")[1]
         kafka_connection_name = f"{self.source.name}_kafka_conn"
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 > CREATE CONNECTION IF NOT EXISTS {self.source.name}_csr_conn
                   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
@@ -111,8 +110,7 @@ class CreateSource(Action):
                 > CREATE TABLE {self.source.get_name_for_query()} FROM SOURCE {self.source.name} (REFERENCE "testdrive-{self.source.topic.name}-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn
                   ENVELOPE {envelope}
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -140,12 +138,10 @@ class AlterSourceConnection(Action):
         kafka_connection_name = f"{self.source.name}_kafka_conn"
 
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 > ALTER CONNECTION {kafka_connection_name} SET (BROKER '${{testdrive.kafka-addr}}'
                   {'USING SSH TUNNEL zippy_ssh' if new_use_ssh_status else ''});
-                """
-            ),
+                """),
             mz_service=mz_service,
         )
 

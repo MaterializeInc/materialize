@@ -18,9 +18,9 @@
 
 use mz_ore::collections::CollectionExt;
 use proc_macro2::LineColumn;
+use syn::Error;
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::spanned::Spanned;
-use syn::Error;
 
 use super::TestCatalog;
 
@@ -71,7 +71,9 @@ mod relation {
     use std::collections::BTreeMap;
 
     use mz_expr::{AccessStrategy, Id, JoinImplementation, LocalId, MirRelationExpr};
-    use mz_repr::{Diff, RelationType, Row, ScalarType};
+    use mz_repr::{Diff, ReprRelationType, Row, SqlScalarType};
+
+    use crate::parser::analyses::Analyses;
 
     use super::*;
 
@@ -84,7 +86,9 @@ mod relation {
         } else if lookahead.peek(kw::Get) {
             parse_get(ctx, input)
         } else if lookahead.peek(kw::Return) {
-            parse_let(ctx, input)
+            parse_let_or_letrec_old(ctx, input)
+        } else if lookahead.peek(kw::With) {
+            parse_let_or_letrec(ctx, input)
         } else if lookahead.peek(kw::Project) {
             parse_project(ctx, input)
         } else if lookahead.peek(kw::Map) {
@@ -119,19 +123,21 @@ mod relation {
     fn parse_constant(ctx: CtxRef, input: ParseStream) -> Result {
         let constant = input.parse::<kw::Constant>()?;
 
-        let parse_typ = |input: ParseStream| -> syn::Result<RelationType> {
-            let attrs = attributes::parse_attributes(input)?;
-            let Some(column_types) = attrs.types else {
-                let msg = "Missing expected `types` attribute for Constant line";
+        let parse_typ = |input: ParseStream| -> syn::Result<ReprRelationType> {
+            let analyses = analyses::parse_analyses(input)?;
+            let Some(column_types) = analyses.types else {
+                let msg = "Missing expected `types` analyses for Constant line";
                 Err(Error::new(input.span(), msg))?
             };
-            let keys = attrs.keys.unwrap_or_default();
-            Ok(RelationType { column_types, keys })
+            let keys = analyses.keys.unwrap_or_default();
+            Ok(ReprRelationType::new(column_types).with_keys(keys))
         };
-
         if input.eat3(syn::Token![<], kw::empty, syn::Token![>]) {
             let typ = parse_typ(input)?;
-            Ok(MirRelationExpr::constant(vec![], typ))
+            Ok(MirRelationExpr::Constant {
+                rows: Ok(vec![]),
+                typ,
+            })
         } else {
             let typ = parse_typ(input)?;
             let parse_children = ParseChildren::new(input, constant.span().start());
@@ -159,7 +165,7 @@ mod relation {
             }?;
         } else {
             row = inner1.parse::<Parsed<Row>>()?.into();
-            diff = 1;
+            diff = Diff::ONE;
         }
 
         Ok((row, diff))
@@ -172,50 +178,95 @@ mod relation {
         match ctx.catalog.get(&ident.to_string()) {
             Some((id, _cols, typ)) => Ok(MirRelationExpr::Get {
                 id: Id::Global(*id),
-                typ: typ.clone(),
+                typ: ReprRelationType::from(typ),
                 access_strategy: AccessStrategy::UnknownOrLocal,
             }),
             None => Ok(MirRelationExpr::Get {
                 id: Id::Local(parse_local_id(ident)?),
-                typ: RelationType::empty(),
+                typ: ReprRelationType::empty(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
             }),
         }
     }
 
-    fn parse_let(ctx: CtxRef, input: ParseStream) -> Result {
+    /// Parses a Let or a LetRec with the old order: Return first, and then CTEs in descending order.
+    fn parse_let_or_letrec_old(ctx: CtxRef, input: ParseStream) -> Result {
         let return_ = input.parse::<kw::Return>()?;
         let parse_body = ParseChildren::new(input, return_.span().start());
-        let mut body = parse_body.parse_one(ctx, parse_expr)?;
+        let body = parse_body.parse_one(ctx, parse_expr)?;
 
         let with = input.parse::<kw::With>()?;
         let recursive = input.eat2(kw::Mutually, kw::Recursive);
         let parse_ctes = ParseChildren::new(input, with.span().start());
+        let mut ctes = parse_ctes.parse_many(ctx, parse_cte)?;
+
+        if ctes.is_empty() {
+            let msg = "At least one Let/LetRec cte binding expected";
+            Err(Error::new(input.span(), msg))?
+        }
+
+        ctes.reverse();
+        let cte_ids = ctes.iter().map(|(id, _, _)| id);
+        if !cte_ids.clone().is_sorted() {
+            let msg = format!(
+                "Error parsing Let/LetRec: seen Return before With, but cte ids are not ordered descending: {:?}",
+                cte_ids.collect::<Vec<_>>()
+            );
+            Err(Error::new(input.span(), msg))?
+        }
+        build_let_or_let_rec(ctes, body, recursive, with)
+    }
+
+    /// Parses a Let or a LetRec with the new order: CTEs first in ascending order, and then Return.
+    fn parse_let_or_letrec(ctx: CtxRef, input: ParseStream) -> Result {
+        let with = input.parse::<kw::With>()?;
+        let recursive = input.eat2(kw::Mutually, kw::Recursive);
+        let parse_ctes = ParseChildren::new(input, with.span().start());
         let ctes = parse_ctes.parse_many(ctx, parse_cte)?;
+
+        let return_ = input.parse::<kw::Return>()?;
+        let parse_body = ParseChildren::new(input, return_.span().start());
+        let body = parse_body.parse_one(ctx, parse_expr)?;
 
         if ctes.is_empty() {
             let msg = "At least one `let cte` binding expected";
             Err(Error::new(input.span(), msg))?
         }
 
+        let cte_ids = ctes.iter().map(|(id, _, _)| id);
+        if !cte_ids.clone().is_sorted() {
+            let msg = format!(
+                "Error parsing Let/LetRec: seen With before Return, but cte ids are not ordered ascending: {:?}",
+                cte_ids.collect::<Vec<_>>()
+            );
+            Err(Error::new(input.span(), msg))?
+        }
+        build_let_or_let_rec(ctes, body, recursive, with)
+    }
+
+    fn build_let_or_let_rec(
+        ctes: Vec<(LocalId, Analyses, MirRelationExpr)>,
+        body: MirRelationExpr,
+        recursive: bool,
+        with: kw::With,
+    ) -> Result {
         if recursive {
             let (mut ids, mut values, mut limits) = (vec![], vec![], vec![]);
-            for (id, attrs, value) in ctes.into_iter().rev() {
+            for (id, analyses, value) in ctes.into_iter() {
                 let typ = {
-                    let Some(column_types) = attrs.types else {
-                        let msg = format!("`let {}` needs a `types` attribute", id);
+                    let Some(column_types) = analyses.types else {
+                        let msg = format!("`let {}` needs a `types` analyses", id);
                         Err(Error::new(with.span(), msg))?
                     };
-                    let keys = attrs.keys.unwrap_or_default();
-                    RelationType { column_types, keys }
+                    let keys = analyses.keys.unwrap_or_default();
+                    ReprRelationType::new(column_types).with_keys(keys)
                 };
-
                 // An ugly-ugly hack to pass the type information of the WMR CTE
                 // to the `fix_types` pass.
                 let value = {
                     let get_cte = MirRelationExpr::Get {
                         id: Id::Local(id),
-                        typ: typ.clone(),
+                        typ,
                         access_strategy: AccessStrategy::UnknownOrLocal,
                     };
                     // Do not use the `union` smart constructor here!
@@ -237,7 +288,8 @@ mod relation {
                 body: Box::new(body),
             })
         } else {
-            for (id, _, value) in ctes.into_iter() {
+            let mut body = body;
+            for (id, _, value) in ctes.into_iter().rev() {
                 body = MirRelationExpr::Let {
                     id,
                     value: Box::new(value),
@@ -251,7 +303,7 @@ mod relation {
     fn parse_cte(
         ctx: CtxRef,
         input: ParseStream,
-    ) -> syn::Result<(LocalId, attributes::Attributes, MirRelationExpr)> {
+    ) -> syn::Result<(LocalId, analyses::Analyses, MirRelationExpr)> {
         let cte = input.parse::<kw::cte>()?;
 
         let ident = input.parse::<syn::Ident>()?;
@@ -259,12 +311,12 @@ mod relation {
 
         input.parse::<syn::Token![=]>()?;
 
-        let attrs = attributes::parse_attributes(input)?;
+        let analyses = analyses::parse_analyses(input)?;
 
         let parse_value = ParseChildren::new(input, cte.span().start());
         let value = parse_value.parse_one(ctx, parse_expr)?;
 
-        Ok((id, attrs, value))
+        Ok((id, analyses, value))
     }
 
     fn parse_project(ctx: CtxRef, input: ParseStream) -> Result {
@@ -302,29 +354,29 @@ mod relation {
         let ident = input.parse::<syn::Ident>()?;
         let func = match ident.to_string().to_lowercase().as_str() {
             "unnest_list" => UnnestList {
-                el_typ: ScalarType::Int64, // FIXME
+                el_typ: SqlScalarType::Int64, // FIXME
             },
             "unnest_array" => UnnestArray {
-                el_typ: ScalarType::Int64, // FIXME
+                el_typ: SqlScalarType::Int64, // FIXME
             },
             "wrap1" => Wrap {
                 types: vec![
-                    ScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
                 ],
                 width: 1,
             },
             "wrap2" => Wrap {
                 types: vec![
-                    ScalarType::Int64.nullable(true), // FIXME
-                    ScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
                 ],
                 width: 2,
             },
             "wrap3" => Wrap {
                 types: vec![
-                    ScalarType::Int64.nullable(true), // FIXME
-                    ScalarType::Int64.nullable(true), // FIXME
-                    ScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
                 ],
                 width: 3,
             },
@@ -352,7 +404,10 @@ mod relation {
         let filter = input.parse::<kw::Filter>()?;
 
         let predicates = match scalar::parse_expr(input)? {
-            CallVariadic { func: And, exprs } => exprs,
+            CallVariadic {
+                func: And(_),
+                exprs,
+            } => exprs,
             expr => vec![expr],
         };
 
@@ -589,8 +644,8 @@ mod relation {
 
     #[derive(Default)]
     pub struct FixTypesCtx {
-        env: BTreeMap<LocalId, RelationType>,
-        typ: Vec<RelationType>,
+        env: BTreeMap<LocalId, ReprRelationType>,
+        typ: Vec<ReprRelationType>,
     }
 
     pub fn fix_types(
@@ -667,8 +722,12 @@ mod relation {
 
 /// Support for parsing [mz_expr::MirScalarExpr].
 mod scalar {
-    use mz_expr::{BinaryFunc, ColumnOrder, MirScalarExpr};
-    use mz_repr::{AsColumnType, Datum, Row, RowArena, ScalarType};
+    use mz_expr::{
+        BinaryFunc, ColumnOrder, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc, func,
+    };
+    use mz_repr::{
+        AsColumnType, Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlScalarType,
+    };
 
     use super::*;
 
@@ -709,17 +768,17 @@ mod scalar {
             fn precedence(&self) -> Option<usize> {
                 match self {
                     // 01: logical disjunction
-                    Op::Var(mz_expr::VariadicFunc::Or) => Some(1),
+                    Op::Var(mz_expr::VariadicFunc::Or(_)) => Some(1),
                     // 02: logical conjunction
-                    Op::Var(mz_expr::VariadicFunc::And) => Some(2),
+                    Op::Var(mz_expr::VariadicFunc::And(_)) => Some(2),
                     // 04: equality, assignment
-                    Op::Bin(mz_expr::BinaryFunc::Eq) => Some(4),
-                    Op::Bin(mz_expr::BinaryFunc::NotEq) => Some(4),
+                    Op::Bin(mz_expr::BinaryFunc::Eq(_)) => Some(4),
+                    Op::Bin(mz_expr::BinaryFunc::NotEq(_)) => Some(4),
                     // 05: less than, greater than
-                    Op::Bin(mz_expr::BinaryFunc::Gt) => Some(5),
-                    Op::Bin(mz_expr::BinaryFunc::Gte) => Some(5),
-                    Op::Bin(mz_expr::BinaryFunc::Lt) => Some(5),
-                    Op::Bin(mz_expr::BinaryFunc::Lte) => Some(5),
+                    Op::Bin(mz_expr::BinaryFunc::Gt(_)) => Some(5),
+                    Op::Bin(mz_expr::BinaryFunc::Gte(_)) => Some(5),
+                    Op::Bin(mz_expr::BinaryFunc::Lt(_)) => Some(5),
+                    Op::Bin(mz_expr::BinaryFunc::Lte(_)) => Some(5),
                     // 13: test for TRUE, FALSE, UNKNOWN, NULL
                     Op::Unr(mz_expr::UnaryFunc::IsNull(_)) => Some(13),
                     Op::Neg(mz_expr::UnaryFunc::IsNull(_)) => Some(13),
@@ -728,11 +787,11 @@ mod scalar {
                     Op::Unr(mz_expr::UnaryFunc::IsFalse(_)) => Some(13),
                     Op::Neg(mz_expr::UnaryFunc::IsFalse(_)) => Some(13),
                     // 14: addition, subtraction
-                    Op::Bin(mz_expr::BinaryFunc::AddInt64) => Some(14),
+                    Op::Bin(mz_expr::BinaryFunc::AddInt64(_)) => Some(14),
                     // 14: multiplication, division, modulo
-                    Op::Bin(mz_expr::BinaryFunc::MulInt64) => Some(15),
-                    Op::Bin(mz_expr::BinaryFunc::DivInt64) => Some(15),
-                    Op::Bin(mz_expr::BinaryFunc::ModInt64) => Some(15),
+                    Op::Bin(mz_expr::BinaryFunc::MulInt64(_)) => Some(15),
+                    Op::Bin(mz_expr::BinaryFunc::DivInt64(_)) => Some(15),
+                    Op::Bin(mz_expr::BinaryFunc::ModInt64(_)) => Some(15),
                     // unsupported
                     _ => None,
                 }
@@ -761,40 +820,43 @@ mod scalar {
                 // Else it is an operand - append it to postfix and continue.
                 let op = if input.eat(syn::Token![=]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::Eq)
+                    Op::Bin(func::Eq.into())
                 } else if input.eat(syn::Token![!=]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::NotEq)
+                    Op::Bin(func::NotEq.into())
                 } else if input.eat(syn::Token![>=]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::Gte)
+                    Op::Bin(func::Gte.into())
                 } else if input.eat(syn::Token![>]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::Gt)
+                    Op::Bin(func::Gt.into())
                 } else if input.eat(syn::Token![<=]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::Lte)
+                    Op::Bin(func::Lte.into())
                 } else if input.eat(syn::Token![<]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::Lt)
+                    Op::Bin(func::Lt.into())
                 } else if input.eat(syn::Token![+]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::AddInt64) // TODO: fix placeholder
+                    Op::Bin(func::AddInt64.into()) // TODO: fix placeholder
                 } else if input.eat(syn::Token![*]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::MulInt64) // TODO: fix placeholder
+                    Op::Bin(func::MulInt64.into()) // TODO: fix placeholder
                 } else if input.eat(syn::Token![/]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::DivInt64) // TODO: fix placeholder
+                    Op::Bin(func::DivInt64.into()) // TODO: fix placeholder
                 } else if input.eat(syn::Token![%]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::ModInt64) // TODO: fix placeholder
+                    Op::Bin(func::ModInt64.into()) // TODO: fix placeholder
                 } else if input.eat(kw::AND) {
                     exp_opd = true;
-                    Op::Var(mz_expr::VariadicFunc::And)
+                    Op::Var(VariadicFunc::And(func::variadic::And))
                 } else if input.eat(kw::OR) {
                     exp_opd = true;
-                    Op::Var(mz_expr::VariadicFunc::Or)
+                    Op::Var(VariadicFunc::Or(func::variadic::Or))
+                } else if input.eat(kw::coalesce) {
+                    exp_opd = true;
+                    Op::Var(VariadicFunc::Coalesce(func::variadic::Coalesce))
                 } else if input.eat(kw::IS) {
                     let negate = input.eat(kw::NOT);
 
@@ -809,11 +871,7 @@ mod scalar {
                         Err(lookahead.error())?
                     };
 
-                    if negate {
-                        Op::Neg(func)
-                    } else {
-                        Op::Unr(func)
-                    }
+                    if negate { Op::Neg(func) } else { Op::Unr(func) }
                 } else {
                     // We were expecting an optional operator but didn't find
                     // anything. Exit the parsing loop and process the postfix
@@ -874,7 +932,7 @@ mod scalar {
                     for expr in [expr1, expr2] {
                         match expr {
                             MirScalarExpr::CallVariadic { func: f, exprs: es } if f == func => {
-                                exprs.extend(es.into_iter());
+                                exprs.extend(es);
                             }
                             expr => {
                                 exprs.push(expr);
@@ -906,6 +964,8 @@ mod scalar {
             parse_array(input)
         } else if lookahead.peek(kw::list) {
             parse_list(input)
+        } else if lookahead.peek(kw::case) {
+            parse_case(input)
         } else if lookahead.peek(syn::Ident) {
             parse_apply(input)
         } else if lookahead.peek(syn::token::Brace) {
@@ -921,12 +981,33 @@ mod scalar {
             syn::parenthesized!(inner in input);
             parse_expr(&inner)
         } else {
-            Err(lookahead.error()) // FIXME: support IfThenElse variants
+            Err(lookahead.error())
+        }
+    }
+
+    /// Parses `case when {cond} then {then} else {els} end`.
+    fn parse_case(input: ParseStream) -> Result {
+        input.parse::<kw::case>()?;
+        if input.peek(kw::when) {
+            input.parse::<kw::when>()?;
+            let cond = parse_expr(input)?;
+            input.parse::<kw::then>()?;
+            let then = parse_expr(input)?;
+            input.parse::<syn::Token![else]>()?;
+            let els = parse_expr(input)?;
+            input.parse::<kw::end>()?;
+            Ok(MirScalarExpr::If {
+                cond: Box::new(cond),
+                then: Box::new(then),
+                els: Box::new(els),
+            })
+        } else {
+            Err(Error::new(input.span(), "expected 'when' after 'case'"))
         }
     }
 
     pub fn parse_column(input: ParseStream) -> Result {
-        Ok(MirScalarExpr::Column(parse_column_index(input)?))
+        Ok(MirScalarExpr::column(parse_column_index(input)?))
     }
 
     pub fn parse_column_index(input: ParseStream) -> syn::Result<usize> {
@@ -953,24 +1034,27 @@ mod scalar {
         let typ = if input.eat(kw::null) {
             packer.push(Datum::Null);
             input.parse::<syn::Token![::]>()?;
-            attributes::parse_scalar_type(input)?.nullable(true)
+            ReprColumnType {
+                scalar_type: analyses::parse_scalar_type(input)?,
+                nullable: true,
+            }
         } else {
             match input.parse::<syn::Lit>()? {
                 syn::Lit::Str(l) => {
                     packer.push(Datum::from(l.value().as_str()));
-                    Ok(String::as_column_type())
+                    Ok(ReprColumnType::from(&String::as_column_type()))
                 }
                 syn::Lit::Int(l) => {
                     packer.push(Datum::from(l.base10_parse::<i64>()?));
-                    Ok(i64::as_column_type())
+                    Ok(ReprColumnType::from(&i64::as_column_type()))
                 }
                 syn::Lit::Float(l) => {
                     packer.push(Datum::from(l.base10_parse::<f64>()?));
-                    Ok(f64::as_column_type())
+                    Ok(ReprColumnType::from(&f64::as_column_type()))
                 }
                 syn::Lit::Bool(l) => {
                     packer.push(Datum::from(l.value));
-                    Ok(bool::as_column_type())
+                    Ok(ReprColumnType::from(&bool::as_column_type()))
                 }
                 _ => Err(Error::new(input.span(), "cannot parse literal")),
             }?
@@ -978,7 +1062,6 @@ mod scalar {
 
         Ok(MirScalarExpr::Literal(Ok(row), typ))
     }
-
     fn parse_literal_err(input: ParseStream) -> Result {
         input.parse::<kw::error>()?;
         let mut msg = {
@@ -991,39 +1074,37 @@ mod scalar {
         } else {
             Err(Error::new(msg.span(), "expected `internal error: $msg`"))
         }?;
-        Ok(MirScalarExpr::Literal(Err(err), bool::as_column_type())) // FIXME
+        Ok(MirScalarExpr::literal(Err(err), ReprScalarType::Bool))
     }
 
     fn parse_literal_array(input: ParseStream) -> Result {
-        use mz_expr::func::VariadicFunc::*;
+        use mz_expr::func::variadic::ArrayCreate;
 
-        let elem_type = ScalarType::Int64; // FIXME
-        let func = ArrayCreate { elem_type };
+        let elem_type = SqlScalarType::Int64; // FIXME
+        let func = VariadicFunc::ArrayCreate(ArrayCreate { elem_type });
         let exprs = input.parse_comma_sep(parse_literal_ok)?;
 
         // Evaluate into a datum
         let temp_storage = RowArena::default();
         let datum = func.eval(&[], &temp_storage, &exprs).expect("datum");
-        let typ = ScalarType::Array(Box::new(ScalarType::Int64)); // FIXME
+        let typ = ReprScalarType::from(&SqlScalarType::Array(Box::new(SqlScalarType::Int64))); // FIXME
         Ok(MirScalarExpr::literal_ok(datum, typ))
     }
-
     fn parse_literal_list(input: ParseStream) -> Result {
-        use mz_expr::func::VariadicFunc::*;
+        use mz_expr::func::variadic::ListCreate;
 
-        let elem_type = ScalarType::Int64; // FIXME
-        let func = ListCreate { elem_type };
+        let elem_type = SqlScalarType::Int64; // FIXME
+        let func = VariadicFunc::ListCreate(ListCreate { elem_type });
         let exprs = input.parse_comma_sep(parse_literal_ok)?;
 
         // Evaluate into a datum
         let temp_storage = RowArena::default();
         let datum = func.eval(&[], &temp_storage, &exprs).expect("datum");
-        let typ = ScalarType::Array(Box::new(ScalarType::Int64)); // FIXME
+        let typ = ReprScalarType::from(&SqlScalarType::Array(Box::new(SqlScalarType::Int64))); // FIXME
         Ok(MirScalarExpr::literal_ok(datum, typ))
     }
-
     fn parse_array(input: ParseStream) -> Result {
-        use mz_expr::func::VariadicFunc::*;
+        use mz_expr::func::variadic::ArrayCreate;
 
         input.parse::<kw::array>()?;
 
@@ -1031,15 +1112,15 @@ mod scalar {
         let inner;
         syn::bracketed!(inner in input);
 
-        let elem_type = ScalarType::Int64; // FIXME
+        let elem_type = SqlScalarType::Int64; // FIXME
         let func = ArrayCreate { elem_type };
         let exprs = inner.parse_comma_sep(parse_expr)?;
 
-        Ok(MirScalarExpr::CallVariadic { func, exprs })
+        Ok(MirScalarExpr::call_variadic(func, exprs))
     }
 
     fn parse_list(input: ParseStream) -> Result {
-        use mz_expr::func::VariadicFunc::*;
+        use mz_expr::func::variadic::ListCreate;
 
         input.parse::<kw::list>()?;
 
@@ -1047,16 +1128,14 @@ mod scalar {
         let inner;
         syn::bracketed!(inner in input);
 
-        let elem_type = ScalarType::Int64; // FIXME
+        let elem_type = SqlScalarType::Int64; // FIXME
         let func = ListCreate { elem_type };
         let exprs = inner.parse_comma_sep(parse_expr)?;
 
-        Ok(MirScalarExpr::CallVariadic { func, exprs })
+        Ok(MirScalarExpr::call_variadic(func, exprs))
     }
 
     fn parse_apply(input: ParseStream) -> Result {
-        use mz_expr::func::{BinaryFunc::*, UnmaterializableFunc::*, VariadicFunc::*, *};
-
         let ident = input.parse::<syn::Ident>()?;
 
         // parse parentheses
@@ -1078,7 +1157,7 @@ mod scalar {
         };
         let parse_variadic = |func: VariadicFunc| -> Result {
             let exprs = inner.parse_comma_sep(parse_expr)?;
-            Ok(MirScalarExpr::CallVariadic { func, exprs })
+            Ok(MirScalarExpr::call_variadic(func, exprs))
         };
 
         // Infix binary and variadic function calls are handled in `parse_scalar_expr`.
@@ -1088,14 +1167,15 @@ mod scalar {
         // name resolution in the parser.
         match ident.to_string().to_lowercase().as_str() {
             // Supported unmaterializable (a.k.a. nullary) functions:
-            "mz_environment_id" => parse_nullary(MzEnvironmentId),
+            "mz_environment_id" => parse_nullary(UnmaterializableFunc::MzEnvironmentId),
             // Supported unary functions:
-            "abs" => parse_unary(AbsInt64.into()),
-            "not" => parse_unary(Not.into()),
+            "abs" => parse_unary(func::AbsInt64.into()),
+            "not" => parse_unary(func::Not.into()),
             // Supported binary functions:
-            "ltrim" => parse_binary(TrimLeading),
+            "ltrim" => parse_binary(func::TrimLeading.into()),
             // Supported variadic functions:
-            "greatest" => parse_variadic(Greatest),
+            "greatest" => parse_variadic(VariadicFunc::Greatest(func::variadic::Greatest)),
+            "coalesce" => parse_variadic(VariadicFunc::Coalesce(func::variadic::Coalesce)),
             _ => Err(Error::new(ident.span(), "unsupported function name")),
         }
     }
@@ -1110,7 +1190,7 @@ mod scalar {
                     // Be more lenient and support parenthesized equivalences,
                     // e.g. `... AND (x = u + v = z + 1) AND ...`.
                     if let MirScalarExpr::CallBinary {
-                        func: BinaryFunc::Eq,
+                        func: BinaryFunc::Eq(_),
                         expr1,
                         expr2,
                     } = operand
@@ -1237,21 +1317,21 @@ mod row {
     }
 }
 
-mod attributes {
-    use mz_repr::{ColumnType, ScalarType};
+mod analyses {
+    use mz_repr::{ReprColumnType, ReprScalarType};
 
     use super::*;
 
     #[derive(Default)]
-    pub struct Attributes {
-        pub types: Option<Vec<ColumnType>>,
+    pub struct Analyses {
+        pub types: Option<Vec<ReprColumnType>>,
         pub keys: Option<Vec<Vec<usize>>>,
     }
 
-    pub fn parse_attributes(input: ParseStream) -> syn::Result<Attributes> {
-        let mut attributes = Attributes::default();
+    pub fn parse_analyses(input: ParseStream) -> syn::Result<Analyses> {
+        let mut analyses = Analyses::default();
 
-        // Attributes are optional, appearing after a `//` at the end of the
+        // Analyses are optional, appearing after a `//` at the end of the
         // line. However, since the syn lexer eats comments, we assume that `//`
         // was replaced with `::` upfront.
         if input.eat(syn::Token![::]) {
@@ -1260,7 +1340,7 @@ mod attributes {
 
             let (start, end) = (inner.span().start(), inner.span().end());
             if start.line != end.line {
-                let msg = "attributes should not span more than one line".to_string();
+                let msg = "analyses should not span more than one line".to_string();
                 Err(Error::new(inner.span(), msg))?
             }
 
@@ -1270,49 +1350,52 @@ mod attributes {
                     "types" => {
                         inner.parse::<syn::Token![:]>()?;
                         let value = inner.parse::<syn::LitStr>()?.value();
-                        attributes.types = Some(parse_types.parse_str(&value)?);
+                        analyses.types = Some(parse_types.parse_str(&value)?);
                     }
                     // TODO: support keys
                     key => {
-                        let msg = format!("unexpected attribute type `{}`", key);
+                        let msg = format!("unexpected analysis type `{}`", key);
                         Err(Error::new(inner.span(), msg))?;
                     }
                 }
             }
         }
-        Ok(attributes)
+        Ok(analyses)
     }
 
-    fn parse_types(input: ParseStream) -> syn::Result<Vec<ColumnType>> {
+    fn parse_types(input: ParseStream) -> syn::Result<Vec<ReprColumnType>> {
         let inner;
         syn::parenthesized!(inner in input);
         inner.parse_comma_sep(parse_column_type)
     }
 
-    pub fn parse_column_type(input: ParseStream) -> syn::Result<ColumnType> {
+    pub fn parse_column_type(input: ParseStream) -> syn::Result<ReprColumnType> {
         let scalar_type = parse_scalar_type(input)?;
-        Ok(scalar_type.nullable(input.eat(syn::Token![?])))
+        Ok(ReprColumnType {
+            scalar_type,
+            nullable: input.eat(syn::Token![?]),
+        })
     }
 
-    pub fn parse_scalar_type(input: ParseStream) -> syn::Result<ScalarType> {
+    pub fn parse_scalar_type(input: ParseStream) -> syn::Result<ReprScalarType> {
         let lookahead = input.lookahead1();
 
         let scalar_type = if input.look_and_eat(bigint, &lookahead) {
-            ScalarType::Int64
+            ReprScalarType::Int64
         } else if input.look_and_eat(double, &lookahead) {
             input.parse::<precision>()?;
-            ScalarType::Float64
+            ReprScalarType::Float64
         } else if input.look_and_eat(boolean, &lookahead) {
-            ScalarType::Bool
+            ReprScalarType::Bool
         } else if input.look_and_eat(character, &lookahead) {
             input.parse::<varying>()?;
-            ScalarType::VarChar { max_length: None }
+            ReprScalarType::String
         } else if input.look_and_eat(integer, &lookahead) {
-            ScalarType::Int32
+            ReprScalarType::Int32
         } else if input.look_and_eat(smallint, &lookahead) {
-            ScalarType::Int16
+            ReprScalarType::Int16
         } else if input.look_and_eat(text, &lookahead) {
-            ScalarType::String
+            ReprScalarType::String
         } else {
             Err(lookahead.error())?
         };
@@ -1335,12 +1418,12 @@ pub enum Def {
     Source {
         name: String,
         cols: Vec<String>,
-        typ: mz_repr::RelationType,
+        typ: mz_repr::SqlRelationType,
     },
 }
 
 mod def {
-    use mz_repr::{ColumnType, RelationType};
+    use mz_repr::{SqlColumnType, SqlRelationType};
 
     use super::*;
 
@@ -1382,7 +1465,7 @@ mod def {
             (column_names, column_types)
         };
 
-        let typ = RelationType { column_types, keys };
+        let typ = SqlRelationType { column_types, keys };
 
         Ok(Def::Source { name, cols, typ })
     }
@@ -1390,11 +1473,11 @@ mod def {
     fn parse_def_source_column(
         _ctx: CtxRef,
         input: ParseStream,
-    ) -> syn::Result<(String, ColumnType)> {
+    ) -> syn::Result<(String, SqlColumnType)> {
         input.parse::<syn::Token![-]>()?;
         let column_name = input.parse::<syn::Ident>()?.to_string();
         input.parse::<syn::Token![:]>()?;
-        let column_type = attributes::parse_column_type(input)?;
+        let column_type = SqlColumnType::from_repr(&analyses::parse_column_type(input)?);
         Ok((column_name, column_type))
     }
 
@@ -1558,6 +1641,9 @@ mod kw {
     syn::custom_keyword!(ArrangeBy);
     syn::custom_keyword!(array);
     syn::custom_keyword!(asc);
+    // case when ... then ... else ... end
+    syn::custom_keyword!(case);
+    syn::custom_keyword!(coalesce);
     syn::custom_keyword!(Constant);
     syn::custom_keyword!(CrossJoin);
     syn::custom_keyword!(cte);
@@ -1565,6 +1651,7 @@ mod kw {
     syn::custom_keyword!(distinct);
     syn::custom_keyword!(Distinct);
     syn::custom_keyword!(empty);
+    syn::custom_keyword!(end);
     syn::custom_keyword!(eq);
     syn::custom_keyword!(error);
     syn::custom_keyword!(exp_group_size);
@@ -1596,10 +1683,12 @@ mod kw {
     syn::custom_keyword!(Recursive);
     syn::custom_keyword!(Reduce);
     syn::custom_keyword!(Return);
+    syn::custom_keyword!(then);
     syn::custom_keyword!(Threshold);
     syn::custom_keyword!(TopK);
     syn::custom_keyword!(TRUE);
     syn::custom_keyword!(Union);
+    syn::custom_keyword!(when);
     syn::custom_keyword!(With);
     syn::custom_keyword!(x);
 }

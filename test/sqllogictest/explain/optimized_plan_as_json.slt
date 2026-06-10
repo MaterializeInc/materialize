@@ -159,12 +159,20 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
               "expressions": [
                 {
                   "CallBinary": {
-                    "func": "AddInt32",
+                    "func": {
+                      "AddInt32": null
+                    },
                     "expr1": {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "a"
+                      ]
                     },
                     "expr2": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "b"
+                      ]
                     }
                   }
                 },
@@ -190,9 +198,14 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                   1,
                   {
                     "CallBinary": {
-                      "func": "Gt",
+                      "func": {
+                        "Gt": null
+                      },
                       "expr1": {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       },
                       "expr2": {
                         "Literal": [
@@ -216,9 +229,14 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                   2,
                   {
                     "CallBinary": {
-                      "func": "Lt",
+                      "func": {
+                        "Lt": null
+                      },
                       "expr1": {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       },
                       "expr2": {
                         "Literal": [
@@ -242,9 +260,14 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                   3,
                   {
                     "CallBinary": {
-                      "func": "Gt",
+                      "func": {
+                        "Gt": null
+                      },
                       "expr1": {
-                        "Column": 2
+                        "Column": [
+                          2,
+                          null
+                        ]
                       },
                       "expr2": {
                         "Literal": [
@@ -321,12 +344,20 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                   "scalars": [
                     {
                       "CallBinary": {
-                        "func": "AddInt32",
+                        "func": {
+                          "AddInt32": null
+                        },
                         "expr1": {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         },
                         "expr2": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       }
                     },
@@ -352,9 +383,14 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
               "predicates": [
                 {
                   "CallBinary": {
-                    "func": "Lt",
+                    "func": {
+                      "Lt": null
+                    },
                     "expr1": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "b"
+                      ]
                     },
                     "expr2": {
                       "Literal": [
@@ -375,9 +411,14 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                 },
                 {
                   "CallBinary": {
-                    "func": "Gt",
+                    "func": {
+                      "Gt": null
+                    },
                     "expr1": {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "a"
+                      ]
                     },
                     "expr2": {
                       "Literal": [
@@ -398,9 +439,14 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                 },
                 {
                   "CallBinary": {
-                    "func": "Gt",
+                    "func": {
+                      "Gt": null
+                    },
                     "expr1": {
-                      "Column": 2
+                      "Column": [
+                        2,
+                        null
+                      ]
                     },
                     "expr2": {
                       "Literal": [
@@ -442,9 +488,14 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
             1,
             {
               "CallBinary": {
-                "func": "Gt",
+                "func": {
+                  "Gt": null
+                },
                 "expr1": {
-                  "Column": 0
+                  "Column": [
+                    0,
+                    "a"
+                  ]
                 },
                 "expr2": {
                   "Literal": [
@@ -468,9 +519,14 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
             2,
             {
               "CallBinary": {
-                "func": "Lt",
+                "func": {
+                  "Lt": null
+                },
                 "expr1": {
-                  "Column": 1
+                  "Column": [
+                    1,
+                    "b"
+                  ]
                 },
                 "expr2": {
                   "Literal": [
@@ -494,15 +550,25 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
             2,
             {
               "CallBinary": {
-                "func": "Gt",
+                "func": {
+                  "Gt": null
+                },
                 "expr1": {
                   "CallBinary": {
-                    "func": "AddInt32",
+                    "func": {
+                      "AddInt32": null
+                    },
                     "expr1": {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "a"
+                      ]
                     },
                     "expr2": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "b"
+                      ]
                     }
                   }
                 },
@@ -584,10 +650,16 @@ SELECT generate_series(a, b) from t
               "func": "GenerateSeriesInt32",
               "exprs": [
                 {
-                  "Column": 0
+                  "Column": [
+                    0,
+                    "a"
+                  ]
                 },
                 {
-                  "Column": 1
+                  "Column": [
+                    1,
+                    "b"
+                  ]
                 },
                 {
                   "Literal": [
@@ -675,7 +747,10 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                   },
                   "group_key": [
                     {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        null
+                      ]
                     }
                   ],
                   "aggregates": [],
@@ -720,7 +795,10 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                         },
                         "group_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "aggregates": [],
@@ -1031,14 +1109,20 @@ SELECT abs(min(a) - max(a)) FROM t
                 {
                   "func": "MinInt32",
                   "expr": {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      "a"
+                    ]
                   },
                   "distinct": false
                 },
                 {
                   "func": "MaxInt32",
                   "expr": {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      "a"
+                    ]
                   },
                   "distinct": false
                 }
@@ -1180,12 +1264,20 @@ SELECT abs(min(a) - max(a)) FROM t
                         },
                         "expr": {
                           "CallBinary": {
-                            "func": "SubInt32",
+                            "func": {
+                              "SubInt32": null
+                            },
                             "expr1": {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "?column?"
+                              ]
                             },
                             "expr2": {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "?column?"
+                              ]
                             }
                           }
                         }
@@ -1256,21 +1348,30 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                   },
                   "group_key": [
                     {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        null
+                      ]
                     }
                   ],
                   "aggregates": [
                     {
                       "func": "MinInt32",
                       "expr": {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       },
                       "distinct": false
                     },
                     {
                       "func": "MaxInt32",
                       "expr": {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       },
                       "distinct": false
                     }
@@ -1287,12 +1388,20 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                     },
                     "expr": {
                       "CallBinary": {
-                        "func": "SubInt32",
+                        "func": {
+                          "SubInt32": null
+                        },
                         "expr1": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "?column?"
+                          ]
                         },
                         "expr2": {
-                          "Column": 2
+                          "Column": [
+                            2,
+                            "?column?"
+                          ]
                         }
                       }
                     }
@@ -1322,95 +1431,147 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
     {
       "id": "Explained Query",
       "plan": {
-        "Project": {
-          "input": {
-            "Join": {
-              "inputs": [
-                {
-                  "ArrangeBy": {
-                    "input": {
-                      "Get": {
-                        "id": {
-                          "Global": {
-                            "User": 1
+        "Let": {
+          "id": 0,
+          "value": {
+            "Project": {
+              "input": {
+                "Join": {
+                  "inputs": [
+                    {
+                      "ArrangeBy": {
+                        "input": {
+                          "Get": {
+                            "id": {
+                              "Global": {
+                                "User": 1
+                              }
+                            },
+                            "typ": {
+                              "column_types": [
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                },
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                }
+                              ],
+                              "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 4
+                                  },
+                                  "DifferentialJoin"
+                                ]
+                              ]
+                            }
                           }
                         },
-                        "typ": {
-                          "column_types": [
+                        "keys": [
+                          [
                             {
-                              "scalar_type": "Int32",
-                              "nullable": true
-                            },
-                            {
-                              "scalar_type": "Int32",
-                              "nullable": true
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             }
-                          ],
-                          "keys": []
-                        },
-                        "access_strategy": {
-                          "Index": [
-                            [
-                              {
-                                "User": 4
-                              },
-                              {
-                                "DeltaJoin": "FirstInputFullScan"
-                              }
-                            ],
-                            [
-                              {
-                                "User": 4
-                              },
-                              "FullScan"
-                            ]
                           ]
-                        }
+                        ]
                       }
                     },
-                    "keys": [
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      [
-                        {
-                          "Column": 1
-                        }
-                      ]
-                    ]
-                  }
-                },
-                {
-                  "ArrangeBy": {
-                    "input": {
-                      "Reduce": {
+                    {
+                      "ArrangeBy": {
                         "input": {
-                          "Project": {
+                          "Reduce": {
                             "input": {
-                              "Filter": {
+                              "Project": {
                                 "input": {
-                                  "Join": {
-                                    "inputs": [
-                                      {
-                                        "ArrangeBy": {
-                                          "input": {
-                                            "Reduce": {
+                                  "Filter": {
+                                    "input": {
+                                      "Join": {
+                                        "inputs": [
+                                          {
+                                            "ArrangeBy": {
+                                              "input": {
+                                                "Reduce": {
+                                                  "input": {
+                                                    "Project": {
+                                                      "input": {
+                                                        "Get": {
+                                                          "id": {
+                                                            "Global": {
+                                                              "User": 1
+                                                            }
+                                                          },
+                                                          "typ": {
+                                                            "column_types": [
+                                                              {
+                                                                "scalar_type": "Int32",
+                                                                "nullable": true
+                                                              },
+                                                              {
+                                                                "scalar_type": "Int32",
+                                                                "nullable": true
+                                                              }
+                                                            ],
+                                                            "keys": []
+                                                          },
+                                                          "access_strategy": {
+                                                            "Index": [
+                                                              [
+                                                                {
+                                                                  "User": 4
+                                                                },
+                                                                "FullScan"
+                                                              ]
+                                                            ]
+                                                          }
+                                                        }
+                                                      },
+                                                      "outputs": [
+                                                        0
+                                                      ]
+                                                    }
+                                                  },
+                                                  "group_key": [
+                                                    {
+                                                      "Column": [
+                                                        0,
+                                                        null
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "aggregates": [],
+                                                  "monotonic": false,
+                                                  "expected_group_size": null
+                                                }
+                                              },
+                                              "keys": [
+                                                []
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "ArrangeBy": {
                                               "input": {
                                                 "Project": {
                                                   "input": {
                                                     "Get": {
                                                       "id": {
                                                         "Global": {
-                                                          "User": 1
+                                                          "User": 8
                                                         }
                                                       },
                                                       "typ": {
                                                         "column_types": [
                                                           {
                                                             "scalar_type": "Int32",
-                                                            "nullable": true
+                                                            "nullable": false
                                                           },
                                                           {
                                                             "scalar_type": "Int32",
@@ -1419,16 +1580,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                         ],
                                                         "keys": []
                                                       },
-                                                      "access_strategy": {
-                                                        "Index": [
-                                                          [
-                                                            {
-                                                              "User": 4
-                                                            },
-                                                            "FullScan"
-                                                          ]
-                                                        ]
-                                                      }
+                                                      "access_strategy": "Persist"
                                                     }
                                                   },
                                                   "outputs": [
@@ -1436,172 +1588,316 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                   ]
                                                 }
                                               },
-                                              "group_key": [
-                                                {
-                                                  "Column": 0
-                                                }
-                                              ],
-                                              "aggregates": [],
-                                              "monotonic": false,
-                                              "expected_group_size": null
-                                            }
-                                          },
-                                          "keys": [
-                                            []
-                                          ]
-                                        }
-                                      },
-                                      {
-                                        "ArrangeBy": {
-                                          "input": {
-                                            "Project": {
-                                              "input": {
-                                                "Get": {
-                                                  "id": {
-                                                    "Global": {
-                                                      "User": 8
-                                                    }
-                                                  },
-                                                  "typ": {
-                                                    "column_types": [
-                                                      {
-                                                        "scalar_type": "Int32",
-                                                        "nullable": false
-                                                      },
-                                                      {
-                                                        "scalar_type": "Int32",
-                                                        "nullable": true
-                                                      }
-                                                    ],
-                                                    "keys": []
-                                                  },
-                                                  "access_strategy": "Persist"
-                                                }
-                                              },
-                                              "outputs": [
-                                                0
+                                              "keys": [
+                                                []
                                               ]
                                             }
-                                          },
-                                          "keys": [
-                                            []
+                                          }
+                                        ],
+                                        "equivalences": [],
+                                        "implementation": {
+                                          "Differential": [
+                                            [
+                                              0,
+                                              [],
+                                              {
+                                                "V1": {
+                                                  "unique_key": false,
+                                                  "key_length": 0,
+                                                  "arranged": false,
+                                                  "cardinality": null,
+                                                  "filters": {
+                                                    "literal_equality": false,
+                                                    "like": false,
+                                                    "is_null": false,
+                                                    "literal_inequality": 0,
+                                                    "any_filter": false
+                                                  },
+                                                  "input": 0
+                                                }
+                                              }
+                                            ],
+                                            [
+                                              [
+                                                1,
+                                                [],
+                                                {
+                                                  "V1": {
+                                                    "unique_key": false,
+                                                    "key_length": 0,
+                                                    "arranged": false,
+                                                    "cardinality": null,
+                                                    "filters": {
+                                                      "literal_equality": false,
+                                                      "like": false,
+                                                      "is_null": false,
+                                                      "literal_inequality": 0,
+                                                      "any_filter": false
+                                                    },
+                                                    "input": 1
+                                                  }
+                                                }
+                                              ]
+                                            ]
                                           ]
                                         }
                                       }
-                                    ],
-                                    "equivalences": [],
-                                    "implementation": {
-                                      "Differential": [
-                                        [
-                                          0,
-                                          [],
-                                          {
-                                            "unique_key": false,
-                                            "key_length": 0,
-                                            "arranged": false,
-                                            "cardinality": null,
-                                            "filters": {
-                                              "literal_equality": false,
-                                              "like": false,
-                                              "is_null": false,
-                                              "literal_inequality": 0,
-                                              "any_filter": false
-                                            },
-                                            "input": 0
+                                    },
+                                    "predicates": [
+                                      {
+                                        "CallBinary": {
+                                          "func": {
+                                            "Lt": null
+                                          },
+                                          "expr1": {
+                                            "Column": [
+                                              0,
+                                              "a"
+                                            ]
+                                          },
+                                          "expr2": {
+                                            "Column": [
+                                              1,
+                                              "a"
+                                            ]
                                           }
-                                        ],
-                                        [
-                                          [
-                                            1,
-                                            [],
-                                            {
-                                              "unique_key": false,
-                                              "key_length": 0,
-                                              "arranged": false,
-                                              "cardinality": null,
-                                              "filters": {
-                                                "literal_equality": false,
-                                                "like": false,
-                                                "is_null": false,
-                                                "literal_inequality": 0,
-                                                "any_filter": false
-                                              },
-                                              "input": 1
-                                            }
-                                          ]
-                                        ]
-                                      ]
-                                    }
+                                        }
+                                      }
+                                    ]
                                   }
                                 },
-                                "predicates": [
-                                  {
-                                    "CallBinary": {
-                                      "func": "Lt",
-                                      "expr1": {
-                                        "Column": 0
-                                      },
-                                      "expr2": {
-                                        "Column": 1
-                                      }
-                                    }
-                                  }
+                                "outputs": [
+                                  0
                                 ]
                               }
                             },
-                            "outputs": [
-                              0
-                            ]
+                            "group_key": [
+                              {
+                                "Column": [
+                                  0,
+                                  null
+                                ]
+                              }
+                            ],
+                            "aggregates": [],
+                            "monotonic": false,
+                            "expected_group_size": null
                           }
                         },
-                        "group_key": [
+                        "keys": [
+                          [
+                            {
+                              "Column": [
+                                0,
+                                null
+                              ]
+                            }
+                          ]
+                        ]
+                      }
+                    }
+                  ],
+                  "equivalences": [
+                    [
+                      {
+                        "Column": [
+                          0,
+                          null
+                        ]
+                      },
+                      {
+                        "Column": [
+                          2,
+                          null
+                        ]
+                      }
+                    ]
+                  ],
+                  "implementation": {
+                    "Differential": [
+                      [
+                        1,
+                        [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
-                        "aggregates": [],
-                        "monotonic": false,
-                        "expected_group_size": null
-                      }
-                    },
-                    "keys": [
-                      [
                         {
-                          "Column": 0
+                          "V1": {
+                            "unique_key": true,
+                            "key_length": 1,
+                            "arranged": true,
+                            "cardinality": null,
+                            "filters": {
+                              "literal_equality": false,
+                              "like": false,
+                              "is_null": false,
+                              "literal_inequality": 0,
+                              "any_filter": false
+                            },
+                            "input": 1
+                          }
                         }
+                      ],
+                      [
+                        [
+                          0,
+                          [
+                            {
+                              "Column": [
+                                0,
+                                "a"
+                              ]
+                            }
+                          ],
+                          {
+                            "V1": {
+                              "unique_key": false,
+                              "key_length": 1,
+                              "arranged": true,
+                              "cardinality": null,
+                              "filters": {
+                                "literal_equality": false,
+                                "like": false,
+                                "is_null": false,
+                                "literal_inequality": 0,
+                                "any_filter": false
+                              },
+                              "input": 0
+                            }
+                          }
+                        ]
                       ]
                     ]
                   }
-                },
-                {
-                  "ArrangeBy": {
-                    "input": {
-                      "Reduce": {
+                }
+              },
+              "outputs": [
+                0,
+                1
+              ]
+            }
+          },
+          "body": {
+            "Project": {
+              "input": {
+                "Join": {
+                  "inputs": [
+                    {
+                      "ArrangeBy": {
                         "input": {
-                          "Project": {
+                          "Get": {
+                            "id": {
+                              "Local": 0
+                            },
+                            "typ": {
+                              "column_types": [
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": false
+                                },
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                }
+                              ],
+                              "keys": []
+                            },
+                            "access_strategy": "UnknownOrLocal"
+                          }
+                        },
+                        "keys": [
+                          [
+                            {
+                              "Column": [
+                                1,
+                                null
+                              ]
+                            }
+                          ]
+                        ]
+                      }
+                    },
+                    {
+                      "ArrangeBy": {
+                        "input": {
+                          "Reduce": {
                             "input": {
-                              "Filter": {
+                              "Project": {
                                 "input": {
-                                  "Join": {
-                                    "inputs": [
-                                      {
-                                        "ArrangeBy": {
-                                          "input": {
-                                            "Reduce": {
+                                  "Filter": {
+                                    "input": {
+                                      "Join": {
+                                        "inputs": [
+                                          {
+                                            "ArrangeBy": {
+                                              "input": {
+                                                "Reduce": {
+                                                  "input": {
+                                                    "Project": {
+                                                      "input": {
+                                                        "Get": {
+                                                          "id": {
+                                                            "Local": 0
+                                                          },
+                                                          "typ": {
+                                                            "column_types": [
+                                                              {
+                                                                "scalar_type": "Int32",
+                                                                "nullable": false
+                                                              },
+                                                              {
+                                                                "scalar_type": "Int32",
+                                                                "nullable": true
+                                                              }
+                                                            ],
+                                                            "keys": []
+                                                          },
+                                                          "access_strategy": "UnknownOrLocal"
+                                                        }
+                                                      },
+                                                      "outputs": [
+                                                        1
+                                                      ]
+                                                    }
+                                                  },
+                                                  "group_key": [
+                                                    {
+                                                      "Column": [
+                                                        0,
+                                                        null
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "aggregates": [],
+                                                  "monotonic": false,
+                                                  "expected_group_size": null
+                                                }
+                                              },
+                                              "keys": [
+                                                []
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "ArrangeBy": {
                                               "input": {
                                                 "Project": {
                                                   "input": {
                                                     "Get": {
                                                       "id": {
                                                         "Global": {
-                                                          "User": 1
+                                                          "User": 8
                                                         }
                                                       },
                                                       "typ": {
                                                         "column_types": [
                                                           {
                                                             "scalar_type": "Int32",
-                                                            "nullable": true
+                                                            "nullable": false
                                                           },
                                                           {
                                                             "scalar_type": "Int32",
@@ -1610,16 +1906,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                         ],
                                                         "keys": []
                                                       },
-                                                      "access_strategy": {
-                                                        "Index": [
-                                                          [
-                                                            {
-                                                              "User": 4
-                                                            },
-                                                            "FullScan"
-                                                          ]
-                                                        ]
-                                                      }
+                                                      "access_strategy": "Persist"
                                                     }
                                                   },
                                                   "outputs": [
@@ -1627,310 +1914,199 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                   ]
                                                 }
                                               },
-                                              "group_key": [
-                                                {
-                                                  "Column": 0
-                                                }
-                                              ],
-                                              "aggregates": [],
-                                              "monotonic": false,
-                                              "expected_group_size": null
-                                            }
-                                          },
-                                          "keys": [
-                                            []
-                                          ]
-                                        }
-                                      },
-                                      {
-                                        "ArrangeBy": {
-                                          "input": {
-                                            "Project": {
-                                              "input": {
-                                                "Get": {
-                                                  "id": {
-                                                    "Global": {
-                                                      "User": 8
-                                                    }
-                                                  },
-                                                  "typ": {
-                                                    "column_types": [
-                                                      {
-                                                        "scalar_type": "Int32",
-                                                        "nullable": false
-                                                      },
-                                                      {
-                                                        "scalar_type": "Int32",
-                                                        "nullable": true
-                                                      }
-                                                    ],
-                                                    "keys": []
-                                                  },
-                                                  "access_strategy": "Persist"
-                                                }
-                                              },
-                                              "outputs": [
-                                                1
+                                              "keys": [
+                                                []
                                               ]
                                             }
-                                          },
-                                          "keys": [
-                                            []
+                                          }
+                                        ],
+                                        "equivalences": [],
+                                        "implementation": {
+                                          "Differential": [
+                                            [
+                                              0,
+                                              [],
+                                              {
+                                                "V1": {
+                                                  "unique_key": false,
+                                                  "key_length": 0,
+                                                  "arranged": false,
+                                                  "cardinality": null,
+                                                  "filters": {
+                                                    "literal_equality": false,
+                                                    "like": false,
+                                                    "is_null": false,
+                                                    "literal_inequality": 0,
+                                                    "any_filter": false
+                                                  },
+                                                  "input": 0
+                                                }
+                                              }
+                                            ],
+                                            [
+                                              [
+                                                1,
+                                                [],
+                                                {
+                                                  "V1": {
+                                                    "unique_key": false,
+                                                    "key_length": 0,
+                                                    "arranged": false,
+                                                    "cardinality": null,
+                                                    "filters": {
+                                                      "literal_equality": false,
+                                                      "like": false,
+                                                      "is_null": false,
+                                                      "literal_inequality": 0,
+                                                      "any_filter": false
+                                                    },
+                                                    "input": 1
+                                                  }
+                                                }
+                                              ]
+                                            ]
                                           ]
                                         }
                                       }
-                                    ],
-                                    "equivalences": [],
-                                    "implementation": {
-                                      "Differential": [
-                                        [
-                                          0,
-                                          [],
-                                          {
-                                            "unique_key": false,
-                                            "key_length": 0,
-                                            "arranged": false,
-                                            "cardinality": null,
-                                            "filters": {
-                                              "literal_equality": false,
-                                              "like": false,
-                                              "is_null": false,
-                                              "literal_inequality": 0,
-                                              "any_filter": false
-                                            },
-                                            "input": 0
+                                    },
+                                    "predicates": [
+                                      {
+                                        "CallBinary": {
+                                          "func": {
+                                            "Gt": null
+                                          },
+                                          "expr1": {
+                                            "Column": [
+                                              0,
+                                              "b"
+                                            ]
+                                          },
+                                          "expr2": {
+                                            "Column": [
+                                              1,
+                                              "b"
+                                            ]
                                           }
-                                        ],
-                                        [
-                                          [
-                                            1,
-                                            [],
-                                            {
-                                              "unique_key": false,
-                                              "key_length": 0,
-                                              "arranged": false,
-                                              "cardinality": null,
-                                              "filters": {
-                                                "literal_equality": false,
-                                                "like": false,
-                                                "is_null": false,
-                                                "literal_inequality": 0,
-                                                "any_filter": false
-                                              },
-                                              "input": 1
-                                            }
-                                          ]
-                                        ]
-                                      ]
-                                    }
+                                        }
+                                      }
+                                    ]
                                   }
                                 },
-                                "predicates": [
-                                  {
-                                    "CallBinary": {
-                                      "func": "Gt",
-                                      "expr1": {
-                                        "Column": 0
-                                      },
-                                      "expr2": {
-                                        "Column": 1
-                                      }
-                                    }
-                                  }
+                                "outputs": [
+                                  0
                                 ]
                               }
                             },
-                            "outputs": [
-                              0
-                            ]
+                            "group_key": [
+                              {
+                                "Column": [
+                                  0,
+                                  null
+                                ]
+                              }
+                            ],
+                            "aggregates": [],
+                            "monotonic": false,
+                            "expected_group_size": null
                           }
                         },
-                        "group_key": [
+                        "keys": [
+                          [
+                            {
+                              "Column": [
+                                0,
+                                null
+                              ]
+                            }
+                          ]
+                        ]
+                      }
+                    }
+                  ],
+                  "equivalences": [
+                    [
+                      {
+                        "Column": [
+                          1,
+                          null
+                        ]
+                      },
+                      {
+                        "Column": [
+                          2,
+                          null
+                        ]
+                      }
+                    ]
+                  ],
+                  "implementation": {
+                    "Differential": [
+                      [
+                        1,
+                        [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
-                        "aggregates": [],
-                        "monotonic": false,
-                        "expected_group_size": null
-                      }
-                    },
-                    "keys": [
-                      [
                         {
-                          "Column": 0
+                          "V1": {
+                            "unique_key": true,
+                            "key_length": 1,
+                            "arranged": true,
+                            "cardinality": null,
+                            "filters": {
+                              "literal_equality": false,
+                              "like": false,
+                              "is_null": false,
+                              "literal_inequality": 0,
+                              "any_filter": false
+                            },
+                            "input": 1
+                          }
                         }
+                      ],
+                      [
+                        [
+                          0,
+                          [
+                            {
+                              "Column": [
+                                1,
+                                null
+                              ]
+                            }
+                          ],
+                          {
+                            "V1": {
+                              "unique_key": false,
+                              "key_length": 1,
+                              "arranged": false,
+                              "cardinality": null,
+                              "filters": {
+                                "literal_equality": false,
+                                "like": false,
+                                "is_null": false,
+                                "literal_inequality": 0,
+                                "any_filter": false
+                              },
+                              "input": 0
+                            }
+                          }
+                        ]
                       ]
                     ]
                   }
                 }
-              ],
-              "equivalences": [
-                [
-                  {
-                    "Column": 0
-                  },
-                  {
-                    "Column": 2
-                  }
-                ],
-                [
-                  {
-                    "Column": 1
-                  },
-                  {
-                    "Column": 3
-                  }
-                ]
-              ],
-              "implementation": {
-                "DeltaQuery": [
-                  [
-                    [
-                      1,
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      {
-                        "unique_key": true,
-                        "key_length": 1,
-                        "arranged": true,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 1
-                      }
-                    ],
-                    [
-                      2,
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      {
-                        "unique_key": true,
-                        "key_length": 1,
-                        "arranged": true,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 2
-                      }
-                    ]
-                  ],
-                  [
-                    [
-                      0,
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      {
-                        "unique_key": false,
-                        "key_length": 1,
-                        "arranged": true,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 0
-                      }
-                    ],
-                    [
-                      2,
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      {
-                        "unique_key": true,
-                        "key_length": 1,
-                        "arranged": true,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 2
-                      }
-                    ]
-                  ],
-                  [
-                    [
-                      0,
-                      [
-                        {
-                          "Column": 1
-                        }
-                      ],
-                      {
-                        "unique_key": false,
-                        "key_length": 1,
-                        "arranged": false,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 0
-                      }
-                    ],
-                    [
-                      1,
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      {
-                        "unique_key": true,
-                        "key_length": 1,
-                        "arranged": true,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 1
-                      }
-                    ]
-                  ]
-                ]
-              }
+              },
+              "outputs": [
+                0,
+                1
+              ]
             }
-          },
-          "outputs": [
-            0,
-            1
-          ]
+          }
         }
       }
     }
@@ -2021,7 +2197,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                   },
                   "group_key": [
                     {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        null
+                      ]
                     }
                   ],
                   "aggregates": [],
@@ -2058,7 +2237,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                       "keys": [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "b"
+                            ]
                           }
                         ]
                       ]
@@ -2143,7 +2325,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                         "IsNull": null
                                                       },
                                                       "expr": {
-                                                        "Column": 1
+                                                        "Column": [
+                                                          1,
+                                                          "b"
+                                                        ]
                                                       }
                                                     }
                                                   }
@@ -2155,7 +2340,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         "keys": [
                                           [
                                             {
-                                              "Column": 1
+                                              "Column": [
+                                                1,
+                                                "b"
+                                              ]
                                             }
                                           ]
                                         ]
@@ -2165,10 +2353,16 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                   "equivalences": [
                                     [
                                       {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          "b"
+                                        ]
                                       },
                                       {
-                                        "Column": 2
+                                        "Column": [
+                                          2,
+                                          "b"
+                                        ]
                                       }
                                     ]
                                   ],
@@ -2178,36 +2372,17 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         0,
                                         [
                                           {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "b"
+                                            ]
                                           }
                                         ],
                                         {
-                                          "unique_key": true,
-                                          "key_length": 1,
-                                          "arranged": true,
-                                          "cardinality": null,
-                                          "filters": {
-                                            "literal_equality": false,
-                                            "like": false,
-                                            "is_null": false,
-                                            "literal_inequality": 0,
-                                            "any_filter": false
-                                          },
-                                          "input": 0
-                                        }
-                                      ],
-                                      [
-                                        [
-                                          1,
-                                          [
-                                            {
-                                              "Column": 1
-                                            }
-                                          ],
-                                          {
-                                            "unique_key": false,
+                                          "V1": {
+                                            "unique_key": true,
                                             "key_length": 1,
-                                            "arranged": false,
+                                            "arranged": true,
                                             "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
@@ -2216,7 +2391,36 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                               "literal_inequality": 0,
                                               "any_filter": false
                                             },
-                                            "input": 1
+                                            "input": 0
+                                          }
+                                        }
+                                      ],
+                                      [
+                                        [
+                                          1,
+                                          [
+                                            {
+                                              "Column": [
+                                                1,
+                                                "b"
+                                              ]
+                                            }
+                                          ],
+                                          {
+                                            "V1": {
+                                              "unique_key": false,
+                                              "key_length": 1,
+                                              "arranged": false,
+                                              "cardinality": null,
+                                              "filters": {
+                                                "literal_equality": false,
+                                                "like": false,
+                                                "is_null": false,
+                                                "literal_inequality": 0,
+                                                "any_filter": false
+                                              },
+                                              "input": 1
+                                            }
                                           }
                                         ]
                                       ]
@@ -2325,7 +2529,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                             "IsNull": null
                                                           },
                                                           "expr": {
-                                                            "Column": 1
+                                                            "Column": [
+                                                              1,
+                                                              "b"
+                                                            ]
                                                           }
                                                         }
                                                       }
@@ -2337,7 +2544,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             "keys": [
                                               [
                                                 {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               ]
                                             ]
@@ -2347,10 +2557,16 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                       "equivalences": [
                                         [
                                           {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "b"
+                                            ]
                                           },
                                           {
-                                            "Column": 2
+                                            "Column": [
+                                              2,
+                                              "b"
+                                            ]
                                           }
                                         ]
                                       ],
@@ -2360,36 +2576,17 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             0,
                                             [
                                               {
-                                                "Column": 0
+                                                "Column": [
+                                                  0,
+                                                  "b"
+                                                ]
                                               }
                                             ],
                                             {
-                                              "unique_key": true,
-                                              "key_length": 1,
-                                              "arranged": true,
-                                              "cardinality": null,
-                                              "filters": {
-                                                "literal_equality": false,
-                                                "like": false,
-                                                "is_null": false,
-                                                "literal_inequality": 0,
-                                                "any_filter": false
-                                              },
-                                              "input": 0
-                                            }
-                                          ],
-                                          [
-                                            [
-                                              1,
-                                              [
-                                                {
-                                                  "Column": 1
-                                                }
-                                              ],
-                                              {
-                                                "unique_key": false,
+                                              "V1": {
+                                                "unique_key": true,
                                                 "key_length": 1,
-                                                "arranged": false,
+                                                "arranged": true,
                                                 "cardinality": null,
                                                 "filters": {
                                                   "literal_equality": false,
@@ -2398,7 +2595,36 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                   "literal_inequality": 0,
                                                   "any_filter": false
                                                 },
-                                                "input": 1
+                                                "input": 0
+                                              }
+                                            }
+                                          ],
+                                          [
+                                            [
+                                              1,
+                                              [
+                                                {
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
+                                                }
+                                              ],
+                                              {
+                                                "V1": {
+                                                  "unique_key": false,
+                                                  "key_length": 1,
+                                                  "arranged": false,
+                                                  "cardinality": null,
+                                                  "filters": {
+                                                    "literal_equality": false,
+                                                    "like": false,
+                                                    "is_null": false,
+                                                    "literal_inequality": 0,
+                                                    "any_filter": false
+                                                  },
+                                                  "input": 1
+                                                }
                                               }
                                             ]
                                           ]
@@ -2464,7 +2690,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         "keys": [
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ]
                                         ]
@@ -2590,7 +2819,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         "keys": [
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ]
                                         ]
@@ -2716,7 +2948,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         "keys": [
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ]
                                         ]
@@ -2726,13 +2961,22 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                   "equivalences": [
                                     [
                                       {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          null
+                                        ]
                                       },
                                       {
-                                        "Column": 1
+                                        "Column": [
+                                          1,
+                                          null
+                                        ]
                                       },
                                       {
-                                        "Column": 3
+                                        "Column": [
+                                          3,
+                                          null
+                                        ]
                                       }
                                     ]
                                   ],
@@ -2743,44 +2987,54 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           1,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
-                                            "unique_key": true,
-                                            "key_length": 1,
-                                            "arranged": false,
-                                            "cardinality": null,
-                                            "filters": {
-                                              "literal_equality": false,
-                                              "like": false,
-                                              "is_null": false,
-                                              "literal_inequality": 0,
-                                              "any_filter": false
-                                            },
-                                            "input": 1
+                                            "V1": {
+                                              "unique_key": true,
+                                              "key_length": 1,
+                                              "arranged": false,
+                                              "cardinality": null,
+                                              "filters": {
+                                                "literal_equality": false,
+                                                "like": false,
+                                                "is_null": false,
+                                                "literal_inequality": 0,
+                                                "any_filter": false
+                                              },
+                                              "input": 1
+                                            }
                                           }
                                         ],
                                         [
                                           2,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
-                                            "unique_key": true,
-                                            "key_length": 1,
-                                            "arranged": false,
-                                            "cardinality": null,
-                                            "filters": {
-                                              "literal_equality": false,
-                                              "like": false,
-                                              "is_null": false,
-                                              "literal_inequality": 0,
-                                              "any_filter": false
-                                            },
-                                            "input": 2
+                                            "V1": {
+                                              "unique_key": true,
+                                              "key_length": 1,
+                                              "arranged": false,
+                                              "cardinality": null,
+                                              "filters": {
+                                                "literal_equality": false,
+                                                "like": false,
+                                                "is_null": false,
+                                                "literal_inequality": 0,
+                                                "any_filter": false
+                                              },
+                                              "input": 2
+                                            }
                                           }
                                         ]
                                       ],
@@ -2789,44 +3043,54 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           2,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
-                                            "unique_key": true,
-                                            "key_length": 1,
-                                            "arranged": false,
-                                            "cardinality": null,
-                                            "filters": {
-                                              "literal_equality": false,
-                                              "like": false,
-                                              "is_null": false,
-                                              "literal_inequality": 0,
-                                              "any_filter": false
-                                            },
-                                            "input": 2
+                                            "V1": {
+                                              "unique_key": true,
+                                              "key_length": 1,
+                                              "arranged": false,
+                                              "cardinality": null,
+                                              "filters": {
+                                                "literal_equality": false,
+                                                "like": false,
+                                                "is_null": false,
+                                                "literal_inequality": 0,
+                                                "any_filter": false
+                                              },
+                                              "input": 2
+                                            }
                                           }
                                         ],
                                         [
                                           0,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
-                                            "unique_key": false,
-                                            "key_length": 1,
-                                            "arranged": false,
-                                            "cardinality": null,
-                                            "filters": {
-                                              "literal_equality": false,
-                                              "like": false,
-                                              "is_null": false,
-                                              "literal_inequality": 0,
-                                              "any_filter": false
-                                            },
-                                            "input": 0
+                                            "V1": {
+                                              "unique_key": false,
+                                              "key_length": 1,
+                                              "arranged": false,
+                                              "cardinality": null,
+                                              "filters": {
+                                                "literal_equality": false,
+                                                "like": false,
+                                                "is_null": false,
+                                                "literal_inequality": 0,
+                                                "any_filter": false
+                                              },
+                                              "input": 0
+                                            }
                                           }
                                         ]
                                       ],
@@ -2835,44 +3099,54 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           1,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
-                                            "unique_key": true,
-                                            "key_length": 1,
-                                            "arranged": false,
-                                            "cardinality": null,
-                                            "filters": {
-                                              "literal_equality": false,
-                                              "like": false,
-                                              "is_null": false,
-                                              "literal_inequality": 0,
-                                              "any_filter": false
-                                            },
-                                            "input": 1
+                                            "V1": {
+                                              "unique_key": true,
+                                              "key_length": 1,
+                                              "arranged": false,
+                                              "cardinality": null,
+                                              "filters": {
+                                                "literal_equality": false,
+                                                "like": false,
+                                                "is_null": false,
+                                                "literal_inequality": 0,
+                                                "any_filter": false
+                                              },
+                                              "input": 1
+                                            }
                                           }
                                         ],
                                         [
                                           0,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
-                                            "unique_key": false,
-                                            "key_length": 1,
-                                            "arranged": false,
-                                            "cardinality": null,
-                                            "filters": {
-                                              "literal_equality": false,
-                                              "like": false,
-                                              "is_null": false,
-                                              "literal_inequality": 0,
-                                              "any_filter": false
-                                            },
-                                            "input": 0
+                                            "V1": {
+                                              "unique_key": false,
+                                              "key_length": 1,
+                                              "arranged": false,
+                                              "cardinality": null,
+                                              "filters": {
+                                                "literal_equality": false,
+                                                "like": false,
+                                                "is_null": false,
+                                                "literal_inequality": 0,
+                                                "any_filter": false
+                                              },
+                                              "input": 0
+                                            }
                                           }
                                         ]
                                       ]
@@ -2919,7 +3193,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                       "IsNull": null
                     },
                     "expr": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "b"
+                      ]
                     }
                   }
                 }
@@ -2999,7 +3276,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       }
                     }
@@ -3037,7 +3317,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                   "keys": [
                     [
                       {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       }
                     ]
                   ]
@@ -3079,7 +3362,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                       "keys": [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "b"
+                            ]
                           }
                         ]
                       ]
@@ -3156,13 +3442,22 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                               "equivalences": [
                                 [
                                   {
-                                    "Column": 1
+                                    "Column": [
+                                      1,
+                                      "b"
+                                    ]
                                   },
                                   {
-                                    "Column": 3
+                                    "Column": [
+                                      3,
+                                      "b"
+                                    ]
                                   },
                                   {
-                                    "Column": 4
+                                    "Column": [
+                                      4,
+                                      "b"
+                                    ]
                                   }
                                 ]
                               ],
@@ -3173,44 +3468,54 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       1,
                                       [
                                         {
-                                          "Column": 1
+                                          "Column": [
+                                            1,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
-                                        "unique_key": false,
-                                        "key_length": 1,
-                                        "arranged": false,
-                                        "cardinality": null,
-                                        "filters": {
-                                          "literal_equality": false,
-                                          "like": false,
-                                          "is_null": false,
-                                          "literal_inequality": 0,
-                                          "any_filter": false
-                                        },
-                                        "input": 1
+                                        "V1": {
+                                          "unique_key": false,
+                                          "key_length": 1,
+                                          "arranged": false,
+                                          "cardinality": null,
+                                          "filters": {
+                                            "literal_equality": false,
+                                            "like": false,
+                                            "is_null": false,
+                                            "literal_inequality": 0,
+                                            "any_filter": false
+                                          },
+                                          "input": 1
+                                        }
                                       }
                                     ],
                                     [
                                       2,
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
-                                        "unique_key": false,
-                                        "key_length": 1,
-                                        "arranged": false,
-                                        "cardinality": null,
-                                        "filters": {
-                                          "literal_equality": false,
-                                          "like": false,
-                                          "is_null": false,
-                                          "literal_inequality": 0,
-                                          "any_filter": false
-                                        },
-                                        "input": 2
+                                        "V1": {
+                                          "unique_key": false,
+                                          "key_length": 1,
+                                          "arranged": false,
+                                          "cardinality": null,
+                                          "filters": {
+                                            "literal_equality": false,
+                                            "like": false,
+                                            "is_null": false,
+                                            "literal_inequality": 0,
+                                            "any_filter": false
+                                          },
+                                          "input": 2
+                                        }
                                       }
                                     ]
                                   ],
@@ -3219,44 +3524,54 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       0,
                                       [
                                         {
-                                          "Column": 1
+                                          "Column": [
+                                            1,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
-                                        "unique_key": false,
-                                        "key_length": 1,
-                                        "arranged": false,
-                                        "cardinality": null,
-                                        "filters": {
-                                          "literal_equality": false,
-                                          "like": false,
-                                          "is_null": false,
-                                          "literal_inequality": 0,
-                                          "any_filter": false
-                                        },
-                                        "input": 0
+                                        "V1": {
+                                          "unique_key": false,
+                                          "key_length": 1,
+                                          "arranged": false,
+                                          "cardinality": null,
+                                          "filters": {
+                                            "literal_equality": false,
+                                            "like": false,
+                                            "is_null": false,
+                                            "literal_inequality": 0,
+                                            "any_filter": false
+                                          },
+                                          "input": 0
+                                        }
                                       }
                                     ],
                                     [
                                       2,
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
-                                        "unique_key": false,
-                                        "key_length": 1,
-                                        "arranged": false,
-                                        "cardinality": null,
-                                        "filters": {
-                                          "literal_equality": false,
-                                          "like": false,
-                                          "is_null": false,
-                                          "literal_inequality": 0,
-                                          "any_filter": false
-                                        },
-                                        "input": 2
+                                        "V1": {
+                                          "unique_key": false,
+                                          "key_length": 1,
+                                          "arranged": false,
+                                          "cardinality": null,
+                                          "filters": {
+                                            "literal_equality": false,
+                                            "like": false,
+                                            "is_null": false,
+                                            "literal_inequality": 0,
+                                            "any_filter": false
+                                          },
+                                          "input": 2
+                                        }
                                       }
                                     ]
                                   ],
@@ -3265,44 +3580,54 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       0,
                                       [
                                         {
-                                          "Column": 1
+                                          "Column": [
+                                            1,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
-                                        "unique_key": false,
-                                        "key_length": 1,
-                                        "arranged": false,
-                                        "cardinality": null,
-                                        "filters": {
-                                          "literal_equality": false,
-                                          "like": false,
-                                          "is_null": false,
-                                          "literal_inequality": 0,
-                                          "any_filter": false
-                                        },
-                                        "input": 0
+                                        "V1": {
+                                          "unique_key": false,
+                                          "key_length": 1,
+                                          "arranged": false,
+                                          "cardinality": null,
+                                          "filters": {
+                                            "literal_equality": false,
+                                            "like": false,
+                                            "is_null": false,
+                                            "literal_inequality": 0,
+                                            "any_filter": false
+                                          },
+                                          "input": 0
+                                        }
                                       }
                                     ],
                                     [
                                       1,
                                       [
                                         {
-                                          "Column": 1
+                                          "Column": [
+                                            1,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
-                                        "unique_key": false,
-                                        "key_length": 1,
-                                        "arranged": false,
-                                        "cardinality": null,
-                                        "filters": {
-                                          "literal_equality": false,
-                                          "like": false,
-                                          "is_null": false,
-                                          "literal_inequality": 0,
-                                          "any_filter": false
-                                        },
-                                        "input": 1
+                                        "V1": {
+                                          "unique_key": false,
+                                          "key_length": 1,
+                                          "arranged": false,
+                                          "cardinality": null,
+                                          "filters": {
+                                            "literal_equality": false,
+                                            "like": false,
+                                            "is_null": false,
+                                            "literal_inequality": 0,
+                                            "any_filter": false
+                                          },
+                                          "input": 1
+                                        }
                                       }
                                     ]
                                   ]
@@ -3385,7 +3710,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                         },
                                                         "group_key": [
                                                           {
-                                                            "Column": 0
+                                                            "Column": [
+                                                              0,
+                                                              null
+                                                            ]
                                                           }
                                                         ],
                                                         "aggregates": [],
@@ -3396,7 +3724,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                     "keys": [
                                                       [
                                                         {
-                                                          "Column": 0
+                                                          "Column": [
+                                                            0,
+                                                            null
+                                                          ]
                                                         }
                                                       ]
                                                     ]
@@ -3406,10 +3737,16 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                               "equivalences": [
                                                 [
                                                   {
-                                                    "Column": 0
+                                                    "Column": [
+                                                      0,
+                                                      "b"
+                                                    ]
                                                   },
                                                   {
-                                                    "Column": 1
+                                                    "Column": [
+                                                      1,
+                                                      null
+                                                    ]
                                                   }
                                                 ]
                                               ],
@@ -3419,36 +3756,17 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                     1,
                                                     [
                                                       {
-                                                        "Column": 0
+                                                        "Column": [
+                                                          0,
+                                                          null
+                                                        ]
                                                       }
                                                     ],
                                                     {
-                                                      "unique_key": true,
-                                                      "key_length": 1,
-                                                      "arranged": true,
-                                                      "cardinality": null,
-                                                      "filters": {
-                                                        "literal_equality": false,
-                                                        "like": false,
-                                                        "is_null": false,
-                                                        "literal_inequality": 0,
-                                                        "any_filter": false
-                                                      },
-                                                      "input": 1
-                                                    }
-                                                  ],
-                                                  [
-                                                    [
-                                                      0,
-                                                      [
-                                                        {
-                                                          "Column": 0
-                                                        }
-                                                      ],
-                                                      {
-                                                        "unique_key": false,
+                                                      "V1": {
+                                                        "unique_key": true,
                                                         "key_length": 1,
-                                                        "arranged": false,
+                                                        "arranged": true,
                                                         "cardinality": null,
                                                         "filters": {
                                                           "literal_equality": false,
@@ -3457,7 +3775,36 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                           "literal_inequality": 0,
                                                           "any_filter": false
                                                         },
-                                                        "input": 0
+                                                        "input": 1
+                                                      }
+                                                    }
+                                                  ],
+                                                  [
+                                                    [
+                                                      0,
+                                                      [
+                                                        {
+                                                          "Column": [
+                                                            0,
+                                                            "b"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      {
+                                                        "V1": {
+                                                          "unique_key": false,
+                                                          "key_length": 1,
+                                                          "arranged": false,
+                                                          "cardinality": null,
+                                                          "filters": {
+                                                            "literal_equality": false,
+                                                            "like": false,
+                                                            "is_null": false,
+                                                            "literal_inequality": 0,
+                                                            "any_filter": false
+                                                          },
+                                                          "input": 0
+                                                        }
                                                       }
                                                     ]
                                                   ]
@@ -3739,7 +4086,10 @@ FROM
                                     "keys": [
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "a"
+                                          ]
                                         }
                                       ]
                                     ]
@@ -3775,7 +4125,10 @@ FROM
                                                       },
                                                       "group_key": [
                                                         {
-                                                          "Column": 0
+                                                          "Column": [
+                                                            0,
+                                                            null
+                                                          ]
                                                         }
                                                       ],
                                                       "aggregates": [],
@@ -3813,25 +4166,7 @@ FROM
                                                   0,
                                                   [],
                                                   {
-                                                    "unique_key": false,
-                                                    "key_length": 0,
-                                                    "arranged": false,
-                                                    "cardinality": null,
-                                                    "filters": {
-                                                      "literal_equality": false,
-                                                      "like": false,
-                                                      "is_null": false,
-                                                      "literal_inequality": 0,
-                                                      "any_filter": false
-                                                    },
-                                                    "input": 0
-                                                  }
-                                                ],
-                                                [
-                                                  [
-                                                    1,
-                                                    [],
-                                                    {
+                                                    "V1": {
                                                       "unique_key": false,
                                                       "key_length": 0,
                                                       "arranged": false,
@@ -3843,7 +4178,29 @@ FROM
                                                         "literal_inequality": 0,
                                                         "any_filter": false
                                                       },
-                                                      "input": 1
+                                                      "input": 0
+                                                    }
+                                                  }
+                                                ],
+                                                [
+                                                  [
+                                                    1,
+                                                    [],
+                                                    {
+                                                      "V1": {
+                                                        "unique_key": false,
+                                                        "key_length": 0,
+                                                        "arranged": false,
+                                                        "cardinality": null,
+                                                        "filters": {
+                                                          "literal_equality": false,
+                                                          "like": false,
+                                                          "is_null": false,
+                                                          "literal_inequality": 0,
+                                                          "any_filter": false
+                                                        },
+                                                        "input": 1
+                                                      }
                                                     }
                                                   ]
                                                 ]
@@ -3853,7 +4210,10 @@ FROM
                                         },
                                         "group_key": [
                                           {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              null
+                                            ]
                                           }
                                         ],
                                         "aggregates": [
@@ -3861,12 +4221,20 @@ FROM
                                             "func": "MaxInt32",
                                             "expr": {
                                               "CallBinary": {
-                                                "func": "MulInt32",
+                                                "func": {
+                                                  "MulInt32": null
+                                                },
                                                 "expr1": {
-                                                  "Column": 0
+                                                  "Column": [
+                                                    0,
+                                                    "a"
+                                                  ]
                                                 },
                                                 "expr2": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "a"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -3880,7 +4248,10 @@ FROM
                                     "keys": [
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            null
+                                          ]
                                         }
                                       ]
                                     ]
@@ -3890,10 +4261,16 @@ FROM
                               "equivalences": [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      null
+                                    ]
                                   },
                                   {
-                                    "Column": 2
+                                    "Column": [
+                                      2,
+                                      null
+                                    ]
                                   }
                                 ]
                               ],
@@ -3903,34 +4280,15 @@ FROM
                                     1,
                                     [
                                       {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          null
+                                        ]
                                       }
                                     ],
                                     {
-                                      "unique_key": true,
-                                      "key_length": 1,
-                                      "arranged": true,
-                                      "cardinality": null,
-                                      "filters": {
-                                        "literal_equality": false,
-                                        "like": false,
-                                        "is_null": false,
-                                        "literal_inequality": 0,
-                                        "any_filter": true
-                                      },
-                                      "input": 1
-                                    }
-                                  ],
-                                  [
-                                    [
-                                      0,
-                                      [
-                                        {
-                                          "Column": 0
-                                        }
-                                      ],
-                                      {
-                                        "unique_key": false,
+                                      "V1": {
+                                        "unique_key": true,
                                         "key_length": 1,
                                         "arranged": true,
                                         "cardinality": null,
@@ -3941,7 +4299,36 @@ FROM
                                           "literal_inequality": 0,
                                           "any_filter": true
                                         },
-                                        "input": 0
+                                        "input": 1
+                                      }
+                                    }
+                                  ],
+                                  [
+                                    [
+                                      0,
+                                      [
+                                        {
+                                          "Column": [
+                                            0,
+                                            "a"
+                                          ]
+                                        }
+                                      ],
+                                      {
+                                        "V1": {
+                                          "unique_key": false,
+                                          "key_length": 1,
+                                          "arranged": true,
+                                          "cardinality": null,
+                                          "filters": {
+                                            "literal_equality": false,
+                                            "like": false,
+                                            "is_null": false,
+                                            "literal_inequality": 0,
+                                            "any_filter": true
+                                          },
+                                          "input": 0
+                                        }
                                       }
                                     ]
                                   ]
@@ -3952,12 +4339,20 @@ FROM
                           "predicates": [
                             {
                               "CallBinary": {
-                                "func": "NotEq",
+                                "func": {
+                                  "NotEq": null
+                                },
                                 "expr1": {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    null
+                                  ]
                                 },
                                 "expr2": {
-                                  "Column": 3
+                                  "Column": [
+                                    3,
+                                    "m"
+                                  ]
                                 }
                               }
                             }
@@ -4008,7 +4403,10 @@ FROM
                                     "keys": [
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            null
+                                          ]
                                         }
                                       ]
                                     ]
@@ -4059,7 +4457,10 @@ FROM
                                                       },
                                                       "group_key": [
                                                         {
-                                                          "Column": 0
+                                                          "Column": [
+                                                            0,
+                                                            null
+                                                          ]
                                                         }
                                                       ],
                                                       "aggregates": [],
@@ -4097,25 +4498,7 @@ FROM
                                                   0,
                                                   [],
                                                   {
-                                                    "unique_key": false,
-                                                    "key_length": 0,
-                                                    "arranged": false,
-                                                    "cardinality": null,
-                                                    "filters": {
-                                                      "literal_equality": false,
-                                                      "like": false,
-                                                      "is_null": false,
-                                                      "literal_inequality": 0,
-                                                      "any_filter": false
-                                                    },
-                                                    "input": 0
-                                                  }
-                                                ],
-                                                [
-                                                  [
-                                                    1,
-                                                    [],
-                                                    {
+                                                    "V1": {
                                                       "unique_key": false,
                                                       "key_length": 0,
                                                       "arranged": false,
@@ -4127,7 +4510,29 @@ FROM
                                                         "literal_inequality": 0,
                                                         "any_filter": false
                                                       },
-                                                      "input": 1
+                                                      "input": 0
+                                                    }
+                                                  }
+                                                ],
+                                                [
+                                                  [
+                                                    1,
+                                                    [],
+                                                    {
+                                                      "V1": {
+                                                        "unique_key": false,
+                                                        "key_length": 0,
+                                                        "arranged": false,
+                                                        "cardinality": null,
+                                                        "filters": {
+                                                          "literal_equality": false,
+                                                          "like": false,
+                                                          "is_null": false,
+                                                          "literal_inequality": 0,
+                                                          "any_filter": false
+                                                        },
+                                                        "input": 1
+                                                      }
                                                     }
                                                   ]
                                                 ]
@@ -4137,7 +4542,10 @@ FROM
                                         },
                                         "group_key": [
                                           {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              null
+                                            ]
                                           }
                                         ],
                                         "aggregates": [
@@ -4145,12 +4553,20 @@ FROM
                                             "func": "MaxInt32",
                                             "expr": {
                                               "CallBinary": {
-                                                "func": "MulInt32",
+                                                "func": {
+                                                  "MulInt32": null
+                                                },
                                                 "expr1": {
-                                                  "Column": 0
+                                                  "Column": [
+                                                    0,
+                                                    "a"
+                                                  ]
                                                 },
                                                 "expr2": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "a"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -4164,7 +4580,10 @@ FROM
                                     "keys": [
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            null
+                                          ]
                                         }
                                       ]
                                     ]
@@ -4174,10 +4593,16 @@ FROM
                               "equivalences": [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      null
+                                    ]
                                   },
                                   {
-                                    "Column": 3
+                                    "Column": [
+                                      3,
+                                      null
+                                    ]
                                   }
                                 ]
                               ],
@@ -4187,36 +4612,17 @@ FROM
                                     1,
                                     [
                                       {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          null
+                                        ]
                                       }
                                     ],
                                     {
-                                      "unique_key": true,
-                                      "key_length": 1,
-                                      "arranged": true,
-                                      "cardinality": null,
-                                      "filters": {
-                                        "literal_equality": false,
-                                        "like": false,
-                                        "is_null": false,
-                                        "literal_inequality": 0,
-                                        "any_filter": true
-                                      },
-                                      "input": 1
-                                    }
-                                  ],
-                                  [
-                                    [
-                                      0,
-                                      [
-                                        {
-                                          "Column": 0
-                                        }
-                                      ],
-                                      {
-                                        "unique_key": false,
+                                      "V1": {
+                                        "unique_key": true,
                                         "key_length": 1,
-                                        "arranged": false,
+                                        "arranged": true,
                                         "cardinality": null,
                                         "filters": {
                                           "literal_equality": false,
@@ -4225,7 +4631,36 @@ FROM
                                           "literal_inequality": 0,
                                           "any_filter": true
                                         },
-                                        "input": 0
+                                        "input": 1
+                                      }
+                                    }
+                                  ],
+                                  [
+                                    [
+                                      0,
+                                      [
+                                        {
+                                          "Column": [
+                                            0,
+                                            null
+                                          ]
+                                        }
+                                      ],
+                                      {
+                                        "V1": {
+                                          "unique_key": false,
+                                          "key_length": 1,
+                                          "arranged": false,
+                                          "cardinality": null,
+                                          "filters": {
+                                            "literal_equality": false,
+                                            "like": false,
+                                            "is_null": false,
+                                            "literal_inequality": 0,
+                                            "any_filter": true
+                                          },
+                                          "input": 0
+                                        }
                                       }
                                     ]
                                   ]
@@ -4236,12 +4671,20 @@ FROM
                           "predicates": [
                             {
                               "CallBinary": {
-                                "func": "NotEq",
+                                "func": {
+                                  "NotEq": null
+                                },
                                 "expr1": {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    null
+                                  ]
                                 },
                                 "expr2": {
-                                  "Column": 4
+                                  "Column": [
+                                    4,
+                                    "m"
+                                  ]
                                 }
                               }
                             }
@@ -4371,25 +4814,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                     0,
                     [],
                     {
-                      "unique_key": false,
-                      "key_length": 0,
-                      "arranged": false,
-                      "cardinality": null,
-                      "filters": {
-                        "literal_equality": false,
-                        "like": false,
-                        "is_null": false,
-                        "literal_inequality": 0,
-                        "any_filter": false
-                      },
-                      "input": 0
-                    }
-                  ],
-                  [
-                    [
-                      1,
-                      [],
-                      {
+                      "V1": {
                         "unique_key": false,
                         "key_length": 0,
                         "arranged": false,
@@ -4401,7 +4826,29 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                           "literal_inequality": 0,
                           "any_filter": false
                         },
-                        "input": 1
+                        "input": 0
+                      }
+                    }
+                  ],
+                  [
+                    [
+                      1,
+                      [],
+                      {
+                        "V1": {
+                          "unique_key": false,
+                          "key_length": 0,
+                          "arranged": false,
+                          "cardinality": null,
+                          "filters": {
+                            "literal_equality": false,
+                            "like": false,
+                            "is_null": false,
+                            "literal_inequality": 0,
+                            "any_filter": false
+                          },
+                          "input": 1
+                        }
                       }
                     ]
                   ]
@@ -4480,7 +4927,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       }
                     }
@@ -4518,7 +4968,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                   "keys": [
                     [
                       {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       }
                     ]
                   ]
@@ -4604,7 +5057,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                             "keys": [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "b"
+                                  ]
                                 }
                               ]
                             ]
@@ -4614,13 +5070,22 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                       "equivalences": [
                         [
                           {
-                            "Column": 1
+                            "Column": [
+                              1,
+                              "b"
+                            ]
                           },
                           {
-                            "Column": 3
+                            "Column": [
+                              3,
+                              "b"
+                            ]
                           },
                           {
-                            "Column": 4
+                            "Column": [
+                              4,
+                              "b"
+                            ]
                           }
                         ]
                       ],
@@ -4631,44 +5096,54 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               1,
                               [
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
-                                "unique_key": false,
-                                "key_length": 1,
-                                "arranged": false,
-                                "cardinality": null,
-                                "filters": {
-                                  "literal_equality": false,
-                                  "like": false,
-                                  "is_null": false,
-                                  "literal_inequality": 0,
-                                  "any_filter": false
-                                },
-                                "input": 1
+                                "V1": {
+                                  "unique_key": false,
+                                  "key_length": 1,
+                                  "arranged": false,
+                                  "cardinality": null,
+                                  "filters": {
+                                    "literal_equality": false,
+                                    "like": false,
+                                    "is_null": false,
+                                    "literal_inequality": 0,
+                                    "any_filter": false
+                                  },
+                                  "input": 1
+                                }
                               }
                             ],
                             [
                               2,
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
-                                "unique_key": false,
-                                "key_length": 1,
-                                "arranged": false,
-                                "cardinality": null,
-                                "filters": {
-                                  "literal_equality": false,
-                                  "like": false,
-                                  "is_null": false,
-                                  "literal_inequality": 0,
-                                  "any_filter": false
-                                },
-                                "input": 2
+                                "V1": {
+                                  "unique_key": false,
+                                  "key_length": 1,
+                                  "arranged": false,
+                                  "cardinality": null,
+                                  "filters": {
+                                    "literal_equality": false,
+                                    "like": false,
+                                    "is_null": false,
+                                    "literal_inequality": 0,
+                                    "any_filter": false
+                                  },
+                                  "input": 2
+                                }
                               }
                             ]
                           ],
@@ -4677,44 +5152,54 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               0,
                               [
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
-                                "unique_key": false,
-                                "key_length": 1,
-                                "arranged": false,
-                                "cardinality": null,
-                                "filters": {
-                                  "literal_equality": false,
-                                  "like": false,
-                                  "is_null": false,
-                                  "literal_inequality": 0,
-                                  "any_filter": false
-                                },
-                                "input": 0
+                                "V1": {
+                                  "unique_key": false,
+                                  "key_length": 1,
+                                  "arranged": false,
+                                  "cardinality": null,
+                                  "filters": {
+                                    "literal_equality": false,
+                                    "like": false,
+                                    "is_null": false,
+                                    "literal_inequality": 0,
+                                    "any_filter": false
+                                  },
+                                  "input": 0
+                                }
                               }
                             ],
                             [
                               2,
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
-                                "unique_key": false,
-                                "key_length": 1,
-                                "arranged": false,
-                                "cardinality": null,
-                                "filters": {
-                                  "literal_equality": false,
-                                  "like": false,
-                                  "is_null": false,
-                                  "literal_inequality": 0,
-                                  "any_filter": false
-                                },
-                                "input": 2
+                                "V1": {
+                                  "unique_key": false,
+                                  "key_length": 1,
+                                  "arranged": false,
+                                  "cardinality": null,
+                                  "filters": {
+                                    "literal_equality": false,
+                                    "like": false,
+                                    "is_null": false,
+                                    "literal_inequality": 0,
+                                    "any_filter": false
+                                  },
+                                  "input": 2
+                                }
                               }
                             ]
                           ],
@@ -4723,44 +5208,54 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               0,
                               [
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
-                                "unique_key": false,
-                                "key_length": 1,
-                                "arranged": false,
-                                "cardinality": null,
-                                "filters": {
-                                  "literal_equality": false,
-                                  "like": false,
-                                  "is_null": false,
-                                  "literal_inequality": 0,
-                                  "any_filter": false
-                                },
-                                "input": 0
+                                "V1": {
+                                  "unique_key": false,
+                                  "key_length": 1,
+                                  "arranged": false,
+                                  "cardinality": null,
+                                  "filters": {
+                                    "literal_equality": false,
+                                    "like": false,
+                                    "is_null": false,
+                                    "literal_inequality": 0,
+                                    "any_filter": false
+                                  },
+                                  "input": 0
+                                }
                               }
                             ],
                             [
                               1,
                               [
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
-                                "unique_key": false,
-                                "key_length": 1,
-                                "arranged": false,
-                                "cardinality": null,
-                                "filters": {
-                                  "literal_equality": false,
-                                  "like": false,
-                                  "is_null": false,
-                                  "literal_inequality": 0,
-                                  "any_filter": false
-                                },
-                                "input": 1
+                                "V1": {
+                                  "unique_key": false,
+                                  "key_length": 1,
+                                  "arranged": false,
+                                  "cardinality": null,
+                                  "filters": {
+                                    "literal_equality": false,
+                                    "like": false,
+                                    "is_null": false,
+                                    "literal_inequality": 0,
+                                    "any_filter": false
+                                  },
+                                  "input": 1
+                                }
                               }
                             ]
                           ]
@@ -4859,7 +5354,10 @@ WHERE a = c and d = e and b = f
                                     "IsNull": null
                                   },
                                   "expr": {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "a"
+                                    ]
                                   }
                                 }
                               }
@@ -4876,7 +5374,10 @@ WHERE a = c and d = e and b = f
                                     "IsNull": null
                                   },
                                   "expr": {
-                                    "Column": 1
+                                    "Column": [
+                                      1,
+                                      "b"
+                                    ]
                                   }
                                 }
                               }
@@ -4888,15 +5389,24 @@ WHERE a = c and d = e and b = f
                     "keys": [
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         }
                       ],
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         },
                         {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       ]
                     ]
@@ -4949,12 +5459,18 @@ WHERE a = c and d = e and b = f
                     "keys": [
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "c"
+                          ]
                         }
                       ],
                       [
                         {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "d"
+                          ]
                         }
                       ]
                     ]
@@ -5008,7 +5524,10 @@ WHERE a = c and d = e and b = f
                                     "IsNull": null
                                   },
                                   "expr": {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      "e"
+                                    ]
                                   }
                                 }
                               }
@@ -5025,7 +5544,10 @@ WHERE a = c and d = e and b = f
                                     "IsNull": null
                                   },
                                   "expr": {
-                                    "Column": 1
+                                    "Column": [
+                                      1,
+                                      "f"
+                                    ]
                                   }
                                 }
                               }
@@ -5037,10 +5559,16 @@ WHERE a = c and d = e and b = f
                     "keys": [
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "e"
+                          ]
                         },
                         {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "f"
+                          ]
                         }
                       ]
                     ]
@@ -5050,26 +5578,44 @@ WHERE a = c and d = e and b = f
               "equivalences": [
                 [
                   {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      "a"
+                    ]
                   },
                   {
-                    "Column": 2
+                    "Column": [
+                      2,
+                      "c"
+                    ]
                   }
                 ],
                 [
                   {
-                    "Column": 1
+                    "Column": [
+                      1,
+                      "b"
+                    ]
                   },
                   {
-                    "Column": 5
+                    "Column": [
+                      5,
+                      "f"
+                    ]
                   }
                 ],
                 [
                   {
-                    "Column": 3
+                    "Column": [
+                      3,
+                      "d"
+                    ]
                   },
                   {
-                    "Column": 4
+                    "Column": [
+                      4,
+                      "e"
+                    ]
                   }
                 ]
               ],
@@ -5080,47 +5626,60 @@ WHERE a = c and d = e and b = f
                       1,
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "c"
+                          ]
                         }
                       ],
                       {
-                        "unique_key": false,
-                        "key_length": 1,
-                        "arranged": true,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 1
+                        "V1": {
+                          "unique_key": false,
+                          "key_length": 1,
+                          "arranged": true,
+                          "cardinality": null,
+                          "filters": {
+                            "literal_equality": false,
+                            "like": false,
+                            "is_null": false,
+                            "literal_inequality": 0,
+                            "any_filter": false
+                          },
+                          "input": 1
+                        }
                       }
                     ],
                     [
                       2,
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "e"
+                          ]
                         },
                         {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "f"
+                          ]
                         }
                       ],
                       {
-                        "unique_key": false,
-                        "key_length": 2,
-                        "arranged": false,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 2
+                        "V1": {
+                          "unique_key": false,
+                          "key_length": 2,
+                          "arranged": false,
+                          "cardinality": null,
+                          "filters": {
+                            "literal_equality": false,
+                            "like": false,
+                            "is_null": false,
+                            "literal_inequality": 0,
+                            "any_filter": false
+                          },
+                          "input": 2
+                        }
                       }
                     ]
                   ],
@@ -5129,47 +5688,60 @@ WHERE a = c and d = e and b = f
                       0,
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         }
                       ],
                       {
-                        "unique_key": false,
-                        "key_length": 1,
-                        "arranged": true,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 0
+                        "V1": {
+                          "unique_key": false,
+                          "key_length": 1,
+                          "arranged": true,
+                          "cardinality": null,
+                          "filters": {
+                            "literal_equality": false,
+                            "like": false,
+                            "is_null": false,
+                            "literal_inequality": 0,
+                            "any_filter": false
+                          },
+                          "input": 0
+                        }
                       }
                     ],
                     [
                       2,
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "e"
+                          ]
                         },
                         {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "f"
+                          ]
                         }
                       ],
                       {
-                        "unique_key": false,
-                        "key_length": 2,
-                        "arranged": false,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 2
+                        "V1": {
+                          "unique_key": false,
+                          "key_length": 2,
+                          "arranged": false,
+                          "cardinality": null,
+                          "filters": {
+                            "literal_equality": false,
+                            "like": false,
+                            "is_null": false,
+                            "literal_inequality": 0,
+                            "any_filter": false
+                          },
+                          "input": 2
+                        }
                       }
                     ]
                   ],
@@ -5178,47 +5750,60 @@ WHERE a = c and d = e and b = f
                       1,
                       [
                         {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "d"
+                          ]
                         }
                       ],
                       {
-                        "unique_key": false,
-                        "key_length": 1,
-                        "arranged": true,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 1
+                        "V1": {
+                          "unique_key": false,
+                          "key_length": 1,
+                          "arranged": true,
+                          "cardinality": null,
+                          "filters": {
+                            "literal_equality": false,
+                            "like": false,
+                            "is_null": false,
+                            "literal_inequality": 0,
+                            "any_filter": false
+                          },
+                          "input": 1
+                        }
                       }
                     ],
                     [
                       0,
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         },
                         {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       ],
                       {
-                        "unique_key": false,
-                        "key_length": 2,
-                        "arranged": false,
-                        "cardinality": null,
-                        "filters": {
-                          "literal_equality": false,
-                          "like": false,
-                          "is_null": false,
-                          "literal_inequality": 0,
-                          "any_filter": false
-                        },
-                        "input": 0
+                        "V1": {
+                          "unique_key": false,
+                          "key_length": 2,
+                          "arranged": false,
+                          "cardinality": null,
+                          "filters": {
+                            "literal_equality": false,
+                            "like": false,
+                            "is_null": false,
+                            "literal_inequality": 0,
+                            "any_filter": false
+                          },
+                          "input": 0
+                        }
                       }
                     ]
                   ]
@@ -5304,7 +5889,10 @@ WHERE b = c and d = e
                         "keys": [
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "b"
+                              ]
                             }
                           ]
                         ]
@@ -5357,12 +5945,18 @@ WHERE b = c and d = e
                         "keys": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "c"
+                              ]
                             }
                           ],
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "d"
+                              ]
                             }
                           ]
                         ]
@@ -5407,7 +6001,10 @@ WHERE b = c and d = e
                         "keys": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ]
                         ]
@@ -5417,18 +6014,30 @@ WHERE b = c and d = e
                   "equivalences": [
                     [
                       {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       },
                       {
-                        "Column": 2
+                        "Column": [
+                          2,
+                          "c"
+                        ]
                       }
                     ],
                     [
                       {
-                        "Column": 3
+                        "Column": [
+                          3,
+                          "d"
+                        ]
                       },
                       {
-                        "Column": 4
+                        "Column": [
+                          4,
+                          "e"
+                        ]
                       }
                     ]
                   ],
@@ -5439,44 +6048,54 @@ WHERE b = c and d = e
                           1,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "c"
+                              ]
                             }
                           ],
                           {
-                            "unique_key": false,
-                            "key_length": 1,
-                            "arranged": true,
-                            "cardinality": null,
-                            "filters": {
-                              "literal_equality": false,
-                              "like": false,
-                              "is_null": false,
-                              "literal_inequality": 0,
-                              "any_filter": false
-                            },
-                            "input": 1
+                            "V1": {
+                              "unique_key": false,
+                              "key_length": 1,
+                              "arranged": true,
+                              "cardinality": null,
+                              "filters": {
+                                "literal_equality": false,
+                                "like": false,
+                                "is_null": false,
+                                "literal_inequality": 0,
+                                "any_filter": false
+                              },
+                              "input": 1
+                            }
                           }
                         ],
                         [
                           2,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ],
                           {
-                            "unique_key": false,
-                            "key_length": 1,
-                            "arranged": true,
-                            "cardinality": null,
-                            "filters": {
-                              "literal_equality": false,
-                              "like": false,
-                              "is_null": false,
-                              "literal_inequality": 0,
-                              "any_filter": false
-                            },
-                            "input": 2
+                            "V1": {
+                              "unique_key": false,
+                              "key_length": 1,
+                              "arranged": true,
+                              "cardinality": null,
+                              "filters": {
+                                "literal_equality": false,
+                                "like": false,
+                                "is_null": false,
+                                "literal_inequality": 0,
+                                "any_filter": false
+                              },
+                              "input": 2
+                            }
                           }
                         ]
                       ],
@@ -5485,44 +6104,54 @@ WHERE b = c and d = e
                           0,
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "b"
+                              ]
                             }
                           ],
                           {
-                            "unique_key": false,
-                            "key_length": 1,
-                            "arranged": true,
-                            "cardinality": null,
-                            "filters": {
-                              "literal_equality": false,
-                              "like": false,
-                              "is_null": false,
-                              "literal_inequality": 0,
-                              "any_filter": false
-                            },
-                            "input": 0
+                            "V1": {
+                              "unique_key": false,
+                              "key_length": 1,
+                              "arranged": true,
+                              "cardinality": null,
+                              "filters": {
+                                "literal_equality": false,
+                                "like": false,
+                                "is_null": false,
+                                "literal_inequality": 0,
+                                "any_filter": false
+                              },
+                              "input": 0
+                            }
                           }
                         ],
                         [
                           2,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ],
                           {
-                            "unique_key": false,
-                            "key_length": 1,
-                            "arranged": true,
-                            "cardinality": null,
-                            "filters": {
-                              "literal_equality": false,
-                              "like": false,
-                              "is_null": false,
-                              "literal_inequality": 0,
-                              "any_filter": false
-                            },
-                            "input": 2
+                            "V1": {
+                              "unique_key": false,
+                              "key_length": 1,
+                              "arranged": true,
+                              "cardinality": null,
+                              "filters": {
+                                "literal_equality": false,
+                                "like": false,
+                                "is_null": false,
+                                "literal_inequality": 0,
+                                "any_filter": false
+                              },
+                              "input": 2
+                            }
                           }
                         ]
                       ],
@@ -5531,44 +6160,54 @@ WHERE b = c and d = e
                           1,
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "d"
+                              ]
                             }
                           ],
                           {
-                            "unique_key": false,
-                            "key_length": 1,
-                            "arranged": true,
-                            "cardinality": null,
-                            "filters": {
-                              "literal_equality": false,
-                              "like": false,
-                              "is_null": false,
-                              "literal_inequality": 0,
-                              "any_filter": false
-                            },
-                            "input": 1
+                            "V1": {
+                              "unique_key": false,
+                              "key_length": 1,
+                              "arranged": true,
+                              "cardinality": null,
+                              "filters": {
+                                "literal_equality": false,
+                                "like": false,
+                                "is_null": false,
+                                "literal_inequality": 0,
+                                "any_filter": false
+                              },
+                              "input": 1
+                            }
                           }
                         ],
                         [
                           0,
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "b"
+                              ]
                             }
                           ],
                           {
-                            "unique_key": false,
-                            "key_length": 1,
-                            "arranged": true,
-                            "cardinality": null,
-                            "filters": {
-                              "literal_equality": false,
-                              "like": false,
-                              "is_null": false,
-                              "literal_inequality": 0,
-                              "any_filter": false
-                            },
-                            "input": 0
+                            "V1": {
+                              "unique_key": false,
+                              "key_length": 1,
+                              "arranged": true,
+                              "cardinality": null,
+                              "filters": {
+                                "literal_equality": false,
+                                "like": false,
+                                "is_null": false,
+                                "literal_inequality": 0,
+                                "any_filter": false
+                              },
+                              "input": 0
+                            }
                           }
                         ]
                       ]
@@ -5588,7 +6227,10 @@ WHERE b = c and d = e
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       }
                     }
@@ -5605,7 +6247,10 @@ WHERE b = c and d = e
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 3
+                          "Column": [
+                            3,
+                            "d"
+                          ]
                         }
                       }
                     }
@@ -5640,7 +6285,7 @@ INSERT INTO t2 VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 
 # the other fields.
 
 query T multiline
-EXPLAIN AS JSON
+EXPLAIN OPTIMIZED PLAN AS JSON FOR
 SELECT s FROM t2 WHERE s ~ 'a.*';
 ----
 {
@@ -5689,7 +6334,10 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                       }
                     },
                     "expr": {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "s"
+                      ]
                     }
                   }
                 }
@@ -5723,7 +6371,10 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                   }
                 },
                 "expr": {
-                  "Column": 0
+                  "Column": [
+                    0,
+                    "s"
+                  ]
                 }
               }
             }

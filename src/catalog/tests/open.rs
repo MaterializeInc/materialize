@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
@@ -15,25 +17,28 @@ use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
-    test_bootstrap_args, CatalogError, Database, DurableCatalogError, DurableCatalogState, Epoch,
-    FenceError, Schema, TestCatalogStateBuilder, CATALOG_VERSION,
+    BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, Database, DurableCatalogError,
+    DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError,
+    MOCK_AUTHENTICATION_NONCE_KEY, Schema, TestCatalogStateBuilder, test_bootstrap_args,
 };
+use mz_catalog_protos::objects::{SettingKey, SettingValue};
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation};
+use mz_persist_types::ShardId;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
+use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};
 use uuid::Uuid;
 
-/// A new type for [`Snapshot`] that excludes the user_version from the debug output. The
-/// user_version changes frequently, so it's useful to print the contents excluding the
-/// user_version to avoid having to update the expected value in tests.
-struct HiddenUserVersionSnapshot<'a>(&'a Snapshot);
+/// A new type for [`Snapshot`] that excludes fields that change often from the debug output. It's
+/// useful to print the contents excluding these fields to avoid having to update the expected value
+/// in tests.
+struct StableSnapshot<'a>(&'a Snapshot);
 
-impl HiddenUserVersionSnapshot<'_> {
+impl StableSnapshot<'_> {
     fn user_version(&self) -> Option<&proto::ConfigValue> {
         self.0.configs.get(&Self::user_version_key())
     }
@@ -43,14 +48,41 @@ impl HiddenUserVersionSnapshot<'_> {
             key: USER_VERSION_KEY.to_string(),
         }
     }
+
+    fn builtin_migration_shard(&self) -> Option<&proto::SettingValue> {
+        self.0.settings.get(&Self::builtin_migration_shard_key())
+    }
+
+    fn builtin_migration_shard_key() -> proto::SettingKey {
+        proto::SettingKey {
+            name: BUILTIN_MIGRATION_SHARD_KEY.to_string(),
+        }
+    }
+
+    fn expression_cache_shard(&self) -> Option<&proto::SettingValue> {
+        self.0.settings.get(&Self::expression_cache_shard_key())
+    }
+
+    fn expression_cache_shard_key() -> proto::SettingKey {
+        proto::SettingKey {
+            name: EXPRESSION_CACHE_SHARD_KEY.to_string(),
+        }
+    }
+
+    fn mock_authentication_nonce_key() -> proto::SettingKey {
+        proto::SettingKey {
+            name: MOCK_AUTHENTICATION_NONCE_KEY.to_string(),
+        }
+    }
 }
 
-impl Debug for HiddenUserVersionSnapshot<'_> {
+impl Debug for StableSnapshot<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Snapshot {
             databases,
             schemas,
             roles,
+            role_auth,
             items,
             comments,
             clusters,
@@ -71,10 +103,15 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
         } = self.0;
         let mut configs: BTreeMap<proto::ConfigKey, proto::ConfigValue> = configs.clone();
         configs.remove(&Self::user_version_key());
+        let mut settings: BTreeMap<proto::SettingKey, proto::SettingValue> = settings.clone();
+        settings.remove(&Self::builtin_migration_shard_key());
+        settings.remove(&Self::expression_cache_shard_key());
+        settings.remove(&Self::mock_authentication_nonce_key());
         f.debug_struct("Snapshot")
             .field("databases", databases)
             .field("schemas", schemas)
             .field("roles", roles)
+            .field("role_auth", role_auth)
             .field("items", items)
             .field("comments", comments)
             .field("clusters", clusters)
@@ -83,7 +120,7 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             .field("introspection_sources", introspection_sources)
             .field("id_allocator", id_allocator)
             .field("configs", &configs)
-            .field("settings", settings)
+            .field("settings", &settings)
             .field("source_references", source_references)
             .field("system_object_mappings", system_object_mappings)
             .field("system_configurations", system_configurations)
@@ -114,9 +151,10 @@ async fn test_is_initialized(state_builder: TestCatalogStateBuilder) {
     );
 
     let state = openable_state1
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     state.expire().await;
 
     let mut openable_state2 = state_builder.unwrap_build().await;
@@ -158,9 +196,10 @@ async fn test_get_deployment_generation(state_builder: TestCatalogStateBuilder) 
         );
 
         let state = openable_state
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         state.expire().await;
     }
 
@@ -201,7 +240,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args())
+            .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap_err();
         match err {
@@ -216,9 +255,10 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
         Box::new(state).expire().await;
     }
@@ -229,9 +269,10 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args())
+            .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         // Drain initial updates.
         let _ = state
             .sync_to_current_updates()
@@ -242,7 +283,6 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
 
         // Perform writes.
         let mut txn = state.transaction().await.unwrap();
-        let mut ids = Vec::new();
         let mut db_schemas = Vec::new();
         for i in 0..10 {
             let (db_id, db_oid) = txn
@@ -262,7 +302,6 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
                     &HashSet::new(),
                 )
                 .unwrap();
-            ids.push((db_id.clone(), schema_id.clone()));
             db_schemas.push((
                 Database {
                     id: db_id.clone(),
@@ -283,7 +322,8 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
         }
         // Drain txn updates.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit().await.unwrap();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
 
         // Read back writes.
         let snapshot = state.snapshot().await.unwrap();
@@ -310,7 +350,8 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
         }
         // Drain txn updates.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit().await.unwrap();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
 
         // Read back updates.
         let snapshot = state.snapshot().await.unwrap();
@@ -332,9 +373,10 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         // Write should not have persisted.
         let db = state
             .snapshot()
@@ -377,9 +419,10 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -399,7 +442,11 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
         read_only_state.epoch(),
         Epoch::new(2).expect("known to be non-zero")
     );
-    let err = read_only_state.allocate_user_id().await.unwrap_err();
+    let commit_ts = state.current_upper().await;
+    let err = read_only_state
+        .allocate_user_id(commit_ts)
+        .await
+        .unwrap_err();
     match err {
         CatalogError::Catalog(_) => panic!("unexpected catalog error"),
         CatalogError::Durable(e) => assert!(e.can_recover_with_write_mode()),
@@ -410,7 +457,7 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
     let (role_id, _) = txn
         .insert_user_role(
             "joe".to_string(),
-            RoleAttributes::new(),
+            RoleAttributesRaw::new(),
             RoleMembership::new(),
             RoleVars::default(),
             &HashSet::new(),
@@ -418,11 +465,12 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
         .unwrap();
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
-    txn.commit().await.unwrap();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
 
     let snapshot = read_only_state.snapshot().await.unwrap();
     let role = snapshot.roles.get(&proto::RoleKey {
-        id: Some(role_id.into_proto()),
+        id: role_id.into_proto(),
     });
     assert_eq!(&role.unwrap().name, "joe");
 
@@ -441,23 +489,32 @@ async fn test_persist_open() {
 async fn test_open(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
 
-    let (snapshot, audit_log) = {
+    let (mut snapshot, audit_log) = {
         let mut state = state_builder
             .clone()
             .unwrap_build()
             .await
             // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-            .open(NOW_ZERO(), &test_bootstrap_args())
+            .open(NOW_ZERO().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
         // Check initial snapshot.
         let snapshot = state.snapshot().await.unwrap();
         {
-            let test_snapshot = HiddenUserVersionSnapshot(&snapshot);
+            let test_snapshot = StableSnapshot(&snapshot);
+
             let user_version = test_snapshot.user_version().unwrap();
             assert_eq!(user_version.value, CATALOG_VERSION);
+
+            let builtin_migration_shard = test_snapshot.builtin_migration_shard().unwrap();
+            let _shard_id: ShardId = builtin_migration_shard.value.parse().unwrap();
+
+            let expression_cache_shard = test_snapshot.expression_cache_shard().unwrap();
+            let _shard_id: ShardId = expression_cache_shard.value.parse().unwrap();
+
             insta::assert_debug_snapshot!("initial_snapshot", test_snapshot);
         }
         let audit_log = state.get_audit_logs().await.unwrap();
@@ -471,9 +528,22 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
+
+        // Because of the ad-hoc migration for `migration_version`, reopening the catalog does
+        // change this version currently.
+        // TODO: remove this once we only support upgrades from version >= 0.164
+        snapshot.settings.insert(
+            SettingKey {
+                name: "migration_version".into(),
+            },
+            SettingValue {
+                value: "0.0.0".into(),
+            },
+        );
 
         assert_eq!(state.epoch(), Epoch::new(3).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);
@@ -486,9 +556,10 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         assert_eq!(state.epoch(), Epoch::new(4).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);
@@ -500,12 +571,14 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_unopened_deploy_generation_fencing() {
-    let persist_client = PersistClient::new_for_tests().await;
+    let mut persist_cache = PersistClientCache::new_no_metrics();
+    persist_cache.cfg.build_version = semver::Version::new(0, 1, 0);
+    let persist_client = persist_cache
+        .open(PersistLocation::new_in_mem())
+        .await
+        .unwrap();
     let state_builder = TestCatalogStateBuilder::new(persist_client);
-    test_unopened_deploy_generation_fencing(state_builder).await;
-}
 
-async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogStateBuilder) {
     // Initialize catalog.
     let deploy_generation = 0;
     let version = semver::Version::new(0, 1, 0);
@@ -518,15 +591,17 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         // drain catalog updates.
         let _ = state.sync_to_current_updates().await.unwrap();
         let mut txn = state.transaction().await.unwrap();
         txn.set_0dt_deployment_max_wait(zdt_deployment_max_wait)
             .unwrap();
-        txn.commit().await.unwrap();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
     }
     let mut openable_state = state_builder.clone().unwrap_build().await;
 
@@ -546,9 +621,10 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Unopened catalog should be fenced now with a deploy generation fence.
     let err = openable_state
@@ -593,10 +669,7 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
         .await
         .unwrap_err();
     assert!(
-        matches!(
-            err,
-            DurableCatalogError::Fence(FenceError::DeployGeneration { .. })
-        ),
+        matches!(err, DurableCatalogError::IncompatiblePersistVersion { .. }),
         "unexpected err: {err:?}"
     );
 }
@@ -616,18 +689,20 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Open catalog, which will bump the epoch.
     let _state = state_builder
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Opened catalog should be fenced now with an epoch fence.
     let err = state.snapshot().await.unwrap_err();
@@ -664,9 +739,10 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Open catalog, which will bump the epoch AND deploy generation.
     let _state = state_builder
@@ -674,9 +750,10 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Opened catalog should be fenced now with an epoch fence.
     let err = state.snapshot().await.unwrap_err();
@@ -717,9 +794,10 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     // Drain updates.
     let _ = state.sync_to_current_updates().await;
     let mut txn = state.transaction().await.unwrap();
@@ -731,14 +809,16 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     // Drain updates.
     let _ = state.sync_to_current_updates().await;
 
     // Committing results in an epoch fence error.
-    let err = txn.commit().await.unwrap_err();
+    let commit_ts = txn.upper();
+    let err = txn.commit(commit_ts).await.unwrap_err();
     assert!(
         matches!(
             err,
@@ -756,12 +836,14 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Committing results in a deploy generation fence error.
-    let err = txn.commit().await.unwrap_err();
+    let commit_ts = txn.upper();
+    let err = txn.commit(commit_ts).await.unwrap_err();
     assert!(
         matches!(
             err,
@@ -795,9 +877,10 @@ async fn test_persist_version_fencing() {
             .unwrap_build()
             .await;
         let _persist_state = persist_openable_state
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         persist_cache.cfg.build_version = reader_version.clone();
         let persist_client = persist_cache
@@ -822,8 +905,14 @@ async fn test_persist_version_fencing() {
     }
 
     testcase("0.10.0", "0.10.0", Ok(())).await;
-    testcase("0.10.0", "0.11.0", Ok(())).await;
-    testcase("0.10.0", "0.12.0", Err(())).await;
+    testcase("0.147.0", "0.148.1", Ok(())).await;
+    testcase("0.10.0", "0.148.1", Err(())).await;
+    testcase("0.147.0", "0.158.0", Ok(())).await;
+    testcase("0.147.0", "26.0.0", Ok(())).await;
+    testcase("0.160.0", "26.0.0", Ok(())).await;
+    testcase("26.0.0", "26.10.0", Ok(())).await;
+    testcase("26.1.0", "27.0.0", Ok(())).await;
+    testcase("0.147.0", "27.0.0", Err(())).await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -842,7 +931,8 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         loop {
             // Drain updates.
             let _ = state.sync_to_current_updates().await?;
-            state.allocate_user_id().await?;
+            let commit_ts = state.current_upper().await;
+            state.allocate_user_id(commit_ts).await?;
             // After winning the race 100 times, sleep to give the debug state a chance to win the
             // race.
             if i > 100 {
@@ -857,9 +947,10 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     let state_handle = mz_ore::task::spawn(|| "state", async move {
         // Eventually this state should get fenced by the open below.
         let err = run_state(&mut state).await.unwrap_err();
@@ -874,17 +965,19 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
-    state_handle.await.unwrap();
+    state_handle.await;
 
     // Open again to ensure that we didn't commit an invalid retraction.
     let _state = state_builder
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 }

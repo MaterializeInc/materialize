@@ -28,25 +28,35 @@ REDPANDA_VERSIONS = [
     "v23.1.21",
     "v23.2.29",
     "v23.3.21",
-    "v24.1.17",
+    "v24.1.21",
+    "v24.2.27",
+    "v24.3.18",
+    "v25.1.12",
+    "v25.2.14",
+    "v25.3.14",
     REDPANDA_VERSION,
     "latest",
 ]
 
 CONFLUENT_PLATFORM_VERSIONS = [
     "7.0.16",
-    "7.1.14",
-    "7.2.12",
-    "7.3.10",
-    "7.4.7",
-    "7.5.6",
-    "7.6.3",
+    "7.1.16",
+    "7.2.15",
+    "7.3.15",
+    "7.4.15",
+    "7.5.14",
+    "7.6.11",
+    "7.7.9",
+    "7.8.8",
+    "7.9.7",
+    "8.0.5",
+    "8.1.3",
     DEFAULT_CONFLUENT_PLATFORM_VERSION,
     "latest",
 ]
 
 SERVICES = [
-    Materialized(),
+    Materialized(default_replication_factor=2),
     # Occasional timeouts in CI with 60s timeout
     Testdrive(
         volumes_extra=["../testdrive:/workdir/testdrive"], default_timeout="120s"
@@ -60,11 +70,21 @@ SERVICES = [
 
 
 TD_CMD = [
-    f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-    f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-    "--var=single-replica-cluster=quickstart",
+    f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
+    f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
     *[f"testdrive/{td}" for td in ["kafka-sinks.td", "kafka-upsert-sources.td"]],
 ]
+
+
+def _needs_zookeeper(confluent_version: str) -> bool:
+    """Confluent Platform 7.x and earlier require Zookeeper; 8.0+ uses KRaft."""
+    if confluent_version == "latest":
+        return False
+    major = confluent_version.split(".", 1)[0]
+    try:
+        return int(major) < 8
+    except ValueError:
+        return False
 
 
 def workflow_default(c: Composition) -> None:
@@ -89,11 +109,15 @@ def workflow_default(c: Composition) -> None:
 
     for confluent_version in confluent_versions:
         print(f"--- Testing Confluent Platform {confluent_version}")
+        use_zookeeper = _needs_zookeeper(confluent_version)
         with c.override(
             Zookeeper(tag=confluent_version),
-            Kafka(tag=confluent_version),
+            Kafka(tag=confluent_version, use_zookeeper=use_zookeeper),
             SchemaRegistry(tag=confluent_version),
         ):
             c.down(destroy_volumes=True)
-            c.up("zookeeper", "kafka", "schema-registry", "materialized")
+            services = ["kafka", "schema-registry", "materialized"]
+            if use_zookeeper:
+                services.insert(0, "zookeeper")
+            c.up(*services)
             c.run_testdrive_files(*TD_CMD)

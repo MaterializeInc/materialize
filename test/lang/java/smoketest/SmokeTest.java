@@ -179,4 +179,12 @@ class SmokeTest {
         stmt.execute("DROP TABLE materialize.public.getpks");
         stmt.close();
     }
+
+    // We test for getCatalog due to a regression caused by (database-issues#9530)
+    @Test
+    void testPgJDBCgetCatalog() throws SQLException, ClassNotFoundException {
+        //Retrieving the current catalog name
+        String catalogName = conn.getCatalog();
+        Assertions.assertEquals("materialize", catalogName);
+    }
 }

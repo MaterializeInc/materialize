@@ -14,19 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from distutils.core import setup
+import os
 from pathlib import Path
 
-from setuptools import find_packages
+from setuptools import find_packages, setup
 
 README = Path(__file__).parent / "README.md"
+
+extras_require = {}
+if not os.environ.get("RELEASE_BUILD"):
+    extras_require["dev"] = [
+        "dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git#egg=dbt-tests-adapter&subdirectory=dbt-tests-adapter"
+    ]
 
 setup(
     name="dbt-materialize",
     # This adapter's minor version should match the required dbt-postgres version,
     # but patch versions may differ.
     # If you bump this version, bump it in __version__.py too.
-    version="1.8.6",
+    version="1.9.10",
     description="The Materialize adapter plugin for dbt.",
     long_description=(Path(__file__).parent / "README.md").open().read(),
     long_description_content_type="text/markdown",
@@ -42,15 +48,11 @@ setup(
         ]
     },
     install_requires=[
-        "dbt-common>=0.1.0a1,<2.0",
-        "dbt-adapters>=0.1.0a1,<2.0",
+        "dbt-common>=1.10,<3.0",
+        "dbt-adapters>=1.7,<2.0",
         # add dbt-core to ensure backwards compatibility of installation, this is not a functional dependency
         "dbt-core>=1.8.0",
-        "dbt-postgres~=1.8.0",
+        "dbt-postgres>=1.8,<1.11",
     ],
-    extras_require={
-        "dev": [
-            "dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git#egg=dbt-tests-adapter&subdirectory=dbt-tests-adapter"
-        ],
-    },
+    extras_require=extras_require,
 )

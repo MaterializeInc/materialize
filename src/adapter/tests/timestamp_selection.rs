@@ -12,13 +12,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
+use mz_adapter::ReadHolds;
 use mz_adapter::catalog::CatalogState;
 use mz_adapter::session::Session;
-use mz_adapter::ReadHolds;
 use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::MirScalarExpr;
-use mz_repr::{Datum, GlobalId, ScalarType, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -114,12 +113,12 @@ impl TimestampProvider for Frontiers {
             .collect()
     }
 
-    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
+    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds {
         let mut read_holds = ReadHolds::new();
 
         let mock_read_hold = |id, frontier| {
             let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-            ReadHold::new(id, frontier, tx)
+            ReadHold::with_channel(id, frontier, tx)
         };
 
         for (instance_id, ids) in id_bundle.compute_ids.iter() {
@@ -150,7 +149,6 @@ impl TimestampProvider for Frontiers {
 struct Determine {
     id_bundle: IdBundle,
     when: String,
-    instance: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -177,11 +175,10 @@ fn parse_query_when(s: &str) -> QueryWhen {
     let s = s.to_lowercase();
     match s.split_once(':') {
         Some((when, ts)) => {
-            let ts: i64 = ts.parse().unwrap();
-            let expr = MirScalarExpr::literal_ok(Datum::Int64(ts), ScalarType::Int64);
+            let ts = ts.parse().unwrap();
             match when {
-                "attimestamp" => QueryWhen::AtTimestamp(expr),
-                "atleasttimestamp" => QueryWhen::AtLeastTimestamp(expr),
+                "attimestamp" => QueryWhen::AtTimestamp(ts),
+                "atleasttimestamp" => QueryWhen::AtLeastTimestamp(ts),
                 _ => panic!("bad when {s}"),
             }
         }
@@ -286,7 +283,6 @@ fn test_timestamp_selection() {
                             &session,
                             &det.id_bundle.into(),
                             &parse_query_when(&det.when),
-                            det.instance.parse().unwrap(),
                             &TimelineContext::TimestampDependent,
                             oracle_read_ts,
                             None, /* real_time_recency_ts */

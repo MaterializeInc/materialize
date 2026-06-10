@@ -14,4 +14,4 @@
 #
 
 > SHOW CREATE MATERIALIZED VIEW special_functions_view;
-"materialize.public.special_functions_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"special_functions_view\" IN CLUSTER \"${arg.created-cluster}\" WITH (REFRESH = ON COMMIT) AS SELECT * FROM \"materialize\".\"public\".\"special_functions\" WHERE \"mz_catalog\".\"mz_now\"() > \"f1\""
+materialize.public.special_functions_view "CREATE MATERIALIZED VIEW materialize.public.special_functions_view\n    IN CLUSTER ${arg.created-cluster}\n    WITH (REFRESH = ON COMMIT)\n    AS SELECT * FROM materialize.public.special_functions WHERE mz_catalog.mz_now() > f1;"

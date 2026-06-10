@@ -15,8 +15,12 @@
 
 //! Iterator utilities.
 
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
+use std::collections::binary_heap::PeekMut;
 use std::fmt::Debug;
 use std::iter::{self, Chain, Once, Peekable};
+use std::rc::Rc;
 
 /// Extension methods for iterators.
 pub trait IteratorExt
@@ -82,6 +86,107 @@ where
 
 impl<I> IteratorExt for I where I: Iterator {}
 
+/// Proactively consolidate adjacent elements in an iterator.
+///
+/// If the input iterator is sorted by `D`, the outputs will be both sorted and fully consolidated.
+/// If the input is not sorted, the output will probably not be either... but still equivalent from
+/// a differential perspective and slightly smaller.
+#[cfg(feature = "differential-dataflow")]
+pub fn consolidate_iter<D: PartialEq, R: differential_dataflow::difference::Semigroup>(
+    iter: impl Iterator<Item = (D, R)>,
+) -> impl Iterator<Item = (D, R)> {
+    let mut peekable = iter.peekable();
+    iter::from_fn(move || {
+        loop {
+            let (t, mut d) = peekable.next()?;
+            while let Some((t_next, d_next)) = peekable.peek()
+                && t == *t_next
+            {
+                d.plus_equals(d_next);
+                let _ = peekable.next();
+            }
+            if d.is_zero() {
+                continue;
+            }
+            return Some((t, d));
+        }
+    })
+}
+
+/// Proactively consolidate adjacent elements in an iterator. (Triple / update edition.)
+///
+/// If the input iterator is sorted by `D` and `T`, the outputs will be both sorted and fully consolidated.
+/// If the input is not sorted, the output will probably not be either... but still equivalent from
+/// a differential perspective and slightly smaller.
+#[cfg(feature = "differential-dataflow")]
+pub fn consolidate_update_iter<
+    D: PartialEq,
+    T: PartialEq,
+    R: differential_dataflow::difference::Semigroup,
+>(
+    iter: impl Iterator<Item = (D, T, R)>,
+) -> impl Iterator<Item = (D, T, R)> {
+    consolidate_iter(iter.map(|(d, t, r)| ((d, t), r))).map(|((d, t), r)| (d, t, r))
+}
+
+/// Combine a stream of iterators into a new iterator, according to the provided merge function.
+///
+/// If the input iterators are sorted by the provided function, the resulting iterators will be
+/// sorted by that function also.
+pub fn merge_iters_by<I: Iterator, F: Fn(&I::Item, &I::Item) -> Ordering>(
+    iters: impl IntoIterator<Item = I>,
+    merge_by: F,
+) -> impl Iterator<Item = I::Item> {
+    /// Iterator-like struct to help with extracting rows in sorted order from `RowCollection`.
+    struct RunIter<I: Iterator, F> {
+        iter: I,
+        peek: <I as Iterator>::Item,
+        merge_by: Rc<F>,
+    }
+
+    impl<I: Iterator, F: Fn(&I::Item, &I::Item) -> Ordering> Ord for RunIter<I, F> {
+        fn cmp(&self, other: &Self) -> Ordering {
+            (self.merge_by)(&self.peek, &other.peek)
+        }
+    }
+
+    impl<I: Iterator, F: Fn(&I::Item, &I::Item) -> Ordering> PartialOrd for RunIter<I, F> {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl<I: Iterator, F: Fn(&I::Item, &I::Item) -> Ordering> PartialEq for RunIter<I, F> {
+        fn eq(&self, other: &Self) -> bool {
+            self.cmp(other).is_eq()
+        }
+    }
+
+    impl<I: Iterator, F: Fn(&I::Item, &I::Item) -> Ordering> Eq for RunIter<I, F> {}
+
+    let iters = iters.into_iter();
+    let mut heap = BinaryHeap::with_capacity(iters.size_hint().0);
+    let merge_by = Rc::new(merge_by);
+    for mut i in iters {
+        let Some(peek) = i.next() else {
+            continue;
+        };
+        heap.push(Reverse(RunIter {
+            peek,
+            iter: i,
+            merge_by: Rc::clone(&merge_by),
+        }));
+    }
+
+    iter::from_fn(move || {
+        let mut peek_mut = heap.peek_mut()?;
+        let next = match peek_mut.0.iter.next() {
+            None => PeekMut::pop(peek_mut).0.peek,
+            Some(next) => std::mem::replace(&mut peek_mut.0.peek, next),
+        };
+        Some(next)
+    })
+}
+
 /// Iterator type returned by [`IteratorExt::exact_size`].
 #[derive(Debug)]
 pub struct ExactSize<I> {
@@ -138,7 +243,10 @@ impl<I: Iterator<Item: Debug> + Debug, A: Debug> Debug for RepeatClone<I, A> {
 
 #[cfg(test)]
 mod tests {
-    use crate::iter::IteratorExt;
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+
+    use super::*;
 
     #[crate::test]
     fn test_all_equal() {
@@ -147,5 +255,43 @@ mod tests {
         assert!([1].iter().all_equal());
         assert!([1, 1].iter().all_equal());
         assert!(![1, 2].iter().all_equal());
+    }
+
+    #[crate::test]
+    #[cfg(feature = "differential-dataflow")]
+    fn test_consolidate_sorted() {
+        proptest!(|(mut data in any::<Vec<(u64, i64)>>())| {
+             data.sort();
+             let streamed: Vec<_> = consolidate_iter(data.iter().copied()).collect();
+             differential_dataflow::consolidation::consolidate(&mut data);
+             assert_eq!(data, streamed);
+        });
+    }
+
+    #[crate::test]
+    #[cfg(feature = "differential-dataflow")]
+    fn test_consolidate() {
+        proptest!(|(mut data in any::<Vec<(u64, i64)>>())| {
+             let streamed: Vec<_> = consolidate_iter(data.iter().copied()).collect();
+             data.dedup_by_key(|t| t.0);
+             assert_eq!(data.len(), streamed.len());
+        });
+    }
+
+    #[crate::test]
+    fn test_merge() {
+        proptest!(|(mut data in vec(vec(0usize..100usize, 0..10), 0..10))| {
+            let mut expected: Vec<_> = data.iter().flatten().copied().collect();
+            expected.sort();
+
+            for series in &mut data {
+                series.sort()
+            }
+            let merged: Vec<_> = merge_iters_by(
+                data.into_iter().map(|i| i.into_iter()),
+                |a, b| a.cmp(b)
+            ).collect();
+             assert_eq!(expected, merged);
+        });
     }
 }

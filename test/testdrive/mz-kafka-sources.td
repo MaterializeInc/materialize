@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 # Test that the source ingestion pipeline commits offsets back to Kafka with
 # the expected group ID.
@@ -20,6 +20,7 @@ $ kafka-create-topic topic=topic partitions=1
 
 > CREATE CLUSTER topic_cluster SIZE '${arg.default-storage-size}';
 
+> BEGIN
 > CREATE SOURCE topic
   IN CLUSTER topic_cluster
   FROM KAFKA CONNECTION conn (
@@ -28,6 +29,7 @@ $ kafka-create-topic topic=topic partitions=1
 
 > CREATE TABLE topic_tbl FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
   FORMAT BYTES
+> COMMIT
 
 > SELECT
     ks.topic

@@ -11,7 +11,6 @@
 # (part of the CREATE SOURCE statement).
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 > CREATE SECRET ssl_ca AS '${arg.ssl-ca}'
@@ -57,9 +56,11 @@ $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
   USER host,
   SSL MODE disabled
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
+> COMMIT
 
 > SELECT * FROM "numbers";
 1 1 one
@@ -89,9 +90,11 @@ contains: invalid CONNECTION: unknown SSL MODE "PREFER"
   USER host,
   SSL MODE required
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
+> COMMIT
 
 > SELECT * FROM "numbers";
 1 1 one
@@ -111,8 +114,10 @@ DELETE FROM numbers WHERE number = 2;
   USER hostssl,
   SSL MODE required
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
 > CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
@@ -145,8 +150,10 @@ DELETE FROM numbers WHERE number = 2;
   SSL MODE verify_ca,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
 > CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
@@ -200,8 +207,10 @@ DELETE FROM numbers WHERE number = 2;
   USER hostnossl,
   SSL MODE disabled
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
 > CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
@@ -236,8 +245,10 @@ DELETE FROM numbers WHERE number = 2;
   SSL KEY SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
 > CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
@@ -258,8 +269,10 @@ DELETE FROM numbers WHERE number = 2;
   SSL MODE verify_ca,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
 > CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
@@ -297,8 +310,10 @@ DELETE FROM numbers WHERE number = 2;
   SSL KEY SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
 > CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one

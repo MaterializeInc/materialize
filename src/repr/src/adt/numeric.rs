@@ -22,6 +22,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -96,13 +97,12 @@ pub mod str_serde {
     }
 }
 
-/// The `max_scale` of a [`ScalarType::Numeric`].
+/// The `max_scale` of a [`SqlScalarType::Numeric`].
 ///
 /// This newtype wrapper ensures that the scale is within the valid range.
 ///
-/// [`ScalarType::Numeric`]: crate::ScalarType::Numeric
+/// [`SqlScalarType::Numeric`]: crate::SqlScalarType::Numeric
 #[derive(
-    Arbitrary,
     Debug,
     Clone,
     Copy,
@@ -113,8 +113,9 @@ pub mod str_serde {
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct NumericMaxScale(pub(crate) u8);
 
 impl NumericMaxScale {
@@ -503,26 +504,23 @@ fn test_twos_comp_numeric_primitive() {
 
         // Ensure extended version of `to_be_bytes` generates same `i128`.
         let e_numeric = twos_complement_be_to_numeric(&mut e, 0).unwrap();
-        let e_p: P = match e_numeric.try_into() {
-            Ok(e_p) => e_p,
-            Err(_) => panic!(),
-        };
+        let e_p: P = e_numeric
+            .try_into()
+            .unwrap_or_else(|_e| panic!("try_into failed"));
         assert_eq!(i, e_p, "expected val of {:?}, got {:?}", i, e_p);
 
         // Wide representation produces same result.
         let w_numeric = twos_complement_be_to_numeric(&mut w, 0).unwrap();
-        let w_p: P = match w_numeric.try_into() {
-            Ok(w_p) => w_p,
-            Err(_) => panic!(),
-        };
+        let w_p: P = w_numeric
+            .try_into()
+            .unwrap_or_else(|_e| panic!("try_into failed"));
         assert_eq!(i, w_p, "expected val of {:?}, got {:?}", i, e_p);
 
         // Bytes do not need to be in `Numeric`-specific format
         let p_numeric = twos_complement_be_to_numeric(i_be_bytes, 0).unwrap();
-        let p_p: P = match p_numeric.try_into() {
-            Ok(p_p) => p_p,
-            Err(_) => panic!(),
-        };
+        let p_p: P = p_numeric
+            .try_into()
+            .unwrap_or_else(|_e| panic!("try_into failed"));
         assert_eq!(i, p_p, "expected val of {:?}, got {:?}", i, p_p);
     }
 
@@ -666,11 +664,7 @@ pub fn get_precision<const N: usize>(n: &Decimal<N>) -> u32 {
 /// Returns `n`'s scale, i.e. the number of digits used after the decimal point.
 pub fn get_scale(n: &Numeric) -> u32 {
     let exp = n.exponent();
-    if exp >= 0 {
-        0
-    } else {
-        exp.unsigned_abs()
-    }
+    if exp >= 0 { 0 } else { exp.unsigned_abs() }
 }
 
 /// Ensures [`Numeric`] values are:
@@ -845,7 +839,9 @@ mod tests {
         }
 
         #[mz_ore::test]
-        fn optional_numeric_max_scale_protobuf_roundtrip(expect in any::<Option<NumericMaxScale>>()) {
+        fn optional_numeric_max_scale_protobuf_roundtrip(
+            expect in any::<Option<NumericMaxScale>>(),
+        ) {
             let actual = protobuf_roundtrip::<_, ProtoOptionalNumericMaxScale>(&expect);
             assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);

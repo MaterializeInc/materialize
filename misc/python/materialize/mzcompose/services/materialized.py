@@ -8,14 +8,21 @@
 # by the Apache License, Version 2.0.
 
 
+import json
+import os
+import shutil
+import tempfile
 from enum import Enum
+from typing import Any
 
-from materialize import docker
+from materialize import MZ_ROOT, docker
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
     DEFAULT_MZ_ENVIRONMENT_ID,
     DEFAULT_MZ_VOLUMES,
+    bootstrap_cluster_replica_size,
+    cluster_replica_size_map,
     get_default_system_parameters,
 )
 from materialize.mzcompose.service import (
@@ -23,8 +30,34 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
+from materialize.mzcompose.services import foundationdb
+from materialize.mzcompose.services.azurite import azure_blob_uri
+from materialize.mzcompose.services.metadata_store import (
+    EXTERNAL_METADATA_STORE_ADDRESS,
+    METADATA_STORE,
+    metadata_store_companions,
+)
 from materialize.mzcompose.services.minio import minio_blob_uri
-from materialize.mzcompose.services.postgres import METADATA_STORE
+
+
+class MaterializeEmulator(Service):
+    """Just the Materialize Emulator with its defaults unchanged"""
+
+    def __init__(self, image: str | None = None):
+        name = "materialized"
+
+        config: ServiceConfig = {
+            "mzbuild": name,
+            "ports": [6875, 6874, 6876, 6877, 6878, 26257],
+            "healthcheck": {
+                "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
+                "interval": "1s",
+                # A fully loaded Materialize can take a long time to start.
+                "start_period": "600s",
+            },
+        }
+
+        super().__init__(name=name, config=config)
 
 
 class Materialized(Service):
@@ -39,17 +72,19 @@ class Materialized(Service):
         volumes_extra: list[str] = [],
         depends_on: list[str] = [],
         memory: str | None = None,
+        cpu: str | None = None,
         options: list[str] = [],
         persist_blob_url: str | None = None,
         default_size: int | str = Size.DEFAULT_SIZE,
         environment_id: str | None = None,
         propagate_crashes: bool = True,
-        external_metadata_store: str | bool = False,
-        external_minio: str | bool = False,
+        external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
+        external_blob_store: str | bool = False,
+        blob_store_is_azure: bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,
         use_default_volumes: bool = True,
-        ports: list[str] | None = None,
+        ports: list[str] | list[int] | list[str | int] | None = None,
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] | None = None,
         system_parameter_version: MzVersion | None = None,
@@ -60,29 +95,56 @@ class Materialized(Service):
         deploy_generation: int | None = None,
         force_migrations: str | None = None,
         publish: bool | None = None,
-        stop_grace_period: str = "60s",
+        stop_grace_period: str = "120s",
         metadata_store: str = METADATA_STORE,
+        cluster_replica_size: dict[str, dict[str, Any]] | None = None,
+        bootstrap_replica_size: str | None = None,
+        default_replication_factor: int = 1,
+        builtin_system_cluster_replication_factor: int | None = None,
+        builtin_probe_cluster_replication_factor: int | None = None,
+        listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json",
+        config_sync_file_path: str | None = None,
+        support_external_clusterd: bool = False,
+        networks: (
+            dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | None
+        ) = None,
     ) -> None:
         if name is None:
             name = "materialized"
 
         if healthcheck is None:
             healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
-
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
 
+        if bootstrap_replica_size is None:
+            bootstrap_replica_size = bootstrap_cluster_replica_size()
+        if cluster_replica_size is None:
+            cluster_replica_size = cluster_replica_size_map()
+        if builtin_system_cluster_replication_factor is None:
+            builtin_system_cluster_replication_factor = default_replication_factor
+        if builtin_probe_cluster_replication_factor is None:
+            builtin_probe_cluster_replication_factor = default_replication_factor
+
         environment = [
             "MZ_NO_TELEMETRY=1",
+            # Not used in most tests
+            "MZ_NO_BUILTIN_CONSOLE=1",
+            # Test runs are discarded on system crash anyway
+            "MZ_EAT_MY_DATA=1",
+            "MZ_TEST_ONLY_DUMMY_SEGMENT_CLIENT=true",
             f"MZ_SOFT_ASSERTIONS={int(soft_assertions)}",
             # The following settings can not be baked in the default image, as they
             # are enabled for testing purposes only
             "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
             "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
             "MZ_BOOTSTRAP_ROLE=materialize",
+            # TODO move this to the listener config?
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
+            "MZ_PERSIST_PUBSUB_URL=http://127.0.0.1:6879",
             "MZ_AWS_CONNECTION_ROLE_ARN=arn:aws:iam::123456789000:role/MaterializeConnection",
+            "MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM=password",
             "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             # Always use the persist catalog if the version has multiple implementations.
             "MZ_CATALOG_STORE=persist",
@@ -94,6 +156,18 @@ class Materialized(Service):
             # use Composition.override.
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
+            f"MZ_CLUSTER_REPLICA_SIZES={json.dumps(cluster_replica_size)}",
+            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            # Note(SangJunBak): mz_system and mz_probe have no replicas by default in materialized
+            # but we re-enable them here since many of our tests rely on them.
+            f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR={builtin_system_cluster_replication_factor}",
+            f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR={builtin_probe_cluster_replication_factor}",
+            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
             *environment_extra,
             *DEFAULT_CRDB_ENVIRONMENT,
         ]
@@ -102,7 +176,7 @@ class Materialized(Service):
         if not image:
             image_version = MzVersion.parse_cargo()
         elif ":" in image:
-            image_version_str = image.split(":")[1]
+            image_version_str = image.rsplit(":", 1)[1]
             if docker.is_image_tag_of_release_version(image_version_str):
                 image_version = MzVersion.parse_mz(image_version_str)
 
@@ -111,6 +185,9 @@ class Materialized(Service):
                 system_parameter_version or image_version
             )
 
+        system_parameter_defaults["default_cluster_replication_factor"] = str(
+            default_replication_factor
+        )
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)
 
@@ -122,6 +199,9 @@ class Materialized(Service):
                 )
             ]
 
+        if not support_external_clusterd:
+            environment.append("MZ_NO_EXTERNAL_CLUSTERD=1")
+
         command = []
 
         if unsafe_mode:
@@ -131,10 +211,15 @@ class Materialized(Service):
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
         command += [f"--environment-id={environment_id}"]
 
-        if external_minio:
-            depends_graph["minio"] = {"condition": "service_healthy"}
-            address = "minio" if external_minio == True else external_minio
-            persist_blob_url = minio_blob_uri(address)
+        if external_blob_store:
+            blob_store = "azurite" if blob_store_is_azure else "minio"
+            depends_graph[blob_store] = {"condition": "service_started"}
+            address = blob_store if external_blob_store == True else external_blob_store
+            persist_blob_url = (
+                azure_blob_uri(address)
+                if blob_store_is_azure
+                else minio_blob_uri(address)
+            )
 
         if persist_blob_url:
             command.append(f"--persist-blob-url={persist_blob_url}")
@@ -147,51 +232,59 @@ class Materialized(Service):
 
         if force_migrations is not None and image is None:
             command += [
-                "--unsafe-mode",
-                f"--unsafe-builtin-table-fingerprint-whitespace={force_migrations}",
+                f"--unsafe-force-builtin-schema-migration={force_migrations}",
             ]
+            if not unsafe_mode:
+                command += ["--unsafe-mode"]
 
         self.default_storage_size = (
-            str(default_size)
-            if image_version and image_version < MzVersion.parse_mz("v0.41.0")
-            else "1" if default_size == 1 else f"{default_size}-1"
+            "scale=1,workers=1"
+            if default_size == 1
+            else f"scale={default_size},workers=1"
         )
 
         self.default_replica_size = (
-            "1"
+            "scale=1,workers=1"
             if default_size == 1
             else (
-                f"{default_size}-{default_size}"
+                f"scale={default_size},workers={default_size}"
                 if isinstance(default_size, int)
                 else default_size
             )
         )
-        command += [
-            # Issue database-issues#4562 prevents the habitual use of large introspection
-            # clusters, so we leave the builtin cluster replica size as is.
-            # f"--bootstrap-builtin-cluster-replica-size={self.default_replica_size}",
-            f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
-        ]
+
+        volumes = []
 
         if external_metadata_store:
+            depends_graph[metadata_store] = {"condition": "service_healthy"}
             address = (
                 metadata_store
                 if external_metadata_store == True
                 else external_metadata_store
             )
-            depends_graph[metadata_store] = {"condition": "service_healthy"}
-            command += [
-                f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
-            ]
-            environment += [
-                f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
-                "MZ_NO_BUILTIN_POSTGRES=1",
-                # For older Materialize versions
-                "MZ_NO_BUILTIN_COCKROACH=1",
-                # Set the adapter stash URL for older environments that need it (versions before
-                # v0.92.0).
-                f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
-            ]
+            if metadata_store in ("postgres-metadata", "cockroach", "alloydb"):
+                command += [
+                    f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
+                ]
+                environment += [
+                    f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
+                    "MZ_NO_BUILTIN_POSTGRES=1",
+                    # For older Materialize versions
+                    "MZ_NO_BUILTIN_COCKROACH=1",
+                    # Set the adapter stash URL for older environments that need it (versions before
+                    # v0.92.0).
+                    f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
+                ]
+            elif metadata_store == "foundationdb":
+                command += [
+                    "--persist-consensus-url=foundationdb:?prefix=consensus",
+                    "--timestamp-oracle-url=foundationdb:?prefix=ts_oracle",
+                ]
+
+                # Generate fdb.cluster file dynamically based on the metadata store address
+                min_version = MzVersion.parse_mz("v26.9.0")
+                if image_version is None or image_version >= min_version:
+                    volumes += foundationdb.fdb_cluster_file(external_metadata_store)
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
@@ -219,27 +312,26 @@ class Materialized(Service):
             config["mzbuild"] = "materialized"
 
         if restart:
-            # Old images don't have the new entrypoint.sh with
-            # MZ_RESTART_ON_FAILURE yet, fall back to having docker handle the
-            # restart logic
-            if image_version and image_version < MzVersion.parse_mz("v0.113.0-dev"):
-                config["restart"] = restart
+            policy, _, max_tries = restart.partition(":")
+            if policy == "on-failure":
+                environment += ["MZ_RESTART_ON_FAILURE=1"]
+                if max_tries:
+                    environment += [f"MZ_RESTART_LIMIT={max_tries}"]
+            elif policy == "no":
+                pass
             else:
-                policy, _, max_tries = restart.partition(":")
-                if policy == "on-failure":
-                    environment += ["MZ_RESTART_ON_FAILURE=1"]
-                    if max_tries:
-                        environment += [f"MZ_RESTART_LIMIT={max_tries}"]
-                elif policy == "no":
-                    pass
-                else:
-                    raise RuntimeError(f"unknown restart policy: {policy}")
+                raise RuntimeError(f"unknown restart policy: {policy}")
 
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the
         # memory limit is known.
-        if memory:
-            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+        if memory or cpu:
+            limits = {}
+            if memory:
+                limits["memory"] = memory
+            if cpu:
+                limits["cpus"] = cpu
+            config["deploy"] = {"resources": {"limits": limits}}
 
         if sanity_restart:
             # Workaround for https://github.com/docker/compose/issues/11133
@@ -248,10 +340,38 @@ class Materialized(Service):
         if platform:
             config["platform"] = platform
 
-        volumes = []
+        if image_version is None or image_version >= "v0.147.0-dev":
+            assert os.path.exists(listeners_config_path)
+            volumes.append(f"{listeners_config_path}:/listeners_config")
+            environment.append("MZ_LISTENERS_CONFIG_PATH=/listeners_config")
+
+        if config_sync_file_path is not None:
+            # assert os.path.exists(str(config_sync_file_path))
+            volumes.append(f"{config_sync_file_path}:/config_sync.json")
+            environment.append("MZ_CONFIG_SYNC_FILE_PATH=/config_sync.json")
+            environment.append("MZ_CONFIG_SYNC_LOOP_INTERVAL=100ms")
+
+        if image_version is None or image_version >= "v0.140.0-dev":
+            if "MZ_CI_LICENSE_KEY" in os.environ:
+                # We have to take care to write the license_key file atomically
+                # so that it is always valid, even if multiple Materialized
+                # objects are created concurrently.
+                with tempfile.NamedTemporaryFile("w", delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                    tmp_file.write(os.environ["MZ_CI_LICENSE_KEY"])
+                os.chmod(tmp_path, 0o644)
+                shutil.move(tmp_path, "license_key")
+
+                environment += ["MZ_LICENSE_KEY=/license_key/license_key"]
+
+                volumes += [f"{os.getcwd()}/license_key:/license_key/license_key"]
+
         if use_default_volumes:
             volumes += DEFAULT_MZ_VOLUMES
         volumes += volumes_extra
+
+        if networks:
+            config["networks"] = networks
 
         config.update(
             {
@@ -280,6 +400,12 @@ class Materialized(Service):
             )
 
         super().__init__(name=name, config=config)
+
+        # Pull the external metadata store container(s) into the composition
+        # automatically, so compositions don't have to spell them out.
+        self.companions = metadata_store_companions(
+            metadata_store, external_metadata_store
+        )
 
 
 class DeploymentStatus(Enum):

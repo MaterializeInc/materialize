@@ -102,12 +102,14 @@ $ set schema=[
 #
 
 $ kafka-create-topic topic=topic1
+> BEGIN
 > CREATE SOURCE source1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
 
 > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-topic1-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+> COMMIT
 
 > CREATE SINK sink1
   IN CLUSTER ${arg.single-replica-cluster}

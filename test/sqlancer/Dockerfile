@@ -13,18 +13,27 @@ MZFROM ubuntu-base
 
 WORKDIR /workdir
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
     default-jdk \
-    maven
+    maven \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
-# Rebuild since SQLancer repo might have changed
-ADD https://api.github.com/repos/sqlancer/sqlancer/git/refs/heads/main version.json
-
-# Build SQLancer
-RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
+# TODO: Put this back when merged: https://github.com/sqlancer/sqlancer/pull/1307 & DQP
+# ggevay: But in the meantime there have been more changes to our fork, see the `main` branch there.
+RUN git clone https://github.com/MaterializeInc/sqlancer \
     && cd sqlancer \
+    && git checkout 933b9fa077916fa8f431612d6892f6fa4c711a78 \
+    && rm -rf .git \
     && mvn package -DskipTests
+# RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
+#     && cd sqlancer \
+#     && rm -rf .git \
+#     && mvn package -DskipTests
 
-ENTRYPOINT ["/usr/bin/java", "-jar", "sqlancer/target/sqlancer-2.0.0.jar"]
+WORKDIR /workdir/sqlancer
+
+ENTRYPOINT ["/usr/bin/eatmydata", "/usr/bin/java", "-Xmx16g", "-jar", "target/sqlancer-2.0.0.jar"]

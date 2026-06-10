@@ -1,0 +1,235 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# =============================================================================
+# Initialize
+# =============================================================================
+
+# Standard MCP initialize handshake for developer endpoint.
+mcp-developer
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-developer","version":"<VERSION>"},"instructions":"You are connected to the Materialize developer MCP server. You have read-only access to system catalog tables (mz_*, pg_catalog, information_schema) for troubleshooting and observability.\n\nIMPORTANT: Before writing queries, discover table schemas using the mz_ontology tables:\n- mz_internal.mz_ontology_entity_types: what catalog entities exist and which tables they map to\n- mz_internal.mz_ontology_link_types: relationships between entities (foreign keys, metrics, etc.)\n- mz_internal.mz_ontology_properties: column names, types, and descriptions for each entity\n- mz_internal.mz_ontology_semantic_types: typed ID domains (CatalogItemId, ReplicaId, etc.)\n\nUse these to find the correct tables, join paths, and column names instead of guessing.\n\nKey rules:\n- mz_source_statuses and mz_sink_statuses use `last_status_change_at` (NOT `updated_at`)\n- mz_cluster_replica_utilization only has `replica_id` — JOIN with mz_cluster_replicas and mz_clusters to get names\n- Do NOT query mz_introspection.mz_dataflow_arrangement_sizes — it is cluster-scoped and has uint8/text type mismatches\n- Use SHOW COLUMNS FROM <table> to verify column names if unsure"}}
+
+# =============================================================================
+# Tools List
+# =============================================================================
+
+# Developer should only expose query_system_catalog.
+mcp-developer
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
+
+# =============================================================================
+# query_system_catalog - valid system catalog queries
+# =============================================================================
+
+# Query mz_databases for the default database should work and return predictable result.
+mcp-developer
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
+
+# Query with qualified schema should work.
+mcp-developer
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_catalog.mz_databases WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
+
+# =============================================================================
+# query_system_catalog - pg_catalog and information_schema
+# =============================================================================
+
+# pg_catalog should be accessible.
+mcp-developer
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT typname FROM pg_catalog.pg_type WHERE typname = 'bool'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"[\n  [\n    \"bool\"\n  ]\n]"}],"isError":false}}
+
+# information_schema should be accessible.
+mcp-developer
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT table_schema FROM information_schema.tables WHERE table_name = 'mz_databases' AND table_schema = 'mz_catalog' LIMIT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\n    \"mz_catalog\"\n  ]\n]"}],"isError":false}}
+
+# =============================================================================
+# query_system_catalog - non-system tables rejected
+# =============================================================================
+
+# Querying a non-system table should be rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM user_table"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: user_table. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# Querying a non-system schema should be rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM public.my_view"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":21,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: public.my_view. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query_system_catalog - DDL rejected
+# =============================================================================
+
+# DDL on system tables should still be rejected (read-only validation runs first).
+mcp-developer
+{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"DROP TABLE mz_tables"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":22,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query_system_catalog - multi-statement rejected
+# =============================================================================
+
+mcp-developer
+{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT 1; SELECT * FROM mz_tables"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":23,"error":{"code":-32602,"message":"Query validation failed: Only one query allowed at a time. Found 2 statements.","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query_system_catalog - empty query
+# =============================================================================
+
+mcp-developer
+{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":""}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":24,"error":{"code":-32602,"message":"Query validation failed: Empty query","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query_system_catalog - must reference at least one system table
+# =============================================================================
+
+# A query with no table reference should be rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":25,"error":{"code":-32602,"message":"Query validation failed: Query must reference at least one system catalog table","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# Agents tools on developer endpoint - wrong endpoint
+# =============================================================================
+
+# Calling get_data_products on developer endpoint should fail.
+mcp-developer
+{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"get_data_products","arguments":{}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":30,"error":{"code":-32602,"message":"Tool not found: get_data_products is not available on developer endpoint","data":{"error_type":"ToolNotFound"}}}
+
+# Calling read_data_product on developer endpoint should fail.
+mcp-developer
+{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"read_data_product","arguments":{"name":"some_product"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":31,"error":{"code":-32602,"message":"Tool not found: read_data_product is not available on developer endpoint","data":{"error_type":"ToolNotFound"}}}
+
+# Calling query on developer endpoint should fail.
+mcp-developer
+{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":32,"error":{"code":-32602,"message":"Tool not found: query is not available on developer endpoint","data":{"error_type":"ToolNotFound"}}}
+
+# Calling get_data_product_details on developer endpoint should fail.
+mcp-developer
+{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"get_data_product_details","arguments":{"name":"some_product"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":33,"error":{"code":-32602,"message":"Tool not found: get_data_product_details is not available on developer endpoint","data":{"error_type":"ToolNotFound"}}}
+
+# Calling a completely unknown tool fails at deserialization (422).
+mcp-developer
+{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}
+----
+422 Unprocessable Entity
+Failed to deserialize the JSON body into the target type: .: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 99
+
+# =============================================================================
+# JSON-RPC protocol validation
+# =============================================================================
+
+# Wrong JSON-RPC version should return InvalidRequest error.
+mcp-developer
+{"jsonrpc":"1.0","id":40,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":40,"error":{"code":-32600,"message":"Invalid JSON-RPC version: expected 2.0","data":{"error_type":"InvalidRequest"}}}
+
+# Unknown method should return MethodNotFound error.
+mcp-developer
+{"jsonrpc":"2.0","id":41,"method":"unknown/method"}
+----
+200 OK
+{"jsonrpc":"2.0","id":41,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
+
+# Notification (no id) should return 200 with empty body.
+mcp-developer
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+----
+200 OK
+
+# String id should be echoed back.
+mcp-developer
+{"jsonrpc":"2.0","id":"my-request-42","method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":"my-request-42","result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
+
+# =============================================================================
+# query_system_catalog - additional rejection cases
+# =============================================================================
+
+# INSERT should be rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"INSERT INTO mz_tables VALUES (1)"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":50,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# UPDATE should be rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"UPDATE mz_tables SET name = 'hacked'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":51,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# CREATE should be rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"CREATE TABLE mz_evil (id INT)"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":52,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# Schema-squatting should be rejected (mz_catalogg is not a valid system schema).
+mcp-developer
+{"jsonrpc":"2.0","id":53,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM mz_catalogg.fake_table"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":53,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: mz_catalogg.fake_table. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# Mixed system and user tables in JOIN should be rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":54,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM mz_tables t JOIN public.user_data u ON t.id = u.table_id"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":54,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: public.user_data. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}

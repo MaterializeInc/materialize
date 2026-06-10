@@ -34,6 +34,10 @@ message ProtoMySqlColumnMetaTimestamp {
   uint32 precision = 1;
 }
 
+message ProtoMySqlColumnMetaBit {
+  uint32 precision = 1;
+}
+
 message ProtoMySqlColumnDesc {
   string name = 1;
   optional mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
@@ -44,6 +48,7 @@ message ProtoMySqlColumnDesc {
     ProtoMySqlColumnMetaYear year = 5;
     ProtoMySqlColumnMetaDate date = 6;
     ProtoMySqlColumnMetaTimestamp timestamp = 7;
+    ProtoMySqlColumnMetaBit bit = 8;
   }
 }
 

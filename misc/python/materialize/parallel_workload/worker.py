@@ -91,6 +91,10 @@ class Worker:
                     try:
                         self.exe.rollback()
                     except QueryError as e:
+                        # ROLLBACK can itself be cancelled by
+                        # `pg_cancel_backend`, leaving psycopg in
+                        # `InFailedSqlTransaction`. Force a reconnect rather
+                        # than retry the rollback.
                         if (
                             "Please disconnect and re-connect" in e.msg
                             or "server closed the connection unexpectedly" in e.msg
@@ -98,6 +102,8 @@ class Worker:
                             or "Connection refused" in e.msg
                             or "the connection is lost" in e.msg
                             or "connection in transaction status INERROR" in e.msg
+                            or "canceling statement due to user request" in e.msg
+                            or "current transaction is aborted" in e.msg
                         ):
                             self.exe.reconnect_next = True
                             self.exe.rollback_next = False
@@ -112,6 +118,11 @@ class Worker:
                     self.num_queries[type(action)] += 1
             except QueryError as e:
                 self.num_queries[type(action)] += 1
+                # TODO(def-): Reduce number of errors for temp tables/views? At
+                # least the errors will be fast, so maybe not worth it
+                # if "temp" in e.msg:
+                #     print(e.query)
+                #     print(e.msg)
                 for error_to_ignore in action.errors_to_ignore(self.exe):
                     if error_to_ignore in e.msg:
                         self.ignored_errors[error_to_ignore][type(action)] += 1

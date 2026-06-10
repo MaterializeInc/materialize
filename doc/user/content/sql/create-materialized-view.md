@@ -7,54 +7,68 @@ menu:
     parent: 'commands'
 ---
 
-{{< note >}}
+Use `CREATE MATERIALIZED VIEW` to:
 
-Depending on your use case, instead of a materialized view, you might prefer to
+- Create a materialized view that maintains [fresh
+  results](/concepts/reaction-time) by persisting them in durable storage and
+  incrementally updating them as new data arrives.
+
+- Create a replacement for an existing materialized view that can be applied in
+  place with [`ALTER MATERIALIZED VIEW ... APPLY
+  REPLACEMENT`](/sql/alter-materialized-view/).
+
+Materialized views are particularly useful when you need **cross-cluster
+access** to results or want to sink data to external systems like
+[Kafka](/sql/create-sink). When you create a materialized view, a
+[cluster](/concepts/clusters/), responsible for maintaining the view, is
+associated with it, but the results can be **queried from any cluster**. This
+allows you to separate the compute resources used for view maintenance from
+those used for serving queries.
+
+If you do not need durability or cross-cluster sharing, and you are primarily
+interested in fast query performance within a single cluster, you may prefer to
 [create a view and index it](/concepts/views/#views). In Materialize, [indexes
-on views](/concepts/indexes/) **maintain and incrementally update view results
-in memory** for the cluster where you create the index.  See [Usage Patterns](#usage-patterns).
-
-{{</ note >}}
-
-`CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and
-incrementally updated as new data arrives.
-
-A materialized view specifies a [cluster](/concepts/clusters/) that
-is tasked with keeping its results up-to-date, but **can be referenced in
-any cluster**. This allows you to effectively decouple the computational
-resources used for view maintenance from the resources used for query serving.
+on views](/concepts/indexes/) also maintain results incrementally, but store
+them in memory, scoped to the cluster where the index was created. This approach
+offers lower latency for direct querying within that cluster.
 
 ## Syntax
 
-{{< diagram "create-materialized-view.svg" >}}
+{{< tabs >}}
+{{< tab "CREATE MATERIALIZED VIEW" >}}
 
-Field | Use
-------|-----
-**OR REPLACE** | If a materialized view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
-**IF NOT EXISTS** | If specified, _do not_ generate an error if a materialized view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
-_view&lowbar;name_ | A name for the materialized view.
-**(** _col_ident_... **)** | Rename the `SELECT` statement's columns to the list of identifiers, both of which must be the same length. Note that this is required for statements that return multiple columns with the same identifier.
-_cluster&lowbar;name_ | The cluster to maintain this materialized view. If not specified, defaults to the active cluster.
-_select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you want to maintain incrementally updated.
+### Create materialized view
 
-#### `with_options`
+{{% include-syntax file="examples/create_materialized_view" example="syntax" %}}
 
-{{< diagram "with-options.svg" >}}
+{{< /tab >}}
 
-| Field      | Value     | Description                                                                                                                                                       |
-| ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ASSERT NOT NULL** _col_ident_ | `text` | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, use the option multiple times. |
-| **RETAIN HISTORY FOR** _retention_period_ | `interval` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
-| **REFRESH _refresh_strategy_** | | ***Private preview.** This option has known performance or stability issues and is under active development.* The refresh strategy for the materialized view. See [Refresh strategies](#refresh-strategies) for syntax options. <br>Default: `ON COMMIT`. |
+{{< tab "CREATE REPLACEMENT MATERIALIZED VIEW" >}}
+
+### Create replacement materialized view
+
+{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
+
+Create a replacement materialized view for an existing materialized view.
+
+{{% include-syntax file="examples/create_materialized_view" example="syntax-replacement" %}}
+
+The created replacement materialized view starts hydrating immediately and can
+later be applied to replace the specified materialized view. For more
+information, see [Creating replacement materialized
+views](#creating-replacement-materialized-views).
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Details
 
-### Usage patterns
+### Usage pattern
 
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern-intro" %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 
-### Indexes
+### Indexing materialized views
 
 Although you can query a materialized view directly, these queries will be
 issued against Materialize's storage layer. This is expected to be fast, but
@@ -85,249 +99,46 @@ value is in fact produced in a column for which `ASSERT NOT NULL` was
 specified, querying the materialized view will produce an error until the
 offending row is deleted.
 
-### Refresh strategies
+### Creating replacement materialized views
 
-{{< private-preview />}}
+{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
 
-Depending on your use case, you might have data that doesn't require
-up-to-the-second freshness, or that can be accessed using different patterns to
-optimize for performance and cost (e.g., hot vs. cold data). To support these
-use cases, you can configure a non-default refresh strategy for materialized
-views.
+{{% include-headless "/headless/replacement-views/associated-commands-blurb/"
+%}}
 
-{{< note >}}
-We **do not** recommend using this feature if you're looking for very frequent
-refreshes (e.g., every few minutes). For cost savings to be significant in
-Materialize, the target refresh interval should be at least a few hours;
-otherwise, you'll want to stick with the [default behavior](#refresh-on-commit).
-{{< /note >}}
+{{% include-from-yaml data="examples/create_materialized_view"
+name="create-replacement-view-syntax-details" %}}
 
-Materialized views configured with a refresh strategy are **not incrementally
-maintained** and must recompute their results from scratch on every refresh.
-Because these views can be hosted in [scheduled clusters](/sql/create-cluster/#scheduling),
-which automatically turn on and off based on the configured refresh strategies,
-this feature can lead to significant cost savings when handling large volumes of
-historical data that is updated less frequently.
+{{< include-from-yaml data="examples/alter_materialized_view"
+name="prereq-recommendations-short" >}}
 
-[//]: # "TODO(morsapaes) We should add a SQL pattern that walks through a
-full-blown example of how to implement the cold, warm, hot path with refresh
-strategies."
+The replacement view is dropped when you apply the replacement view. For more
+information on applying the replacement view, including recommendations and
+CPU/memory considerations, see [`ALTER MATERIALIZED VIEW ... APPLY
+REPLACEMENT...`](/sql/alter-materialized-view/#replacing-a-materialized-view)
 
-#### Refresh on commit
+See also:
 
-<p style="font-size:14px"><b>Syntax:</b> <code>REFRESH ON COMMIT</code></p>
+- [Replace materialized
+views](/transform-data/updating-materialized-views/replace-materialized-view/)
+guide for a step-by-step tutorial.
 
-By default, Materialize refreshes a materialized view on every change to its
-inputs (i.e., on commit) — this guarantees that results are incrementally
-updated, fresh and consistent as new data arrives. Refresh on commit is
-the **default** when you create a materialized view that doesn't explicitly
-specify a refresh strategy, and is the **recommended behavior for the vast
-majority of use cases**.
+#### Query performance of replacement views
 
-Depending on your use case, it might make sense to trade-off freshness for
-performance and cost. For example, if it's important to keep results up-to-date
-for the most recent data, but not as much once data goes over a certain time
-threshold, it might be tolerable for changes to the older data to take a longer
-time to reflect.
+{{% include-headless "/headless/replacement-views/querying-replacement-view" %}}
 
-**Example**
+#### Restrictions and limitations
 
-To implement this pattern, you can maintain the recent data in a regular
-materialized view that refreshes on commit, create a second materialized view
-for data that goes over a specific threshold (e.g., one week) using a
-[refresh every](#refresh-every) strategy with the desired freshness interval
-(e.g., one day), and then union these views to get the entire result set.
+{{% include-headless
+"/headless/replacement-views/replacement-view-target-restrictions" %}}
 
-```mzsql
-CREATE MATERIALIZED VIEW mv AS
-SELECT ...
--- Keep data newer than one week
-WHERE mz_now() <= event_ts + INTERVAL '1' WEEK;
-```
-
-```mzsql
-CREATE MATERIALIZED VIEW mv_refresh_every
-WITH (
-  -- Refresh at creation, so the view is populated ahead of
-  -- the first user-specified refresh time
-  REFRESH AT CREATION,
-  -- Refresh every day at midnight UTC
-  REFRESH EVERY '1 day' ALIGNED TO '2024-04-17 00:00:00'
-) AS
-SELECT ...
--- Keep data older than one week
-WHERE mz_now() > event_ts + INTERVAL '1' WEEK
-```
-
-```mzsql
-CREATE VIEW v_mv_results AS
-SELECT * FROM mv
-UNION ALL
-SELECT * FROM mv_refresh_every;
-```
-
-#### Refresh at
-
-<p style="font-size:14px"><b>Syntax:</b> <code>REFRESH AT</code> { <code>CREATION</code> | <i>timestamp</i> }</p>
-
-This strategy allows configuring a materialized view to **refresh at a specific
-time**. The refresh time can be specified as a timestamp, or using the `AT CREATION`
-clause, which triggers a first refresh when the materialized view is created.
-
-**Example**
-
-To create a materialized view that is refreshed at creation, and then at the
-specified times:
-
-```mzsql
-CREATE MATERIALIZED VIEW mv_refresh_at
-IN CLUSTER my_scheduled_cluster
-WITH (
-  -- Refresh at creation, so the view is populated ahead of
-  -- the first user-specified refresh time
-  REFRESH AT CREATION,
-  -- Refresh at a user-specified (future) time
-  REFRESH AT '2024-06-06 12:00:00',
-  -- Refresh at another user-specified (future) time
-  REFRESH AT '2024-06-08 22:00:00'
-)
-AS SELECT ... FROM ...;
-```
-
-You can specify multiple `REFRESH AT` strategies in the same `CREATE` statement,
-and combine them with the [`REFRESH EVERY` strategy](#refresh-every).
-
-#### Refresh every
-
-<p style="font-size:14px"><b>Syntax:</b> <code>REFRESH EVERY</code> <i>interval</i> [ <code>ALIGNED TO</code> <i>timestamp</i> ]</code></p>
-
-This strategy allows configuring a materialized view to **refresh at regular
-intervals**. The `ALIGNED TO` clause additionally allows specifying the _phase_
-of the scheduled refreshes: for daily refreshes, it specifies the time of the
-day when the refresh will happen; for weekly refreshes, it specifies the day of
-the week and the time of the day when the refresh will happen. If `ALIGNED TO`
-is not specified, it defaults to the time when the materialized view is
-created.
-
-**Example**
-
-To create a materialized view that is refreshed at creation, and then once a day
-at 10PM UTC:
-
-```mzsql
-CREATE MATERIALIZED VIEW mv_refresh_every
-IN CLUSTER my_scheduled_cluster
-WITH (
-  -- Refresh at creation, so the view is populated ahead of
-  -- the first user-specified refresh time
-  REFRESH AT CREATION,
-  -- Refresh every day at 10PM UTC
-  REFRESH EVERY '1 day' ALIGNED TO '2024-06-06 22:00:00'
-) AS
-SELECT ...;
-```
-
-You can specify multiple `REFRESH EVERY` strategies in the same `CREATE`
-statement, and combine them with the [`REFRESH AT` strategy](#refresh-at). When
-this strategy, we recommend **always** using the [`REFRESH AT CREATION`](#refresh-at)
-clause, so the materialized view is available for querying ahead of the first
-user-specified refresh time.
-
-#### Querying materialized views with refresh strategies
-
-Materialized views configured with [`REFRESH EVERY` strategies](#refresh-every)
-have a period of unavailability around the scheduled refresh times — during this
-period, the view **will not return any results**. To avoid unavailability
-during the refresh operation, you must host these views in
-[**scheduled clusters**](/sql/create-cluster/#scheduling), which can be
-configured to automatically [turn on ahead of the scheduled refresh time](/sql/create-cluster/#hydration-time-estimate).
-
-**Example**
-
-To create a scheduled cluster that turns on 1 hour ahead of any scheduled
-refresh times:
-
-```mzsql
-CREATE CLUSTER my_scheduled_cluster (
-  SIZE = '3200cc',
-  SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
-);
-```
-
-You can then create a materialized view in this cluster, configured to refresh
-at creation, then once a day at 12PM UTC:
-
-```mzsql
-CREATE MATERIALIZED VIEW mv_refresh_every
-IN CLUSTER my_scheduled_cluster
-WITH (
-  -- Refresh at creation, so the view is populated ahead of
-  -- the first user-specified refresh time
-  REFRESH AT CREATION,
-  -- Refresh every day at 12PM UTC
-  REFRESH EVERY '1 day' ALIGNED TO '2024-06-18 00:00:00'
-) AS
-SELECT ...;
-```
-
-Because the materialized view is hosted on a scheduled cluster that is
-configured to **turn on ahead of any scheduled refreshes**, you can expect
-`my_scheduled_cluster` to be provisioned at 11PM UTC — or, 1 hour ahead of the
-scheduled refresh time for `mv_refresh_every`. This means that the cluster can
-backfill the view with pre-existing data — a process known as [_hydration_](/transform-data/troubleshooting/#hydrating-upstream-objects)
-— ahead of the refresh operation, which **reduces the total unavailability window
-of the view** to just the duration of the refresh.
-
-If the cluster is **not** configured to turn on ahead of scheduled refreshes
-(i.e., using the `HYDRATION TIME ESTIMATE` option), the total unavailability
-window of the view will be a combination of the hydration time for all objects
-in the cluster (typically long) and the duration of the refresh for the
-materialized view (typically short).
-
-Depending on the actual time it takes to hydrate the view or set of views in the
-cluster, you can later adjust the hydration time estimate value for the
-cluster using [`ALTER CLUSTER`](../alter-cluster/#schedule):
-
-```mzsql
-ALTER CLUSTER my_scheduled_cluster
-SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '30 minutes'));
-```
-
-#### Introspection
-
-To check details about the (non-default) refresh strategies associated with any materialized
-view in the system, you can query
-the [`mz_internal.mz_materialized_view_refresh_strategies`](../system-catalog/mz_internal/#mz_materialized_view_refresh_strategies)
-and [`mz_internal.mz_materialized_view_refreshes`](../system-catalog/mz_internal/#mz_materialized_view_refreshes)
-system catalog tables:
-
-```mzsql
-SELECT mv.id AS materialized_view_id,
-       mv.name AS materialized_view_name,
-       rs.type AS refresh_strategy,
-       rs.interval AS refresh_interval,
-       rs.aligned_to AS refresh_interval_phase,
-       rs.at AS refresh_time,
-       r.last_completed_refresh,
-       r.next_refresh
-FROM mz_internal.mz_materialized_view_refresh_strategies rs
-JOIN mz_internal.mz_materialized_view_refreshes r ON r.materialized_view_id = rs.materialized_view_id
-JOIN mz_materialized_views mv ON rs.materialized_view_id = mv.id;
-```
+{{% include-headless "/headless/replacement-views/replacement-view-index-restrictions" %}}
 
 ## Examples
 
 ### Creating a materialized view
 
-```mzsql
-CREATE MATERIALIZED VIEW winning_bids AS
-SELECT auction_id,
-       bid_id,
-       item,
-       amount
-FROM highest_bid_per_auction
-WHERE end_time < mz_now();
-```
+{{% include-example file="examples/create_materialized_view" example="example-create-materialized-view" %}}
 
 ### Using non-null assertions
 
@@ -345,36 +156,34 @@ SELECT
 FROM users FULL OUTER JOIN orders ON users.id = orders.user_id
 ```
 
-### Using refresh strategies
-
-```mzsql
-CREATE MATERIALIZED VIEW mv
-IN CLUSTER my_refresh_cluster
-WITH (
-  -- Refresh every Tuesday at 12PM UTC
-  REFRESH EVERY '7 days' ALIGNED TO '2024-06-04 12:00:00',
-  -- Refresh every Thursday at 12PM UTC
-  REFRESH EVERY '7 days' ALIGNED TO '2024-06-06 12:00:00',
-  -- Refresh on creation, so the view is populated ahead of
-  -- the first user-specified refresh time
-  REFRESH AT CREATION
-)
-AS SELECT ... FROM ...;
-```
-
 [//]: # "TODO(morsapaes) Add more elaborate examples with \timing that show
 things like querying materialized views from different clusters, indexed vs.
 non-indexed, and so on."
+
+### Creating a replacement materialized view
+
+{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
+
+{{% include-from-yaml file="examples/create_materialized_view"
+name="replacement-view-syntax-details" %}}
+
+{{% include-example file="examples/create_materialized_view"
+example="example-create-replacement-materialized-view" %}}
+
+To replace the existing view with its replacement, see [`ALTER MATERIALIZED
+VIEW`](../alter-materialized-view).
+
+See also:
+
+- [Replace materialized views guide
+](/transform-data/updating-materialized-views/replace-materialized-view/)
+
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-- Ownership of existing `view_name` if `OR REPLACE` is specified.
-- `CREATE` privileges on the containing schema.
-- `CREATE` privileges on the containing cluster.
-- `USAGE` privileges on all types used in the materialized view definition.
-- `USAGE` privileges on the schemas that all types in the statement are contained in.
+{{% include-headless "/headless/sql-command-privileges/create-materialized-view" %}}
 
 ## Additional information
 
@@ -383,6 +192,7 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
+- [`ALTER MATERIALIZED VIEW`](../alter-materialized-view)
 - [`SHOW MATERIALIZED VIEWS`](../show-materialized-views)
 - [`SHOW CREATE MATERIALIZED VIEW`](../show-create-materialized-view)
 - [`DROP MATERIALIZED VIEW`](../drop-materialized-view)

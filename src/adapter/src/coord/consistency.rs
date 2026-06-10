@@ -12,10 +12,10 @@
 use super::Coordinator;
 use crate::catalog::consistency::CatalogInconsistencies;
 use mz_adapter_types::connection::ConnectionIdType;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::instrument;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica};
 use serde::Serialize;
 
@@ -78,7 +78,7 @@ impl Coordinator {
 
         for timeline in self.global_timelines.values() {
             for id in timeline.read_holds.storage_ids() {
-                if self.catalog().try_get_entry(&id).is_none() {
+                if self.catalog().try_get_entry_by_global_id(&id).is_none() {
                     inconsistencies.push(ReadHoldsInconsistency::Storage(id));
                 }
             }
@@ -86,7 +86,7 @@ impl Coordinator {
                 if self.catalog().try_get_cluster(cluster_id).is_none() {
                     inconsistencies.push(ReadHoldsInconsistency::Cluster(cluster_id));
                 }
-                if !id.is_transient() && self.catalog().try_get_entry(&id).is_none() {
+                if !id.is_transient() && self.catalog().try_get_entry_by_global_id(&id).is_none() {
                     inconsistencies.push(ReadHoldsInconsistency::Compute(id));
                 }
             }
@@ -117,8 +117,13 @@ impl Coordinator {
                 .try_get_entry(id)
                 .map(|entry| entry.item())
                 .and_then(|item| {
-                    let CatalogItem::Source(Source { data_source, .. }) = &item else {
-                        return None;
+                    let data_source = match &item {
+                        CatalogItem::Source(Source { data_source, .. }) => data_source,
+                        CatalogItem::Table(Table {
+                            data_source: TableDataSource::DataSource { desc, .. },
+                            ..
+                        }) => desc,
+                        _ => return None,
                     };
                     Some(matches!(data_source, DataSourceDesc::Webhook { .. }))
                 })
@@ -196,7 +201,7 @@ enum ReadHoldsInconsistency {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 enum ActiveWebhookInconsistency {
-    NonExistentWebhook(GlobalId),
+    NonExistentWebhook(CatalogItemId),
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]

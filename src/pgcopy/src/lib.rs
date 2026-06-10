@@ -16,7 +16,6 @@
 mod copy;
 
 pub use copy::{
-    decode_copy_format, encode_copy_format, encode_copy_format_header, CopyCsvFormatParams,
-    CopyFormatParams, CopyTextFormatParams, CopyTextFormatParser, ProtoCopyCsvFormatParams,
-    ProtoCopyFormatParams, ProtoCopyTextFormatParams,
+    CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams, CopyTextFormatParser,
+    decode_copy_format, encode_copy_format, encode_copy_format_header,
 };

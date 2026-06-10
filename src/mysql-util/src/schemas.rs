@@ -18,10 +18,10 @@ use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{FromRowError, Row};
 
 use mz_repr::adt::char::CharLength;
-use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
-use mz_repr::{ColumnType, ScalarType};
+use mz_repr::{SqlColumnType, SqlScalarType};
 
 use crate::desc::{
     MySqlColumnDesc, MySqlColumnMeta, MySqlColumnMetaEnum, MySqlKeyDesc, MySqlTableDesc,
@@ -116,8 +116,8 @@ impl MySqlTableSchema {
     ) -> Result<MySqlTableDesc, MySqlError> {
         // Verify there are no duplicates in text_columns and exclude_columns
         match (&text_columns, &exclude_columns) {
-            (Some(text_cols), Some(ignore_cols)) => {
-                let intersection: Vec<_> = text_cols.intersection(ignore_cols).collect();
+            (Some(text_cols), Some(exclude_cols)) => {
+                let intersection: Vec<_> = text_cols.intersection(exclude_cols).collect();
                 if !intersection.is_empty() {
                     Err(MySqlError::DuplicatedColumnNames {
                         qualified_table_name: format!("{:?}.{:?}", self.schema_name, self.name),
@@ -139,7 +139,7 @@ impl MySqlTableSchema {
                         Err(err) => error_cols.push(err),
                         Ok((scalar_type, meta)) => columns.push(MySqlColumnDesc {
                             name: info.column_name,
-                            column_type: Some(ColumnType {
+                            column_type: Some(SqlColumnType {
                                 scalar_type,
                                 nullable: &info.is_nullable == "YES",
                             }),
@@ -165,13 +165,13 @@ impl MySqlTableSchema {
             // Collect the parsed data types or errors for later reporting.
             match parse_data_type(&info, &self.schema_name, &self.name) {
                 Err(err) => error_cols.push(err),
-                Ok(scalar_type) => columns.push(MySqlColumnDesc {
+                Ok((scalar_type, meta)) => columns.push(MySqlColumnDesc {
                     name: info.column_name,
-                    column_type: Some(ColumnType {
+                    column_type: Some(SqlColumnType {
                         scalar_type,
                         nullable: &info.is_nullable == "YES",
                     }),
-                    meta: None,
+                    meta,
                 }),
             }
         }
@@ -346,35 +346,35 @@ fn parse_data_type(
     info: &InfoSchema,
     schema_name: &str,
     table_name: &str,
-) -> Result<ScalarType, UnsupportedDataType> {
+) -> Result<(SqlScalarType, Option<MySqlColumnMeta>), UnsupportedDataType> {
     let unsigned = info.column_type.contains("unsigned");
 
-    match info.data_type.as_str() {
+    let scalar_type = match info.data_type.as_str() {
         "tinyint" | "smallint" => {
             if unsigned {
-                Ok(ScalarType::UInt16)
+                SqlScalarType::UInt16
             } else {
-                Ok(ScalarType::Int16)
+                SqlScalarType::Int16
             }
         }
         "mediumint" | "int" => {
             if unsigned {
-                Ok(ScalarType::UInt32)
+                SqlScalarType::UInt32
             } else {
-                Ok(ScalarType::Int32)
+                SqlScalarType::Int32
             }
         }
         "bigint" => {
             if unsigned {
-                Ok(ScalarType::UInt64)
+                SqlScalarType::UInt64
             } else {
-                Ok(ScalarType::Int64)
+                SqlScalarType::Int64
             }
         }
-        "float" => Ok(ScalarType::Float32),
-        "double" => Ok(ScalarType::Float64),
-        "date" => Ok(ScalarType::Date),
-        "datetime" | "timestamp" => Ok(ScalarType::Timestamp {
+        "float" => SqlScalarType::Float32,
+        "double" => SqlScalarType::Float64,
+        "date" => SqlScalarType::Date,
+        "datetime" | "timestamp" => SqlScalarType::Timestamp {
             // both mysql and our scalar type use a max six-digit fractional-second precision
             // this is bounds-checked in the TryFrom impl
             precision: info
@@ -387,11 +387,11 @@ fn parse_data_type(
                     column_name: info.column_name.clone(),
                     intended_type: None,
                 })?,
-        }),
-        "time" => Ok(ScalarType::Time),
+        },
+        "time" => SqlScalarType::Time,
         "decimal" | "numeric" => {
             // validate the precision is within the bounds of our numeric type
-            // here since we don't use this precision on the ScalarType itself
+            // here since we don't use this precision on the SqlScalarType itself
             // whereas the scale will be bounds-checked in the TryFrom impl
             if info.numeric_precision.unwrap_or_default() > NUMERIC_DATUM_MAX_PRECISION.into() {
                 Err(UnsupportedDataType {
@@ -401,7 +401,7 @@ fn parse_data_type(
                     intended_type: None,
                 })?
             }
-            Ok(ScalarType::Numeric {
+            SqlScalarType::Numeric {
                 max_scale: info
                     .numeric_scale
                     .map(NumericMaxScale::try_from)
@@ -412,9 +412,9 @@ fn parse_data_type(
                         column_name: info.column_name.clone(),
                         intended_type: None,
                     })?,
-            })
+            }
         }
-        "char" => Ok(ScalarType::Char {
+        "char" => SqlScalarType::Char {
             length: info
                 .character_maximum_length
                 .and_then(|f| Some(CharLength::try_from(f)))
@@ -425,8 +425,8 @@ fn parse_data_type(
                     column_name: info.column_name.clone(),
                     intended_type: None,
                 })?,
-        }),
-        "varchar" => Ok(ScalarType::VarChar {
+        },
+        "varchar" => SqlScalarType::VarChar {
             max_length: info
                 .character_maximum_length
                 .and_then(|f| Some(VarCharMaxLength::try_from(f)))
@@ -437,19 +437,37 @@ fn parse_data_type(
                     column_name: info.column_name.clone(),
                     intended_type: None,
                 })?,
-        }),
-        "text" | "tinytext" | "mediumtext" | "longtext" => Ok(ScalarType::String),
+        },
+        "text" | "tinytext" | "mediumtext" | "longtext" => SqlScalarType::String,
         "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => {
-            Ok(ScalarType::Bytes)
+            SqlScalarType::Bytes
         }
-        "json" => Ok(ScalarType::Jsonb),
-        _ => Err(UnsupportedDataType {
-            column_type: info.column_type.clone(),
-            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
-            column_name: info.column_name.clone(),
-            intended_type: None,
-        }),
-    }
+        "json" => SqlScalarType::Jsonb,
+        // TODO(mysql): Support the `bit` type natively in Materialize.
+        "bit" => {
+            let precision = match info.numeric_precision {
+                Some(x @ 0..=64) => u32::try_from(x).expect("known good value"),
+                prec => {
+                    mz_ore::soft_panic_or_log!(
+                        "found invalid bit precision, {prec:?}, falling back"
+                    );
+                    64u32
+                }
+            };
+            return Ok((SqlScalarType::UInt64, Some(MySqlColumnMeta::Bit(precision))));
+        }
+        typ => {
+            tracing::warn!(?typ, "found unsupported data type");
+            return Err(UnsupportedDataType {
+                column_type: info.column_type.clone(),
+                qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                column_name: info.column_name.clone(),
+                intended_type: None,
+            });
+        }
+    };
+
+    Ok((scalar_type, None))
 }
 
 /// Parse the specified column as a TEXT COLUMN. We only support the set of types that are
@@ -459,12 +477,12 @@ fn parse_as_text_column(
     info: &InfoSchema,
     schema_name: &str,
     table_name: &str,
-) -> Result<(ScalarType, Option<MySqlColumnMeta>), UnsupportedDataType> {
+) -> Result<(SqlScalarType, Option<MySqlColumnMeta>), UnsupportedDataType> {
     match info.data_type.as_str() {
-        "year" => Ok((ScalarType::String, Some(MySqlColumnMeta::Year))),
-        "json" => Ok((ScalarType::String, Some(MySqlColumnMeta::Json))),
+        "year" => Ok((SqlScalarType::String, Some(MySqlColumnMeta::Year))),
+        "json" => Ok((SqlScalarType::String, Some(MySqlColumnMeta::Json))),
         "enum" => Ok((
-            ScalarType::String,
+            SqlScalarType::String,
             Some(MySqlColumnMeta::Enum(MySqlColumnMetaEnum {
                 values: enum_vals_from_column_type(info.column_type.as_str()).map_err(|_| {
                     UnsupportedDataType {
@@ -476,9 +494,9 @@ fn parse_as_text_column(
                 })?,
             })),
         )),
-        "date" => Ok((ScalarType::String, Some(MySqlColumnMeta::Date))),
+        "date" => Ok((SqlScalarType::String, Some(MySqlColumnMeta::Date))),
         "datetime" | "timestamp" => Ok((
-            ScalarType::String,
+            SqlScalarType::String,
             Some(MySqlColumnMeta::Timestamp(
                 info.datetime_precision
                     // Default precision is 0 in MySQL if not specified
@@ -512,9 +530,7 @@ fn enum_vals_from_column_type(s: &str) -> Result<Vec<String>, anyhow::Error> {
     let vals_str = s
         .strip_prefix("enum(")
         .and_then(|s| s.strip_suffix(')'))
-        .ok_or(anyhow::format_err!(
-            "Unable to parse enum column type string"
-        ))?;
+        .ok_or_else(|| anyhow::format_err!("Unable to parse enum column type string"))?;
 
     Ok(ENUM_VAL_REGEX
         .captures_iter(vals_str)

@@ -1,0 +1,28 @@
+{{ $azure_version := site.Data.self_managed.latest_versions.terraform_azure_version }}
+
+1. Fork the [Materialize's sample Terraform
+   repo](https://github.com/MaterializeInc/terraform-azurerm-materialize).
+
+1. Set `MY_ORGANIZATION` to your github organization name, substituting your
+   organization's name for `<enter-your-organization>`:
+
+   ```bash
+   MY_ORGANIZATION=<enter-your-organization>
+   ```
+
+
+1. Clone your forked repo and checkout the `{{ $azure_version }}` tag. For example,
+
+   - If cloning via SSH (substitute `YOUR_ORGANIZATION` with your organization's
+     name):
+
+     ```bash
+     git clone --depth 1 -b {{ $azure_version }} git@github.com:${MY_ORGANIZATION}/terraform-azurerm-materialize.git
+     ```
+
+   - If cloning via HTTPS (substitute `YOUR_ORGANIZATION` with your
+     organization's name):
+
+     ```bash
+     git clone --depth 1 -b {{ $azure_version }} https://github.com/${MY_ORGANIZATION}/terraform-azurerm-materialize.git
+     ```

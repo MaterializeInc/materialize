@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+import os
+
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -15,6 +17,7 @@ from materialize.mzcompose.services.materialized import (
     Materialized,
 )
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
+from materialize.zippy.blob_store_capabilities import BlobStoreIsRunning
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
 from materialize.zippy.framework import (
     Action,
@@ -24,7 +27,6 @@ from materialize.zippy.framework import (
     Mz0dtDeployBaseAction,
     State,
 )
-from materialize.zippy.minio_capabilities import MinioIsRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.view_capabilities import ViewExists
 
@@ -34,7 +36,7 @@ class MzStartParameterized(ActionFactory):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {CockroachIsRunning, MinioIsRunning}
+        return {CockroachIsRunning, BlobStoreIsRunning}
 
     @classmethod
     def incompatible_with(cls) -> set[type[Capability]]:
@@ -59,7 +61,7 @@ class MzStart(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {CockroachIsRunning, MinioIsRunning}
+        return {CockroachIsRunning, BlobStoreIsRunning}
 
     @classmethod
     def incompatible_with(cls) -> set[type[Capability]]:
@@ -70,7 +72,21 @@ class MzStart(Action):
         capabilities: Capabilities,
         additional_system_parameter_defaults: dict[str, str] = {},
     ) -> None:
-        self.additional_system_parameter_defaults = additional_system_parameter_defaults
+        if additional_system_parameter_defaults:
+            self.additional_system_parameter_defaults = (
+                additional_system_parameter_defaults
+            )
+        else:
+            self.additional_system_parameter_defaults = {}
+            system_parameter_default = os.getenv("CI_MZ_SYSTEM_PARAMETER_DEFAULT", "")
+            if system_parameter_default:
+                for val in system_parameter_default.split(";"):
+                    x = val.split("=", maxsplit=1)
+                    assert (
+                        len(x) == 2
+                    ), f"CI_MZ_SYSTEM_PARAMETER_DEFAULT '{val}' should be the format <key>=<val>"
+                    self.additional_system_parameter_defaults[x[0]] = x[1]
+
         super().__init__(capabilities)
 
     def run(self, c: Composition, state: State) -> None:
@@ -81,7 +97,8 @@ class MzStart(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
-                external_minio=True,
+                external_blob_store=True,
+                blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
@@ -89,6 +106,7 @@ class MzStart(Action):
                 restart="on-failure",
                 additional_system_parameter_defaults=self.additional_system_parameter_defaults,
                 metadata_store="cockroach",
+                default_replication_factor=2,
             )
         ):
             c.up(state.mz_service)
@@ -158,13 +176,15 @@ class MzRestart(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
-                external_minio=True,
+                external_blob_store=True,
+                blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
                 metadata_store="cockroach",
+                default_replication_factor=2,
             )
         ):
             c.kill(state.mz_service)
@@ -190,7 +210,8 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
         with c.override(
             Materialized(
                 name=state.mz_service,
-                external_minio=True,
+                external_blob_store=True,
+                blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
@@ -198,6 +219,7 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
                 metadata_store="cockroach",
+                default_replication_factor=2,
             ),
         ):
             c.up(state.mz_service, detach=True)

@@ -10,6 +10,7 @@
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -27,8 +28,18 @@ use mz_ore::cast::CastLossy;
 /// 30kB since it can't have a lower unit, but 30.1MB will be rounded to 30822kB.
 /// For [`ByteSize`], the value is an integer and the base unit is bytes (`B`).
 #[derive(
-    Arbitrary, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ByteSize(u64);
 
 impl ByteSize {
@@ -58,7 +69,7 @@ impl ByteSize {
 
     fn format_string(&self) -> String {
         match self.0 {
-            zero if zero == 0 => "0".to_string(),
+            0 => "0".to_string(),
             tb if tb % BytesUnit::Tb.value() == 0 => {
                 format!("{}{}", tb / BytesUnit::Tb.value(), BytesUnit::Tb)
             }
@@ -140,8 +151,18 @@ impl FromStr for ByteSize {
 
 /// Valid units for representing bytes
 #[derive(
-    Arbitrary, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum BytesUnit {
     #[default]
     B,

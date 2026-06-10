@@ -21,7 +21,7 @@
 //!   set we want to support in persist.
 //! - Do `dyn Any` downcasting of columns once per part, not once per update.
 //!
-//! Finally, the [Schema2] trait maps an implementor of [Codec] to the underlying
+//! Finally, the [Schema] trait maps an implementor of [Codec] to the underlying
 //! column structure. It also provides a [ColumnEncoder] and [ColumnDecoder] for
 //! amortizing any downcasting that does need to happen.
 
@@ -31,8 +31,8 @@ use arrow::datatypes::DataType;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::stats::{DynStats, StructStats};
 use crate::Codec;
+use crate::stats::{DynStats, StructStats};
 
 /// A __stable__ encoding for a type that gets durably persisted in an
 /// [`arrow::array::FixedSizeBinaryArray`].
@@ -70,6 +70,9 @@ pub trait ColumnDecoder<T> {
     /// Returns if the value at `idx` is null.
     fn is_null(&self, idx: usize) -> bool;
 
+    /// Returns the number of bytes used by this decoder.
+    fn goodbytes(&self) -> usize;
+
     /// Returns statistics for the column. This structure is defined by Persist,
     /// but the contents are determined by the client; Persist will preserve
     /// them in the part metadata and make them available to readers.
@@ -103,7 +106,7 @@ pub trait ColumnEncoder<T> {
 }
 
 /// Description of a type that we encode into Persist.
-pub trait Schema2<T>: Debug + Send + Sync {
+pub trait Schema<T>: Debug + Send + Sync {
     /// The type of column we decode from, and encoder will finish into.
     type ArrowColumn: arrow::array::Array + Debug + Clone + 'static;
     /// Statistics we collect for a schema of this type.
@@ -112,7 +115,7 @@ pub trait Schema2<T>: Debug + Send + Sync {
     /// Type that is able to decode values of `T` from [`Self::ArrowColumn`].
     type Decoder: ColumnDecoder<T> + Debug + Send + Sync;
     /// Type that is able to encoder values of `T`.
-    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn> + Debug;
+    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn> + Debug + Send + Sync;
 
     /// Returns a type that is able to decode instances of `T` from the provider column.
     fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error>;
@@ -147,11 +150,11 @@ pub fn data_type<A: Codec>(schema: &A::Schema) -> anyhow::Result<DataType> {
 }
 
 /// Helper to convert from codec-encoded data to structured data.
-pub fn codec_to_schema2<A: Codec + Default>(
+pub fn codec_to_schema<A: Codec + Default>(
     schema: &A::Schema,
     data: &BinaryArray,
 ) -> anyhow::Result<ArrayRef> {
-    let mut encoder = Schema2::encoder(schema)?;
+    let mut encoder = Schema::encoder(schema)?;
 
     let mut value: A = A::default();
     let mut storage = Some(A::Storage::default());
@@ -174,26 +177,24 @@ pub fn codec_to_schema2<A: Codec + Default>(
 }
 
 /// Helper to convert from structured data to codec-encoded data.
-pub fn schema2_to_codec<A: Codec + Default>(
+pub fn schema_to_codec<A: Codec + Default>(
     schema: &A::Schema,
     data: &dyn Array,
 ) -> anyhow::Result<BinaryArray> {
     let len = data.len();
-    let decoder = Schema2::decoder_any(schema, data)?;
+    let decoder = Schema::decoder_any(schema, data)?;
     let mut builder = BinaryBuilder::new();
 
     let mut value: A = A::default();
     let mut buffer = vec![];
 
     for i in 0..len {
-        if decoder.is_null(i) {
-            builder.append_null();
-        } else {
-            decoder.decode(i, &mut value);
-            Codec::encode(&value, &mut buffer);
-            builder.append_value(&buffer);
-            buffer.clear()
-        }
+        // The binary encoding of key/value types can never be null.
+        // Defer to the implementation-defined behaviour for null entries in that case.
+        decoder.decode(i, &mut value);
+        Codec::encode(&value, &mut buffer);
+        builder.append_value(&buffer);
+        buffer.clear()
     }
 
     Ok(BinaryBuilder::finish(&mut builder))

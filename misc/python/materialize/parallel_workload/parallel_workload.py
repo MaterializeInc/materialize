@@ -67,7 +67,9 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
+    replicas: int,
     composition: Composition | None,
+    azurite: bool,
     sanity_restart: bool,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
@@ -75,7 +77,7 @@ def run(
     rng = random.Random(random.randrange(SEED_RANGE))
 
     print(
-        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} (--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} --replicas={replicas} (--host={host})"
     )
     initialize_logging()
 
@@ -94,31 +96,32 @@ def run(
     with system_conn.cursor() as system_cur:
         system_exe = Executor(rng, system_cur, None, database)
         system_exe.execute(
-            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 40 + num_threads}"
         )
         # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
         system_exe.execute(
-            f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 1000 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 40 + num_threads}"
         )
         system_exe.execute("ALTER SYSTEM SET max_secrets = 1000000")
+        system_exe.execute("ALTER SYSTEM SET idle_in_transaction_session_timeout = 0")
         # Most queries should not fail because of privileges
         for object_type in [
             "TABLES",
@@ -132,6 +135,18 @@ def run(
             system_exe.execute(
                 f"ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON {object_type} TO PUBLIC"
             )
+
+        if replicas > 1:
+            system_exe.execute("DROP CLUSTER quickstart CASCADE")
+            replica_names = [f"r{replica_id}" for replica_id in range(0, replicas)]
+            replica_string = ",".join(
+                f"{replica_name} (SIZE 'scale=1,workers=4')"
+                for replica_name in replica_names
+            )
+            system_exe.execute(
+                f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
+            )
+
         system_conn.close()
         conn = psycopg.connect(
             host=host,
@@ -222,7 +237,7 @@ def run(
         assert composition, "Kill scenario only works in mzcompose"
         worker = Worker(
             worker_rng,
-            [KillAction(worker_rng, composition, sanity_restart)],
+            [KillAction(worker_rng, composition, azurite, sanity_restart)],
             [1],
             end_time,
             autocommit=False,
@@ -246,6 +261,7 @@ def run(
                 ZeroDowntimeDeployAction(
                     worker_rng,
                     composition,
+                    azurite,
                     sanity_restart,
                 )
             ],
@@ -283,7 +299,7 @@ def run(
         )
         thread.start()
         threads.append(thread)
-    elif scenario in (Scenario.Regression, Scenario.Rename):
+    elif scenario in (Scenario.Regression, Scenario.Rename, Scenario.RepeatRow):
         pass
     else:
         raise ValueError(f"Unknown scenario {scenario}")
@@ -356,25 +372,28 @@ def run(
                 print(
                     f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
                 )
-        print_stats(num_queries, workers, num_threads)
+        print_stats(num_queries, workers, num_threads, scenario)
+
         if num_threads >= 50:
             # Under high load some queries can't finish quickly, especially UPDATE/DELETE
             os._exit(0)
         if scenario == scenario.ZeroDowntimeDeploy:
             # With 0dt deploys connections against the currently-fenced-out
             # environmentd will be stuck forever, the promoted environmentd can
-            # take > 5 minutes to become responsive as well
+            # take > 10 minutes to become responsive as well
             os._exit(0)
-        print("Threads have not stopped within 5 minutes, exiting hard")
-        os._exit(1)
+        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9672 is fixed
+        # print("Threads have not stopped within 10 minutes, exiting hard")
+        # os._exit(1)
+        os._exit(0)
 
     try:
         conn = psycopg.connect(
             host=host, port=ports["materialized"], user="materialize"
         )
-    except Exception:
+    except Exception as e:
         if scenario == Scenario.ZeroDowntimeDeploy:
-            print("Failed connecting to materialized, using materialized2: {e}")
+            print(f"Failed connecting to materialized, using materialized2: {e}")
             conn = psycopg.connect(
                 host=host, port=ports["materialized2"], user="materialize"
             )
@@ -382,6 +401,7 @@ def run(
             raise
 
     conn.autocommit = True
+
     with conn.cursor() as cur:
         # Dropping the database also releases the long running connections
         # used by database objects.
@@ -405,13 +425,15 @@ def run(
         # else:
         #     raise ValueError("Sessions did not clean up within 30s of threads stopping")
     conn.close()
-    print_stats(num_queries, workers, num_threads)
+
+    print_stats(num_queries, workers, num_threads, scenario)
 
 
 def print_stats(
     num_queries: defaultdict[ActionList, Counter[type[Action]]],
     workers: list[Worker],
     num_threads: int,
+    scenario: Scenario,
 ) -> None:
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
     num_failures = 0
@@ -441,7 +463,10 @@ def print_stats(
             for action_class, count in counter.items()
         )
         print(f"  {error}: {text}")
-    assert failed < 50 if num_threads < 50 else failed < 75
+    if num_threads < 50 and scenario != scenario.ZeroDowntimeDeploy:
+        assert failed < 50
+    else:
+        assert failed < 75
 
 
 def parse_common_args(parser: argparse.ArgumentParser) -> None:
@@ -474,6 +499,10 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Whether to initialize expensive parts like SQLsmith, sources, sinks (for fast local testing, reduces coverage)",
     )
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+    parser.add_argument("--replicas", type=int, default=2, help="use multiple replicas")
 
 
 def main() -> int:
@@ -483,7 +512,7 @@ def main() -> int:
         description="Run a parallel workload against Materialize",
     )
 
-    parser.add_argument("--host", default="localhost", type=str)
+    parser.add_argument("--host", default="127.0.0.1", type=str)
     parser.add_argument("--port", default=6875, type=int)
     parser.add_argument("--system-port", default=6877, type=int)
     parser.add_argument("--http-port", default=6876, type=int)
@@ -524,7 +553,9 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
+        args.replicas,
         composition=None,  # only works in mzcompose
+        azurite=args.azurite,
         sanity_restart=False,  # only works in mzcompose
     )
     return 0

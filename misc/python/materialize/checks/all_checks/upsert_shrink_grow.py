@@ -21,23 +21,15 @@ class ShrinkGrow:
     def initialize(self) -> Testdrive:
         name = self.name()
         pads = self.pads()
-        return Testdrive(
-            schemas()
-            + dedent(
-                f"""
+        return Testdrive(schemas() + dedent(f"""
                 $ kafka-create-topic topic=upsert-update-{name}
 
                 $ kafka-ingest format=avro key-format=avro topic=upsert-update-{name} key-schema=${{keyschema}} schema=${{schema}} repeat=10000
                 {{"key1": "${{kafka-ingest.iteration}}"}} {{"f1": "A${{kafka-ingest.iteration}}{pads[0]}A"}}
 
-                >[version<11900] CREATE SOURCE upsert_update_{name}
+                > CREATE SOURCE upsert_update_{name}_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-update-{name}-${{testdrive.seed}}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE UPSERT
-
-                >[version>=11900] CREATE SOURCE upsert_update_{name}_src
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-update-{name}-${{testdrive.seed}}')
-                >[version>=11900] CREATE TABLE upsert_update_{name} FROM SOURCE upsert_update_{name}_src (REFERENCE "testdrive-upsert-update-{name}-${{testdrive.seed}}")
+                > CREATE TABLE upsert_update_{name} FROM SOURCE upsert_update_{name}_src (REFERENCE "testdrive-upsert-update-{name}-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -47,9 +39,7 @@ class ShrinkGrow:
                   MIN(LENGTH(f1)) AS l1, MAX(LENGTH(f1)) AS l2
                   FROM upsert_update_{name}
                   GROUP BY LEFT(f1, 1), RIGHT(f1, 1);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         name = self.name()
@@ -71,14 +61,10 @@ class ShrinkGrow:
     def validate(self) -> Testdrive:
         name = self.name()
         last_pad_length = len(self.pads()[-1])
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT * FROM upsert_update_{name}_view;
                 C C 10000 10000 10000 {last_pad_length+3} {last_pad_length+6}
-                """
-            )
-        )
+                """))
 
     def name(self) -> str:
         raise NotImplementedError

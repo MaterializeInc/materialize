@@ -23,24 +23,24 @@
 # introspection relations are asynchronously updated, so DDL commands are not
 # immediately reflected there.
 
-> CREATE CLUSTER test REPLICAS (hydrated_test_1 (SIZE '1'))
+> CREATE CLUSTER test REPLICAS (hydrated_test_1 (SIZE 'scale=1,workers=1'))
 > SET cluster = test
 
 # Test that on an empty cluster only the introspection indexes show up.
 # Introspection subscribes do not show up because the hydration introspection
 # relations exclude transient dataflow.
 
-> SELECT DISTINCT left(h.object_id, 1), h.hydrated
+> SELECT DISTINCT left(h.object_id, 2), h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
-s true
+si true
 
-> SELECT DISTINCT left(h.object_id, 1), h.hydrated
+> SELECT DISTINCT left(h.object_id, 2), h.hydrated
   FROM mz_internal.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
-s true
+si true
 
 # No operator-level hydration status logging for introspection dataflows.
 > SELECT DISTINCT left(h.object_id, 1), h.hydrated
@@ -77,6 +77,9 @@ idx      hydrated_test_1 true
 mv       hydrated_test_1 true
 mv_const hydrated_test_1 true
 
+# `mv_const` doesn't show up because the dataflow advanced to the empty
+# frontier and its replica state was cleaned up, including introspection
+# logging.
 > SELECT o.name, r.name, bool_and(h.hydrated)
   FROM mz_internal.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -87,11 +90,10 @@ mv_const hydrated_test_1 true
   GROUP BY o.name, r.name;
 idx      hydrated_test_1 true
 mv       hydrated_test_1 true
-mv_const hydrated_test_1 true
 
 # Test adding new replicas.
 
-> CREATE CLUSTER REPLICA test.hydrated_test_2 SIZE '1'
+> CREATE CLUSTER REPLICA test.hydrated_test_2 SIZE 'scale=1,workers=1'
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
@@ -121,9 +123,6 @@ mv       hydrated_test_2 true
 mv_const hydrated_test_1 true
 mv_const hydrated_test_2 true
 
-# `mv_const` doesn't show up for the second replica because its output was
-# already fully computed so it wasn't installed on the replica and no operators
-# exist.
 > SELECT o.name, r.name, bool_and(h.hydrated)
   FROM mz_internal.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -136,7 +135,6 @@ idx      hydrated_test_1 true
 idx      hydrated_test_2 true
 mv       hydrated_test_1 true
 mv       hydrated_test_2 true
-mv_const hydrated_test_1 true
 
 # Test dropping replicas.
 
@@ -204,7 +202,7 @@ mv       hydrated_test_2 true
 
 # Test dropping dataflows.
 
-> CREATE CLUSTER REPLICA test.hydrated_test_3 SIZE '1'
+> CREATE CLUSTER REPLICA test.hydrated_test_3 SIZE 'scale=1,workers=1'
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
@@ -272,6 +270,7 @@ mv  hydrated_test_3 true
 
 # Test adding new storage dataflows.
 
+> BEGIN
 > CREATE SOURCE src
   IN CLUSTER test
   FROM LOAD GENERATOR auction (UP TO 100);
@@ -281,6 +280,7 @@ mv  hydrated_test_3 true
 > CREATE TABLE bids FROM SOURCE src (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE src (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE src (REFERENCE users);
+> COMMIT
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
@@ -322,7 +322,7 @@ snk           hydrated_test_3 true
 
 # Test adding new replicas.
 
-> CREATE CLUSTER REPLICA test.hydrated_test_4 SIZE '1'
+> CREATE CLUSTER REPLICA test.hydrated_test_4 SIZE 'scale=1,workers=1'
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -407,7 +407,6 @@ mv_wmr_stuck hydrated_test_4 false
       o.id NOT LIKE 's%'
   GROUP BY o.name, r.name;
 mv_wmr       hydrated_test_4 true
-mv_wmr_const hydrated_test_4 true
 mv_wmr_stuck hydrated_test_4 false
 
 > DROP MATERIALIZED VIEW mv_wmr

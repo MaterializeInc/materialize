@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, SqlScalarType};
 use mz_sql_parser::ast::InspectShardStatement;
 use std::time::Duration;
 use uncased::UncasedStr;
@@ -26,9 +26,9 @@ use crate::ast::{
 use crate::names::{self, Aug};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
-    FetchPlan, InspectShardPlan, Params, Plan, PlanError, PreparePlan, ResetVariablePlan,
-    SetVariablePlan, ShowVariablePlan, VariableValue,
+    ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout, FetchPlan,
+    InspectShardPlan, Params, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan,
+    ShowVariablePlan, VariableValue, describe, query,
 };
 use crate::session::vars;
 use crate::session::vars::{IsolationLevel, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME};
@@ -54,7 +54,7 @@ pub fn plan_set_variable(
     if let VariableValue::Values(values) = &value {
         if let Some(value) = values.first() {
             if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
-                && value == IsolationLevel::StrongSessionSerializable.as_str()
+                && value == IsolationLevel::StrongSessionSerializable.as_variant_str()
             {
                 scx.require_feature_flag(&vars::ENABLE_SESSION_TIMELINES)?;
             }
@@ -104,17 +104,17 @@ pub fn describe_show_variable(
 ) -> Result<StatementDesc, PlanError> {
     let desc = if variable.as_str() == UncasedStr::new("ALL") {
         RelationDesc::builder()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("setting", ScalarType::String.nullable(false))
-            .with_column("description", ScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("setting", SqlScalarType::String.nullable(false))
+            .with_column("description", SqlScalarType::String.nullable(false))
             .finish()
     } else if variable.as_str() == SCHEMA_ALIAS {
         RelationDesc::builder()
-            .with_column(variable.as_str(), ScalarType::String.nullable(true))
+            .with_column(variable.as_str(), SqlScalarType::String.nullable(true))
             .finish()
     } else {
         RelationDesc::builder()
-            .with_column(variable.as_str(), ScalarType::String.nullable(false))
+            .with_column(variable.as_str(), SqlScalarType::String.nullable(false))
             .finish()
     };
     Ok(StatementDesc::new(Some(desc)))
@@ -138,17 +138,24 @@ pub fn describe_inspect_shard(
     InspectShardStatement { .. }: InspectShardStatement,
 ) -> Result<StatementDesc, PlanError> {
     let desc = RelationDesc::builder()
-        .with_column("state", ScalarType::Jsonb.nullable(false))
+        .with_column("state", SqlScalarType::Jsonb.nullable(false))
         .finish();
     Ok(StatementDesc::new(Some(desc)))
 }
 
 pub fn plan_inspect_shard(
-    _: &StatementContext,
+    scx: &StatementContext,
     InspectShardStatement { id }: InspectShardStatement,
 ) -> Result<Plan, PlanError> {
-    let id: GlobalId = id.parse().map_err(|_| sql_err!("invalid shard id"))?;
-    Ok(Plan::InspectShard(InspectShardPlan { id }))
+    let id: CatalogItemId = id.parse().map_err(|_| sql_err!("invalid shard id"))?;
+    // Always inspect the shard at the latest GlobalId.
+    let gid = scx
+        .catalog
+        .try_get_item(&id)
+        .ok_or_else(|| sql_err!("item doesn't exist"))?
+        .at_version(RelationVersionSelector::Latest)
+        .global_id();
+    Ok(Plan::InspectShard(InspectShardPlan { id: gid }))
 }
 
 pub fn describe_discard(
@@ -173,7 +180,7 @@ pub fn plan_discard(
 pub fn describe_declare(
     scx: &StatementContext,
     DeclareStatement { stmt, .. }: DeclareStatement<Aug>,
-    param_types_in: &[Option<ScalarType>],
+    param_types_in: &[Option<SqlScalarType>],
 ) -> Result<StatementDesc, PlanError> {
     let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt)?;
     // Get the desc for the inner statement, but only for its parameters. The outer DECLARE doesn't
@@ -201,10 +208,25 @@ pub fn plan_declare(
 }
 
 pub fn describe_fetch(
-    _: &StatementContext,
-    _: FetchStatement<Aug>,
+    scx: &StatementContext,
+    FetchStatement {
+        name,
+        count: _,
+        options: _,
+    }: FetchStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
+    if let Some(mut desc) = scx
+        .catalog
+        .get_portal_desc_unverified(&name.to_string())
+        .cloned()
+    {
+        // Parameters are already bound to the portal and will not be accepted through
+        // FETCH.
+        desc.param_types = Vec::new();
+        Ok(desc)
+    } else {
+        Err(PlanError::UnknownCursor(name.to_string()))
+    }
 }
 
 generate_extracted_config!(FetchOption, (Timeout, Duration));

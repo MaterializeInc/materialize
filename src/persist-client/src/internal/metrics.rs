@@ -24,9 +24,9 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::instrument;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    raw, ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
+    ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
     DeleteOnDropGauge, IntCounter, MakeCollector, MetricVecExt, MetricsRegistry, UIntGauge,
-    UIntGaugeVec,
+    UIntGaugeVec, raw,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -41,7 +41,7 @@ use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
-use tracing::{debug, info, info_span, Instrument};
+use tracing::{Instrument, debug, info, info_span};
 
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
@@ -140,12 +140,7 @@ impl Metrics {
             move || start.elapsed().as_secs_f64(),
         );
         let s3_blob = S3BlobMetrics::new(registry);
-        let columnar = ColumnarMetrics::new(
-            registry,
-            &s3_blob.lgbytes,
-            Arc::clone(&cfg.configs),
-            cfg.is_cc_active,
-        );
+        let columnar = ColumnarMetrics::new(registry);
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -421,7 +416,6 @@ impl MetricsVecs {
             )),
             compare_and_downgrade_since: self.cmd_metrics("compare_and_downgrade_since"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
-            heartbeat_reader: self.cmd_metrics("heartbeat_reader"),
             expire_reader: self.cmd_metrics("expire_reader"),
             expire_writer: self.cmd_metrics("expire_writer"),
             merge_res: self.cmd_metrics("merge_res"),
@@ -630,7 +624,6 @@ pub struct CmdsMetrics {
     pub(crate) compare_and_append_noop: IntCounter,
     pub(crate) compare_and_downgrade_since: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
-    pub(crate) heartbeat_reader: CmdMetrics,
     pub(crate) expire_reader: CmdMetrics,
     pub(crate) expire_writer: CmdMetrics,
     pub(crate) merge_res: CmdMetrics,
@@ -792,6 +785,7 @@ impl BatchWriteMetrics {
 pub struct CompactionMetrics {
     pub(crate) requested: IntCounter,
     pub(crate) dropped: IntCounter,
+    pub(crate) disabled: IntCounter,
     pub(crate) skipped: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) applied: IntCounter,
@@ -816,6 +810,7 @@ pub struct CompactionMetrics {
 
     pub(crate) batch: BatchWriteMetrics,
     pub(crate) steps: CompactionStepTimings,
+    pub(crate) schema_selection: CompactionSchemaSelection,
 
     pub(crate) _steps_vec: CounterVec,
 }
@@ -827,6 +822,11 @@ impl CompactionMetrics {
                 help: "time spent on individual steps of compaction",
                 var_labels: ["step"],
         ));
+        let schema_selection: CounterVec = registry.register(metric!(
+            name: "mz_persist_compaction_schema_selection",
+            help: "count of compactions and how we did schema selection",
+            var_labels: ["selection"],
+        ));
 
         CompactionMetrics {
             requested: registry.register(metric!(
@@ -836,6 +836,10 @@ impl CompactionMetrics {
             dropped: registry.register(metric!(
                 name: "mz_persist_compaction_dropped",
                 help: "count of total compaction requests dropped due to a full queue",
+            )),
+            disabled: registry.register(metric!(
+                name: "mz_persist_compaction_disabled",
+                help: "count of total compaction requests dropped because compaction was disabled",
             )),
             skipped: registry.register(metric!(
                 name: "mz_persist_compaction_skipped",
@@ -919,6 +923,7 @@ impl CompactionMetrics {
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
             steps: CompactionStepTimings::new(step_timings.clone()),
+            schema_selection: CompactionSchemaSelection::new(schema_selection.clone()),
             _steps_vec: step_timings,
         }
     }
@@ -935,6 +940,21 @@ impl CompactionStepTimings {
         CompactionStepTimings {
             part_fetch_seconds: step_timings.with_label_values(&["part_fetch"]),
             heap_population_seconds: step_timings.with_label_values(&["heap_population"]),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CompactionSchemaSelection {
+    pub(crate) recent_schema: Counter,
+    pub(crate) no_schema: Counter,
+}
+
+impl CompactionSchemaSelection {
+    fn new(schema_selection: CounterVec) -> CompactionSchemaSelection {
+        CompactionSchemaSelection {
+            recent_schema: schema_selection.with_label_values(&["recent"]),
+            no_schema: schema_selection.with_label_values(&["none"]),
         }
     }
 }
@@ -1261,6 +1281,7 @@ pub struct ShardsMetrics {
     pubsub_push_diff_applied: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_not_applied_stale: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_not_applied_out_of_order: mz_ore::metrics::IntCounterVec,
+    stale_version: mz_ore::metrics::UIntGaugeVec,
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
     live_writers: mz_ore::metrics::UIntGaugeVec,
@@ -1433,6 +1454,11 @@ impl ShardsMetrics {
                 help: "number of diffs received via pubsub that did not apply due to out-of-order delivery",
                 var_labels: ["shard", "name"],
             )),
+            stale_version: registry.register(metric!(
+                name: "mz_persist_shard_stale_version",
+                help: "indicates whether the current version of the shard is less than the current version of the code",
+                var_labels: ["shard", "name"],
+            )),
             blob_gets: registry.register(metric!(
                 name: "mz_persist_shard_blob_gets",
                 help: "number of Blob::get calls for this shard",
@@ -1524,9 +1550,11 @@ impl ShardsMetrics {
             }
         }
         let shard = Arc::new(ShardMetrics::new(shard_id, name, self));
-        assert!(shards
-            .insert(shard_id.clone(), Arc::downgrade(&shard))
-            .is_none());
+        assert!(
+            shards
+                .insert(shard_id.clone(), Arc::downgrade(&shard))
+                .is_none()
+        );
         shard
     }
 
@@ -1553,52 +1581,50 @@ impl ShardsMetrics {
 pub struct ShardMetrics {
     pub shard_id: ShardId,
     pub name: String,
-    pub since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub latest_rollup_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub encoded_diff_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub hollow_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub spine_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub since: DeleteOnDropGauge<AtomicI64, Vec<String>>,
+    pub upper: DeleteOnDropGauge<AtomicI64, Vec<String>>,
+    pub largest_batch_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub latest_rollup_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub encoded_diff_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub hollow_batch_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub spine_batch_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub batch_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     batch_part_version_count: mz_ore::metrics::UIntGaugeVec,
     batch_part_version_bytes: mz_ore::metrics::UIntGaugeVec,
     batch_part_version_map: Mutex<BTreeMap<String, BatchPartVersionMetrics>>,
-    pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub rollup_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub seqnos_since_last_rollup: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_current_state_batches_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_current_state_rollups_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_referenced_not_current_state_bytes:
-        DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_not_leaked_not_referenced_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_leaked_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_not_applied_out_of_order:
-        DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub blob_gets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub live_writers: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub unconsolidated_snapshot: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
-    pub backpressure_last_backpressured_bytes:
-        Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
-    pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
-    pub rewrite_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub inline_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub inline_part_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub compact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub compacting_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub noncompact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub schema_registry_version_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub inline_backpressure_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub update_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub rollup_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub seqnos_held: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub seqnos_since_last_rollup: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub gc_seqno_held_parts: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub gc_live_diffs: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_current_state_batches_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_current_state_rollups_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_referenced_not_current_state_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_not_leaked_not_referenced_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_leaked_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub gc_finished: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub compaction_applied: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub cmd_succeeded: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_applied: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_out_of_order: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub stale_version: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub blob_gets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub blob_sets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub live_writers: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub unconsolidated_snapshot: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
+    pub backpressure_last_backpressured_bytes: Arc<DeleteOnDropGauge<AtomicU64, Vec<String>>>,
+    pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
+    pub rewrite_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub inline_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub inline_part_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub compact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub compacting_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub noncompact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub schema_registry_version_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub inline_backpressure_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1684,6 +1710,9 @@ impl ShardMetrics {
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             pubsub_push_diff_not_applied_out_of_order: shards_metrics
                 .pubsub_push_diff_not_applied_out_of_order
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
+            stale_version: shards_metrics
+                .stale_version
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             blob_gets: shards_metrics
                 .blob_gets
@@ -1799,8 +1828,8 @@ impl ShardMetrics {
 
 #[derive(Debug)]
 pub struct BatchPartVersionMetrics {
-    pub batch_part_version_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub batch_part_version_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub batch_part_version_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub batch_part_version_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 }
 
 /// Metrics recorded by audits of persist usage
@@ -2265,12 +2294,10 @@ pub struct LockMetrics {
 
 #[derive(Debug)]
 pub struct WatchMetrics {
-    pub(crate) listen_woken_via_watch: IntCounter,
-    pub(crate) listen_woken_via_sleep: IntCounter,
-    pub(crate) listen_resolved_via_watch: IntCounter,
-    pub(crate) listen_resolved_via_sleep: IntCounter,
-    pub(crate) snapshot_woken_via_watch: IntCounter,
-    pub(crate) snapshot_woken_via_sleep: IntCounter,
+    pub(crate) wait_woken_via_watch: IntCounter,
+    pub(crate) wait_woken_via_sleep: IntCounter,
+    pub(crate) wait_resolved_via_watch: IntCounter,
+    pub(crate) wait_resolved_via_sleep: IntCounter,
     pub(crate) notify_sent: IntCounter,
     pub(crate) notify_noop: IntCounter,
     pub(crate) notify_recv: IntCounter,
@@ -2282,29 +2309,21 @@ pub struct WatchMetrics {
 impl WatchMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         WatchMetrics {
-            listen_woken_via_watch: registry.register(metric!(
-                name: "mz_persist_listen_woken_via_watch",
-                help: "count of listen next batches wakes via watch notify",
+            wait_woken_via_watch: registry.register(metric!(
+                name: "mz_persist_wait_woken_via_watch",
+                help: "count of wait-for-uppers wakes via watch notify",
             )),
-            listen_woken_via_sleep: registry.register(metric!(
-                name: "mz_persist_listen_woken_via_sleep",
-                help: "count of listen next batches wakes via sleep",
+            wait_woken_via_sleep: registry.register(metric!(
+                name: "mz_persist_wait_woken_via_sleep",
+                help: "count of wait-for-uppers wakes via sleep",
             )),
-            listen_resolved_via_watch: registry.register(metric!(
-                name: "mz_persist_listen_resolved_via_watch",
-                help: "count of listen next batches resolved via watch notify",
+            wait_resolved_via_watch: registry.register(metric!(
+                name: "mz_persist_wait_resolved_via_watch",
+                help: "count of wait-for-uppers resolved via watch notify",
             )),
-            listen_resolved_via_sleep: registry.register(metric!(
-                name: "mz_persist_listen_resolved_via_sleep",
-                help: "count of listen next batches resolved via sleep",
-            )),
-            snapshot_woken_via_watch: registry.register(metric!(
-                name: "mz_persist_snapshot_woken_via_watch",
-                help: "count of snapshot wakes via watch notify",
-            )),
-            snapshot_woken_via_sleep: registry.register(metric!(
-                name: "mz_persist_snapshot_woken_via_sleep",
-                help: "count of snapshot wakes via sleep",
+            wait_resolved_via_sleep: registry.register(metric!(
+                name: "mz_persist_wait_resolved_via_sleep",
+                help: "count of wait-for-uppers resolved via sleep",
             )),
             notify_sent: registry.register(metric!(
                 name: "mz_persist_watch_notify_sent",
@@ -2348,6 +2367,7 @@ pub struct PushdownMetrics {
     pub(crate) parts_faked_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
+    pub(crate) parts_projection_trimmed_bytes: IntCounter,
     pub part_stats: PartStatsMetrics,
 }
 
@@ -2401,6 +2421,10 @@ impl PushdownMetrics {
             parts_stats_trimmed_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
                 help: "total bytes trimmed from part stats",
+            )),
+            parts_projection_trimmed_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_projection_trimmed_bytes",
+                help: "total bytes trimmed from columnar data because of projection pushdown",
             )),
             part_stats: PartStatsMetrics::new(registry),
         }
@@ -2885,7 +2909,7 @@ impl MetricsConsensus {
 
 #[async_trait]
 impl Consensus for MetricsConsensus {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         Box::pin(
             self.metrics
                 .consensus
@@ -2916,7 +2940,6 @@ impl Consensus for MetricsConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         let bytes = new.data.len();
@@ -2924,10 +2947,7 @@ impl Consensus for MetricsConsensus {
             .metrics
             .consensus
             .compare_and_set
-            .run_op(
-                || self.consensus.compare_and_set(key, expected, new),
-                Self::on_err,
-            )
+            .run_op(|| self.consensus.compare_and_set(key, new), Self::on_err)
             .await;
         match res.as_ref() {
             Ok(CaSResult::Committed) => self
@@ -2966,17 +2986,15 @@ impl Consensus for MetricsConsensus {
     }
 
     #[instrument(name = "consensus::truncate", fields(shard=key))]
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
-        let deleted = self
-            .metrics
-            .consensus
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
+        let metrics = &self.metrics.consensus;
+        let deleted = metrics
             .truncate
             .run_op(|| self.consensus.truncate(key, seqno), Self::on_err)
             .await?;
-        self.metrics
-            .consensus
-            .truncated_count
-            .inc_by(u64::cast_from(deleted));
+        if let Some(deleted) = deleted {
+            metrics.truncated_count.inc_by(u64::cast_from(deleted));
+        }
         Ok(deleted)
     }
 }

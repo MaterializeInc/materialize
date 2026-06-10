@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -328,13 +327,13 @@ public          nonpk_table
 public          types_table
 public          nulls_table
 public          multipart_pk
-public          "\"mixED_CAse\""
-public          "\"space table\""
-public          "\"таблица\""
+public          mixED_CAse
+public          "space table"
+public          таблица
 public          trailing_space_pk
 public          escaped_text_table
 public          trailing_space_nopk
-public          "\"\"\"literal_quotes\"\"\""
+public          "\"literal_quotes\""
 conflict_schema conflict_table
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
@@ -552,7 +551,7 @@ true
 # Ensure we can start a source with more workers
 #
 
-> CREATE CLUSTER large_cluster SIZE '16';
+> CREATE CLUSTER large_cluster SIZE 'scale=1,workers=16';
 
 > CREATE SOURCE large_cluster_source
   IN CLUSTER large_cluster

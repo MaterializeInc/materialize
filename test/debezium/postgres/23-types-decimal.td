@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_type (f1 DECIMAL(5,3), f2 INTEGER PRIMARY KEY);
 ALTER TABLE decimal_type REPLICA IDENTITY FULL;
 INSERT INTO decimal_type VALUES (NULL, 0), (NULL, 1), (12.345, 2), ('NaN', 3);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.decimal_type
 
@@ -24,12 +25,14 @@ $ schema-registry-wait topic=postgres.public.decimal_type
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE decimal_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_type');
 
 > CREATE TABLE decimal_type_tbl FROM SOURCE decimal_type (REFERENCE "postgres.public.decimal_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 # NaN arrives as NULL
 

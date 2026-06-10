@@ -11,12 +11,17 @@
     "@babel/preset-env": "^7.9.5",
     "@babel/preset-typescript": "^7.9.0",
     "@types/jest": "^27.0.0",
-    "@types/pg": "^7.14.3",
+    "@types/pg": "^8.20.0",
     "babel-jest": "^27.0.0",
     "jest": "^27.0.0",
-    "pg": "^8.11.3",
+    "pg": "^8.21.0",
     "pg-query-stream": "^4.5.3",
     "prettier": "^2.0.4"
+  },
+  "resolutions": {
+    "@babel/plugin-transform-modules-systemjs": ">=7.29.4",
+    "js-yaml": "^3.14.2",
+    "lodash": ">=4.18.0"
   },
   "prettier": {
     "tabWidth": 2,

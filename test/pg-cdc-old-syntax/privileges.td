@@ -57,7 +57,13 @@ REVOKE USAGE ON SCHEMA other FROM priv;
     PASSWORD SECRET pgpass
   )
 
-! CREATE SOURCE mz_source
+![version>15800] CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR SCHEMAS(public, other);
+contains:insufficient privileges
+detail:user lacks USAGE privileges for schemas other
+
+![version<=15800] CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS(public, other);
 contains:insufficient privileges
@@ -71,7 +77,13 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 GRANT ALL PRIVILEGES ON SCHEMA other TO priv;
 REVOKE SELECT ON TABLE other.s FROM priv;
 
-! CREATE SOURCE mz_source
+![version>15800] CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR SCHEMAS(public, other);
+contains:insufficient privileges
+detail:user lacks SELECT privileges for tables other.s
+
+![version<=15800] CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS(public, other);
 contains:insufficient privileges
@@ -83,7 +95,13 @@ REVOKE SELECT ON public.select FROM priv;
 CREATE TABLE """select""" (a INT);
 REVOKE SELECT ON public."""select""" FROM priv;
 
-! CREATE SOURCE mz_source
+![version>15800] CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR SCHEMAS(public);
+contains:insufficient privileges
+detail:user lacks SELECT privileges for tables public."""select""", public."select"
+
+![version<=15800] CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS(public);
 contains:insufficient privileges

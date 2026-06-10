@@ -20,6 +20,7 @@ INSERT INTO concurrent_delete VALUES (3);
 INSERT INTO concurrent_delete VALUES (4);
 INSERT INTO concurrent_delete VALUES (5);
 INSERT INTO concurrent_delete VALUES (6);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.concurrent_delete
 
@@ -29,12 +30,14 @@ $ schema-registry-wait topic=postgres.public.concurrent_delete
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE concurrent_delete
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_delete');
 
 > CREATE TABLE concurrent_delete_tbl FROM SOURCE concurrent_delete (REFERENCE "postgres.public.concurrent_delete")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 $ postgres-connect name=conn1 url=postgres://postgres:postgres@postgres
 

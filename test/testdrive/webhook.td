@@ -7,13 +7,19 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default replicas=1
+$ set-sql-timeout duration=60s
+$ set-arg-default replicas=2
+$ set-arg-default default-storage-size=scale=1,workers=1
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET webhooks_secrets_caching_ttl_secs = 300
+
 
 # Exercises Webhook sources.
 
-> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '${arg.default-storage-size}'), r2 (SIZE '${arg.default-storage-size}'));
 
-> CREATE CLUSTER webhook_compute REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER webhook_compute REPLICAS (r1 (SIZE '${arg.default-storage-size}'), r2 (SIZE '${arg.default-storage-size}'));
 
 > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT;
@@ -22,6 +28,15 @@ $ set-arg-default replicas=1
 name   nullable  type  comment
 ------------------------------
 body   false     text  ""
+
+>[version<2600700] SHOW CREATE SOURCE webhook_text;
+materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;"
+
+>[version>=2600700] SHOW CREATE SOURCE webhook_text;
+materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text\nIN CLUSTER webhook_cluster\nFROM WEBHOOK\nBODY FORMAT TEXT;"
+
+> SELECT name, type FROM mz_objects WHERE name = 'webhook_text';
+webhook_text source
 
 $ webhook-append database=materialize schema=public name=webhook_text
 a
@@ -118,7 +133,7 @@ $ webhook-append database=materialize schema=public name=webhook_json_with_heade
 "\"Hellö String\""
 
 ! SELECT * FROM webhook_json_with_headers;
-contains: binary encoding of map types is not implemented
+contains: no binary output function available for type map
 
 # An invalid body should return a 400.
 $ webhook-append database=materialize schema=public name=webhook_json_with_headers status=400 content-type=application/json
@@ -202,6 +217,22 @@ using an mz secret
 
 > SELECT * FROM webhook_bytes_with_secret;
 "using an mz secret"
+
+# Rotating the secret should invalidate webhook validation immediately, rather
+# than continuing to accept the old signature until TTL expiry.
+> ALTER SECRET webhook_secret AS 'rotated_key';
+
+$ webhook-append name=webhook_bytes_with_secret x-signature=j3SCbCSIZkqSPp4/92jFfx7er2Hvo983exMJ+tCMis8= status=400
+stale signature should fail
+
+$ webhook-append name=webhook_bytes_with_secret x-signature=j3tHunMI70qMa/t47VAz6DsUJ/TflkLI9A4SlDEKBz8=
+fresh signature should pass
+
+> SELECT * FROM webhook_bytes_with_secret;
+"using an mz secret"
+"fresh signature should pass"
+
+> ALTER SECRET webhook_secret AS 'shared_key';
 
 > CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
@@ -529,10 +560,6 @@ $ check-shard-tombstone shard-id=${webhook-source-shard-id}
 # Cleanup.
 > DROP CLUSTER webhook_cluster CASCADE;
 
-# Creating a webhook source without specifying the cluster.
-$ skip-if
-SELECT ${arg.replicas} > 1;
-
 $ set-from-sql var=current-cluster
 SHOW cluster;
 
@@ -540,3 +567,36 @@ SHOW cluster;
 
 > SELECT c.name = '${current-cluster}' FROM mz_clusters c JOIN mz_sources s ON c.id = s.cluster_id WHERE s.name = 'webhook_in_current';
 true
+
+> CREATE TABLE webhook_as_table FROM WEBHOOK BODY FORMAT TEXT;
+
+$ webhook-append name=webhook_as_table
+aaa_1
+
+> SELECT * FROM webhook_as_table;
+aaa_1
+
+> SHOW CREATE TABLE webhook_as_table;
+materialize.public.webhook_as_table "CREATE TABLE materialize.public.webhook_as_table FROM WEBHOOK BODY FORMAT TEXT;"
+
+> SHOW COLUMNS FROM webhook_as_table;
+name   nullable  type  comment
+------------------------------
+body   false     text  ""
+
+> SHOW TABLES
+not_a_webhook ""
+webhook_as_table ""
+
+> SELECT name, type FROM mz_objects WHERE name = 'webhook_as_table';
+webhook_as_table table
+
+$ set-from-sql var=webhook-table-id
+SELECT id FROM mz_tables WHERE name = 'webhook_as_table';
+
+$ set-from-sql var=webhook-table-shard-id
+SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-table-id}';
+
+> DROP TABLE webhook_as_table;
+
+$ check-shard-tombstone shard-id=${webhook-table-shard-id}

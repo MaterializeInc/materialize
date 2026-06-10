@@ -14,6 +14,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.sql_server import SqlServer
 
 
 class Executor:
@@ -76,6 +77,7 @@ class Docker(Executor):
             "--backoff-factor=0",
             "--consistency-checks=disable",
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            f"--var=sql-server-sa-password={SqlServer.DEFAULT_SA_PASSWORD}",
             stdin=input,
             capture=True,
         ).stdout

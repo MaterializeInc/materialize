@@ -1,0 +1,99 @@
+{{- $dataPath := .Get "data" | default "sql_commands_all" -}}
+{{- $label := .Get "label" -}}
+{{- $columns := .Get "columns" | default "command" -}}
+{{- $groupBy := .Get "group_by" -}}
+
+{{- if not $label -}}
+  {{- errorf "sql-commands-by-label shortcode requires a 'label' parameter" -}}
+{{- end -}}
+
+{{- $parts := split $dataPath "/" -}}
+{{- $data := index site.Data (index $parts 0) -}}
+{{- range $i, $key := after 1 $parts -}}
+  {{- $data = index $data $key -}}
+{{- end -}}
+
+
+{{- $columnNames := split $columns "," -}}
+{{- $columnList := slice -}}
+{{- range $columnNames -}}
+  {{- $colName := trim . " " -}}
+  {{- $capitalized := $colName | title -}}
+  {{- $columnList = $columnList | append (dict "column" $capitalized) -}}
+{{- end -}}
+
+{{- $filteredRows := slice -}}
+{{- range $data.rows -}}
+  {{- if in .labels $label -}}
+    {{- $filteredRows = $filteredRows | append . -}}
+  {{- end -}}
+{{- end -}}
+
+
+{{- if gt (len $filteredRows) 0 -}}
+  {{- if $groupBy -}}
+    {{- $scratch := newScratch -}}
+    {{- $groupKeys := slice -}}
+    {{- $verbs := slice -}}
+    {{- range $filteredRows -}}
+      {{- $groupKey := index . $groupBy -}}
+      {{- if $groupKey -}}
+        {{- if not (in $groupKeys $groupKey) -}}
+          {{- $groupKeys = $groupKeys | append $groupKey -}}
+        {{- end -}}
+        {{- $commandText := index . "command" -}}
+        {{- $commandMatch := findRE "`([A-Z]+(?:\\s+[A-Z]+)*)`" $commandText -}}
+        {{- if $commandMatch -}}
+          {{- $fullCommand := index $commandMatch 0 -}}
+          {{- $commandWords := split (trim (replaceRE "`" "" $fullCommand) " ") " " -}}
+          {{- $verb := index $commandWords 0 -}}
+          {{- if not (in $verbs $verb) -}}
+            {{- $verbs = $verbs | append $verb -}}
+          {{- end -}}
+          {{- $existingCommands := $scratch.Get (printf "%s_%s" $groupKey $verb) -}}
+          {{- if not $existingCommands -}}
+            {{- $scratch.Set (printf "%s_%s" $groupKey $verb) $commandText -}}
+          {{- end -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+    {{- $groupKeys = sort $groupKeys -}}
+    {{- $sortedVerbs := slice -}}
+    {{- $priorityVerbs := slice "CREATE" "ALTER" "DROP" -}}
+    {{- range $priorityVerb := $priorityVerbs -}}
+      {{- if in $verbs $priorityVerb -}}
+        {{- $sortedVerbs = $sortedVerbs | append $priorityVerb -}}
+      {{- end -}}
+    {{- end -}}
+    {{- $remainingVerbs := slice -}}
+    {{- range $verb := $verbs -}}
+      {{- if not (in $priorityVerbs $verb) -}}
+        {{- $remainingVerbs = $remainingVerbs | append $verb -}}
+      {{- end -}}
+    {{- end -}}
+    {{- $remainingVerbs = sort $remainingVerbs -}}
+    {{- $verbs = $sortedVerbs -}}
+    {{- range $verb := $remainingVerbs -}}
+      {{- $verbs = $verbs | append $verb -}}
+    {{- end -}}
+    {{- $pivotRows := slice -}}
+    {{- range $groupKey := $groupKeys -}}
+      {{- $row := dict "Object" $groupKey -}}
+      {{- range $verb := $verbs -}}
+        {{- $command := $scratch.Get (printf "%s_%s" $groupKey $verb) -}}
+        {{- $row = merge $row (dict $verb ($command | default "")) -}}
+      {{- end -}}
+      {{- $pivotRows = $pivotRows | append $row -}}
+    {{- end -}}
+    {{- $pivotColumns := slice -}}
+    {{- range $verb := $verbs -}}
+      {{- $capitalized := $verb | title -}}
+      {{- $pivotColumns = $pivotColumns | append (dict "column" $capitalized) -}}
+    {{- end -}}
+    {{- partial "yaml-tables/generic-table.html" (dict "rows" $pivotRows "columns" $pivotColumns) -}}
+  {{- else -}}
+    {{- partial "yaml-tables/generic-table.html" (dict "rows" $filteredRows "columns" $columnList) -}}
+  {{- end -}}
+{{- else -}}
+  <p><em>No commands found with label "{{ $label }}".</em></p>
+{{- end -}}

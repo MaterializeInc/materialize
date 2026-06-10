@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
+use mz_adapter_types::connection::ConnectionId;
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
@@ -98,9 +102,15 @@ impl Coordinator {
             .catalog()
             .resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
+        let dependencies = plan
+            .raw_plan
+            .depends_on()
+            .into_iter()
+            .map(|id| self.catalog().resolve_item_id(&id))
+            .collect();
         let validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            plan.raw_plan.depends_on(),
+            dependencies,
             Some(cluster_id),
             None,
             session.role_metadata().clone(),
@@ -124,7 +134,6 @@ impl Coordinator {
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-        // Build an optimizer for this VIEW.
         let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
         let span = Span::current();
@@ -169,16 +178,18 @@ impl Coordinator {
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let source_ids = optimized_plan.depends_on();
         let fut = self
-            .determine_real_time_recent_timestamp(session, source_ids.iter().cloned())
+            .determine_real_time_recent_timestamp_if_needed(session, source_ids.iter().copied())
             .await?;
 
         match fut {
             Some(fut) => {
+                let catalog = Arc::clone(&self.catalog);
                 let span = Span::current();
                 Ok(StageResult::Handle(mz_ore::task::spawn(
                     || "explain timestamp real time recency",
                     async move {
-                        let real_time_recency_ts = fut.await?;
+                        let real_time_recency_ts =
+                            Coordinator::await_real_time_recent_timestamp(catalog, fut).await?;
                         let stage = ExplainTimestampStage::Finish(ExplainTimestampFinish {
                             validity,
                             format,
@@ -209,11 +220,12 @@ impl Coordinator {
 
     pub(crate) fn explain_timestamp(
         &self,
-        session: &Session,
+        conn_id: &ConnectionId,
+        session_wall_time: DateTime<Utc>,
         cluster_id: ClusterId,
         id_bundle: &CollectionIdBundle,
-        determination: TimestampDetermination<mz_repr::Timestamp>,
-    ) -> TimestampExplanation<mz_repr::Timestamp> {
+        determination: TimestampDetermination,
+    ) -> TimestampExplanation {
         let mut sources = Vec::new();
         {
             let storage_ids = id_bundle.storage_ids.iter().cloned().collect_vec();
@@ -226,11 +238,11 @@ impl Coordinator {
             for (id, since, upper) in frontiers {
                 let name = self
                     .catalog()
-                    .try_get_entry(&id)
+                    .try_get_entry_by_global_id(&id)
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog()
-                            .resolve_full_name(name, Some(session.conn_id()))
+                            .resolve_full_name(name, Some(conn_id))
                             .to_string()
                     })
                     .unwrap_or_else(|| id.to_string());
@@ -251,13 +263,9 @@ impl Coordinator {
                         .collection_frontiers(*id, Some(cluster_id))
                         .expect("id does not exist");
                     let name = catalog
-                        .try_get_entry(id)
+                        .try_get_entry_by_global_id(id)
                         .map(|item| item.name())
-                        .map(|name| {
-                            catalog
-                                .resolve_full_name(name, Some(session.conn_id()))
-                                .to_string()
-                        })
+                        .map(|name| catalog.resolve_full_name(name, Some(conn_id)).to_string())
                         .unwrap_or_else(|| id.to_string());
                     sources.push(TimestampSource {
                         name: format!("{name} ({id}, compute)"),
@@ -271,7 +279,7 @@ impl Coordinator {
         TimestampExplanation {
             determination,
             sources,
-            session_wall_time: session.pcx().wall_time,
+            session_wall_time,
             respond_immediately,
         }
     }
@@ -292,7 +300,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let id_bundle = self
             .index_oracle(cluster_id)
-            .sufficient_collections(&source_ids);
+            .sufficient_collections(source_ids.iter().copied());
 
         let is_json = match format {
             ExplainFormat::Text => false,
@@ -301,7 +309,9 @@ impl Coordinator {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
         };
-        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        let mut timeline_context = self
+            .catalog()
+            .validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && optimized_plan.contains_temporal()
         {
@@ -324,7 +334,13 @@ impl Coordinator {
             real_time_recency_ts,
             RequireLinearization::NotRequired,
         )?;
-        let explanation = self.explain_timestamp(session, cluster_id, &id_bundle, determination);
+        let explanation = self.explain_timestamp(
+            session.conn_id(),
+            session.pcx().wall_time,
+            cluster_id,
+            &id_bundle,
+            determination,
+        );
 
         let s = if is_json {
             serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")

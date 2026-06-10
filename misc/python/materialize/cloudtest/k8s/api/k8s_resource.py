@@ -88,16 +88,17 @@ class K8sResource:
         else:
             coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
             sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
-            bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
-            bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+            lto = ui.env_is_truthy("CI_LTO")
 
             repo = mzbuild.Repository(
                 MZ_ROOT,
-                release_mode=release_mode,
+                profile=(
+                    (mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED)
+                    if release_mode
+                    else mzbuild.Profile.DEV
+                ),
                 coverage=coverage,
                 sanitizer=sanitizer,
-                bazel=bazel,
-                bazel_remote_cache=bazel_remote_cache,
             )
             deps = repo.resolve_dependencies([repo.images[service]])
             rimage = deps[service]
@@ -107,5 +108,11 @@ class K8sResource:
         self,
         condition: str,
         resource: str,
+        timeout_secs: int = 300,
     ) -> None:
-        wait(condition=condition, resource=resource, namespace=self.selected_namespace)
+        wait(
+            condition=condition,
+            resource=resource,
+            namespace=self.selected_namespace,
+            timeout_secs=timeout_secs,
+        )

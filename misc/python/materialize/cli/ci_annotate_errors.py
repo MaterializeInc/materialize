@@ -19,6 +19,7 @@ import sys
 import traceback
 import urllib.parse
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from itertools import chain
 from textwrap import dedent
@@ -50,6 +51,7 @@ from materialize.github import (
     for_github_re,
     get_known_issues_from_github,
 )
+from materialize.linear import get_known_issues_from_linear
 from materialize.observed_error import ObservedBaseError, WithIssue
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
@@ -73,22 +75,28 @@ ERROR_RE = re.compile(
     | has\ overflowed\ its\ stack
     | internal\ error:
     | \*\ FATAL:
+    | was\ provided\ more\ than\ once,\ but\ cannot\ be\ used\ multiple\ times
     | (^|\ )fatal: # used in frontegg-mock
     | [Oo]ut\ [Oo]f\ [Mm]emory
+    | memory\ allocation\ of\ [0-9]+\ bytes\ failed
+    | memory\ utilization\ exceeded\ configured\ limits
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
     | fatal\ runtime\ error: # stack overflow
     | \[SQLsmith\] # Unknown errors are logged
     | \[SQLancer\] # Unknown errors are logged
+    | \[SQLancer\+\+\] # Unknown errors are logged
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
     | environmentd\ .*\ unrecognized\ configuration\ parameter
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     | SUMMARY:\ .*Sanitizer
-    | Fixpoint\ .*\ detected\ a\ loop\ of\ length\ .*\ after\ .*\ iterations
-    | Fixpoint\ .*\ failed\ to\ reach\ a\ fixed\ point,\ or\ cycle\ of\ length\ at\ most
     | primary\ source\ \w+\ seemingly\ dropped\ before\ subsource
+    | :\ test\ timed\ out
+    | very\ slow\ coordinator\ message
+    # Only notifying on unexpected failures. INT, TRAP, BUS, FPE, SEGV, PIPE
+    | \ ANOM_ABEND\ .*\ sig=(2|5|7|8|11|13)
     # \s\S is any character including newlines, so this matches multiline strings
     # non-greedy using ? so that we don't match all the result comparison issues into one block
     | ----------\ RESULT\ COMPARISON\ ISSUE\ START\ ----------[\s\S]*?----------\ RESULT\ COMPARISON\ ISSUE\ END\ ------------
@@ -97,7 +105,15 @@ ERROR_RE = re.compile(
     # for miri test summary
     | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
     # parallel-workload
-    | worker_.*\ still\ running: [\s\S]* Threads\ have\ not\ stopped\ within\ 5\ minutes,\ exiting\ hard
+    | Threads\ have\ not\ stopped\ within\ [0-9]+\ minutes,\ exiting\ hard
+    # source-table migration
+    | source-table-migration\ issue
+    # sql logic tests
+    | Rewrite\ SLT\ files\ locally\ with:\ [\s\S]*? ^EOF$
+    | ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s+thread\ '.*?'\ panicked\ at\ .*\n.*
+    # rdkafka assertions
+    | Assertion\ `.*'\ failed\.
+    | Invalid\ data\ in\ source\ errors,\ saw\ retractions
     )
     .* $
     """,
@@ -107,11 +123,18 @@ ERROR_RE = re.compile(
 # Panics are multiline and our log lines of multiple services are interleaved,
 # making them complex to handle in regular expressions, thus handle them
 # separately.
-# Example 1: launchdarkly-materialized-1  | thread 'coordinator' panicked at [...]
-# Example 2: [pod/environmentd-0/environmentd] thread 'coordinator' panicked at [...]
+# Example 1: launchdarkly-materialized-1  | 2025-02-08T16:40:57.296144Z  thread 'coordinator' panicked at [...]
+# Example 2: [pod/environmentd-0/environmentd] 2025-02-08T16:40:57.296144Z  thread 'coordinator' panicked at [...]
 PANIC_IN_SERVICE_START_RE = re.compile(
-    rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) thread '.*' panicked at "
+    rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z  thread '.*' panicked at "
 )
+
+TIMESTAMP_IN_PANIC_RE = re.compile(rb" \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z ")
+
+JOURNALCTL_LOG_LINE_RE = re.compile(
+    rb"^[A-Z][a-z]{2} \d{2} \d{2}:\d{2}:\d{2} [^\s]+ (?P<msg>.+)"
+)
+
 # Example 1: launchdarkly-materialized-1  | global timestamp must always go up
 # Example 2: [pod/environmentd-0/environmentd] Unknown collection identifier u2082
 SERVICES_LOG_LINE_RE = re.compile(rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) (?P<msg>.*)$")
@@ -125,7 +148,7 @@ IGNORE_RE = re.compile(
     | restart-materialized-1\ *|\ thread\ 'coordinator'\ panicked\ at\ 'external\ operation\ .*\ failed\ unrecoverably.*
     # Expected in cluster test
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
-    | cluster-clusterd1-1\ .*\ has\ exceeded\ expiration
+    | cluster-clusterd1-1\ .*\ replica\ expired
     # Emitted by tests employing explicit mz_panic()
     | forced\ panic
     # Emitted by broken_statements.slt in order to stop panic propagation, as 'forced panic' will unwantedly panic the `environmentd` thread.
@@ -139,9 +162,11 @@ IGNORE_RE = re.compile(
     # Expected when CRDB is corrupted
     | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
     # Will print a separate panic line which will be handled and contains the relevant information (new style)
-    | internal\ error:\ unexpected\ panic\ during\ query\ optimization
+    | internal\ error:\ .*\ unexpected\ panic\ during\ query\ optimization
+    # RQG WMR optimizer soft panic, see database-issues#8741
+    | Arrangements\ depended\ on\ by\ a\ non-delta\ join\ are\ absent
     # redpanda INFO logging
-    | larger\ sizes\ prevent\ running\ out\ of\ memory
+    | [Ll]arger\ sizes\ prevent\ running\ out\ of\ memory
     # Old versions won't support new parameters
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     # Fencing warnings are OK in fencing/0dt tests
@@ -151,20 +176,38 @@ IGNORE_RE = re.compile(
     | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-|legacy-upgrade-).* \| .*fenced\ by\ envd
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
     # For platform-checks upgrade tests
-    | platform-checks-.* \| .* received\ persist\ state\ from\ the\ future
+    | received\ persist\ state\ from\ the\ future
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
     # For tests we purposely trigger this error
     | skip-version-upgrade-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev\.\d+)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ forward\ at\ a\ time
     # For 0dt upgrades
-    | halting\ process:\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
+    | halting\ process:\ (unable\ to\ advance\ catalog\ upper|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out|dependency\ since\ frontier\ is\ empty\ while\ dependent\ upper\ is\ not\ empty|code\ at\ version\ .*\ cannot\ read\ data\ with\ version)
     | zippy-materialized.* \| .* halting\ process:\ Server\ started\ with\ requested\ generation
+    | there\ have\ been\ DDL\ that\ we\ need\ to\ react\ to;\ rebooting\ in\ read-only\ mode
     # Don't care for ssh problems
     | fatal:\ userauth_pubkey
-    # TODO(def-) Remove in ~3 weeks
-    | .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev\.\d+)?,\ current:\ \d+\.\d+\.\d+(-dev\.\d+)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ forward\ at\ a\ time
+    # Expected in Terraform tests if something else failed during the setup
+    | mz-debug:\ fatal:\ failed\ to\ read\ kubeconfig
     # Fences without incrementing deploy generation
-    | txn-wal-fencing-mz_first-.* \| .*unable\ to\ confirm\ leadership
-    | txn-wal-fencing-mz_first-.* \| .*fenced\ by\ envd
+    | txn-wal-fencing-mz_first-.* \| .* unable\ to\ advance\ catalog\ upper
+    | txn-wal-fencing-mz_first-.* \| .* fenced\ by\ envd
+    # 0dt platform-checks have two envds running in parallel, thus high load, tests still succeed, so ignore noise
+    | platform-checks-mz_.* \| .* was\ expired\ due\ to\ inactivity\.\ Did\ the\ machine\ go\ to\ sleep\?
+    # This can happen in "K8s recovery: envd on failing node", but the test still succeeds, old environmentd will just be crashed, see database-issues#8749
+    | \[pod/environmentd-0/environmentd\]\ .*\ (unable\ to\ advance\ catalog\ upper|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
+    | cannot\ load\ unknown\ system\ parameter
+    # Occurs in Orchestratord test when restarting
+    | comm="containerd"\ exe="/usr/local/bin/containerd"\ sig=11
+    # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9970 is fixed
+    | limits-materialized-.* \| .* very\ slow\ coordinator\ message
+    | zippy-materialized.* \| .* very\ slow\ coordinator\ message
+    | sqlsmith-mz.* \| .* very\ slow\ coordinator\ message
+    | sqlsmith-mz.* \| .* panicked\ at\ src/ore/src/overflowing.rs.*\ Overflow
+    # Expected on AWS in RQG because of build
+    | comm="check"\ exe="/usr/bin/qemu-
+    # Handled by panic already
+    | sqlancer.* \| .*internal\ error:\ entered\ unreachable\ code
+    | sqlancer.* \| .*\("internal\ error:\ invalid\ input\ type"\)
     )
     """,
     re.VERBOSE | re.MULTILINE,
@@ -176,6 +219,7 @@ IGNORE_RE = re.compile(
 PRODUCT_LIMITS_FIND_IGNORE_RE = re.compile(
     rb"""
     ( Memory\ cgroup\ out\ of\ memory
+    | [Oo]ut\ [Oo]f\ [Mm]emory
     | limits-materialized .* \| .* fatal\ runtime\ error:\ stack\ overflow
     | limits-materialized .* \| .* has\ overflowed\ its\ stack
     )
@@ -183,32 +227,19 @@ PRODUCT_LIMITS_FIND_IGNORE_RE = re.compile(
     re.VERBOSE | re.MULTILINE,
 )
 
-# We don't want any plaintext passwords in our logs, fail the test if it contains any
-PASSWORD_RE = re.compile(
-    rb"""
-    ( password:\ Some\("(?P<pw_config_some>[^"]*)"\) # From a Rust config object being dumped
-    | password:\ "(?P<pw_config_plain>[^"]*)"        # From a Rust config object being dumped
-    | ://[^:@\s]+:(?P<pw_url>[^:@\s]+)@              # Inside a URL string
-    )
-    """,
-    re.VERBOSE,
-)
-
-PASSWORD_IGNORE_RE = re.compile(
-    # We actually want this to be the exact ignored string, but unfortunately
-    # log lines from clusterd and environmentd can interfer when they are
-    # running in the same materialized container. Example:
-    # > password: Some("%3C2024-10-18T17:11:36.445784450Z redacted%3E")
-    # rb"^ ( < | %3[Cc] ) redacted ( > | %3[Ee] ) $",
-    rb".*r.*e.*d.*a.*c.*t.*e.*d.*",
-    re.VERBOSE,
-)
-
 
 @dataclass
 class ErrorLog:
     match: bytes
     file: str
+
+
+@dataclass
+class Secret:
+    secret: str
+    file: str
+    line: int
+    detector_name: str
 
 
 @dataclass
@@ -231,6 +262,7 @@ class ObservedError(ObservedBaseError):
     location_url: str | None = None
     max_error_length: int = 10000
     max_details_length: int = 10000
+    occurrences: int = 1
 
     def error_message_as_markdown(self) -> str:
         return format_message_as_code_block(self.error_message, self.max_error_length)
@@ -262,37 +294,40 @@ class ObservedError(ObservedBaseError):
 
         assert self.additional_collapsed_error_details_header is not None
 
-        return (
-            "\n"
-            + dedent(
-                f"""
+        return "\n" + dedent(f"""
                 <details>
                     <summary>{self.additional_collapsed_error_details_header}</summary>
                     <pre>{self.additional_collapsed_error_details}</pre>
                 </details>
-            """
-            ).strip()
-            + "\n\n"
-        )
+            """).strip() + "\n\n"
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedErrorWithIssue(ObservedError, WithIssue):
     issue_is_closed: bool
+    issue_ignore_failure: bool
 
     def _get_issue_presentation(self) -> str:
-        issue_presentation = f"#{self.issue_number}"
+        issue_presentation = (
+            self.issue_number
+            if isinstance(self.issue_number, str)
+            else f"#{self.issue_number}"
+        )
         if self.issue_is_closed:
             issue_presentation = f"{issue_presentation}, closed"
 
         return issue_presentation
 
+    def _get_issue_id(self) -> str:
+        if isinstance(self.issue_number, str):
+            return self.issue_number
+        return f"database-issues/{self.issue_number}"
+
     def to_text(self) -> str:
         return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        filters = [{"id": "issue", "value": f"database-issues/{self.issue_number} "}]
-        ci_failures_url = f"https://ci-failures.dev.materialize.com/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
+        ci_failures_url = f"https://ci.dev.materialize.com/#failures?issue={urllib.parse.quote(self._get_issue_id(), safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
@@ -302,8 +337,7 @@ class ObservedErrorWithLocation(ObservedError):
         return f"{self.error_type} in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        filters = [{"id": "content", "value": self.error_message_as_text()[:2000]}]
-        ci_failures_url = f"https://ci-failures.dev.materialize.com/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
+        ci_failures_url = f"https://ci.dev.materialize.com/#failures?content={urllib.parse.quote(self.error_message_as_text()[:2000], safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
@@ -322,6 +356,7 @@ class Annotation:
     suite_name: str
     buildkite_job_id: str
     is_failure: bool
+    ignore_failure: bool
     build_history_on_main: BuildHistory
     test_cmd: str
     test_desc: str
@@ -335,7 +370,11 @@ class Annotation:
         wrap_in_summary = only_known_errors
 
         build_link = f'<a href="#{self.buildkite_job_id}">{self.suite_name}</a>'
-        outcome = "failed" if self.is_failure else "succeeded"
+        outcome = (
+            ("would have failed" if self.ignore_failure else "failed")
+            if self.is_failure
+            else "succeeded"
+        )
 
         title = f"{build_link} {outcome}"
 
@@ -397,6 +436,7 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("--cloud-hostname", type=str)
     parser.add_argument("--test-cmd", type=str)
     parser.add_argument("--test-desc", type=str, default="")
+    parser.add_argument("--test-result", type=int, default=0)
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
@@ -405,19 +445,16 @@ and finds associated open GitHub issues in Materialize repository.""",
     )
     test_analytics = TestAnalyticsDb(test_analytics_config)
 
-    try:
-        # always insert a build job regardless whether it has annotations or not
-        test_analytics.builds.add_build_job(
-            was_successful=has_successful_buildkite_status()
-        )
+    # always insert a build job regardless whether it has annotations or not
+    test_analytics.builds.add_build_job(was_successful=args.test_result == 0)
 
-        number_of_unknown_errors = annotate_logged_errors(
-            args.log_files, test_analytics, args.test_cmd, args.test_desc
-        )
-    except Exception as e:
-        test_analytics.on_upload_failed(e)
-        # Don't fail
-        return 0
+    number_of_unknown_errors, ignore_failure = annotate_logged_errors(
+        args.log_files,
+        test_analytics,
+        args.test_cmd,
+        args.test_desc,
+        args.test_result,
+    )
 
     try:
         test_analytics.submit_updates()
@@ -428,7 +465,21 @@ and finds associated open GitHub issues in Materialize repository.""",
         # An error during an upload must never cause the build to fail
         test_analytics.on_upload_failed(e)
 
-    return 1 if number_of_unknown_errors > 0 else 0
+    if ignore_failure and args.test_result:
+        print(
+            "+++ IGNORING TEST FAILURE: Caused by a known issue annotated with `ci-ignore-failure: true`",
+            file=sys.stderr,
+        )
+        return 0
+
+    if not args.test_result and number_of_unknown_errors:
+        print(
+            "+++ Test succeeded, but unknown errors found in logs, marking as failed",
+            file=sys.stderr,
+        )
+        return 1
+
+    return args.test_result
 
 
 def annotate_errors(
@@ -438,17 +489,20 @@ def annotate_errors(
     test_analytics_db: TestAnalyticsDb,
     test_cmd: str,
     test_desc: str,
+    test_result: int,
+    ignore_failure: bool,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
     annotation_style = "info" if not unknown_errors else "error"
     unknown_errors = group_identical_errors(unknown_errors)
     known_errors = group_identical_errors(known_errors)
-    is_failure = len(unknown_errors) > 0 or not has_successful_buildkite_status()
+    is_failure = len(unknown_errors) > 0 or test_result != 0
 
     annotation = Annotation(
         suite_name=get_suite_name(),
         buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
         is_failure=is_failure,
+        ignore_failure=ignore_failure,
         build_history_on_main=build_history_on_main,
         unknown_errors=unknown_errors,
         known_errors=known_errors,
@@ -479,18 +533,25 @@ def group_identical_errors(
 
 
 def annotate_logged_errors(
-    log_files: list[str], test_analytics: TestAnalyticsDb, test_cmd: str, test_desc: str
-) -> int:
+    log_files: list[str],
+    test_analytics: TestAnalyticsDb,
+    test_cmd: str,
+    test_desc: str,
+    test_result: int,
+) -> tuple[int, bool]:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
-    were no errors logged. This will be used to fail a test even if the test
-    itself succeeded, as long as it had any unknown error logs.
+    were no errors logged as well as whether to ignore the test having failed.
+    This will be used to fail a test even if the test itself succeeded, as long
+    as it had any unknown error logs.
     """
+    executor = ThreadPoolExecutor()
+    artifacts_future = executor.submit(ci_util.get_artifacts)
 
     errors = get_errors(log_files)
 
     if not errors:
-        return 0
+        return (0, False)
 
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
     buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
@@ -498,17 +559,22 @@ def annotate_logged_errors(
     token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
         "GITHUB_TOKEN"
     )
-    (known_issues, issues_with_invalid_regex) = get_known_issues_from_github(token)
+    known_issues, issues_with_invalid_regex = get_known_issues_from_github(token)
+    linear_known_issues, linear_issues_with_invalid_regex = (
+        get_known_issues_from_linear()
+    )
+    known_issues.extend(linear_known_issues)
     unknown_errors: list[ObservedBaseError] = []
     unknown_errors.extend(issues_with_invalid_regex)
+    unknown_errors.extend(linear_issues_with_invalid_regex)
 
-    artifacts = ci_util.get_artifacts()
     job = os.getenv("BUILDKITE_JOB_ID")
 
     known_errors: list[ObservedBaseError] = []
+    ignore_failure: bool = False
 
     # Keep track of known errors so we log each only once
-    already_reported_issue_numbers: set[int] = set()
+    already_reported_issue_numbers: set[int | str] = set()
 
     def handle_error(
         error_message: str,
@@ -524,11 +590,13 @@ def annotate_logged_errors(
 
         for issue in known_issues:
             match = issue.regex.search(for_github_re(search_string))
-            if match and issue.info["state"] == "open":
+            if match and issue.info["state"] == "OPEN":
                 if issue.apply_to and issue.apply_to not in (
                     step_key.lower(),
-                    buildkite_label.lower(),
+                    buildkite_label.lower().rstrip("01234567889 "),
                 ):
+                    continue
+                if issue.location and issue.location != location:
                     continue
 
                 if issue.info["number"] not in already_reported_issue_numbers:
@@ -538,10 +606,11 @@ def annotate_logged_errors(
                             error_details=error_details,
                             error_type="Known issue",
                             internal_error_type="KNOWN_ISSUE",
-                            issue_url=issue.info["html_url"],
+                            issue_url=issue.info["url"],
                             issue_title=issue.info["title"],
                             issue_number=issue.info["number"],
                             issue_is_closed=False,
+                            issue_ignore_failure=issue.ignore_failure,
                             location=location,
                             location_url=location_url,
                             additional_collapsed_error_details=additional_collapsed_error_details,
@@ -553,7 +622,7 @@ def annotate_logged_errors(
         else:
             for issue in known_issues:
                 match = issue.regex.search(for_github_re(search_string))
-                if match and issue.info["state"] == "closed":
+                if match and issue.info["state"] == "CLOSED":
                     if issue.apply_to and issue.apply_to not in (
                         step_key.lower(),
                         buildkite_label.lower(),
@@ -567,10 +636,11 @@ def annotate_logged_errors(
                                 error_details=error_details,
                                 error_type="Potential regression",
                                 internal_error_type="POTENTIAL_REGRESSION",
-                                issue_url=issue.info["html_url"],
+                                issue_url=issue.info["url"],
                                 issue_title=issue.info["title"],
                                 issue_number=issue.info["number"],
                                 issue_is_closed=True,
+                                issue_ignore_failure=False,  # Never ignore regressions
                                 location=location,
                                 location_url=location_url,
                                 additional_collapsed_error_details=additional_collapsed_error_details,
@@ -593,77 +663,104 @@ def annotate_logged_errors(
                     )
                 )
 
-    for error in errors:
-        if isinstance(error, ErrorLog):
-            for artifact in artifacts:
-                if artifact["job_id"] == job and artifact["path"] == error.file:
-                    location: str = error.file
-                    location_url = get_artifact_url(artifact)
-                    break
-            else:
-                location: str = error.file
-                location_url = None
-
-            handle_error(error.match.decode("utf-8"), None, location, location_url)
-        elif isinstance(error, JunitError):
-            if "in Code Coverage" in error.text or "covered" in error.message:
-                msg = "\n".join(filter(None, [error.message, error.text]))
-                # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
-                known_errors.append(
-                    FailureInCoverageRun(
-                        error_type="Failure",
-                        internal_error_type="FAILURE_IN_COVERAGE_MODE",
-                        error_message=msg,
-                        location=error.testcase,
-                    )
-                )
-            else:
-                # JUnit error
-                all_error_details_raw = error.text
-                all_error_detail_parts = all_error_details_raw.split(
-                    JUNIT_ERROR_DETAILS_SEPARATOR
-                )
-                error_details = all_error_detail_parts[0]
-
-                if len(all_error_detail_parts) == 3:
-                    additional_collapsed_error_details_header = all_error_detail_parts[
-                        1
-                    ]
-                    additional_collapsed_error_details = all_error_detail_parts[2]
-                elif len(all_error_detail_parts) == 1:
-                    additional_collapsed_error_details_header = None
-                    additional_collapsed_error_details = None
+    if errors:
+        artifacts = artifacts_future.result()
+        for error in errors:
+            if isinstance(error, ErrorLog):
+                for artifact in artifacts:
+                    if artifact["job_id"] == job and artifact["path"] == error.file:
+                        location: str = error.file
+                        location_url = get_artifact_url(artifact)
+                        break
                 else:
-                    raise RuntimeError(
-                        f"Unexpected error details format: {all_error_details_raw}"
+                    location: str = error.file
+                    location_url = None
+
+                handle_error(error.match.decode("utf-8"), None, location, location_url)
+            elif isinstance(error, JunitError):
+                if "in Code Coverage" in error.text or "covered" in error.message:
+                    msg = "\n".join(filter(None, [error.message, error.text]))
+                    # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
+                    known_errors.append(
+                        FailureInCoverageRun(
+                            error_type="Failure",
+                            internal_error_type="FAILURE_IN_COVERAGE_MODE",
+                            error_message=msg,
+                            location=error.testcase,
+                        )
                     )
+                else:
+                    # JUnit error
+                    all_error_details_raw = error.text
+                    all_error_detail_parts = all_error_details_raw.split(
+                        JUNIT_ERROR_DETAILS_SEPARATOR
+                    )
+                    error_details = all_error_detail_parts[0]
+
+                    if len(all_error_detail_parts) == 3:
+                        additional_collapsed_error_details_header = (
+                            all_error_detail_parts[1]
+                        )
+                        additional_collapsed_error_details = all_error_detail_parts[2]
+                    elif len(all_error_detail_parts) == 1:
+                        additional_collapsed_error_details_header = None
+                        additional_collapsed_error_details = None
+                    else:
+                        raise RuntimeError(
+                            f"Unexpected error details format: {all_error_details_raw}"
+                        )
+
+                    handle_error(
+                        error_message=error.message,
+                        error_details=error_details,
+                        location=error.testcase,
+                        location_url=None,
+                        additional_collapsed_error_details_header=additional_collapsed_error_details_header,
+                        additional_collapsed_error_details=additional_collapsed_error_details,
+                    )
+            elif isinstance(error, Secret):
+                for artifact in artifacts:
+                    if artifact["job_id"] == job and artifact["path"] == error.file:
+                        location: str = error.file
+                        location_url = get_artifact_url(artifact)
+                        break
+                else:
+                    location: str = error.file
+                    location_url = None
 
                 handle_error(
-                    error_message=error.message,
-                    error_details=error_details,
-                    location=error.testcase,
-                    location_url=None,
-                    additional_collapsed_error_details_header=additional_collapsed_error_details_header,
-                    additional_collapsed_error_details=additional_collapsed_error_details,
+                    f"Secret found on line {error.line}: {error.secret}",
+                    f"Detector: {error.detector_name}. Don't print out secrets in tests/logs and revoke them immediately. Mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter_(logs|common)",
+                    location,
+                    location_url,
                 )
-        else:
-            raise RuntimeError(f"Unexpected error type: {type(error)}")
+            else:
+                raise RuntimeError(f"Unexpected error type: {type(error)}")
+
+    ignore_failure = bool(known_errors) and not unknown_errors
+    if not unknown_errors:
+        for error in known_errors:
+            if not isinstance(error, ObservedErrorWithIssue):
+                ignore_failure = False
+                break
+            elif error.issue_ignore_failure == False:
+                ignore_failure = False
+                break
 
     build_history_on_main = get_failures_on_main(test_analytics)
-    annotate_errors(
-        unknown_errors,
-        known_errors,
-        build_history_on_main,
-        test_analytics,
-        test_cmd,
-        test_desc,
-    )
-
-    if unknown_errors:
-        print(
-            f"+++ Failing test because of {len(unknown_errors)} unknown error{'s' if len(unknown_errors) != 1 else ''}",
-            file=sys.stderr,
+    try:
+        annotate_errors(
+            unknown_errors,
+            known_errors,
+            build_history_on_main,
+            test_analytics,
+            test_cmd,
+            test_desc,
+            test_result,
+            ignore_failure,
         )
+    except Exception as e:
+        print(f"Annotating failed, continuing: {e}")
 
     # No need for rest of the logic as no error logs were found, but since
     # this script was called the test still failed, so showing the current
@@ -675,7 +772,7 @@ def annotate_logged_errors(
         and len(known_errors) == 0
         and ui.env_is_truthy("BUILDKITE")
         and os.getenv("BUILDKITE_BRANCH") != "main"
-        and not has_successful_buildkite_status()
+        and test_result != 0
         and get_job_state() not in ("canceling", "canceled")
     ):
         annotation = Annotation(
@@ -687,6 +784,7 @@ def annotate_logged_errors(
             known_errors=[],
             test_cmd=test_cmd,
             test_desc=test_desc,
+            ignore_failure=False,
         )
         add_annotation_raw(style="error", markdown=annotation.to_markdown())
 
@@ -694,16 +792,16 @@ def annotate_logged_errors(
 
     store_known_issues_in_test_analytics(test_analytics, known_issues)
 
-    return len(unknown_errors)
+    return (len(unknown_errors), ignore_failure)
 
 
-def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError]:
+def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError | Secret]:
     error_logs = []
     for log_file_name in log_file_names:
-        # junit_testdrive_* is excluded by this, but currently
-        # not more useful than junit_mzcompose anyway
-        if "junit_" in log_file_name and "junit_testdrive_" not in log_file_name:
+        if "junit_" in log_file_name:
             error_logs.extend(_get_errors_from_junit_file(log_file_name))
+        elif log_file_name == "trufflehog.log":
+            error_logs.extend(_get_errors_from_trufflehog(log_file_name))
         else:
             error_logs.extend(_get_errors_from_log_file(log_file_name))
 
@@ -729,8 +827,29 @@ def _get_errors_from_junit_file(log_file_name: str) -> list[JunitError]:
                     JunitError(
                         testcase.classname,
                         testcase.name,
-                        result.message or "",
+                        (result.message or "").replace("&#10;", "\n"),
                         result.text or "",
+                    )
+                )
+    return error_logs
+
+
+def _get_errors_from_trufflehog(log_file_name: str) -> list[Secret]:
+    error_logs = []
+    with open(log_file_name) as f:
+        for line in f:
+            data = json.loads(line)
+            # Only report each secret once
+            for error_log in error_logs:
+                if error_log.secret == data["Raw"]:
+                    break
+            else:
+                error_logs.append(
+                    Secret(
+                        data["Raw"],
+                        data["SourceMetadata"]["Data"]["Filesystem"]["file"],
+                        data["SourceMetadata"]["Data"]["Filesystem"]["line"],
+                        data["DetectorName"],
                     )
                 )
     return error_logs
@@ -748,77 +867,36 @@ def _get_errors_from_log_file(log_file_name: str) -> list[ErrorLog]:
         error_logs.extend(_collect_errors_in_logs(data, log_file_name))
         data.seek(0)
         error_logs.extend(_collect_service_panics_in_logs(data, log_file_name))
-        # TODO(def-) Figure out a way to reenable, currently log lines in the
-        # same container can intersect in any way, so there is no reliable way
-        # to detect if a password is in the logs or not
-        # Passwords are expected in these files, ignore them
-        # if log_file_name not in {
-        #     "run.log",
-        #     "docker-inspect.log",
-        #     "docker-ps-a.log",
-        #     "ps-aux.log",
-        #     "kubectl-describe-all.log",
-        #     # TODO(def-): Remove when we have 4 versions released without leaking passwords to logs
-        # } and os.getenv("BUILDKITE_STEP_KEY") not in {
-        #     "checks-upgrade-clusterd-compute-first",
-        #     "checks-upgrade-clusterd-compute-last",
-        #     "checks-upgrade-entire-mz-two-versions",
-        #     "checks-upgrade-entire-mz-four-versions",
-        #     "checks-preflight-check-rollback",
-        #     "checks-0dt-upgrade-entire-mz-two-versions",
-        #     "checks-0dt-upgrade-entire-mz-four-versions",
-        #     "cloudtest-upgrade",
-        #     "feature-benchmark",
-        # }:
-        #     data.seek(0)
-        #     error_logs.extend(_collect_passwords_in_logs(data, log_file_name))
 
     return error_logs
-
-
-def _collect_passwords_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
-    collected_passwords = []
-
-    for match in PASSWORD_RE.finditer(data):
-        password = (
-            match.group("pw_config_some")
-            or match.group("pw_config_plain")
-            or match.group("pw_url")
-        )
-        if PASSWORD_IGNORE_RE.match(password):
-            continue
-        collected_passwords.append(
-            ErrorLog(
-                b'Plain-text password "' + password + b'"',
-                log_file_name,
-            )
-        )
-
-    return collected_passwords
 
 
 def _collect_errors_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
     collected_errors = []
 
     for match in ERROR_RE.finditer(data):
-        if IGNORE_RE.search(match.group(0)):
+        error = match.group(0)
+        if IGNORE_RE.search(error):
             continue
         label = os.getenv("BUILDKITE_LABEL")
         if (
             label
             and label.startswith("Product limits (finding new limits) ")
-            and PRODUCT_LIMITS_FIND_IGNORE_RE.search(match.group(0))
+            and PRODUCT_LIMITS_FIND_IGNORE_RE.search(error)
         ):
             continue
         # environmentd segfaults during normal shutdown in coverage builds, see database-issues#5980
         # Ignoring this in regular ways would still be quite spammy.
         if (
-            b"environmentd" in match.group(0)
-            and b"segfault at" in match.group(0)
+            b"environmentd" in error
+            and b"segfault at" in error
             and ui.env_is_truthy("CI_COVERAGE_ENABLED")
         ):
             continue
-        collected_errors.append(ErrorLog(match.group(0), log_file_name))
+        if log_file_name == "journalctl-merge.log":
+            if journalctl_match := JOURNALCTL_LOG_LINE_RE.match(error):
+                error = journalctl_match.group("msg")
+        collected_errors.append(ErrorLog(error, log_file_name))
 
     return collected_errors
 
@@ -842,11 +920,14 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
                 # handle only the ones which are currently in a panic
                 # handler:
                 if panic_start := open_panics.get(match.group("service")):
+                    panic_without_ts = TIMESTAMP_IN_PANIC_RE.sub(b"", panic_start)
                     del open_panics[match.group("service")]
                     if IGNORE_RE.search(match.group(0)):
                         continue
                     collected_panics.append(
-                        ErrorLog(panic_start + b" " + match.group("msg"), log_file_name)
+                        ErrorLog(
+                            panic_without_ts + b" " + match.group("msg"), log_file_name
+                        )
                     )
     assert not open_panics, f"Panic log never finished: {open_panics}"
 
@@ -993,10 +1074,6 @@ def get_retry_count() -> int:
     return int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
 
 
-def has_successful_buildkite_status() -> bool:
-    return os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") == "0"
-
-
 def format_message_as_code_block(
     error_message: str | None, max_length: int = 10_000
 ) -> str:
@@ -1010,6 +1087,9 @@ def format_message_as_code_block(
 def store_known_issues_in_test_analytics(
     test_analytics: TestAnalyticsDb, known_issues: list[KnownGitHubIssue]
 ) -> None:
+    if os.getenv("BUILDKITE_PIPELINE_SLUG") == "test":
+        # Too slow, run only on slower pipelines. We don't need the updates to be immediate anyway.
+        return
     for issue in known_issues:
         test_analytics.known_issues.add_or_update_issue(issue)
 
@@ -1028,7 +1108,11 @@ def store_annotation_in_test_analytics(
             error_type=error.internal_error_type,
             message=error.to_text(),
             issue=(
-                f"database-issues/{error.issue_number}"
+                (
+                    error.issue_number
+                    if isinstance(error.issue_number, str)
+                    else f"database-issues/{error.issue_number}"
+                )
                 if isinstance(error, WithIssue)
                 else None
             ),

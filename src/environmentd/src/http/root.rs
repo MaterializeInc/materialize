@@ -11,6 +11,7 @@
 
 use askama::Template;
 use axum::response::IntoResponse;
+use mz_server_core::listeners::HttpRoutesEnabled;
 
 use crate::BUILD_INFO;
 
@@ -18,22 +19,21 @@ use crate::BUILD_INFO;
 #[template(path = "home.html")]
 struct HomeTemplate<'a> {
     version: &'a str,
-    build_time: &'a str,
     build_sha: &'static str,
-    profiling: bool,
+    routes_enabled: HttpRoutesEnabled,
 }
 
-pub async fn handle_home(profiling: bool) -> impl IntoResponse {
+pub async fn handle_home(routes_enabled: HttpRoutesEnabled) -> impl IntoResponse {
     mz_http_util::template_response(HomeTemplate {
         version: BUILD_INFO.version,
-        build_time: BUILD_INFO.time,
         build_sha: BUILD_INFO.sha,
-        profiling,
+        routes_enabled,
     })
 }
 
 mz_http_util::make_handle_static!(
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),
-    "src/http/static",
-    "src/http/static-dev"
+    dir_1: ::include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),
+    dir_2: ::include_dir::include_dir!("$OUT_DIR/src/http/static"),
+    prod_base_path: "src/http/static",
+    dev_base_path: "src/http/static-dev",
 );

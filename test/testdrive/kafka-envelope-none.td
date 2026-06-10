@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 $ kafka-create-topic topic=missing_keys_or_values partitions=1
 
@@ -15,6 +17,7 @@ $ kafka-create-topic topic=missing_keys_or_values partitions=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER missing_keys_or_values_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE missing_keys_or_values
   IN CLUSTER missing_keys_or_values_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-missing_keys_or_values-${testdrive.seed}')
@@ -24,6 +27,7 @@ $ kafka-create-topic topic=missing_keys_or_values partitions=1
   VALUE FORMAT TEXT
   INCLUDE KEY
   ENVELOPE NONE
+> COMMIT
 
 # make sure a record with both key and value goes through
 

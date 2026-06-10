@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 $ set-arg-default single-replica-cluster=quickstart
 
 # must be a subset of the keys in the rows
@@ -156,6 +158,7 @@ creature
 --------
 moros
 
+> BEGIN
 > CREATE SOURCE doin_upsert_metadata
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -171,6 +174,7 @@ moros
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET AS test_kafka_offset
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * FROM doin_upsert_metadata_tbl WHERE id = 4
 id creature partition test_kafka_offset
@@ -198,6 +202,7 @@ id creature
 3  triceratops
 
 # Test that `WITH (START OFFSET=<whatever>)` works
+> BEGIN
 > CREATE SOURCE upsert_fast_forward
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START OFFSET = [6], TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -205,6 +210,7 @@ id creature
 > CREATE TABLE upsert_fast_forward_tbl FROM SOURCE upsert_fast_forward (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * FROM upsert_fast_forward_tbl WHERE id = 3
 id creature
@@ -212,6 +218,7 @@ id creature
 3  triceratops
 
 # test include metadata
+> BEGIN
 > CREATE SOURCE upsert_metadata
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -220,6 +227,7 @@ id creature
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET, PARTITION
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * FROM upsert_metadata_tbl
 id   creature      offset  partition
@@ -230,6 +238,7 @@ id   creature      offset  partition
 4    chicken       10      0
 
 # test include metadata respects metadata order
+> BEGIN
 > CREATE SOURCE upsert_metadata_reordered
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -238,6 +247,7 @@ id   creature      offset  partition
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * FROM upsert_metadata_reordered_tbl
 id   creature      partition  offset

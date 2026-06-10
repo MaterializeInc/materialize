@@ -25,3 +25,5 @@ CREATE TABLE t1 (f1 INTEGER, f2 TEXT);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
 
 INSERT INTO t1 SELECT a1.f1 + a6.f1 , E'abc\nxyz' FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4, ten AS a5, ten AS a6;
+ANALYZE ten;
+ANALYZE t1;

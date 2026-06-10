@@ -20,7 +20,7 @@ use crate::optimize::dataflows::DataflowBuilder;
 
 impl Coordinator {
     /// Creates a new index oracle for the specified compute instance.
-    pub fn index_oracle(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+    pub fn index_oracle(&self, instance: ComputeInstanceId) -> DataflowBuilder<'_> {
         self.dataflow_builder(instance)
     }
 }
@@ -30,12 +30,12 @@ impl DataflowBuilder<'_> {
     /// building a dataflow for the identifiers in `ids` out of the indexes
     /// available in this compute instance.
     #[mz_ore::instrument(level = "debug")]
-    pub fn sufficient_collections<'a, I>(&self, ids: I) -> CollectionIdBundle
+    pub fn sufficient_collections<I>(&self, ids: I) -> CollectionIdBundle
     where
-        I: IntoIterator<Item = &'a GlobalId>,
+        I: IntoIterator<Item = GlobalId>,
     {
         let mut id_bundle = CollectionIdBundle::default();
-        let mut todo: BTreeSet<GlobalId> = ids.into_iter().cloned().collect();
+        let mut todo: BTreeSet<GlobalId> = ids.into_iter().collect();
 
         // Iteratively extract the largest element, potentially introducing lesser elements.
         while let Some(id) = todo.iter().rev().next().cloned() {
@@ -49,10 +49,14 @@ impl DataflowBuilder<'_> {
                     .or_default()
                     .extend(available_indexes);
             } else {
+                // Note that the following match should be kept in sync with `import_into_dataflow`.
                 match self.catalog.get_entry(&id).item() {
                     // Unmaterialized view. Search its dependencies.
                     CatalogItem::View(view) => {
-                        todo.extend(view.optimized_expr.0.depends_on());
+                        todo.extend(view.locally_optimized_expr.0.depends_on());
+                    }
+                    CatalogItem::MaterializedView(mview) if mview.replacement_target.is_some() => {
+                        todo.extend(mview.locally_optimized_expr.0.depends_on());
                     }
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)
@@ -64,7 +68,12 @@ impl DataflowBuilder<'_> {
                         // Log sources should always have an index.
                         panic!("log source {id} is missing index");
                     }
-                    _ => {
+                    CatalogItem::Sink(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_) => {
                         // Non-indexable thing; no work to do.
                     }
                 }

@@ -12,6 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 use mz_tls_util::pkcs12der_from_pem;
+use zeroize::Zeroize;
 
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Identity`].
 ///
@@ -22,14 +23,24 @@ pub struct Identity {
     pass: String,
 }
 
+impl Zeroize for Identity {
+    fn zeroize(&mut self) {
+        self.der.zeroize();
+        self.pass.zeroize();
+    }
+}
+
+impl Drop for Identity {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 impl Identity {
     /// Constructs an identity from a PEM-formatted key and certificate using OpenSSL.
     pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
-        let archive = pkcs12der_from_pem(key, cert)?;
-        Ok(Identity {
-            der: archive.der,
-            pass: archive.pass,
-        })
+        let (der, pass) = pkcs12der_from_pem(key, cert)?.into_parts();
+        Ok(Identity { der, pass })
     }
 
     /// Wraps [`reqwest::Identity::from_pkcs12_der`].

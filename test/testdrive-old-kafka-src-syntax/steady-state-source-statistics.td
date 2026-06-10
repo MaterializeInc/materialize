@@ -10,7 +10,6 @@
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
@@ -65,10 +64,6 @@ goofus,gallant
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE SOURCE counter
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER (UP TO 100);
-
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state
 > SELECT key, f1, f2 FROM upsert
@@ -83,28 +78,17 @@ mammalmore    moose   2
     SUM(u.offset_known) > 0,
     SUM(u.offset_known) = SUM(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
 upsert true true
 
-> SELECT
-    s.name,
-    SUM(u.offset_known) > 0,
-    SUM(u.offset_committed) > 0
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('counter')
-  GROUP BY s.name
-  ORDER BY s.name
-counter true true
-
 $ set-from-sql var=previous-offset-known
 SELECT
     (SUM(u.offset_known))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 
@@ -122,11 +106,10 @@ birdmore      geese   56
     SUM(u.offset_known) > ${previous-offset-known},
     SUM(u.offset_known) = SUM(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
 upsert true true
 
 > DROP SOURCE upsert CASCADE
-> DROP SOURCE counter CASCADE

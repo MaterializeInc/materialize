@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-replica-size=1
+$ set-sql-timeout duration=120s
+$ set-arg-default default-replica-size=scale=1,workers=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
@@ -81,7 +81,7 @@ mammalmore    moose   2
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -91,7 +91,7 @@ $ set-from-sql var=previous-offset-known
 SELECT
     (SUM(u.offset_known))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 
@@ -105,7 +105,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -117,10 +117,14 @@ $ set-from-sql var=pre-restart-offset-committed
 SELECT
     (SUM(u.offset_committed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
+
+# In a resource constrained environment, changing the replication factor can be delayed
+# and MZ may see the event that should be published while no replica exists.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"} {"f1":"moose", "f2": 100}
@@ -133,7 +137,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name

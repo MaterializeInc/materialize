@@ -36,11 +36,65 @@ spec:
           value: "minio"
         - name: MINIO_SECRET_KEY
           value: "minio123"
+        - name: MINIO_BROWSER
+          value: "on"
         ports:
         - containerPort: 9000
         volumeMounts:
         - name: storage
           mountPath: /data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /minio/health/live
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 20
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+        lifecycle:
+          postStart:
+            exec:
+              command:
+                - "bash"
+                - "-euc"
+                - |
+                  function setup_buckets() {
+                      while true; do
+                          echo "Waiting for minio to become ready..."
+                          if curl --fail localhost:9000/minio/health/ready; then
+                              echo "Minio is ready"
+                              break
+                          fi
+                          sleep 1
+                      done
+
+                      echo "Creating local alias"
+                      mc alias set local http://localhost:9000 minio minio123
+                      echo $?
+
+                      echo "Creating local/persist bucket"
+                      mc mb -p local/persist
+                      echo $?
+
+                      echo "Creating local/bucket bucket"
+                      mc mb -p local/bucket
+                      echo $?
+                  }
+
+                  setup_buckets 2>&1 > poststart.log
       volumes:
       - name: storage
         emptyDir: {}

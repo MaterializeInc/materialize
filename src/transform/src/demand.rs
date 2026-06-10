@@ -14,7 +14,7 @@ use mz_ore::assert_none;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{
-    AggregateExpr, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr,
+    AggregateExpr, AggregateFunc, Columns, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr,
     RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -37,19 +37,22 @@ use crate::TransformCtx;
 ///
 /// Nowadays, this transform is mostly obsoleted by `ProjectionPushdown`.
 /// However, I know of one thing that it still does that `ProjectionPushdown`
-/// doesn't do (might possibly be more such things):
+/// doesn't do (there might be more such things):
 /// if you have something like
-// ```
-//     Project (#0, #1)
-//       Join on=(#0 = #1)
-// ```
-// then this is turned into
-// ```
-//     Project (#0, #0)
-//       Join on=(#0 = #1)
-// ```
-// This can be beneficial for projecting out some columns earlier inside a complex join (by the LIR
-// planning), and then recovering them after the join (if needed) by duplicating existing columns.
+/// ```code
+///     Project (#0, #1)
+///       Join on=(#0 = #1)
+/// ```
+/// then this is turned into
+/// ```code
+///     Project (#0, #0)
+///       Join on=(#0 = #1)
+/// ```
+/// This can be beneficial for projecting out some columns earlier inside a complex join (by the LIR
+/// planning), and then recovering them after the join (if needed) by duplicating existing columns.
+///
+/// After the last run of `Demand`, there should always be a `ProjectionPushdown`, so that dummies
+/// are eliminated from plans.
 #[derive(Debug)]
 pub struct Demand {
     recursion_guard: RecursionGuard,
@@ -70,12 +73,16 @@ impl CheckedRecursion for Demand {
 }
 
 impl crate::Transform for Demand {
+    fn name(&self) -> &'static str {
+        "Demand"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "demand")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -169,7 +176,7 @@ impl Demand {
                 ),
                 MirRelationExpr::Map { input, scalars } => {
                     let relation_type = relation_type.as_ref().unwrap();
-                    let arity = input.arity();
+                    let arity = relation_type.arity() - scalars.len();
                     // contains columns whose supports have yet to be explored
                     let mut new_columns = columns.clone();
                     new_columns.retain(|c| *c >= arity);
@@ -212,7 +219,8 @@ impl Demand {
                     for expr in exprs {
                         expr.support_into(&mut columns);
                     }
-                    columns.retain(|c| *c < input.arity());
+                    let arity = input.arity();
+                    columns.retain(|c| *c < arity);
                     self.action(input, columns, gets)
                 }
                 MirRelationExpr::Filter { input, predicates } => {
@@ -237,7 +245,7 @@ impl Demand {
                     for equivalence in equivalences.iter() {
                         let mut first_column = None;
                         for expr in equivalence.iter() {
-                            if let MirScalarExpr::Column(c) = expr {
+                            if let MirScalarExpr::Column(c, _) = expr {
                                 if let Some(prior) = &first_column {
                                     permutation[*c] = *prior;
                                 } else {
@@ -260,7 +268,7 @@ impl Demand {
                     let new_columns = input_mapper.split_column_set_by_input(columns.iter());
 
                     // Recursively indicate the requirements.
-                    for (input, columns) in inputs.iter_mut().zip(new_columns) {
+                    for (input, columns) in inputs.iter_mut().zip_eq(new_columns) {
                         self.action(input, columns, gets)?;
                     }
 

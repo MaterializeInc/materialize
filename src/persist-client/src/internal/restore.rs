@@ -9,16 +9,15 @@
 
 //! See documentation on [[restore_blob]].
 
+use crate::ShardId;
 use crate::internal::encoding::UntypedState;
 use crate::internal::paths::BlobKey;
 use crate::internal::state::{BatchPart, RunPart, State};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
-use crate::ShardId;
 use anyhow::anyhow;
 use mz_persist::location::Blob;
-use timely::Container;
 use tracing::info;
 
 /// Attempt to restore all the blobs referenced by the current state in consensus.
@@ -31,7 +30,7 @@ pub(crate) async fn restore_blob(
     metrics: &Metrics,
 ) -> anyhow::Result<Vec<BlobKey>> {
     let diffs = versions.fetch_all_live_diffs(&shard_id).await;
-    let Some(first_live_seqno) = diffs.0.first().map(|d| d.seqno) else {
+    let Some(first_live_seqno) = diffs.first().map(|d| d.seqno) else {
         info!("No diffs for shard {shard_id}.");
         return Ok(vec![]);
     };
@@ -51,7 +50,7 @@ pub(crate) async fn restore_blob(
         }
     };
 
-    for diff in diffs.0 {
+    for diff in diffs {
         let mut diff: StateDiff<u64> = StateDiff::decode(build_version, diff.data);
         let mut part_queue = vec![];
 

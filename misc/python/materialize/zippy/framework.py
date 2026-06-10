@@ -10,7 +10,7 @@
 import random
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, TypeVar, Union
+from typing import TYPE_CHECKING, TypeVar
 
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
@@ -24,12 +24,12 @@ class State:
     deploy_generation: int
     system_parameter_defaults: dict[str, str]
 
-    def __init__(self, zero_downtime: bool):
+    def __init__(self):
         self.mz_service = "materialized"
         self.deploy_generation = 0
-        self.system_parameter_defaults = get_default_system_parameters(
-            zero_downtime=zero_downtime
-        )
+        self.system_parameter_defaults = get_default_system_parameters()
+        self.iceberg_username: str | None = None
+        self.iceberg_key: str | None = None
 
 
 class Capability:
@@ -47,7 +47,6 @@ class Capability:
 
 
 T = TypeVar("T", bound=Capability)
-ActionOrFactory = Union[type["Action"], "ActionFactory"]
 
 
 class Capabilities:
@@ -173,6 +172,9 @@ class ActionFactory:
         return set()
 
 
+ActionOrFactory = type[Action] | ActionFactory
+
+
 class Test:
     """A Zippy test, consisting of a sequence of actions."""
 
@@ -192,14 +194,7 @@ class Test:
         self._actions_with_weight: dict[ActionOrFactory, float] = (
             self._scenario.actions_with_weight()
         )
-        self._state = State(
-            zero_downtime=any(
-                [
-                    isinstance(action, Mz0dtDeployBaseAction)
-                    for action in self._actions_with_weight
-                ]
-            )
-        )
+        self._state = State()
         self._max_execution_time: timedelta = max_execution_time
 
         for action_or_factory in self._scenario.bootstrap():
@@ -208,9 +203,6 @@ class Test:
         while len(self._actions) < actions:
             action_or_factory = self._pick_action_or_factory()
             self._actions.extend(self.generate_actions(action_or_factory))
-
-        for action_or_factory in self._scenario.finalization():
-            self._final_actions.extend(self.generate_actions(action_or_factory))
 
     def generate_actions(self, action_def: ActionOrFactory) -> list[Action]:
         if isinstance(action_def, ActionFactory):
@@ -234,14 +226,27 @@ class Test:
     def run(self, c: Composition) -> None:
         """Run the Zippy test."""
         max_time = datetime.now() + self._max_execution_time
-        for action in self._actions:
+        executed_count = len(self._actions)
+        for i, action in enumerate(self._actions):
             print(action)
             action.run(c, self._state)
             if datetime.now() > max_time:
                 print(
                     f"--- Desired execution time of {self._max_execution_time} has been reached."
                 )
+                executed_count = i + 1
                 break
+
+        # Remove capability effects of actions that were never executed,
+        # so that finalization only validates objects that actually exist.
+        for action in self._actions[executed_count:]:
+            for cap in action.provides():
+                self._capabilities.remove_capability_instance(cap)
+
+        # Generate finalization actions now, after the main loop, so that
+        # capabilities reflect what was actually created during execution.
+        for action_or_factory in self._scenario.finalization():
+            self._final_actions.extend(self.generate_actions(action_or_factory))
 
         for action in self._final_actions:
             print(action)

@@ -28,15 +28,17 @@ use mz_ore::metrics::{DeleteOnDropCounter, DeleteOnDropHistogram};
 use mz_ore::retry::{Retry, RetryResult};
 use prometheus::core::AtomicU64;
 use rocksdb::merge_operator::MergeOperandsIter;
-use rocksdb::{Env, Error as RocksDBError, ErrorKind, Options as RocksDBOptions, WriteOptions, DB};
-use serde::de::DeserializeOwned;
+use rocksdb::{DB, Env, Error as RocksDBError, ErrorKind, Options as RocksDBOptions, WriteOptions};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio::sync::{mpsc, oneshot};
 
 pub mod config;
-pub use config::{defaults, RocksDBConfig, RocksDBTuningParameters};
+pub use config::{RocksDBConfig, RocksDBTuningParameters, defaults};
 
 use crate::config::WriteBufferManagerHandle;
+
+type Diff = mz_ore::Overflowing<i64>;
 
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]
@@ -62,7 +64,7 @@ pub enum Error {
     #[error("failed to cleanup in time")]
     CleanupTimeout(#[from] tokio::time::error::Elapsed),
 
-    /// An error occured with a provided value.
+    /// An error occurred with a provided value.
     #[error("error with value: {0}")]
     ValueError(String),
 }
@@ -200,26 +202,26 @@ where
 /// so the user can choose the labels.
 pub struct RocksDBSharedMetrics {
     /// Latency of multi_gets, in fractional seconds.
-    pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_get_latency: DeleteOnDropHistogram<Vec<String>>,
     /// Latency of write batch writes, in fractional seconds.
-    pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_put_latency: DeleteOnDropHistogram<Vec<String>>,
 }
 
 /// Worker metrics about an instances usage of RocksDB. User-provided
 /// so the user can choose the labels.
 pub struct RocksDBInstanceMetrics {
     /// Size of multi_get batches.
-    pub multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_get_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Size of multi_get non-empty results.
-    pub multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_get_result_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Total size of bytes returned in the result
-    pub multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_get_result_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// The number of calls to rocksdb multi_get
-    pub multi_get_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_get_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// The number of calls to rocksdb multi_put
-    pub multi_put_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_put_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Size of write batches.
-    pub multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_put_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 /// The result type for `multi_get`.
@@ -254,7 +256,7 @@ pub struct MultiUpdateResult {
     /// The 'diff' size of the values we wrote to the database,
     /// returned when the `MultiUpdate` command included a multiplier 'diff'
     /// for at least one update value.
-    pub size_diff: Option<i64>,
+    pub size_diff: Option<Diff>,
 }
 
 /// The type of update to perform on a key.
@@ -291,10 +293,10 @@ enum Command<K, V> {
         // The batch of updates to perform. The 3rd item in each tuple is an optional diff
         // multiplier that when present, will be multiplied by the size of the encoded
         // value written to the database and summed into the `MultiUpdateResult::size_diff` field.
-        batch: Vec<(K, KeyUpdate<V>, Option<i64>)>,
+        batch: Vec<(K, KeyUpdate<V>, Option<Diff>)>,
         // Scratch vector to return results in.
         response_sender: oneshot::Sender<
-            Result<(MultiUpdateResult, Vec<(K, KeyUpdate<V>, Option<i64>)>), Error>,
+            Result<(MultiUpdateResult, Vec<(K, KeyUpdate<V>, Option<Diff>)>), Error>,
         >,
     },
     Shutdown {
@@ -319,7 +321,7 @@ pub struct RocksDBInstance<K, V> {
 
     // Scratch vector to send updates to the RocksDB thread
     // during `MultiUpdate`.
-    multi_update_scratch: Vec<(K, KeyUpdate<V>, Option<i64>)>,
+    multi_update_scratch: Vec<(K, KeyUpdate<V>, Option<Diff>)>,
 
     // Configuration that can change dynamically.
     dynamic_config: config::RocksDBDynamicConfig,
@@ -327,6 +329,9 @@ pub struct RocksDBInstance<K, V> {
     /// Whether this instance supports merge operations (whether a
     /// merge operator was set at creation time)
     pub supports_merges: bool,
+
+    /// JoinHandle for the rocksdb core loop that processes requests.
+    handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl<K, V> RocksDBInstance<K, V>
@@ -341,7 +346,7 @@ where
     /// `metrics` is a set of metric types that this type will keep
     /// up to date. `enc_opts` is the `bincode` options used to
     /// serialize and deserialize the keys and values.
-    pub async fn new<M, O, IM, F>(
+    pub fn new<M, O, IM, F>(
         instance_path: &Path,
         options: InstanceOptions<O, V, F>,
         tuning_config: RocksDBConfig,
@@ -356,56 +361,17 @@ where
     {
         let dynamic_config = tuning_config.dynamic.clone();
         let supports_merges = options.merge_operator.is_some();
-        if options.cleanup_on_new && instance_path.exists() {
-            let instance_path_owned = instance_path.to_owned();
-
-            // We require that cleanup of the DB succeeds. Otherwise, we could open a DB with old,
-            // incorrect data. Because of races with dataflow shutdown, we retry a few times here.
-            // 1s with a 2x backoff is ~30s after 5 tries.
-            //
-            // TODO(guswynn): remove this when we can wait on dataflow cleanup asynchronously in
-            // the controller.
-            let retry = mz_ore::retry::Retry::default()
-                .max_tries(options.cleanup_tries)
-                // Large DB's could take multiple seconds to run.
-                .initial_backoff(std::time::Duration::from_secs(1));
-
-            retry
-                .retry_async_canceling(|_rs| async {
-                    let instance_path_owned = instance_path_owned.clone();
-                    mz_ore::task::spawn_blocking(
-                        || {
-                            format!(
-                                "RocksDB instance at {}: cleanup on creation",
-                                instance_path.display()
-                            )
-                        },
-                        move || {
-                            if let Err(e) =
-                                DB::destroy(&RocksDBOptions::default(), &*instance_path_owned)
-                            {
-                                tracing::warn!(
-                                    "failed to cleanup rocksdb dir on creation {}: {}",
-                                    instance_path_owned.display(),
-                                    e.display_with_causes(),
-                                );
-                                Err(Error::from(e))
-                            } else {
-                                Ok(())
-                            }
-                        },
-                    )
-                    .await?
-                })
-                .await?;
-        }
 
         // The buffer can be small here, as all interactions with it take `&mut self`.
         let (tx, rx): (mpsc::Sender<Command<K, V>>, _) = mpsc::channel(10);
 
         let instance_path = instance_path.to_owned();
-        let (creation_error_tx, creation_error_rx) = oneshot::channel();
-        std::thread::spawn(move || {
+        // RocksDB inititalization and core loop are executed in a separate thread to avoid
+        // blocking and surfacing initialization errors which may result in a panic.
+        // If initialization fails, the thread exits.  The channel rx handle will be dropped,
+        // and any command to RocksDBInstance will fail with Error::RocksDBThreadGoneAway,
+        // resulting in suspend-and-restart.
+        let handle = std::thread::spawn(move || {
             rocksdb_core_loop(
                 options,
                 tuning_config,
@@ -413,13 +379,8 @@ where
                 rx,
                 shared_metrics,
                 instance_metrics,
-                creation_error_tx,
             )
         });
-
-        if let Ok(creation_error) = creation_error_rx.await {
-            return Err(creation_error);
-        }
 
         Ok(Self {
             tx,
@@ -428,7 +389,14 @@ where
             multi_update_scratch: Vec::new(),
             dynamic_config,
             supports_merges,
+            handle: Some(handle),
         })
+    }
+
+    /// Take ownership of the join handle for the core thread. Once taken, this will just return
+    /// [`None`].
+    pub fn take_core_loop_handle(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        self.handle.take()
     }
 
     /// For each _unique_ key in `gets`, place the stored value (if any) in `results_out`.
@@ -454,9 +422,11 @@ where
             let gets = gets.chunks(batch_size);
             let results_out = results_out.into_iter().chunks(batch_size);
 
-            for (gets, results_out) in gets.into_iter().zip_eq(results_out.into_iter()) {
+            for (gets, results_out) in gets.into_iter().zip_eq(&results_out) {
                 let ret = self.multi_get_inner(gets, results_out, &placement).await?;
                 stats.processed_gets += ret.processed_gets;
+                stats.processed_gets_size += ret.processed_gets_size;
+                stats.returned_gets += ret.returned_gets;
             }
         }
 
@@ -526,7 +496,7 @@ where
     /// summed into the `MultiUpdateResult::size_diff` field.
     pub async fn multi_update<P>(&mut self, puts: P) -> Result<MultiUpdateResult, Error>
     where
-        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<i64>)>,
+        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<Diff>)>,
     {
         let batch_size = self.dynamic_config.batch_size();
         let mut stats = MultiUpdateResult::default();
@@ -540,7 +510,7 @@ where
                 stats.processed_updates += ret.processed_updates;
                 stats.size_written += ret.size_written;
                 if let Some(diff) = ret.size_diff {
-                    stats.size_diff = Some(stats.size_diff.unwrap_or(0) + diff);
+                    stats.size_diff = Some(stats.size_diff.unwrap_or(Diff::ZERO) + diff);
                 }
             }
         }
@@ -550,7 +520,7 @@ where
 
     async fn multi_update_inner<P>(&mut self, updates: P) -> Result<MultiUpdateResult, Error>
     where
-        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<i64>)>,
+        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<Diff>)>,
     {
         let mut multi_put_vec = std::mem::take(&mut self.multi_update_scratch);
         multi_put_vec.clear();
@@ -620,7 +590,6 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     shared_metrics: M,
     instance_metrics: IM,
-    creation_error_tx: oneshot::Sender<Error>,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
@@ -629,6 +598,37 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> V + Send + Sync + Copy + 'static,
     IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
+    if options.cleanup_on_new && instance_path.exists() {
+        // We require that cleanup of the DB succeeds. Otherwise, we could open a DB with old,
+        // incorrect data. Because of races with dataflow shutdown, we retry a few times here.
+        // 1s with a 2x backoff is ~30s after 5 tries.
+        let retry = mz_ore::retry::Retry::default()
+            .max_tries(options.cleanup_tries)
+            // Large DB's could take multiple seconds to run.
+            .initial_backoff(std::time::Duration::from_secs(1));
+
+        let destroy_result = retry.retry(|_rs| {
+            if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*instance_path) {
+                tracing::warn!(
+                    "failed to cleanup rocksdb dir on creation {}: {}",
+                    instance_path.display(),
+                    e.display_with_causes(),
+                );
+                RetryResult::RetryableErr(Error::from(e))
+            } else {
+                RetryResult::Ok(())
+            }
+        });
+        if let Err(e) = destroy_result {
+            tracing::error!(
+                "retries exhausted trying to cleanup rocksdb dir on creation {}: {}",
+                instance_path.display(),
+                e.display_with_causes(),
+            );
+            return;
+        }
+    }
+
     let retry_max_duration = tuning_config.retry_max_duration;
 
     // Handle to an optional reference of a write buffer manager which
@@ -653,13 +653,13 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
         });
 
     let db: DB = match retry_result {
-        Ok(db) => {
-            drop(creation_error_tx);
-            db
-        }
+        Ok(db) => db,
         Err(e) => {
-            // Communicate the error back to `new`.
-            let _ = creation_error_tx.send(e);
+            tracing::error!(
+                "failed to create rocksdb at {}: {}",
+                instance_path.display(),
+                e.display_with_causes(),
+            );
             return;
         }
     };
@@ -668,12 +668,10 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     let mut encoded_batch: Vec<(K, KeyUpdate<Vec<u8>>)> = Vec::new();
 
     let wo = options.as_rocksdb_write_options();
-
     while let Some(cmd) = cmd_rx.blocking_recv() {
         match cmd {
             Command::Shutdown { done_sender } => {
-                db.cancel_all_background_work(true);
-                drop(db);
+                shutdown_and_cleanup(db, &instance_path);
                 drop(write_buffer_handle);
                 let _ = done_sender.send(());
                 return;
@@ -795,12 +793,16 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                         encoded_batch.shrink_to(reduced_capacity);
                     }
                 }
-                assert!(encoded_batch_buffers.len() >= batch_size);
+
+                let Some(encode_bufs) = encoded_batch_buffers.get_mut(0..batch_size) else {
+                    panic!(
+                        "Encoded buffers over-truncated. expected >= {batch_size} actual: {}",
+                        encoded_batch_buffers.len()
+                    );
+                };
 
                 // TODO(guswynn): sort by key before writing.
-                for ((key, value, diff), encode_buf) in
-                    batch.drain(..).zip(encoded_batch_buffers.iter_mut())
-                {
+                for ((key, value, diff), encode_buf) in batch.drain(..).zip_eq(encode_bufs) {
                     ret.processed_updates += 1;
 
                     match &value {
@@ -816,10 +818,12 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                                     ret.size_written += u64::cast_from(encode_buf.len());
                                     // calculate the diff size if the diff multiplier is present
                                     if let Some(diff) = diff {
-                                        let encoded_len = i64::try_from(encode_buf.len())
+                                        let encoded_len = Diff::try_from(encode_buf.len())
                                             .expect("less than i64 size");
-                                        ret.size_diff =
-                                            Some(ret.size_diff.unwrap_or(0) + (diff * encoded_len));
+                                        ret.size_diff = Some(
+                                            ret.size_diff.unwrap_or(Diff::ZERO)
+                                                + (diff * encoded_len),
+                                        );
                                     }
                                 }
                                 Err(e) => {
@@ -879,19 +883,40 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                     }
                 }
 
-                let _ = match retry_result {
+                match retry_result {
                     Ok(()) => {
                         batch.clear();
-                        response_sender.send(Ok((ret, batch)))
+                        let _ = response_sender.send(Ok((ret, batch)));
                     }
-                    Err(e) => response_sender.send(Err(e)),
+                    Err(e) => {
+                        let db_err = match e {
+                            Error::RocksDB(ref inner) => Some(inner.clone()),
+                            _ => None,
+                        };
+                        let _ = response_sender.send(Err(e));
+                        if let Some(db_err) = db_err {
+                            if !matches!(db_err.kind(), ErrorKind::TryAgain) {
+                                tracing::warn!(
+                                    "exiting on fatal rocksdb error at {}: {}",
+                                    instance_path.display(),
+                                    db_err.display_with_causes(),
+                                );
+                                break;
+                            }
+                        }
+                    }
                 };
             }
         }
     }
+    shutdown_and_cleanup(db, &instance_path);
+}
+
+fn shutdown_and_cleanup(db: DB, instance_path: &PathBuf) {
     // Gracefully cleanup if the `RocksDBInstance` has gone away.
     db.cancel_all_background_work(true);
     drop(db);
+    tracing::info!("dropped rocksdb at {}", instance_path.display());
 
     // Note that we don't retry, as we already may race here with a source being restarted.
     if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*instance_path) {

@@ -10,8 +10,9 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use mz_ccsr::GetSubjectConfigError;
+use mz_kafka_util::admin::EnsureTopicConfig;
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::{InTask, OreFutureExt};
@@ -19,8 +20,8 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::KafkaTopicOptions;
 use mz_storage_types::errors::ContextCreationErrorExt;
 use mz_storage_types::sinks::KafkaSinkConnection;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::ClientContext;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use tracing::warn;
 
 pub mod progress_key {
@@ -96,11 +97,11 @@ async fn discover_topic_configs<C: ClientContext>(
 
     if configs.len() != 1 {
         Err(anyhow!(
-                "error creating topic {} for sink: broker {} returned {} config results, but one was expected",
-                topic,
-                broker,
-                configs.len()
-            ))?;
+            "error creating topic {} for sink: broker {} returned {} config results, but one was expected",
+            topic,
+            broker,
+            configs.len()
+        ))?;
     }
 
     let config = configs.into_element().map_err(|e| {
@@ -159,6 +160,7 @@ pub async fn ensure_kafka_topic(
         replication_factor,
         topic_config,
     }: &KafkaTopicOptions,
+    ensure_topic_config: EnsureTopicConfig,
 ) -> Result<bool, anyhow::Error> {
     let client: AdminClient<_> = connection
         .connection
@@ -219,6 +221,7 @@ pub async fn ensure_kafka_topic(
         &client,
         &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
         &kafka_topic,
+        ensure_topic_config,
     )
     .await
     .with_context(|| format!("Error creating topic {} for sink", topic))

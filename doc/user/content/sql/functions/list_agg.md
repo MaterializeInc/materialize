@@ -12,7 +12,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "list-agg.svg" >}}
+{{% include-syntax file="examples/sql_functions/list_agg" example="syntax" %}}
 
 ## Signatures
 

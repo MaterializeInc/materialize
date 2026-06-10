@@ -9,7 +9,7 @@
 
 use crate::utils::RefreshTokenTarget;
 use axum::routing::{delete, get, post, put};
-use axum::{middleware, Router};
+use axum::{Router, middleware};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
@@ -22,7 +22,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::handlers::*;
 use crate::middleware::*;
@@ -32,31 +32,32 @@ const AUTH_API_TOKEN_PATH: &str = "/identity/resources/auth/v1/api-token";
 const AUTH_USER_PATH: &str = "/identity/resources/auth/v1/user";
 const AUTH_API_TOKEN_REFRESH_PATH: &str = "/identity/resources/auth/v1/api-token/token/refresh";
 const GROUPS_PATH: &str = "/frontegg/identity/resources/groups/v1";
-const GROUP_PATH: &str = "/frontegg/identity/resources/groups/v1/:id";
-const GROUP_ROLES_PATH: &str = "/frontegg/identity/resources/groups/v1/:id/roles";
-const GROUP_USERS_PATH: &str = "/frontegg/identity/resources/groups/v1/:id/users";
-const GROUP_PATH_WITH_SLASH: &str = "/frontegg/identity/resources/groups/v1/:id/";
+const GROUP_PATH: &str = "/frontegg/identity/resources/groups/v1/{:id}";
+const GROUP_ROLES_PATH: &str = "/frontegg/identity/resources/groups/v1/{:id}/roles";
+const GROUP_USERS_PATH: &str = "/frontegg/identity/resources/groups/v1/{:id}/users";
+const GROUP_PATH_WITH_SLASH: &str = "/frontegg/identity/resources/groups/v1/{:id}/";
 const MEMBERS_PATH: &str = "/frontegg/team/resources/members/v1";
 const USERS_ME_PATH: &str = "/identity/resources/users/v2/me";
 const USERS_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1";
-const USER_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1/:id";
+const USER_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1/{:id}";
 const TENANT_API_TOKENS_PATH: &str = "/identity/resources/tenants/api-tokens/v1";
-const TENANT_API_TOKEN_PATH: &str = "/identity/resources/tenants/api-tokens/v1/:id";
-const USER_PATH: &str = "/identity/resources/users/v1/:id";
+const TENANT_API_TOKEN_PATH: &str = "/identity/resources/tenants/api-tokens/v1/{:id}";
+const USER_PATH: &str = "/identity/resources/users/v1/{:id}";
 const USER_CREATE_PATH: &str = "/identity/resources/users/v2";
 const USERS_V3_PATH: &str = "/identity/resources/users/v3";
 const ROLES_PATH: &str = "/identity/resources/roles/v2";
 const SCIM_CONFIGURATIONS_PATH: &str = "/frontegg/directory/resources/v1/configurations/scim2";
-const SCIM_CONFIGURATION_PATH: &str = "/frontegg/directory/resources/v1/configurations/scim2/:id";
+const SCIM_CONFIGURATION_PATH: &str = "/frontegg/directory/resources/v1/configurations/scim2/{:id}";
 const SSO_CONFIGS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations";
-const SSO_CONFIG_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id";
-const SSO_CONFIG_DOMAINS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id/domains";
+const SSO_CONFIG_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/{:id}";
+const SSO_CONFIG_DOMAINS_PATH: &str =
+    "/frontegg/team/resources/sso/v1/configurations/{:id}/domains";
 const SSO_CONFIG_DOMAIN_PATH: &str =
-    "/frontegg/team/resources/sso/v1/configurations/:id/domains/:domain_id";
-const SSO_CONFIG_GROUPS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id/groups";
+    "/frontegg/team/resources/sso/v1/configurations/{:id}/domains/{:domain_id}";
+const SSO_CONFIG_GROUPS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/{:id}/groups";
 const SSO_CONFIG_GROUP_PATH: &str =
-    "/frontegg/team/resources/sso/v1/configurations/:id/groups/:group_id";
-const SSO_CONFIG_ROLES_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id/roles";
+    "/frontegg/team/resources/sso/v1/configurations/{:id}/groups/{:group_id}";
+const SSO_CONFIG_ROLES_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/{:id}/roles";
 
 // Internal endpoints for testing
 const INTERNAL_USER_PASSWORD_PATH: &str = "/api/internal-mock/user-password";

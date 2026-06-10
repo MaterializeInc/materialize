@@ -16,8 +16,8 @@
 
 //! Number utilities
 
-use num::traits::bounds::UpperBounded;
 use num::Signed;
+use num::traits::bounds::UpperBounded;
 #[cfg(feature = "proptest")]
 use proptest::arbitrary::Arbitrary;
 #[cfg(feature = "proptest")]
@@ -30,7 +30,18 @@ use std::ops::Deref;
 use std::ops::Range;
 
 /// A wrapper type which ensures a signed number is non-negative.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd
+)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct NonNeg<T>(T)

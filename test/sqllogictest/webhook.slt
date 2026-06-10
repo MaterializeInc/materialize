@@ -14,7 +14,7 @@ reset-server
 
 # Create a cluster to install all of our webhook sources on.
 statement ok
-CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 #
 # Happy Path, valid WEBHOOK sources
@@ -363,7 +363,7 @@ CREATE SOURCE webhook_text_with_header_alias_as_body IN CLUSTER webhook_cluster 
 # Try creating a webhook source in a compute cluster.
 
 statement ok
-CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 statement ok
 CREATE MATERIALIZED VIEW mv1 IN CLUSTER cluster1 AS SELECT name FROM mz_objects;

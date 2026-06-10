@@ -34,6 +34,9 @@ SELECT id, object_type, comment FROM mz_internal.mz_comments
 # schemas.
 
 statement ok
+SET cluster_replica = r1
+
+statement ok
 SELECT * FROM mz_internal.mz_compute_exports
 
 statement ok

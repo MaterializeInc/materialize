@@ -1,0 +1,12 @@
+---
+source: src/adapter/src/coord/sequencer/inner/peek.rs
+revision: fc2aaf02e7
+---
+
+# adapter::coord::sequencer::inner::peek
+
+Implements the coordinator-side peek and COPY TO sequencing paths.
+`sequence_peek`, `sequence_copy_to`, and `explain_peek` each call `peek_validate` to construct an initial `PeekStage`, then drive it through the multi-stage `PeekStage` pipeline (`LinearizeTimestamp` → `RealTimeRecency` → `TimestampReadHold` → `Optimize` → `Finish`, with side branches for `ExplainPlan`, `ExplainPushdown`, `CopyToPreflight`, and `CopyToDataflow`) via the `Staged` trait and `sequence_staged`, spawning off-thread optimizer tasks where appropriate.
+`peek_validate` constructs an `optimize::PeekOptimizer` — either `PeekOptimizer::Select` (for `SELECT`/`EXPLAIN`) or `PeekOptimizer::CopyTo` (for `COPY TO`) — and stores it in `PeekStageLinearizeTimestamp` so that all subsequent stages carry a single optimizer value regardless of statement type. In `peek_optimize`, the off-thread task calls `optimizer.optimize(...)` and matches on the resulting `optimize::PeekGlobalLirPlan` variant to route to the appropriate downstream stage: `PeekStage::Finish` or `PeekStage::ExplainPlan` for the `Select` path, and `PeekStage::CopyToPreflight` for the `CopyTo` path.
+`EXPLAIN PLAN` runs the optimizer in explain mode and formats the result via the `explain` module; `EXPLAIN PUSHDOWN` follows a similar path through `PeekStageExplainPushdown`.
+In the `RealTimeRecency` stage, the RTR future is awaited via `Coordinator::await_real_time_recent_timestamp` so that `StorageError::RtrTimeout` and `StorageError::RtrDropFailure` are converted to humanized `AdapterError` variants before propagating.

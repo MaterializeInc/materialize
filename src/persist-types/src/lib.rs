@@ -16,14 +16,15 @@
     clippy::cast_sign_loss
 )]
 
+use std::fmt::Debug;
+
+use crate::columnar::Schema;
 use bytes::{BufMut, Bytes};
 use mz_ore::url::SensitiveUrl;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use crate::columnar::Schema2;
 
 pub mod arrow;
 pub mod codec_impls;
@@ -32,7 +33,6 @@ pub mod parquet;
 pub mod part;
 pub mod schema;
 pub mod stats;
-pub mod stats2;
 pub mod timestamp;
 pub mod txn;
 
@@ -44,7 +44,7 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
     /// This is a separate type because Row is not self-describing. For Row, you
     /// need a RelationDesc to determine the types of any columns that are
     /// Datum::Null.
-    type Schema: Schema2<Self> + PartialEq;
+    type Schema: Schema<Self> + PartialEq;
 
     /// Name of the codec.
     ///
@@ -86,7 +86,7 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
 
     /// A type used with [Self::decode_from] for allocation reuse. Set to `()`
     /// if unnecessary.
-    type Storage: Default;
+    type Storage: Default + Send + Sync;
     /// An alternate form of [Self::decode] which enables amortizing allocs.
     ///
     /// First, instead of returning `Self`, it takes `&mut Self` as a parameter,
@@ -138,7 +138,7 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
 
 /// Encoding and decoding operations for a type usable as a persisted timestamp
 /// or diff.
-pub trait Codec64: Sized + Clone + 'static {
+pub trait Codec64: Sized + Clone + Debug + 'static {
     /// Name of the codec.
     ///
     /// This name is stored for the timestamp and diff when a stream is first
@@ -167,7 +167,18 @@ pub trait Codec64: Sized + Clone + 'static {
 ///
 /// This structure can be durably written down or transmitted for use by other
 /// processes. This location can contain any number of persist shards.
-#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Arbitrary,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize
+)]
 pub struct PersistLocation {
     /// Uri string that identifies the blob store.
     pub blob_uri: SensitiveUrl,
@@ -192,7 +203,17 @@ impl PersistLocation {
 /// or otherwise used as an interchange format. It can be parsed back using
 /// [str::parse] or [std::str::FromStr::from_str].
 #[derive(
-    Arbitrary, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+    Arbitrary,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
 )]
 #[serde(try_from = "String", into = "String")]
 pub struct ShardId([u8; 16]);
@@ -256,13 +277,6 @@ impl RustType<String> for ShardId {
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
     }
-}
-
-/// An opaque fencing token used in compare_and_downgrade_since.
-pub trait Opaque: PartialEq + Clone + Sized + 'static {
-    /// The value of the opaque token when no compare_and_downgrade_since calls
-    /// have yet been successful.
-    fn initial() -> Self;
 }
 
 /// Advance a timestamp by the least amount possible such that

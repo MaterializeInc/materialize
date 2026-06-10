@@ -11,7 +11,7 @@ import json
 import random
 import threading
 from enum import Enum
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
 
 import psycopg
 import requests
@@ -101,8 +101,6 @@ class Executor:
         # self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
     def log(self, msg: str) -> None:
-        global logging, lock
-
         if not logging:
             return
 
@@ -114,6 +112,33 @@ class Executor:
             print(f"[{thread_name}][{self.mz_service}] {msg}", file=logging)
             logging.flush()
 
+    def copy(
+        self,
+        query: str,
+        rows: list[Any],
+        cluster_replica: str | None = None,
+    ) -> None:
+        query += ";"
+        self.log(f"{query} ({rows})")
+
+        try:
+            try:
+                if cluster_replica:
+                    self.cur.execute(
+                        f"SET cluster_replica = {cluster_replica}".encode()
+                    )
+                with self.cur.copy(query.encode()) as copy:
+                    for row in rows:
+                        copy.write_row(row)
+            except Exception as e:
+                raise QueryError(str(e), query)
+
+            self.action_run_since_last_commit_rollback = True
+        finally:
+            self.last_status = "finished"
+            if cluster_replica:
+                self.cur.execute("RESET cluster_replica")
+
     def execute(
         self,
         query: str,
@@ -121,12 +146,13 @@ class Executor:
         explainable: bool = False,
         http: Http = Http.NO,
         fetch: bool = False,
+        cluster_replica: str | None = None,
     ) -> None:
         is_http = (
             http == Http.RANDOM and self.rng.choice([True, False])
         ) or http == Http.YES
         if explainable and self.rng.choice([True, False]):
-            query = f"EXPLAIN {query}"
+            query = f"EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR {query}"
         query += ";"
         extra_info_str = f" ({extra_info})" if extra_info else ""
         use_ws = self.use_ws and http != Http.NO
@@ -142,9 +168,16 @@ class Executor:
                         raise QueryError(str(e), query)
                 else:
                     try:
+                        if cluster_replica:
+                            self.cur.execute(
+                                f"SET cluster_replica = {cluster_replica}".encode()
+                            )
                         if query == "commit;":
                             self.log("commit")
                             self.cur.connection.commit()
+                        elif query == "rollback;":
+                            self.log("rollback")
+                            self.cur.connection.rollback()
                         else:
                             self.cur.execute(query.encode())
                     except Exception as e:
@@ -229,3 +262,5 @@ class Executor:
                     raise
         finally:
             self.last_status = "finished"
+            if cluster_replica:
+                self.cur.execute("RESET cluster_replica")

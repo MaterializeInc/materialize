@@ -39,6 +39,7 @@ $ kafka-ingest format=avro topic=include-key key-format=avro key-schema=${keysch
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE include_key
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-include-key-${testdrive.seed}')
 
@@ -47,6 +48,7 @@ $ kafka-ingest format=avro topic=include-key key-format=avro key-schema=${keysch
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS named
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT COUNT(*) FROM include_key_tbl;
 10000

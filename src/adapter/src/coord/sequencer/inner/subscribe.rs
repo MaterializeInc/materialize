@@ -7,26 +7,41 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use maplit::btreemap;
+use mz_adapter_types::connection::ConnectionId;
+use mz_cluster_client::ReplicaId;
+use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan;
+use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
-use mz_repr::optimize::OverrideFrom;
-use mz_sql::plan::{self, QueryWhen};
+use mz_repr::GlobalId;
+use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
 use mz_sql::session::metadata::SessionMetadata;
+use std::collections::BTreeSet;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::Span;
+use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
-use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
+use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::coord::{
-    Coordinator, Message, PlanValidity, StageResult, Staged, SubscribeFinish, SubscribeOptimizeMir,
-    SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
+    Coordinator, ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
+    SubscribeExplain, SubscribeFinish, SubscribeOptimizeMir, SubscribeStage,
+    SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
+use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
-use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext, TimestampProvider};
+use crate::{
+    AdapterNotice, ExecuteContext, ExecuteContextGuard, ReadHolds, TimelineContext, optimize,
+};
 
 impl Staged for SubscribeStage {
     type Ctx = ExecuteContext;
@@ -36,6 +51,7 @@ impl Staged for SubscribeStage {
             SubscribeStage::OptimizeMir(stage) => &mut stage.validity,
             SubscribeStage::TimestampOptimizeLir(stage) => &mut stage.validity,
             SubscribeStage::Finish(stage) => &mut stage.validity,
+            SubscribeStage::Explain(stage) => &mut stage.validity,
         }
     }
 
@@ -45,13 +61,12 @@ impl Staged for SubscribeStage {
         ctx: &mut ExecuteContext,
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
-            SubscribeStage::OptimizeMir(stage) => {
-                coord.subscribe_optimize_mir(ctx.session(), stage)
-            }
+            SubscribeStage::OptimizeMir(stage) => coord.subscribe_optimize_mir(stage),
             SubscribeStage::TimestampOptimizeLir(stage) => {
                 coord.subscribe_timestamp_optimize_lir(ctx, stage).await
             }
             SubscribeStage::Finish(stage) => coord.subscribe_finish(ctx, stage).await,
+            SubscribeStage::Explain(stage) => coord.subscribe_explain(ctx.session(), stage).await,
         }
     }
 
@@ -77,7 +92,60 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         let stage = return_if_err!(
-            self.subscribe_validate(ctx.session_mut(), plan, target_cluster),
+            self.subscribe_validate(
+                ctx.session_mut(),
+                plan,
+                target_cluster,
+                ExplainContext::None
+            ),
+            ctx
+        );
+        self.sequence_staged(ctx, Span::current(), stage).await;
+    }
+
+    #[instrument]
+    pub(crate) async fn explain_subscribe(
+        &mut self,
+        mut ctx: ExecuteContext,
+        plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        }: plan::ExplainPlanPlan,
+        target_cluster: TargetCluster,
+    ) {
+        let plan::Explainee::Statement(stmt) = explainee else {
+            // This is currently asserted in the `sequence_explain_plan` code that
+            // calls this method.
+            unreachable!()
+        };
+        let plan::ExplaineeStatement::Subscribe { broken, plan } = stmt else {
+            // This is currently asserted in the `sequence_explain_plan` code that
+            // calls this method.
+            unreachable!()
+        };
+
+        let desc = match &plan.from {
+            SubscribeFrom::Id(_) => None,
+            SubscribeFrom::Query { desc, .. } => Some(desc.clone()),
+        };
+
+        // Create an OptimizerTrace instance to collect plans emitted when
+        // executing the optimizer pipeline.
+        let optimizer_trace = OptimizerTrace::new(stage.paths());
+
+        let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
+            broken,
+            config,
+            format,
+            stage,
+            replan: None,
+            desc,
+            optimizer_trace,
+        });
+        let stage = return_if_err!(
+            self.subscribe_validate(ctx.session_mut(), plan, target_cluster, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -85,10 +153,11 @@ impl Coordinator {
 
     #[instrument]
     fn subscribe_validate(
-        &mut self,
+        &self,
         session: &mut Session,
         plan: plan::SubscribePlan,
         target_cluster: TargetCluster,
+        explain_ctx: ExplainContext,
     ) -> Result<SubscribeStage, AdapterError> {
         let plan::SubscribePlan { from, when, .. } = &plan;
 
@@ -97,7 +166,8 @@ impl Coordinator {
             .resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
 
-        if cluster.replicas().next().is_none() {
+        // Only check cluster replicas if we're not in explain mode.
+        if explain_ctx.needs_cluster() && cluster.replicas().next().is_none() {
             return Err(AdapterError::NoClusterReplicasAvailable {
                 name: cluster.name.clone(),
                 is_managed: cluster.is_managed(),
@@ -119,7 +189,7 @@ impl Coordinator {
 
         // SUBSCRIBE AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
-        if when == &QueryWhen::Immediately {
+        if explain_ctx.needs_cluster() && when == &QueryWhen::Immediately {
             // If this isn't a SUBSCRIBE AS OF, the SUBSCRIBE can be in a transaction if it's the
             // only operation.
             session.add_transaction_ops(TransactionOps::Subscribe)?;
@@ -138,16 +208,22 @@ impl Coordinator {
         session.add_notices(notices);
 
         // Determine timeline.
-        let mut timeline = self.validate_timeline_context(depends_on.clone())?;
+        let mut timeline = self
+            .catalog()
+            .validate_timeline_context(depends_on.iter().copied())?;
         if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
             // If the from IDs are timestamp independent but the query contains temporal functions
             // then the timeline context needs to be upgraded to timestamp dependent.
             timeline = TimelineContext::TimestampDependent;
         }
 
+        let dependencies = depends_on
+            .iter()
+            .map(|id| self.catalog().resolve_item_id(id))
+            .collect();
         let validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            depends_on.clone(),
+            dependencies,
             Some(cluster_id),
             replica_id,
             session.role_metadata().clone(),
@@ -160,13 +236,13 @@ impl Coordinator {
             dependency_ids: depends_on,
             cluster_id,
             replica_id,
+            explain_ctx,
         }))
     }
 
     #[instrument]
     fn subscribe_optimize_mir(
-        &mut self,
-        session: &Session,
+        &self,
         SubscribeOptimizeMir {
             mut validity,
             plan,
@@ -174,6 +250,7 @@ impl Coordinator {
             dependency_ids,
             cluster_id,
             replica_id,
+            explain_ctx,
         }: SubscribeOptimizeMir,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan {
@@ -186,16 +263,12 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
-        let view_id = self.allocate_transient_id();
-        let sink_id = self.allocate_transient_id();
-        let conn_id = session.conn_id().clone();
-        let up_to = up_to
-            .as_ref()
-            .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr.clone(), session))
-            .transpose()?;
+        let (_, view_id) = self.allocate_transient_id();
+        let (_, sink_id) = self.allocate_transient_id();
         let debug_name = format!("subscribe-{}", sink_id);
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(cluster_id).config.features());
+            .override_from(&self.catalog.get_cluster(cluster_id).config.features())
+            .override_from(&explain_ctx);
 
         // Build an optimizer for this SUBSCRIBE.
         let mut optimizer = optimize::subscribe::Optimizer::new(
@@ -203,24 +276,29 @@ impl Coordinator {
             compute_instance,
             view_id,
             sink_id,
-            Some(conn_id),
             *with_snapshot,
-            up_to,
+            *up_to,
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
         );
+        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize subscribe (mir)",
             move || {
                 span.in_scope(|| {
+                    let _dispatch_guard = explain_ctx.dispatch_guard();
+
                     // MIR ⇒ MIR optimization (global)
-                    let global_mir_plan = optimizer.catch_unwind_optimize(plan.from.clone())?;
+                    let global_mir_plan = optimizer.catch_unwind_optimize(plan.clone())?;
                     // Add introduced indexes as validity dependencies.
                     validity.extend_dependencies(
-                        global_mir_plan.id_bundle(optimizer.cluster_id()).iter(),
+                        global_mir_plan
+                            .id_bundle(optimizer.cluster_id())
+                            .iter()
+                            .map(|id| catalog.resolve_item_id(&id)),
                     );
 
                     let stage =
@@ -232,6 +310,7 @@ impl Coordinator {
                             global_mir_plan,
                             dependency_ids,
                             replica_id,
+                            explain_ctx,
                         });
                     Ok(Box::new(stage))
                 })
@@ -251,6 +330,7 @@ impl Coordinator {
             global_mir_plan,
             dependency_ids,
             replica_id,
+            explain_ctx,
         }: SubscribeTimestampOptimizeLir,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan { when, .. } = &plan;
@@ -282,14 +362,9 @@ impl Coordinator {
             }
         }
 
-        self.store_transaction_read_holds(ctx.session(), read_holds);
+        self.store_transaction_read_holds(ctx.session().conn_id().clone(), read_holds);
 
-        let is_timeline_epoch_ms = self
-            .validate_timeline_context(plan.from.depends_on().iter().cloned())?
-            .is_timeline_epoch_ms();
-
-        let global_mir_plan =
-            global_mir_plan.resolve(Antichain::from_elem(as_of), is_timeline_epoch_ms);
+        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
         // Optimize LIR
         let span = Span::current();
@@ -297,18 +372,59 @@ impl Coordinator {
             || "optimize subscribe (lir)",
             move || {
                 span.in_scope(|| {
-                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                    let global_lir_plan =
-                        optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+                    let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                    let stage = SubscribeStage::Finish(SubscribeFinish {
-                        validity,
-                        cluster_id: optimizer.cluster_id(),
-                        plan,
-                        global_lir_plan,
-                        dependency_ids,
-                        replica_id,
-                    });
+                    let cluster_id = optimizer.cluster_id();
+
+                    let mut pipeline = || -> Result<_, AdapterError> {
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan =
+                            optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+                        Ok(global_lir_plan)
+                    };
+
+                    let stage = match pipeline() {
+                        Ok(global_lir_plan) => {
+                            if let ExplainContext::Plan(explain_ctx) = explain_ctx {
+                                let (_, df_meta) = global_lir_plan.unapply();
+                                SubscribeStage::Explain(SubscribeExplain {
+                                    validity,
+                                    optimizer,
+                                    df_meta,
+                                    cluster_id,
+                                    explain_ctx,
+                                })
+                            } else {
+                                SubscribeStage::Finish(SubscribeFinish {
+                                    validity,
+                                    cluster_id,
+                                    plan,
+                                    global_lir_plan,
+                                    dependency_ids,
+                                    replica_id,
+                                })
+                            }
+                        }
+                        Err(err) => {
+                            let ExplainContext::Plan(explain_ctx) = explain_ctx else {
+                                return Err(err);
+                            };
+
+                            if explain_ctx.broken {
+                                tracing::error!("error while handling EXPLAIN statement: {}", err);
+                                SubscribeStage::Explain(SubscribeExplain {
+                                    validity,
+                                    optimizer,
+                                    df_meta: Default::default(),
+                                    cluster_id,
+                                    explain_ctx,
+                                })
+                            } else {
+                                return Err(err);
+                            }
+                        }
+                    };
+
                     Ok(Box::new(stage))
                 })
             },
@@ -322,56 +438,76 @@ impl Coordinator {
         SubscribeFinish {
             validity: _,
             cluster_id,
-            plan:
-                plan::SubscribePlan {
-                    from,
-                    copy_to,
-                    emit_progress,
-                    output,
-                    ..
-                },
+            plan,
             global_lir_plan,
             dependency_ids,
             replica_id,
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
-        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+        let (df_desc, df_meta) = global_lir_plan.unapply();
+        emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
+        let conn_id = ctx.session.conn_id().clone();
+        let session_uuid = ctx.session().uuid();
+        let txn_read_holds = self
+            .txn_read_holds
+            .remove(&conn_id)
+            .expect("must have previously installed read holds");
+        let resp = self
+            .implement_subscribe(
+                ctx.extra_mut(),
+                df_desc,
+                dependency_ids,
+                cluster_id,
+                replica_id,
+                conn_id,
+                session_uuid,
+                txn_read_holds,
+                plan,
+            )
+            .await?;
+        Ok(StageResult::Response(resp))
+    }
 
-        // Collect properties for `DataflowExpirationDesc`.
-        let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = from
-            .depends_on()
-            .into_iter()
-            .any(|id| self.catalog.item_has_transitive_refresh_schedule(id));
-
-        let sink_id = global_lir_plan.sink_id();
+    #[instrument]
+    pub(crate) async fn implement_subscribe(
+        &mut self,
+        ctx_extra: &mut ExecuteContextGuard,
+        df_desc: DataflowDescription<Plan>,
+        dependency_ids: BTreeSet<GlobalId>,
+        cluster_id: ComputeInstanceId,
+        replica_id: Option<ReplicaId>,
+        conn_id: ConnectionId,
+        session_uuid: Uuid,
+        read_holds: ReadHolds,
+        plan: plan::SubscribePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let sink_id = df_desc.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
-            conn_id: ctx.session().conn_id().clone(),
-            session_uuid: ctx.session().uuid(),
+            conn_id: conn_id.clone(),
+            session_uuid,
             channel: tx,
-            emit_progress,
-            as_of: global_lir_plan
-                .as_of()
+            emit_progress: plan.emit_progress,
+            as_of: df_desc
+                .as_of
+                .as_ref()
+                .and_then(|t| t.as_option())
+                .copied()
                 .expect("set to Some in an earlier stage"),
-            arity: global_lir_plan.sink_desc().from_desc.arity(),
+            arity: df_desc
+                .sink_exports
+                .values()
+                .into_element()
+                .from_desc
+                .arity(),
             cluster_id,
             depends_on: dependency_ids,
             start_time: self.now(),
-            output,
+            output: plan.output,
+            internal: false,
         };
         active_subscribe.initialize();
-
-        let (mut df_desc, df_meta) = global_lir_plan.unapply();
-
-        df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-        df_desc
-            .dataflow_expiration_desc
-            .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
-
-        // Emit notices.
-        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 
         // Add metadata for the new SUBSCRIBE.
         let write_notify_fut = self
@@ -384,27 +520,77 @@ impl Coordinator {
         // requests to external services, which can take time, so we run them concurrently.
         let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
 
-        // Release the pre-optimization read holds because the controller is now handling those.
-        let txn_read_holds = self
-            .txn_read_holds
-            .remove(ctx.session().conn_id())
-            .expect("must have previously installed read holds");
-
         // Explicitly drop read holds, just to make it obvious what's happening.
-        drop(txn_read_holds);
+        drop(read_holds);
 
         let resp = ExecuteResponse::Subscribing {
             rx,
-            ctx_extra: std::mem::take(ctx.extra_mut()),
+            ctx_extra: std::mem::take(ctx_extra),
             instance_id: cluster_id,
         };
-        let resp = match copy_to {
+        let resp = match plan.copy_to {
             None => resp,
             Some(format) => ExecuteResponse::CopyTo {
                 format,
                 resp: Box::new(resp),
             },
         };
-        Ok(StageResult::Response(resp))
+        Ok(resp)
+    }
+
+    #[instrument]
+    async fn subscribe_explain(
+        &self,
+        session: &Session,
+        SubscribeExplain {
+            optimizer,
+            df_meta,
+            cluster_id,
+            explain_ctx:
+                ExplainPlanContext {
+                    config,
+                    format,
+                    stage,
+                    optimizer_trace,
+                    desc,
+                    ..
+                },
+            ..
+        }: SubscribeExplain,
+    ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
+        let session_catalog = self.catalog().for_session(session);
+
+        let expr_humanizer = {
+            let transient_items = btreemap! {
+                optimizer.sink_id() => TransientItem::new(
+                    Some(vec![GlobalId::Explain.to_string()]),
+                    desc.map(|d| d.iter_names().map(|c| c.to_string()).collect()),
+                )
+            };
+            ExprHumanizerExt::new(transient_items, &session_catalog)
+        };
+
+        let target_cluster = self.catalog().get_cluster(cluster_id);
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features())
+            .override_from(&config.features);
+
+        let rows = optimizer_trace
+            .into_rows(
+                format,
+                &config,
+                &features,
+                &expr_humanizer,
+                None,
+                Some(target_cluster),
+                df_meta,
+                stage,
+                plan::ExplaineeStatementKind::Subscribe,
+                None,
+            )
+            .await?;
+
+        Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }
 }

@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import os
 import subprocess
 import sys
@@ -16,10 +17,14 @@ from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodS
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
+from materialize.mzcompose import (
+    cluster_replica_size_map,
+)
 from materialize.mzcompose.test_result import (
     extract_error_chunks_from_output,
 )
 from materialize.ui import CommandFailureCausedUIError
+from materialize.util import filter_cmd
 
 
 class TestdriveBase:
@@ -66,8 +71,9 @@ class TestdriveBase:
             f"--log-filter={log_filter}",
             "--var=replicas=1",
             "--var=single-replica-cluster=quickstart",
-            "--var=default-storage-size=1",
-            "--var=default-replica-size=1",
+            "--var=default-storage-size=scale=1,workers=1",
+            "--var=default-replica-size=scale=1,workers=1",
+            f"--cluster-replica-sizes={json.dumps(cluster_replica_size_map())}",
             *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
             *(
                 [
@@ -182,13 +188,13 @@ class TestdrivePod(K8sPod, TestdriveBase):
 
             assert (
                 output is not None
-            ), f"Missing stdout and stderr when running '{e.cmd}' without success"
+            ), f"Missing stdout and stderr when running '{filter_cmd(e.cmd)}' without success"
 
             error_chunks = extract_error_chunks_from_output(output)
             error_text = "\n".join(error_chunks)
             raise CommandFailureCausedUIError(
-                f"Running {' '.join(command)} in testdrive failed with:\n{error_text}",
-                e.cmd,
+                f"Running {' '.join(filter_cmd(e.cmd))} in testdrive failed with:\n{error_text}",
+                filter_cmd(e.cmd),
                 e.stdout,
                 e.stderr,
             )

@@ -19,19 +19,20 @@
 //! [`mz_catalog_server`]: https://materialize.com/docs/sql/show-clusters/#mz_catalog_server-system-cluster
 
 use mz_expr::CollectionPlan;
-use mz_repr::namespaces::is_system_schema;
 use mz_repr::GlobalId;
+use mz_repr::namespaces::is_system_schema;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
     ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
+    SubscribePlan,
 };
 use smallvec::SmallVec;
 
+use crate::AdapterError;
 use crate::catalog::ConnCatalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
-use crate::AdapterError;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 
 /// Checks whether or not we should automatically run a query on the `mz_catalog_server`
@@ -41,6 +42,16 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     session: &'s Session,
     plan: &'p Plan,
 ) -> TargetCluster {
+    let inspect_subscribe = |plan: &SubscribePlan| {
+        (
+            plan.from.depends_on(),
+            match &plan.from {
+                SubscribeFrom::Id(_) => false,
+                SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
+            },
+        )
+    };
+
     let (depends_on, could_run_expensive_function) = match plan {
         Plan::Select(plan) => (
             plan.source.depends_on(),
@@ -50,13 +61,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
             plan.select_plan.source.depends_on(),
             plan.select_plan.source.could_run_expensive_function(),
         ),
-        Plan::Subscribe(plan) => (
-            plan.from.depends_on(),
-            match &plan.from {
-                SubscribeFrom::Id(_) => false,
-                SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
-            },
-        ),
+        Plan::Subscribe(plan) => inspect_subscribe(plan),
         Plan::ExplainPlan(ExplainPlanPlan {
             explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
             ..
@@ -64,6 +69,10 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
             plan.source.depends_on(),
             plan.source.could_run_expensive_function(),
         ),
+        Plan::ExplainPlan(ExplainPlanPlan {
+            explainee: Explainee::Statement(ExplaineeStatement::Subscribe { plan, .. }),
+            ..
+        }) => inspect_subscribe(plan),
         Plan::ExplainTimestamp(ExplainTimestampPlan { raw_plan, .. }) => (
             raw_plan.depends_on(),
             raw_plan.could_run_expensive_function(),
@@ -72,9 +81,9 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::CreateDatabase(_)
         | Plan::CreateSchema(_)
         | Plan::CreateRole(_)
+        | Plan::CreateNetworkPolicy(_)
         | Plan::CreateCluster(_)
         | Plan::CreateClusterReplica(_)
-        | Plan::CreateContinualTask(_)
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)
@@ -102,10 +111,22 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
         | Plan::CopyTo(_)
-        | Plan::ExplainPlan(_)
+        | Plan::ExplainPlan(ExplainPlanPlan {
+            explainee:
+                Explainee::Statement(
+                    // Explicitly list all enum variants, to avoid bugs when somebody
+                    // adds a new variant (e.g., for `Plan::Execute`).
+                    ExplaineeStatement::CreateView { .. }
+                    | ExplaineeStatement::CreateMaterializedView { .. }
+                    | ExplaineeStatement::CreateIndex { .. },
+                ),
+            ..
+        })
+        | Plan::ExplainPlan(ExplainPlanPlan { explainee: _, .. })
         | Plan::ExplainPushdown(_)
         | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)
+        | Plan::AlterNetworkPolicy(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)
         | Plan::AlterClusterSwap(_)
@@ -116,6 +137,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)
         | Plan::AlterRetainHistory(_)
+        | Plan::AlterSourceTimestampInterval(_)
         | Plan::AlterSchemaRename(_)
         | Plan::AlterSchemaSwap(_)
         | Plan::AlterSecret(_)
@@ -126,6 +148,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AlterRole(_)
         | Plan::AlterOwner(_)
         | Plan::AlterTableAddColumn(_)
+        | Plan::AlterMaterializedViewApplyReplacement(_)
         | Plan::Declare(_)
         | Plan::Fetch(_)
         | Plan::Close(_)
@@ -155,7 +178,10 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     }
 
     // These dependencies are just existing dataflows that are referenced in the plan.
-    let mut depends_on = depends_on.into_iter().peekable();
+    let mut depends_on = depends_on
+        .into_iter()
+        .map(|gid| catalog.resolve_item_id(&gid))
+        .peekable();
     let has_dependencies = depends_on.peek().is_some();
 
     // Make sure we only depend on the system catalog, and nothing we depend on is a
@@ -220,7 +246,7 @@ pub fn check_cluster_restrictions(
     // Collect any items that are not allowed to be run on the catalog server cluster.
     let unallowed_dependents: SmallVec<[String; 2]> = depends_on
         .filter_map(|id| {
-            let item = catalog.get_item(&id);
+            let item = catalog.get_item_by_global_id(&id);
             let full_name = catalog.resolve_full_name(item.name());
 
             if !is_system_schema(&full_name.schema) {

@@ -10,7 +10,7 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ----
 COMPLETE 0
 
@@ -37,11 +37,11 @@ yyy
 # IN list translated to fast path full scan, but no semi-join or lookup, because the index is too wide
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 WHERE a IN (1, 1+1)
 ----
 Explained Query (fast path):
-  Filter ((#0 = 1) OR (#0 = 2))
+  Filter ((#0{a} = 1) OR (#0{a} = 2))
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[*** full scan ***]
 
 Used Indexes:
@@ -71,11 +71,11 @@ CREATE INDEX idx_t1_a ON t1(a)
 # Same query as above, but use the index.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 WHERE a IN (1, 1+1)
 ----
 Explained Query (fast path):
-  Project (#0, #1)
+  Project (#0{a}, #1{b})
     ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2)]]
 
 Used Indexes:
@@ -96,11 +96,11 @@ WHERE a IN (1, 1+1)
 # IndexedFilter join executed on fast path with a lookup. (And the filter is removed.)
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 WHERE a = 2 AND b = 'l2'
 ----
 Explained Query (fast path):
-  Project (#0, #1)
+  Project (#0{a}, #1{b})
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup value=(2, "l2")]
 
 Used Indexes:
@@ -119,10 +119,15 @@ WHERE a = 2 AND b = 'l2'
 # IndexedFilter join executed in a dataflow
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT count(*) FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT count(*) FROM t1
 WHERE a = 2 AND b = 'l2' OR a = 1 + 1 + 1 AND b = 'l3'
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)] // { arity: 1 }
+        Project () // { arity: 0 }
+          ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(2, "l2"); (3, "l3")]] // { arity: 4 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
@@ -133,11 +138,6 @@ Explained Query:
               Get l0 // { arity: 1 }
           Constant // { arity: 0 }
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[count(*)] // { arity: 1 }
-        Project () // { arity: 0 }
-          ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(2, "l2"); (3, "l3")]] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -155,10 +155,34 @@ WHERE a = 2 AND b = 'l2' OR a = 1 + 1 + 1 AND b = 'l3'
 # Physical plan for the above. Should have an LIR ArrangeBy for the constant collection.
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR SELECT count(*) FROM t1
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT count(*) FROM t1
 WHERE a = 2 AND b = 'l2' OR a = 1 + 1 + 1 AND b = 'l3'
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Accumulable
+        simple_aggrs[0]=(0, count(*))
+        key_plan=id
+        val_plan
+          project=(#0)
+          map=(true)
+        Join::Linear
+          linear_stage[0]
+            closure
+              project=()
+            lookup={ relation=0, key=[#0{a}, #1{b}] }
+            stream={ key=[#0, #1], thinning=() }
+          source={ relation=1, key=[#0, #1] }
+          Get::PassArrangements materialize.public.t1
+            raw=false
+            arrangements[0]={ key=[#0{a}, #1{b}], permutation=id, thinning=() }
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+            Constant
+              - (2, "l2")
+              - (3, "l3")
   Return
     Union
       ArrangeBy
@@ -179,32 +203,6 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0) }
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce::Accumulable
-        simple_aggrs[0]=(0, 0, count(*))
-        val_plan
-          project=(#0)
-          map=(true)
-        key_plan=id
-        Join::Linear
-          linear_stage[0]
-            closure
-              project=()
-            lookup={ relation=0, key=[#0, #1] }
-            stream={ key=[#0, #1], thinning=() }
-          source={ relation=1, key=[#0, #1] }
-          Get::PassArrangements materialize.public.t1
-            raw=false
-            arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
-            types=[integer?, text?]
-          ArrangeBy
-            raw=true
-            arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
-            types=[integer, text]
-            Constant
-              - (2, "l2")
-              - (3, "l3")
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -216,17 +214,21 @@ EOF
 # `a = NULL` should NOT find the NULL in the table.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 WHERE a = NULL OR a = 2
 ----
 Explained Query (fast path):
-  Filter (null OR (#0 = 2))
+  Filter (null OR (#0{a} = 2))
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
 
 Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
 
@@ -239,7 +241,7 @@ WHERE a = NULL OR a = 2
 # Filter predicate occurring also as an output column
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a = 1 FROM t1 WHERE a = 1;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a = 1 FROM t1 WHERE a = 1;
 ----
 Explained Query (fast path):
   Project (#3)
@@ -263,11 +265,11 @@ true
 # IN list with multiple fields --> RecordCreate has to be decomposed
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 WHERE (a,b) IN ((1,'l1'), (2,'l2'))
 ----
 Explained Query (fast path):
-  Project (#0, #1)
+  Project (#0{a}, #1{b})
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "l1"); (2, "l2")]]
 
 Used Indexes:
@@ -287,11 +289,11 @@ WHERE (a,b) IN ((1,'l1'), (2,'l2'))
 # Exercise LiteralConstraints::distribute_and_over_or (by having 1 in both tuples)
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 WHERE (a,b) IN ((1, 'l1'), (1, 'a'))
 ----
 Explained Query (fast path):
-  Project (#0, #1)
+  Project (#0{a}, #1{b})
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "a"); (1, "l1")]]
 
 Used Indexes:
@@ -320,11 +322,11 @@ INSERT INTO t2 VALUES (1,11,21),(2,22,32),(3,23,33),(1,4,7)
 # LiteralConstraints::distribute_and_over_or needs to do 2 steps
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t2
 WHERE (a,b,c) IN ((1,2,3), (1,4,5), (1,4,7))
 ----
 Explained Query (fast path):
-  Project (#0..=#2)
+  Project (#0{a}..=#2{c})
     ReadIndex on=materialize.public.t2 idx_t2_a_b_c=[lookup values=[(1, 2, 3); (1, 4, 5); (1, 4, 7)]]
 
 Used Indexes:
@@ -353,12 +355,12 @@ WHERE (a,b,c) IN ((1,2,3))
 # use it
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 WHERE (a = 1) OR (a = 3 AND b = 'l3')
 ----
 Explained Query (fast path):
-  Project (#0, #1)
-    Filter ((#0 = 1) OR ((#0 = 3) AND (#1 = "l3")))
+  Project (#0{a}, #1{b})
+    Filter ((#0{a} = 1) OR ((#0{a} = 3) AND (#1{b} = "l3")))
       ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (3)]]
 
 Used Indexes:
@@ -379,11 +381,11 @@ WHERE (a = 1) OR (a = 3 AND b = 'l3')
 # IN list is not fully a literal, so nothing to do
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 WHERE a IN (1, a+a)
 ----
 Explained Query (fast path):
-  Filter ((#0 = 1) OR (#0 = (#0 + #0)))
+  Filter ((#0{a} = 1) OR (#0{a} = (#0{a} + #0{a})))
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[*** full scan ***]
 
 Used Indexes:
@@ -407,11 +409,11 @@ statement ok
 CREATE INDEX idx_t1_aa ON t1(a+a);
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE a+a = 2
 ----
 Explained Query (fast path):
-  Project (#1)
+  Project (#1{a})
     ReadIndex on=materialize.public.t1 idx_t1_aa=[lookup value=(2)]
 
 Used Indexes:
@@ -431,11 +433,11 @@ WHERE a+a = 2
 # A non-trivial expression in a literal constraint that came from an IN of multiple elements
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE a+a IN (-1, 1, 2, 3, 6, 7, 9)
 ----
 Explained Query (fast path):
-  Project (#1)
+  Project (#1{a})
     ReadIndex on=materialize.public.t1 idx_t1_aa=[lookup values=[(-1); (1); (2); (3); (6); (7); (9)]]
 
 Used Indexes:
@@ -458,12 +460,12 @@ WHERE a+a IN (-1, 1, 2, 3, 6, 7, 9)
 # https://github.com/MaterializeInc/database-issues/issues/3783#issuecomment-1192763523
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a+a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a+a FROM t1
 WHERE a+a IN (2, 6);
 ----
 Explained Query (fast path):
   Project (#4)
-    Map ((#1 + #1))
+    Map ((#1{a} + #1{a}))
       ReadIndex on=materialize.public.t1 idx_t1_aa=[lookup values=[(2); (6)]]
 
 Used Indexes:
@@ -488,12 +490,12 @@ CREATE INDEX idx_t2_a ON t2(a);
 # `record_create(a1, a2, ...) = record_create(b1, b2, ...)` case in `MirScalarExpr::reduce()`
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t2
 WHERE (a,b) IN ((1, 4*a), (2, 5*a), (3, a+20))
 ----
 Explained Query (fast path):
-  Project (#0..=#2)
-    Filter (((#0 = 1) AND (#1 = (4 * #0))) OR ((#0 = 2) AND (#1 = (5 * #0))) OR ((#0 = 3) AND (#1 = (#0 + 20))))
+  Project (#0{a}..=#2{c})
+    Filter (((#0{a} = 1) AND (#1{b} = (4 * #0{a}))) OR ((#0{a} = 2) AND (#1{b} = (5 * #0{a}))) OR ((#0{a} = 3) AND (#1{b} = (#0{a} + 20))))
       ReadIndex on=materialize.public.t2 idx_t2_a=[lookup values=[(1); (2); (3)]]
 
 Used Indexes:
@@ -534,7 +536,7 @@ SELECT pk FROM tab0 WHERE (((col4 >= 660.98) AND ((col4 IN (724.71,445.29,441.2,
 statement ok
 CREATE INDEX idx_t1_b ON t1(b)
 
-query I
+query I rowsort
 SELECT a FROM t1
 WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
 ----
@@ -543,12 +545,12 @@ WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
 3
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
 ----
 Explained Query (fast path):
-  Project (#1)
-    Filter ((#1 < 3) OR (#1 > 0))
+  Project (#1{a})
+    Filter ((#1{a} < 3) OR (#1{a} > 0))
       ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l1"); ("l2"); ("l3"); ("l9")]]
 
 Used Indexes:
@@ -560,7 +562,7 @@ EOF
 
 # More tricky tests for `remove_literal_constraints`
 
-query I
+query I rowsort
 SELECT a FROM t1
 WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l%' OR a > 5)
 ----
@@ -569,12 +571,12 @@ WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l
 3
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l%' OR a > 5)
 ----
 Explained Query (fast path):
-  Project (#1)
-    Filter ((#1 < 3) OR (#1 < 7) OR (#1 > 0)) AND (like["l%"](#0) OR (#1 > 5))
+  Project (#1{a})
+    Filter ((#1{a} < 3) OR (#1{a} < 7) OR (#1{a} > 0)) AND (like["l%"](#0{b}) OR (#1{a} > 5))
       ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l1"); ("l2"); ("l3"); ("l9")]]
 
 Used Indexes:
@@ -592,12 +594,12 @@ WHERE ((b = 'l1' AND a = 1) OR (a = 2 AND b = 'l2')) AND (b like 'nonono' OR (b 
 2  l2
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 WHERE ((b = 'l1' AND a = 1) OR (a = 2 AND b = 'l2')) AND (b like 'nonono' OR (b like 'l%' AND a < 10))
 ----
 Explained Query (fast path):
-  Project (#0, #1)
-    Filter (like["nonono"](#1) OR (like["l%"](#1) AND (#0 < 10)))
+  Project (#0{a}, #1{b})
+    Filter (like["nonono"](#1{b}) OR (like["l%"](#1{b}) AND (#0{a} < 10)))
       ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "l1"); (2, "l2")]]
 
 Used Indexes:
@@ -617,13 +619,13 @@ WHERE (a % 3 = 0 OR a % 3 = 1) AND (a,b) IN ((1,'l1'), (2,'l2'), (3,'l3'), (9,'l
 3
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE (a % 3 = 0 OR a % 3 = 1) AND (a,b) IN ((1,'l1'), (2,'l2'), (3,'l3'), (9,'l9'))
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     Filter ((#4 = 0) OR (#4 = 1))
-      Map ((#0 % 3))
+      Map ((#0{a} % 3))
         ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "l1"); (2, "l2"); (3, "l3"); (9, "l9")]]
 
 Used Indexes:
@@ -648,7 +650,7 @@ WHERE (
 2
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE (
     (a = 1 AND b like 'nope') OR
     (a = 2) OR
@@ -657,8 +659,8 @@ WHERE (
 (b like 'l%' OR b like 'aaa')
 ----
 Explained Query (fast path):
-  Project (#0)
-    Filter (like["aaa"](#1) OR like["l%"](#1)) AND ((#0 = 2) OR (like["nope"](#1) AND (#0 = 1)))
+  Project (#0{a})
+    Filter (like["aaa"](#1{b}) OR like["l%"](#1{b})) AND ((#0{a} = 2) OR (like["nope"](#1{b}) AND (#0{a} = 1)))
       ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2)]]
 
 Used Indexes:
@@ -671,7 +673,7 @@ EOF
 # Impossible predicates (exercise `remove_impossible_or_args`)
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE a = 3 AND a = 5
 ----
 Explained Query (fast path):
@@ -682,7 +684,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE a IN (1,2) AND a IN (3,4,5)
 ----
 Explained Query (fast path):
@@ -695,11 +697,11 @@ EOF
 # Only some subexpressions of the predicates can be removed due to being impossible
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE (a = 4 AND a = 7) OR (a = 9)
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     ReadIndex on=materialize.public.t1 idx_t1_a=[lookup value=(9)]
 
 Used Indexes:
@@ -710,11 +712,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE a IN (1,2) AND a IN (2,3,4)
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     ReadIndex on=materialize.public.t1 idx_t1_a=[lookup value=(2)]
 
 Used Indexes:
@@ -730,7 +732,7 @@ EOF
 # can test that `inline_literal_constraints` inlines it back.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM t1
 WHERE
 (b = 'bbb' OR b = 'y') AND
 ((a = 2 AND a = 3) OR b = 'x' OR b = 'y') AND
@@ -750,24 +752,32 @@ EOF
 #   arrangements on the join inputs.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT t1.a, t1.b, t2.c FROM t1, t2
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT t1.a, t1.b, t2.c FROM t1, t2, t2 as t2p
 WHERE
     t1.a = t2.a AND
+    t2.a = t2p.a AND
     t1.b IN ('l2', 'l3')
 ----
 Explained Query:
-  Project (#0, #1, #5) // { arity: 3 }
-    Filter (#0) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #3) type=differential // { arity: 6 }
-        implementation
-          %0:t1[#0]KAe » %1:t2[#0]KAe
-        ArrangeBy keys=[[#0]] // { arity: 3 }
-          ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l2"); ("l3")]] // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 3 }
-          ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0{a}]] // { arity: 3 }
+        ReadIndex on=t2 idx_t2_a=[delta join lookup] // { arity: 3 }
+  Return // { arity: 3 }
+    Project (#0{a}, #1{b}, #5{c}) // { arity: 3 }
+      Filter (#0{a}) IS NOT NULL // { arity: 9 }
+        Join on=(#0{a} = #3{a} = #6{a}) type=delta // { arity: 9 }
+          implementation
+            %0:t1 » %1:l0[#0{a}]KA » %2:l0[#0{a}]KA
+            %1:l0 » %0:t1[#0{a}]KAe » %2:l0[#0{a}]KA
+            %2:l0 » %0:t1[#0{a}]KAe » %1:l0[#0{a}]KA
+          ArrangeBy keys=[[#0{a}]] // { arity: 3 }
+            ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l2"); ("l3")]] // { arity: 3 }
+          Get l0 // { arity: 3 }
+          Get l0 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.idx_t2_a (differential join)
+  - materialize.public.idx_t2_a (delta join lookup)
   - materialize.public.idx_t1_b (lookup)
 
 Target cluster: quickstart
@@ -783,24 +793,24 @@ WHERE
 2  l2  32
 3  l3  33
 
-# This is similar to the previous query, but it also tests that ColumnKnowledge and LiteralLifting don't mess up
+# This is similar to the previous query, but it also tests that EquivalencePropagation and LiteralLifting don't mess up
 # the IndexedFilter join.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT t1.a, t1.b, t2.c FROM t1, t2
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT t1.a, t1.b, t2.c FROM t1, t2
 WHERE
     t1.a = t2.a AND
     t1.b = 'l2'
 ----
 Explained Query:
-  Project (#0, #1, #5) // { arity: 3 }
-    Filter (#0) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #3) type=differential // { arity: 6 }
+  Project (#0{a}, #1{b}, #5{c}) // { arity: 3 }
+    Filter (#0{a}) IS NOT NULL // { arity: 6 }
+      Join on=(#0{a} = #3{a}) type=differential // { arity: 6 }
         implementation
-          %0:t1[#0]KAe » %1:t2[#0]KAe
-        ArrangeBy keys=[[#0]] // { arity: 3 }
+          %0:t1[#0{a}]KAe » %1:t2[#0{a}]KAe
+        ArrangeBy keys=[[#0{a}]] // { arity: 3 }
           ReadIndex on=materialize.public.t1 idx_t1_b=[lookup value=("l2")] // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 3 }
+        ArrangeBy keys=[[#0{a}]] // { arity: 3 }
           ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
 
 Used Indexes:
@@ -819,14 +829,14 @@ WHERE
 ----
 2  l2  32
 
-# ColumnKnowledge is being propagated from one join input to the other: even though the literal constraint mentions
+# EquivalencePropagation is being propagated from one join input to the other: even though the literal constraint mentions
 # only `t1`, the `t1.a = t2.a` join constraint allows us to propagate the literal constraint from `t1.a` to `t2.a`, and
 # then insert an IndexedFilter also for `t2.a`.
 # Note that the final join's key disappears: this is ok, it happens because we know that t1.a and t2.a are both 2, so
 # they are always equal.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT t1.a, t1.b, t2.c FROM t1, t2
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT t1.a, t1.b, t2.c FROM t1, t2
 WHERE
     t1.a = t2.a AND
     t1.a = 2 AND t1.b = 'l2'
@@ -836,10 +846,10 @@ Explained Query:
     implementation
       %0:t1[×]e » %1:t2[×]e
     ArrangeBy keys=[[]] // { arity: 2 }
-      Project (#0, #1) // { arity: 2 }
+      Project (#0{a}, #1{b}) // { arity: 2 }
         ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup value=(2, "l2")] // { arity: 4 }
     ArrangeBy keys=[[]] // { arity: 1 }
-      Project (#2) // { arity: 1 }
+      Project (#2{c}) // { arity: 1 }
         ReadIndex on=materialize.public.t2 idx_t2_a=[lookup value=(2)] // { arity: 4 }
 
 Used Indexes:
@@ -870,11 +880,11 @@ statement ok
 INSERT INTO foo VALUES (0, 1, 2, 'xxx'), (3, 4, 5, 'yyy');
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM foo
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM foo
 WHERE a = 0 AND b = 1 AND c = 2 AND v = 'xxx';
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0{a}..=#3{v})
     ReadIndex on=materialize.public.foo foo_primary_idx=[lookup value=(0, 1, 2, "xxx")]
 
 Used Indexes:
@@ -885,11 +895,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM foo
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM foo
 WHERE 0 = a AND 1 = b AND 2 = c AND 'xxx' = v;
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0{a}..=#3{v})
     ReadIndex on=materialize.public.foo foo_primary_idx=[lookup value=(0, 1, 2, "xxx")]
 
 Used Indexes:
@@ -911,11 +921,11 @@ CREATE INDEX idx_foo_a ON foo(a);
 # Check that the deduplication in `remove_impossible_or_args` treats `a = 0` and `a = 0::SMALLINT` the same
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM foo
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM foo
 WHERE a = 0 AND a = 0::SMALLINT;
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(0)]
 
 Used Indexes:
@@ -935,11 +945,11 @@ WHERE a = 0 AND a = 0::SMALLINT;
 # For this, `any_expr_eq_literal` should peel off the cast in the returned expression.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM foo
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM foo
 WHERE (a = 0 AND a = 2::SMALLINT) OR a = 3;
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(3)]
 
 Used Indexes:
@@ -959,11 +969,11 @@ WHERE (a = 0 AND a = 2::SMALLINT) OR a = 3;
 # SMALLINT. (It never worked for VARCHAR.)
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a FROM foo
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a FROM foo
 WHERE a = 3::SMALLINT;
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(3)]
 
 Used Indexes:
@@ -988,11 +998,11 @@ statement ok
 CREATE INDEX idx_foo_a_cast ON foo(a::INTEGER);
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM foo
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM foo
 WHERE a = 0;
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
+  Project (#1{a}..=#4{v})
     ReadIndex on=materialize.public.foo idx_foo_a_cast=[lookup value=(0)]
 
 Used Indexes:
@@ -1014,11 +1024,11 @@ statement ok
 CREATE INDEX idx_foo_v_cast ON foo(v::TEXT);
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM foo
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM foo
 WHERE v = 'xxx';
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
+  Project (#1{a}..=#3{c}, #0{v})
     ReadIndex on=materialize.public.foo idx_foo_v_cast=[lookup value=("xxx")]
 
 Used Indexes:
@@ -1041,11 +1051,11 @@ statement ok
 CREATE INDEX idx_foo_a ON foo(a);
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM foo
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM foo
 WHERE a = 0;
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0{a}..=#3{v})
     ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(0)]
 
 Used Indexes:
@@ -1068,11 +1078,11 @@ statement ok
 CREATE INDEX idx_foo_v ON foo(v);
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM foo
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM foo
 WHERE v = 'xxx';
 ----
 Explained Query (fast path):
-  Project (#1..=#3, #0)
+  Project (#1{a}..=#3{c}, #0{v})
     ReadIndex on=materialize.public.foo idx_foo_v=[lookup value=("xxx")]
 
 Used Indexes:
@@ -1092,7 +1102,7 @@ WHERE v = 'xxx';
 # See `MirScalarExpr::impossible_literal_equality_because_types`.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM foo
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM foo
 WHERE a = 1000000;
 ----
 Explained Query (fast path):
@@ -1111,12 +1121,12 @@ WHERE a = 1000000;
 # In the following query, we might be able to detect literal constraints if we called `canonicalize_equivalences`
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a, b, c FROM t2 WHERE a IN (a + b, a + c, 1 + 5) AND a + b = 5 AND a + c = 4;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a, b, c FROM t2 WHERE a IN (a + b, a + c, 1 + 5) AND a + b = 5 AND a + c = 4;
 ----
 Explained Query (fast path):
-  Project (#0..=#2)
-    Filter (#3 = 5) AND (#4 = 4) AND ((#0 = #3) OR (#0 = #4) OR (#0 = 6))
-      Map ((#0 + #1), (#0 + #2))
+  Project (#0{a}..=#2{c})
+    Filter (#3 = 5) AND (#4 = 4) AND ((#0{a} = #3) OR (#0{a} = #4) OR (#0{a} = 6))
+      Map ((#0{a} + #1{b}), (#0{a} + #2{c}))
         ReadIndex on=materialize.public.t2 idx_t2_a_b_c=[*** full scan ***]
 
 Used Indexes:
@@ -1136,10 +1146,10 @@ statement ok
 CREATE INDEX ON bar(b AND a);
 
 query T multiline
-EXPLAIN SELECT * FROM bar WHERE (b AND a) = TRUE;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM bar WHERE (b AND a) = TRUE;
 ----
 Explained Query (fast path):
-  Project (#1, #2)
+  Project (#1{a}, #2{b})
     ReadIndex on=materialize.public.bar bar_expr_idx=[lookup value=(true)]
 
 Used Indexes:
@@ -1163,11 +1173,11 @@ statement ok
 CREATE INDEX t3i0 ON t3 (c0);
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t3 WHERE NOT (((t3.c0)::INT != 0));
 ----
 Explained Query (fast path):
-  Filter (0 = double_to_integer(#0))
+  Filter (0 = double_to_integer(#0{c0}))
     ReadIndex on=materialize.public.t3 t3i0=[*** full scan ***]
 
 Used Indexes:
@@ -1188,11 +1198,11 @@ SELECT * FROM t3 WHERE NOT (((t3.c0)::INT != 0));
 # `-0.1` should appear in lookup_values only once!
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t3 WHERE NOT ((t3.c0 != 0.6) AND (t3.c0 != -0.1) AND (t3.c0 != 0.1) AND (-0.1 != t3.c0));
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{c0})
     ReadIndex on=materialize.public.t3 t3i0=[lookup values=[(0.6); (0.1); (-0.1)]]
 
 Used Indexes:
@@ -1212,11 +1222,11 @@ SELECT * FROM t3 WHERE NOT ((t3.c0 != 0.6) AND (t3.c0 != -0.1) AND (t3.c0 != 0.1
 # the rounded value.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t3 WHERE t3.c0 = 0.8::INT OR t3.c0 = -0.1;
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{c0})
     ReadIndex on=materialize.public.t3 t3i0=[lookup values=[(1); (-0.1)]]
 
 Used Indexes:
@@ -1247,26 +1257,26 @@ statement ok
 CREATE INDEX idx_t4_a_b_c ON t4(a, b, c)
 
 query T multiline
-EXPLAIN WITH(arity, join implementations, types, keys)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations, types, keys, humanized expressions) AS VERBOSE TEXT FOR
 SELECT sum(a*b*c*d) FROM t4
 WHERE (a,b,c) IN ((15, 16, 17), (25, 26, 111), (35, 36, 111));
 ----
 Explained Query:
-  Return // { arity: 1, types: "(bigint?)", keys: "([])" }
-    Union // { arity: 1, types: "(bigint?)", keys: "([])" }
-      Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
-      Map (null) // { arity: 1, types: "(bigint?)", keys: "()" }
+  With
+    cte l0 =
+      Reduce aggregates=[sum((((#0{a} * #1{b}) * #2{c}) * #3{d}))] // { arity: 1, types: "(r_int64?)", keys: "([])" }
+        Project (#0{a}..=#3{d}) // { arity: 4, types: "(r_int32, r_int32, r_int32, r_int32?)", keys: "([1], [2])" }
+          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(r_int32, r_int32, r_int32, r_int32?, r_int32, r_int32, r_int32)", keys: "([1], [2])" }
+  Return // { arity: 1, types: "(r_int64?)", keys: "([])" }
+    Union // { arity: 1, types: "(r_int64?)", keys: "([])" }
+      Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
+      Map (null) // { arity: 1, types: "(r_int64?)", keys: "()" }
         Union // { arity: 0, types: "()", keys: "()" }
           Negate // { arity: 0, types: "()", keys: "()" }
             Project () // { arity: 0, types: "()", keys: "([])" }
-              Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
+              Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
           Constant // { arity: 0, types: "()", keys: "([])" }
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum((((#0 * #1) * #2) * #3))] // { arity: 1, types: "(bigint?)", keys: "([])" }
-        Project (#0..=#3) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
-          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
 
 Used Indexes:
   - materialize.public.idx_t4_a_b_c (lookup)
@@ -1306,7 +1316,7 @@ SELECT * FROM c0;
 9
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 3)
   c0(f1 int) as (
     (SELECT * FROM t5)
@@ -1318,21 +1328,21 @@ WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 3)
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return
-    Get l0
   With Mutually Recursive [recursion_limit=3, return_at_limit]
     cte l0 =
-      Distinct project=[#0]
+      Distinct project=[#0{f1}]
         Union
           ReadIndex on=t5 idx_t5_f1=[*** full scan ***]
           Project (#2)
-            Map ((#0 + #1))
+            Map ((#0{f1} + #1{f1}))
               CrossJoin type=differential
                 ArrangeBy keys=[[]]
-                  Project (#0)
+                  Project (#0{f1})
                     ReadIndex on=materialize.public.t5 idx_t5_f1=[lookup values=[(0); (2); (8)]]
                 ArrangeBy keys=[[]]
                   Get l0
+  Return
+    Get l0
 
 Used Indexes:
   - materialize.public.idx_t5_f1 (*** full scan ***, lookup)
@@ -1344,35 +1354,7 @@ EOF
 # Check literal constraints with LIMIT
 
 query T multiline
-EXPLAIN
-SELECT a,b
-FROM t1
-WHERE a IN (4,3,2,1)
-LIMIT 1;
-----
-Explained Query (fast path):
-  Finish limit=1 output=[#0, #1]
-    Project (#0, #1)
-      ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2); (3); (4)]]
-
-Used Indexes:
-  - materialize.public.idx_t1_a (lookup)
-
-Target cluster: quickstart
-
-EOF
-
-# Note: This has LIMIT but no ORDER BY, so this is ok to change when row representation changes.
-query IT
-SELECT a,b
-FROM t1
-WHERE a IN (4,3,2,1)
-LIMIT 1;
-----
-1  a
-
-query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT a,b
 FROM t1
 WHERE a IN (4,3,2,1)
@@ -1381,8 +1363,8 @@ LIMIT 3;
 ----
 Explained Query (fast path):
   Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] limit=3 output=[#0, #1]
-    Project (#0, #1, #3)
-      Map (-(#0))
+    Project (#0{a}, #1{b}, #3)
+      Map (-(#0{a}))
         ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2); (3); (4)]]
 
 Used Indexes:
@@ -1404,7 +1386,7 @@ LIMIT 3;
 1  a
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT a,b
 FROM t1
 WHERE a IN (4,3,2,1)
@@ -1413,8 +1395,8 @@ LIMIT 3 OFFSET 1;
 ----
 Explained Query (fast path):
   Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] limit=3 offset=1 output=[#0, #1]
-    Project (#0, #1, #3)
-      Map (-(#0))
+    Project (#0{a}, #1{b}, #3)
+      Map (-(#0{a}))
         ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2); (3); (4)]]
 
 Used Indexes:
@@ -1434,3 +1416,51 @@ LIMIT 3 OFFSET 1;
 2  l2
 1  a
 1  l1
+
+# Regression test: `text_to_"char"` and `text_to_bytea` are non-injective and
+# must NOT be treated as uniqueness-preserving by cast inversion in
+# `invert_casts_on_expr_eq_literal_inner` (called from `CanonicalizeMfp` and
+# `literal_constraints`). Otherwise `f(col) = lit` is rewritten to
+# `col = f_inv(lit)` where `f_inv` collapses distinct literals, returning rows
+# whose `col::text` does not actually equal the literal.
+
+statement ok
+CREATE TABLE t_char_cast (c "char")
+
+statement ok
+INSERT INTO t_char_cast VALUES ('a'::"char")
+
+statement ok
+CREATE DEFAULT INDEX ON t_char_cast
+
+# 'a'::"char"::text = 'a' which does NOT equal 'abc' — expect 0 rows.
+query T rowsort
+SELECT c FROM t_char_cast WHERE c::text = 'abc'
+----
+
+# Sanity check: the truthful predicate still matches.
+query T rowsort
+SELECT c FROM t_char_cast WHERE c::text = 'a'
+----
+a
+
+statement ok
+CREATE TABLE t_bytea_cast (b bytea)
+
+statement ok
+INSERT INTO t_bytea_cast VALUES (E'\\x41'::bytea)
+
+statement ok
+CREATE DEFAULT INDEX ON t_bytea_cast
+
+# bytea_to_text always formats as hex ('\x41'), so b::text != 'A' — expect 0 rows.
+query T rowsort
+SELECT b FROM t_bytea_cast WHERE b::text = 'A'
+----
+
+# Sanity check: hex-formatted literal that round-trips truthfully.
+# (Sqllogictest formats a one-byte bytea 0x41 as the raw byte, i.e. `A`.)
+query T rowsort
+SELECT b FROM t_bytea_cast WHERE b::text = '\x41'
+----
+A

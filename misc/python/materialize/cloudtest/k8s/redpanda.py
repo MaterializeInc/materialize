@@ -24,6 +24,7 @@ from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
+from materialize.mzcompose.services.redpanda import REDPANDA_VERSION
 
 
 class RedpandaDeployment(K8sDeployment):
@@ -31,7 +32,7 @@ class RedpandaDeployment(K8sDeployment):
         super().__init__(namespace)
         container = V1Container(
             name="redpanda",
-            image="vectorized/redpanda:v24.2.2",
+            image=f"redpandadata/redpanda:{REDPANDA_VERSION}",
             command=[
                 "/usr/bin/rpk",
                 "redpanda",
@@ -55,6 +56,12 @@ class RedpandaDeployment(K8sDeployment):
                 # Only require 4KB per topic partition rather than 4MiB.
                 "--set",
                 "redpanda.topic_memory_per_partition=4096",
+                # `testdrive/kafka-time-offset.td` ingests records with
+                # timestamps in 2099; Redpanda v23+ otherwise rejects them
+                # under the 1-hour `log_message_timestamp_after_max_ms`
+                # default. Same relaxation as `mzcompose.services.redpanda`.
+                "--set",
+                "redpanda.log_message_timestamp_after_max_ms=9223372036854",
                 "--advertise-kafka-addr",
                 f"redpanda.{namespace}:9092",
             ],

@@ -134,8 +134,8 @@ CREATE VIEW dev_warm.stg_data_days AS
     SELECT *
     FROM dev.mock_data_days
     WHERE
-        mz_now() <= date_trunc('year', ts + CAST('1 year' AS interval)) AND
-        ts + CAST('7 days' AS interval) - CAST('1 month' AS interval) < mz_now();
+        TIMESTAMP '2024-12-21' <= date_trunc('year', ts + CAST('1 year' AS interval)) AND
+        ts + CAST('7 days' AS interval) - CAST('1 month' AS interval) < TIMESTAMP '2024-12-21';
 
 statement ok
 CREATE VIEW dev_warm.count_by_day AS
@@ -145,8 +145,8 @@ CREATE VIEW dev_warm.count_by_day AS
     FROM dev_warm.stg_data_days
     GROUP BY 1
     HAVING
-        NOT (mz_now() <= date_trunc('day', ts) + CAST('7 days' AS interval)) AND
-        mz_now() <= date_trunc('year', date_trunc('day', ts) + CAST('1 year' AS interval));
+        NOT (TIMESTAMP '2024-12-21' <= date_trunc('day', ts) + CAST('7 days' AS interval)) AND
+        TIMESTAMP '2024-12-21' <= date_trunc('year', date_trunc('day', ts) + CAST('1 year' AS interval));
 
 statement ok
 CREATE VIEW dev_fy2023.stg_data_days AS
@@ -168,8 +168,6 @@ CREATE VIEW dev_fy2023.count_by_day AS
         NOT (CAST('2024-01-01' AS timestamp) <= date_trunc('day', ts)) AND
         CAST('2023-01-01' AS timestamp) <= date_trunc('day', ts);
 
-# This test will break in the year 10000. If you've survived that far then congratulations. Please
-# update the years 10000 and 10001 in the view dev.mock_data_days to a much larger year.
 query TIT
 SELECT *, 'fy2023' AS origin FROM dev_fy2023.count_by_day
 UNION ALL
@@ -225,6 +223,25 @@ with v as (select mz_now() < '3000-01-01') select * from v;
 ----
 true
 
+# Regression test for SQL-332: `mz_now()` as the direct argument of a value
+# window function (e.g. `first_value`/`last_value`) must still be recognized as
+# temporal, so that the query gets a timestamp near the current time.
+query B
+SELECT first_value(mz_now()) OVER () < '3000-01-01';
+----
+true
+
+query B
+SELECT last_value(mz_now()) OVER () < '3000-01-01';
+----
+true
+
+# Same for `mz_now()` as the direct argument of an aggregate window function.
+query B
+SELECT max(mz_now()) OVER () < '3000-01-01';
+----
+true
+
 # Make sure that we find temporal expressions also in referenced views.
 statement ok
 create view v as select mz_now() as x;
@@ -233,3 +250,193 @@ query B
 select x < '3000-01-01' from v;
 ----
 true
+
+statement ok
+SELECT *
+FROM events
+WHERE insert_ts + 30 >= mz_now();
+
+query error WHERE clause error: operator does not exist: mz_timestamp \- integer
+SELECT *
+FROM events
+WHERE insert_ts >= mz_now() - 30;
+
+statement ok
+CREATE TABLE t2(ts timestamp, x int);
+
+statement ok
+INSERT INTO t2 VALUES ('2024-01-03 00:00:00', 5), ('2024-01-04 00:00:00', 6);
+
+statement ok
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '30' minutes >= mz_now();
+
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '30' minutes >= mz_now();
+
+statement ok
+SELECT * FROM mv1;
+
+query error WHERE clause error: operator does not exist: mz_timestamp \- interval
+SELECT *
+FROM t2
+WHERE ts >= mz_now() - INTERVAL '30' minutes;
+
+query error WHERE clause error: operator does not exist: mz_timestamp \- interval
+CREATE MATERIALIZED VIEW mv_err AS
+SELECT *
+FROM t2
+WHERE ts >= mz_now() - INTERVAL '30' minutes;
+
+statement ok
+SELECT *
+FROM t2
+WHERE
+  ts + INTERVAL '30' minutes >= mz_now()
+  OR ts IS NULL;
+
+query error Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+CREATE MATERIALIZED VIEW mv_err AS
+SELECT *
+FROM t2
+WHERE
+  ts + INTERVAL '30' minutes >= mz_now()
+  OR ts IS NULL;
+
+# This view will only work in one-off queries.
+statement ok
+CREATE VIEW v_one_off AS
+SELECT *
+FROM t2
+WHERE
+  ts + INTERVAL '30' minutes >= mz_now()
+  OR ts IS NULL;
+
+statement ok
+SELECT * FROM v_one_off;
+
+query error Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+CREATE DEFAULT INDEX ON v_one_off;
+
+query error Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+CREATE MATERIALIZED VIEW mv_err AS
+SELECT * FROM v_one_off;
+
+query error Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+SUBSCRIBE v_one_off;
+
+# This view will work also in maintained dataflows.
+statement ok
+CREATE VIEW v_maintained AS
+SELECT *
+FROM t2
+WHERE
+  ts + INTERVAL '30' minutes >= mz_now();
+
+statement ok
+SELECT * FROM v_maintained;
+
+statement ok
+CREATE DEFAULT INDEX ON v_maintained;
+
+statement ok
+SELECT * FROM v_maintained;
+
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS
+SELECT * FROM v_maintained;
+
+statement ok
+SELECT * FROM mv2;
+
+simple
+DECLARE c CURSOR FOR SUBSCRIBE v_maintained;
+FETCH 0 c;
+----
+COMPLETE 0
+COMPLETE 0
+
+# Valid temporal expression remains valid if ANDed with a non-temporal expression
+statement ok
+CREATE MATERIALIZED VIEW mv3 AS
+SELECT *
+FROM t2
+WHERE
+  ts + INTERVAL '30' minutes >= mz_now()
+  AND x != 7;
+
+statement ok
+SELECT * FROM mv3;
+
+# UNION ALL workaround for OR
+
+query error Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#1\{x\} = 7\) OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+CREATE MATERIALIZED VIEW mv_err AS
+SELECT *
+FROM t2
+WHERE
+  x = 7
+  OR ts + INTERVAL '30' minutes >= mz_now();
+
+statement ok
+CREATE MATERIALIZED VIEW mv4 AS
+(
+    SELECT *
+    FROM t2
+    WHERE x = 7
+)
+UNION ALL
+(
+  SELECT *
+  FROM t2
+  WHERE
+    ts + INTERVAL '30' minutes >= mz_now()
+    AND x != 7
+);
+
+statement ok
+SELECT * FROM mv4;
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/9643
+# Two different temporal filters on different reads of the same source.
+
+statement ok
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '30' minutes >= mz_now()
+UNION ALL
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '60' minutes >= mz_now();
+
+statement ok
+CREATE MATERIALIZED VIEW mv5 AS
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '30' minutes >= mz_now()
+UNION ALL
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '60' minutes >= mz_now();
+
+statement ok
+SELECT * FROM mv5;
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/9645
+statement ok
+CREATE TABLE t(export_id text, worker_id int, dataflow_id int);
+
+statement ok
+CREATE DEFAULT INDEX ON t;
+
+statement ok
+SELECT subq_2.c2 AS c5,
+       mz_catalog.mz_now() AS c7
+FROM (SELECT CAST('62143-12-31' AS date) + '200000 YEARS' AS c2
+      FROM (SELECT
+            FROM (SELECT FROM t) AS subq_0) AS subq_1
+      WHERE pg_catalog."current_timestamp"() = pg_catalog.pg_postmaster_start_time()) AS subq_2;

@@ -58,7 +58,7 @@ interpret
 [
   [("{\"created_ms\": 1000}" jsonb) ("{\"created_ms\": 2000}" jsonb) ("{\"created_ms\": 3000}" jsonb)]
 ]
-(call_binary (jsonb_get_string false) #0 ("created_ms" string))
+(call_binary (jsonb_get_string) #0 ("created_ms" string))
 [(0 numeric) (2050 numeric) (4000 numeric) null]
 ----
 may contain: [2050]
@@ -70,7 +70,7 @@ interpret
 [
   [("{\"code\": \"00135\"}" jsonb) ("{\"code\": \"22122\"}" jsonb) ("{\"code\": \"34153\"}" jsonb)]
 ]
-(call_binary (jsonb_get_string true) #0 ("code" string))
+(call_binary (jsonb_get_string_stringify) #0 ("code" string))
 ["00000" "20000" "2" "80000" null]
 ----
 may contain: ["20000" "2"]
@@ -82,7 +82,7 @@ interpret
 [
   [("{\"created_ms\": 1000}" jsonb) ("{\"created_ms\": 2000}" jsonb) ("{\"created_ms\": 3000}" jsonb)]
 ]
-(call_binary (jsonb_get_string true) #0 ("created_ms" string))
+(call_binary (jsonb_get_string_stringify) #0 ("created_ms" string))
 ["00000" "20000" "2" "80000" null]
 ----
 may contain: ["00000" "20000" "2" "80000"]
@@ -94,7 +94,7 @@ interpret
 [
   [null null null]
 ]
-(call_binary (jsonb_get_string false) #0 ("created_ms" string))
+(call_binary (jsonb_get_string) #0 ("created_ms" string))
 ["00000" "foo" null true]
 ----
 may contain: [null]

@@ -2,7 +2,7 @@
 name = "mz"
 description = "The Materialize command-line interface (CLI)."
 license = "Apache-2.0"
-version = "0.3.0"
+version = "0.3.1"
 edition.workspace = true
 rust-version.workspace = true
 
@@ -10,45 +10,42 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-axum = "0.7.5"
-clap = { version = "3.2.24", features = [ "derive" ] }
-csv = "1.2.1"
-dirs = "5.0.0"
-indicatif = "0.17.2"
-termcolor = "1.2.0"
-maplit = "1.0.2"
+axum.workspace = true
+clap.workspace = true
+csv.workspace = true
+dirs.workspace = true
+indicatif.workspace = true
+termcolor.workspace = true
+maplit.workspace = true
 mz-cloud-api = { path = "../cloud-api" }
 mz-frontegg-client = { path = "../frontegg-client" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", features = ["async", "cli", "test"] }
-open = "3.2.0"
-openssl-probe = "0.1.2"
-hyper = "1.4.1"
-reqwest = { version = "0.11", features = ["blocking", "json"] }
-rpassword = "7.2.0"
-semver = "1.0.16"
-serde = { version = "1.0.152", features = ["derive"] }
-serde-aux = "4.1.2"
-serde_json = "1.0.125"
-tabled = "0.10.0"
-time = "0.3.17"
-tokio = { version = "1.38.0", features = ["full"] }
-toml = "0.8.2"
-toml_edit = { version = "0.20.2", features = ["serde"] }
-thiserror = "1.0.37"
-uuid = "1.2.2"
-url = "2.3.1"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+mz-sql-parser = { path = "../sql-parser" }
+open.workspace = true
+openssl-probe.workspace = true
+hyper.workspace = true
+reqwest.workspace = true
+rpassword.workspace = true
+semver = { workspace = true, features = ["serde"] }
+serde.workspace = true
+serde-aux.workspace = true
+serde_json.workspace = true
+tabled.workspace = true
+time.workspace = true
+tokio.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+url.workspace = true
 
 [dev-dependencies]
-assert_cmd = "2.0.5"
+assert_cmd.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "2.7.0"
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+security-framework = "2.10.0"
 
 [package.metadata.deb]
 name = "materialize-cli"
@@ -59,3 +56,6 @@ assets = [
     ["target/release/mz", "usr/bin/", "755"],
 ]
 depends = "postgresql-client, $auto"
+
+[features]
+default = []

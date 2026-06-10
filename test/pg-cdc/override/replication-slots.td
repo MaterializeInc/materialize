@@ -31,10 +31,16 @@ INSERT INTO pk_table VALUES (1, 'one');
 ALTER TABLE pk_table REPLICA IDENTITY FULL;
 INSERT INTO pk_table VALUES (2, 'two');
 
+> BEGIN
 > CREATE SOURCE pg_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 > CREATE TABLE "pk_table" FROM SOURCE pg_source (REFERENCE "pk_table");
+> COMMIT
+
+> SELECT * FROM pk_table
+1 one
+2 two
 
 ! CREATE SOURCE pg_source_2
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-contains:POSTGRES source validation: PostgreSQL server has insufficient number of replication slots available
+contains:PostgreSQL server has insufficient number of replication slots available

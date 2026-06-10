@@ -12,78 +12,83 @@
 #![warn(missing_docs)]
 
 use std::collections::btree_map::Entry;
-use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::mem;
 use std::net::IpAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
+use mz_auth::AuthenticatorKind;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
-use mz_repr::user::ExternalUserMetadata;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowIterator, ScalarType, TimestampManipulation};
+use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
+use mz_repr::{CatalogItemId, Datum, Row, RowIterator, SqlScalarType, Timestamp};
 use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
-    RoleMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
+    INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, RoleMetadata, SYSTEM_USER, User,
 };
+use mz_sql::session::vars::IsolationLevel;
 pub use mz_sql::session::vars::{
-    EndTransactionAction, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
-    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
+    DEFAULT_DATABASE_NAME, EndTransactionAction, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION,
+    SERVER_PATCH_VERSION, SessionVars, Var,
 };
-use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
-use rand::Rng;
+use timely::progress::Timestamp as _;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
-use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
 use crate::catalog::CatalogState;
 use crate::client::RecordFirstRowStream;
+use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
-use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
-use crate::coord::ExplainContext;
+use crate::coord::{Coordinator, ExplainContext};
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
-use crate::AdapterNotice;
+use crate::statement_logging::PreparedStatementLoggingInfo;
+use crate::{AdapterNotice, ExecuteContext};
+use mz_catalog::durable::Snapshot;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
 /// A session holds per-connection state.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Session<T = mz_repr::Timestamp>
-where
-    T: Debug + Clone + Send + Sync,
-{
+pub struct Session {
     conn_id: ConnectionId,
     /// A globally unique identifier for the session. Not to be confused
     /// with `conn_id`, which may be reused.
     uuid: Uuid,
     prepared_statements: BTreeMap<String, PreparedStatement>,
     portals: BTreeMap<String, Portal>,
-    transaction: TransactionStatus<T>,
+    transaction: TransactionStatus,
     pcx: Option<PlanContext>,
     metrics: SessionMetrics,
+    #[derivative(Debug = "ignore")]
+    builtin_updates: Option<BuiltinTableAppendNotify>,
+
     /// The role metadata of the current session.
     ///
     /// Invariant: role_metadata must be `Some` after the user has
     /// successfully connected to and authenticated with Materialize.
     ///
-    /// Prefer using this value over [`Self.user.name`].
+    /// Prefer using this value over [`SessionConfig::user`].
     //
     // It would be better for this not to be an Option, but the
     // `Session` is initialized before the user has connected to
@@ -111,14 +116,16 @@ where
     // on. We express this by gating access with this token.
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
-    session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
+    session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle>,
+    /// Incremented when session state that is relevant to prepared statement planning changes.
+    /// Currently, only changes to `portals` are tracked. Changes to `prepared_statements` don't
+    /// need to be tracked, because prepared statements can't depend on other prepared statements.
+    /// TODO: We might want to track changes also to session variables.
+    /// (`Catalog::transient_revision` similarly tracks changes on the catalog side.)
+    state_revision: u64,
 }
 
-impl<T> SessionMetadata for Session<T>
-where
-    T: Debug + Clone + Send + Sync,
-    T: TimestampManipulation,
-{
+impl SessionMetadata for Session {
     fn conn_id(&self) -> &ConnectionId {
         &self.conn_id
     }
@@ -198,15 +205,21 @@ pub struct SessionConfig {
     /// An optional receiver that the session will periodically check for
     /// updates to a user's external metadata.
     pub external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
+    /// The authenticator that authenticated this user, if any.
+    pub authenticator_kind: AuthenticatorKind,
+    /// Groups from JWT claims for OIDC group-to-role sync.
+    pub groups: Option<Vec<String>>,
 }
 
-impl<T: TimestampManipulation> Session<T> {
+impl Session {
     /// Creates a new session for the specified connection ID.
     pub(crate) fn new(
         build_info: &'static BuildInfo,
         config: SessionConfig,
         metrics: SessionMetrics,
-    ) -> Session<T> {
+    ) -> Session {
         assert_ne!(config.conn_id, DUMMY_CONNECTION_ID);
         Self::new_internal(build_info, config, metrics)
     }
@@ -253,6 +266,10 @@ impl<T: TimestampManipulation> Session<T> {
         ))
     }
 
+    pub(crate) fn qcell_ro<'a, T2: 'a>(&'a self, cell: &'a Arc<QCell<T2>>) -> &'a T2 {
+        self.qcell_owner.ro(&*cell)
+    }
+
     pub(crate) fn qcell_rw<'a, T2: 'a>(&'a mut self, cell: &'a Arc<QCell<T2>>) -> &'a mut T2 {
         self.qcell_owner.rw(&*cell)
     }
@@ -267,7 +284,7 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
-    pub fn dummy() -> Session<T> {
+    pub fn dummy() -> Session {
         let registry = MetricsRegistry::new();
         let metrics = Metrics::register_into(&registry);
         let metrics = metrics.session_metrics();
@@ -279,6 +296,9 @@ impl<T: TimestampManipulation> Session<T> {
                 user: SYSTEM_USER.name.clone(),
                 client_ip: None,
                 external_metadata_rx: None,
+                helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
+                groups: None,
             },
             metrics,
         );
@@ -294,18 +314,24 @@ impl<T: TimestampManipulation> Session<T> {
             user,
             client_ip,
             mut external_metadata_rx,
+            helm_chart_version,
+            authenticator_kind,
+            groups,
         }: SessionConfig,
         metrics: SessionMetrics,
-    ) -> Session<T> {
+    ) -> Session {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user);
         let user = User {
             name: user,
+            internal_metadata: None,
             external_metadata: external_metadata_rx
                 .as_mut()
                 .map(|rx| rx.borrow_and_update().clone()),
+            authenticator_kind: Some(authenticator_kind),
+            groups,
         };
-        let mut vars = SessionVars::new_unchecked(build_info, user);
+        let mut vars = SessionVars::new_unchecked(build_info, user, helm_chart_version);
         if let Some(default_cluster) = default_cluster {
             vars.set_cluster(default_cluster.clone());
         }
@@ -315,6 +341,7 @@ impl<T: TimestampManipulation> Session<T> {
             transaction: TransactionStatus::Default,
             pcx: None,
             metrics,
+            builtin_updates: None,
             prepared_statements: BTreeMap::new(),
             portals: BTreeMap::new(),
             role_metadata: None,
@@ -323,10 +350,11 @@ impl<T: TimestampManipulation> Session<T> {
             notices_tx,
             notices_rx,
             next_transaction_id: 0,
-            secret_key: rand::thread_rng().gen(),
+            secret_key: rand::random(),
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
+            state_revision: 0,
         }
     }
 
@@ -377,7 +405,7 @@ impl<T: TimestampManipulation> Session<T> {
                 self.transaction = TransactionStatus::InTransaction(Transaction {
                     pcx: self.new_pcx(wall_time),
                     ops: TransactionOps::None,
-                    write_lock_guard: None,
+                    write_lock_guards: None,
                     access,
                     id,
                 });
@@ -395,8 +423,7 @@ impl<T: TimestampManipulation> Session<T> {
 
         if let Some(isolation_level) = isolation_level {
             self.vars
-                .set(None, mz_sql::session::vars::TRANSACTION_ISOLATION_VAR_NAME, VarInput::Flat(IsolationLevel::from(isolation_level).as_str()), true)
-                .expect("transaction_isolation should be a valid var and isolation level is a valid value");
+                .set_local_transaction_isolation(isolation_level.into());
         }
 
         Ok(())
@@ -411,7 +438,7 @@ impl<T: TimestampManipulation> Session<T> {
             let txn = Transaction {
                 pcx: self.new_pcx(wall_time),
                 ops: TransactionOps::None,
-                write_lock_guard: None,
+                write_lock_guards: None,
                 access: None,
                 id,
             };
@@ -438,9 +465,10 @@ impl<T: TimestampManipulation> Session<T> {
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
     #[must_use]
-    pub fn clear_transaction(&mut self) -> TransactionStatus<T> {
+    pub fn clear_transaction(&mut self) -> TransactionStatus {
         self.portals.clear();
         self.pcx = None;
+        self.state_revision += 1;
         mem::take(&mut self.transaction)
     }
 
@@ -459,12 +487,12 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Returns the current transaction status.
-    pub fn transaction(&self) -> &TransactionStatus<T> {
+    pub fn transaction(&self) -> &TransactionStatus {
         &self.transaction
     }
 
     /// Returns the current transaction status.
-    pub fn transaction_mut(&mut self) -> &mut TransactionStatus<T> {
+    pub fn transaction_mut(&mut self) -> &mut TransactionStatus {
         &mut self.transaction
     }
 
@@ -476,7 +504,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// Adds operations to the current transaction. An error is produced if
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
-    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
+    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps) -> Result<(), AdapterError> {
         self.transaction.add_ops(add_ops)
     }
 
@@ -555,7 +583,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// ops to `None`, returning the old read timestamp context if
     /// any existed. Must only be used after verifying that no transaction
     /// anomalies will occur if cleared.
-    pub fn take_transaction_timestamp_context(&mut self) -> Option<TimestampContext<T>> {
+    pub fn take_transaction_timestamp_context(&mut self) -> Option<TimestampContext> {
         if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
             if let TransactionOps::Peeks { .. } = ops {
                 let ops = std::mem::take(ops);
@@ -576,12 +604,12 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp_determination(&self) -> Option<TimestampDetermination<T>> {
+    pub fn get_transaction_timestamp_determination(&self) -> Option<TimestampDetermination> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
                 ops: TransactionOps::Peeks { determination, .. },
-                write_lock_guard: _,
+                write_lock_guards: _,
                 access: _,
                 id: _,
             }) => Some(determination.clone()),
@@ -602,7 +630,7 @@ impl<T: TimestampManipulation> Session<T> {
                     },
                     ..
                 },
-                write_lock_guard: _,
+                write_lock_guards: _,
                 access: _,
                 id: _,
             })
@@ -616,7 +644,7 @@ impl<T: TimestampManipulation> Session<T> {
         stmt: Option<Statement<Raw>>,
         raw_sql: String,
         desc: StatementDesc,
-        catalog_revision: u64,
+        state_revision: StateRevision,
         now: EpochMillis,
     ) {
         let logging = PreparedStatementLoggingInfo::still_to_log(
@@ -630,7 +658,7 @@ impl<T: TimestampManipulation> Session<T> {
         let statement = PreparedStatement {
             stmt,
             desc,
-            catalog_revision,
+            state_revision,
             logging: Arc::new(QCell::new(&self.qcell_owner, logging)),
         };
         self.prepared_statements.insert(name, statement);
@@ -672,6 +700,11 @@ impl<T: TimestampManipulation> Session<T> {
         &self.prepared_statements
     }
 
+    /// Returns the portals for the session.
+    pub fn portals(&self) -> &BTreeMap<String, Portal> {
+        &self.portals
+    }
+
     /// Binds the specified portal to the specified prepared statement.
     ///
     /// If the prepared statement contains parameters, the values and types of
@@ -687,27 +720,31 @@ impl<T: TimestampManipulation> Session<T> {
         desc: StatementDesc,
         stmt: Option<Statement<Raw>>,
         logging: Arc<QCell<PreparedStatementLoggingInfo>>,
-        params: Vec<(Datum, ScalarType)>,
+        params: Vec<(Datum, SqlScalarType)>,
         result_formats: Vec<Format>,
-        catalog_revision: u64,
+        state_revision: StateRevision,
     ) -> Result<(), AdapterError> {
         // The empty portal can be silently replaced.
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
             return Err(AdapterError::DuplicateCursor(portal_name));
         }
+        self.state_revision += 1;
+        let param_types = desc.param_types.clone();
         self.portals.insert(
             portal_name,
             Portal {
                 stmt: stmt.map(Arc::new),
                 desc,
-                catalog_revision,
+                state_revision,
                 parameters: Params {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
-                    types: params.into_iter().map(|(_d, t)| t).collect(),
+                    execute_types: params.into_iter().map(|(_d, t)| t).collect(),
+                    expected_types: param_types,
                 },
-                result_formats: result_formats.into_iter().map(Into::into).collect(),
+                result_formats,
                 state: PortalState::NotStarted,
                 logging,
+                lifecycle_timestamps: None,
             },
         );
         Ok(())
@@ -717,6 +754,7 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// If there is no such portal, this method does nothing. Returns whether that portal existed.
     pub fn remove_portal(&mut self, portal_name: &str) -> bool {
+        self.state_revision += 1;
         self.portals.remove(portal_name).is_some()
     }
 
@@ -730,8 +768,20 @@ impl<T: TimestampManipulation> Session<T> {
     /// Retrieves a mutable reference to the specified portal.
     ///
     /// If there is no such portal, returns `None`.
-    pub fn get_portal_unverified_mut(&mut self, portal_name: &str) -> Option<&mut Portal> {
-        self.portals.get_mut(portal_name)
+    ///
+    /// Note: When using the returned `PortalRefMut`, there is no need to increment
+    /// `Session::state_revision`, because the portal's meaning is not changed.
+    pub fn get_portal_unverified_mut(&mut self, portal_name: &str) -> Option<PortalRefMut<'_>> {
+        self.portals.get_mut(portal_name).map(|p| PortalRefMut {
+            stmt: &p.stmt,
+            desc: &p.desc,
+            state_revision: &mut p.state_revision,
+            parameters: &mut p.parameters,
+            result_formats: &mut p.result_formats,
+            logging: &mut p.logging,
+            state: &mut p.state,
+            lifecycle_timestamps: &mut p.lifecycle_timestamps,
+        })
     }
 
     /// Creates and installs a new portal.
@@ -742,10 +792,11 @@ impl<T: TimestampManipulation> Session<T> {
         desc: StatementDesc,
         parameters: Params,
         result_formats: Vec<Format>,
-        catalog_revision: u64,
+        state_revision: StateRevision,
     ) -> Result<String, AdapterError> {
-        // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
+        self.state_revision += 1;
 
+        // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
         for i in 0usize.. {
             let name = format!("<unnamed portal {}>", i);
             match self.portals.entry(name.clone()) {
@@ -754,11 +805,12 @@ impl<T: TimestampManipulation> Session<T> {
                     entry.insert(Portal {
                         stmt: stmt.map(Arc::new),
                         desc,
-                        catalog_revision,
+                        state_revision,
                         parameters,
                         result_formats,
                         state: PortalState::NotStarted,
                         logging,
+                        lifecycle_timestamps: None,
                     });
                     return Ok(name);
                 }
@@ -793,22 +845,13 @@ impl<T: TimestampManipulation> Session<T> {
         &mut self.vars
     }
 
-    /// Grants the coordinator's write lock guard to this session's inner
-    /// transaction.
+    /// Grants a set of write locks to this session's inner [`Transaction`].
     ///
     /// # Panics
-    /// If the inner transaction is idle. See
-    /// [`TransactionStatus::grant_write_lock`].
-    pub fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
-        self.transaction.grant_write_lock(guard);
-    }
-
-    /// Returns whether or not this session currently holds the write lock.
-    pub fn has_write_lock(&self) -> bool {
-        match self.transaction.inner() {
-            None => false,
-            Some(txn) => txn.write_lock_guard.is_some(),
-        }
+    /// If the inner transaction is idle. See [`TransactionStatus::try_grant_write_locks`].
+    ///
+    pub fn try_grant_write_locks(&mut self, guards: WriteLocks) -> Result<(), &WriteLocks> {
+        self.transaction.try_grant_write_locks(guards)
     }
 
     /// Drains any external metadata updates and applies the changes from the latest update.
@@ -829,6 +872,11 @@ impl<T: TimestampManipulation> Session<T> {
         self.vars.set_external_user_metadata(metadata);
     }
 
+    /// Applies the internal user metadata to the session.
+    pub fn apply_internal_user_metadata(&mut self, metadata: InternalUserMetadata) {
+        self.vars.set_internal_user_metadata(metadata);
+    }
+
     /// Initializes the session's role metadata.
     pub fn initialize_role_metadata(&mut self, role_id: RoleId) {
         self.role_metadata = Some(RoleMetadata::new(role_id));
@@ -836,32 +884,26 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Ensures that a timestamp oracle exists for `timeline` and returns a mutable reference to
     /// the timestamp oracle.
-    pub fn ensure_timestamp_oracle(
-        &mut self,
-        timeline: Timeline,
-    ) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
-        self.session_oracles
-            .entry(timeline)
-            .or_insert_with(|| InMemoryTimestampOracle::new(T::minimum(), NowFn::from(T::minimum)))
+    pub fn ensure_timestamp_oracle(&mut self, timeline: Timeline) -> &mut InMemoryTimestampOracle {
+        self.session_oracles.entry(timeline).or_insert_with(|| {
+            InMemoryTimestampOracle::new(Timestamp::minimum(), NowFn::from(Timestamp::minimum))
+        })
     }
 
     /// Ensures that a timestamp oracle exists for reads and writes from/to a local input and
     /// returns a mutable reference to the timestamp oracle.
-    pub fn ensure_local_timestamp_oracle(&mut self) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
+    pub fn ensure_local_timestamp_oracle(&mut self) -> &mut InMemoryTimestampOracle {
         self.ensure_timestamp_oracle(Timeline::EpochMilliseconds)
     }
 
     /// Returns a reference to the timestamp oracle for `timeline`.
-    pub fn get_timestamp_oracle(
-        &self,
-        timeline: &Timeline,
-    ) -> Option<&InMemoryTimestampOracle<T, NowFn<T>>> {
+    pub fn get_timestamp_oracle(&self, timeline: &Timeline) -> Option<&InMemoryTimestampOracle> {
         self.session_oracles.get(timeline)
     }
 
     /// If the current session is using the Strong Session Serializable isolation level advance the
     /// session local timestamp oracle to `write_ts`.
-    pub fn apply_write(&mut self, timestamp: T) {
+    pub fn apply_write(&mut self, timestamp: Timestamp) {
         if self.vars().transaction_isolation() == &IsolationLevel::StrongSessionSerializable {
             self.ensure_local_timestamp_oracle().apply_write(timestamp);
         }
@@ -871,6 +913,35 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn metrics(&self) -> &SessionMetrics {
         &self.metrics
     }
+
+    /// Sets the `BuiltinTableAppendNotify` for this session.
+    pub fn set_builtin_table_updates(&mut self, fut: BuiltinTableAppendNotify) {
+        let prev = self.builtin_updates.replace(fut);
+        mz_ore::soft_assert_or_log!(prev.is_none(), "replacing old builtin table notify");
+    }
+
+    /// Takes the stashed `BuiltinTableAppendNotify`, if one exists, and returns a [`Future`] that
+    /// waits for the writes to complete.
+    pub fn clear_builtin_table_updates(&mut self) -> Option<impl Future<Output = ()> + 'static> {
+        if let Some(fut) = self.builtin_updates.take() {
+            // Record how long we blocked for, if we blocked at all.
+            let histogram = self
+                .metrics()
+                .session_startup_table_writes_seconds()
+                .clone();
+            Some(async move {
+                fut.wall_time().observe(histogram).await;
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Return the state_revision of the session, which can be used by dependent objects for knowing
+    /// when to re-plan due to session state changes.
+    pub fn state_revision(&self) -> u64 {
+        self.state_revision
+    }
 }
 
 /// A prepared statement.
@@ -879,8 +950,8 @@ impl<T: TimestampManipulation> Session<T> {
 pub struct PreparedStatement {
     stmt: Option<Statement<Raw>>,
     desc: StatementDesc,
-    /// The most recent catalog revision that has verified this statement.
-    pub catalog_revision: u64,
+    /// The most recent state revision that has verified this statement.
+    pub state_revision: StateRevision,
     #[derivative(Debug = "ignore")]
     logging: Arc<QCell<PreparedStatementLoggingInfo>>,
 }
@@ -911,8 +982,8 @@ pub struct Portal {
     pub stmt: Option<Arc<Statement<Raw>>>,
     /// The statement description.
     pub desc: StatementDesc,
-    /// The most recent catalog revision that has verified this statement.
-    pub catalog_revision: u64,
+    /// The most recent state revision that has verified this portal.
+    pub state_revision: StateRevision,
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.
@@ -923,6 +994,42 @@ pub struct Portal {
     /// The execution state of the portal.
     #[derivative(Debug = "ignore")]
     pub state: PortalState,
+    /// Statement lifecycle timestamps coming from `mz-pgwire`.
+    pub lifecycle_timestamps: Option<LifecycleTimestamps>,
+}
+
+/// A mutable reference to a portal, capturing its state and associated metadata. Importantly, it
+/// does _not_ give _mutable_ access to `stmt` and `desc`, which means that you do not need to
+/// increment `Session::state_revision` when modifying fields through a `PortalRefMut`, because the
+/// portal's meaning is not changed.
+pub struct PortalRefMut<'a> {
+    /// The statement that is bound to this portal.
+    pub stmt: &'a Option<Arc<Statement<Raw>>>,
+    /// The statement description.
+    pub desc: &'a StatementDesc,
+    /// The most recent state revision that has verified this portal.
+    pub state_revision: &'a mut StateRevision,
+    /// The bound values for the parameters in the prepared statement, if any.
+    pub parameters: &'a mut Params,
+    /// The desired output format for each column in the result set.
+    pub result_formats: &'a mut Vec<Format>,
+    /// A handle to metadata needed for statement logging.
+    pub logging: &'a mut Arc<QCell<PreparedStatementLoggingInfo>>,
+    /// The execution state of the portal.
+    pub state: &'a mut PortalState,
+    /// Statement lifecycle timestamps coming from `mz-pgwire`.
+    pub lifecycle_timestamps: &'a mut Option<LifecycleTimestamps>,
+}
+
+/// Points to a revision of catalog state and session state. When the current revisions are not the
+/// same as the revisions when a prepared statement or a portal was described, we need to check
+/// whether the description is still valid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateRevision {
+    /// A revision of the catalog.
+    pub catalog_revision: u64,
+    /// A revision of the session state.
+    pub session_state_revision: u64,
 }
 
 /// Execution states of a portal.
@@ -954,16 +1061,40 @@ impl InProgressRows {
             remaining,
         }
     }
+
+    /// Determines whether the underlying stream has ended and there are also no more rows
+    /// stashed in `current`.
+    pub fn no_more_rows(&self) -> bool {
+        self.remaining.no_more_rows && self.current.is_none()
+    }
 }
 
 /// A channel of batched rows.
 pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
 
+/// Part of statement lifecycle. These are timestamps that come from the Adapter frontend
+/// (`mz-pgwire`) part of the lifecycle.
+#[derive(Debug, Clone)]
+pub struct LifecycleTimestamps {
+    /// When the query was received. More specifically, when the tokio recv returned.
+    /// For a Simple Query, this is for the whole query, for the Extended Query flow, this is only
+    /// for `FrontendMessage::Execute`. (This means that this is after parsing for the
+    /// Extended Query flow.)
+    pub received: EpochMillis,
+}
+
+impl LifecycleTimestamps {
+    /// Creates a new `LifecycleTimestamps`.
+    pub fn new(received: EpochMillis) -> Self {
+        Self { received }
+    }
+}
+
 /// The transaction status of a session.
 ///
 /// PostgreSQL's transaction states are in backend/access/transam/xact.c.
 #[derive(Debug)]
-pub enum TransactionStatus<T> {
+pub enum TransactionStatus {
     /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
     /// Running a single-query transaction. Matches
@@ -975,33 +1106,31 @@ pub enum TransactionStatus<T> {
     /// when using the extended query protocol. Therefore, we can guarantee that this state will
     /// always be a single-query transaction and never be upgraded into a multi-statement implicit
     /// query.
-    Started(Transaction<T>),
+    Started(Transaction),
     /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
-    InTransaction(Transaction<T>),
+    InTransaction(Transaction),
     /// Currently in an implicit transaction started from a multi-statement query
     /// with more than 1 statements. Matches `TBLOCK_IMPLICIT_INPROGRESS`.
-    InTransactionImplicit(Transaction<T>),
+    InTransactionImplicit(Transaction),
     /// In a failed transaction. Matches `TBLOCK_ABORT`.
-    Failed(Transaction<T>),
+    Failed(Transaction),
 }
 
-impl<T: TimestampManipulation> TransactionStatus<T> {
+impl TransactionStatus {
     /// Extracts the inner transaction ops and write lock guard if not failed.
-    pub fn into_ops_and_lock_guard(
-        self,
-    ) -> (Option<TransactionOps<T>>, Option<OwnedMutexGuard<()>>) {
+    pub fn into_ops_and_lock_guard(self) -> (Option<TransactionOps>, Option<WriteLocks>) {
         match self {
             TransactionStatus::Default | TransactionStatus::Failed(_) => (None, None),
             TransactionStatus::Started(txn)
             | TransactionStatus::InTransaction(txn)
             | TransactionStatus::InTransactionImplicit(txn) => {
-                (Some(txn.ops), txn.write_lock_guard)
+                (Some(txn.ops), txn.write_lock_guards)
             }
         }
     }
 
     /// Exposes the inner transaction.
-    pub fn inner(&self) -> Option<&Transaction<T>> {
+    pub fn inner(&self) -> Option<&Transaction> {
         match self {
             TransactionStatus::Default => None,
             TransactionStatus::Started(txn)
@@ -1012,7 +1141,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
     }
 
     /// Exposes the inner transaction.
-    pub fn inner_mut(&mut self) -> Option<&mut Transaction<T>> {
+    pub fn inner_mut(&mut self) -> Option<&mut Transaction> {
         match self {
             TransactionStatus::Default => None,
             TransactionStatus::Started(txn)
@@ -1058,24 +1187,37 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
-    /// Whether the transaction is in a multi-statement, immediate transaction.
+    /// Whether we are in a multi-statement transaction, AND the query is immediate.
     pub fn in_immediate_multi_stmt_txn(&self, when: &QueryWhen) -> bool {
         self.is_in_multi_statement_transaction() && when == &QueryWhen::Immediately
     }
 
-    /// Grants the write lock to the inner transaction.
+    /// Grants the writes lock to the inner transaction, returning an error if the transaction
+    /// has already been granted write locks.
     ///
     /// # Panics
     /// If `self` is `TransactionStatus::Default`, which indicates that the
     /// transaction is idle, which is not appropriate to assign the
     /// coordinator's write lock to.
-    pub fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
+    ///
+    pub fn try_grant_write_locks(&mut self, guards: WriteLocks) -> Result<(), &WriteLocks> {
         match self {
             TransactionStatus::Default => panic!("cannot grant write lock to txn not yet started"),
             TransactionStatus::Started(txn)
             | TransactionStatus::InTransaction(txn)
             | TransactionStatus::InTransactionImplicit(txn)
-            | TransactionStatus::Failed(txn) => txn.grant_write_lock(guard),
+            | TransactionStatus::Failed(txn) => txn.try_grant_write_locks(guards),
+        }
+    }
+
+    /// Returns the currently held [`WriteLocks`], if this transaction holds any.
+    pub fn write_locks(&self) -> Option<&WriteLocks> {
+        match self {
+            TransactionStatus::Default => None,
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => txn.write_lock_guards.as_ref(),
         }
     }
 
@@ -1120,6 +1262,34 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
+    /// Checks whether the current state of this transaction allows writes
+    /// (adding write ops).
+    /// transaction
+    pub fn allows_writes(&self) -> bool {
+        match self {
+            TransactionStatus::Started(Transaction { ops, access, .. })
+            | TransactionStatus::InTransaction(Transaction { ops, access, .. })
+            | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
+                match ops {
+                    TransactionOps::None => access != &Some(TransactionAccessMode::ReadOnly),
+                    TransactionOps::Peeks { determination, .. } => {
+                        // If-and-only-if peeks thus far do not have a timestamp
+                        // (i.e. they are constant), we can switch to a write
+                        // transaction.
+                        !determination.timestamp_context.contains_timestamp()
+                    }
+                    TransactionOps::Subscribe => false,
+                    TransactionOps::Writes(_) => true,
+                    TransactionOps::SingleStatement { .. } => false,
+                    TransactionOps::DDL { .. } => false,
+                }
+            }
+            TransactionStatus::Default | TransactionStatus::Failed(_) => {
+                unreachable!()
+            }
+        }
+    }
+
     /// Adds operations to the current transaction. An error is produced if they cannot be merged
     /// (i.e., a timestamp-dependent read cannot be merged to an insert).
     ///
@@ -1132,7 +1302,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
     /// If the operations are compatible but the operation metadata doesn't match. Such as reads at
     /// different timestamps, reads on different timelines, reads on different clusters, etc. It's
     /// up to the caller to make sure these are aligned.
-    pub fn add_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
+    pub fn add_ops(&mut self, add_ops: TransactionOps) -> Result<(), AdapterError> {
         match self {
             TransactionStatus::Started(Transaction { ops, access, .. })
             | TransactionStatus::InTransaction(Transaction { ops, access, .. })
@@ -1201,7 +1371,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         _ => return Err(AdapterError::ReadOnlyTransaction),
                     },
                     TransactionOps::Subscribe => {
-                        return Err(AdapterError::SubscribeOnlyTransaction)
+                        return Err(AdapterError::SubscribeOnlyTransaction);
                     }
                     TransactionOps::Writes(txn_writes) => match add_ops {
                         TransactionOps::Writes(mut add_writes) => {
@@ -1219,17 +1389,21 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         }
                     },
                     TransactionOps::SingleStatement { .. } => {
-                        return Err(AdapterError::SingleStatementTransaction)
+                        return Err(AdapterError::SingleStatementTransaction);
                     }
                     TransactionOps::DDL {
                         ops: og_ops,
                         revision: og_revision,
                         state: og_state,
+                        side_effects,
+                        snapshot: og_snapshot,
                     } => match add_ops {
                         TransactionOps::DDL {
                             ops: new_ops,
                             revision: new_revision,
+                            side_effects: mut net_new_side_effects,
                             state: new_state,
+                            snapshot: new_snapshot,
                         } => {
                             if *og_revision != new_revision {
                                 return Err(AdapterError::DDLTransactionRace);
@@ -1238,7 +1412,9 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                             if !new_ops.is_empty() {
                                 *og_ops = new_ops;
                                 *og_state = new_state;
+                                *og_snapshot = new_snapshot;
                             }
+                            side_effects.append(&mut net_new_side_effects);
                         }
                         _ => return Err(AdapterError::DDLOnlyTransaction),
                     },
@@ -1255,7 +1431,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
 /// An abstraction allowing us to identify different transactions.
 pub type TransactionId = u64;
 
-impl<T> Default for TransactionStatus<T> {
+impl Default for TransactionStatus {
     fn default() -> Self {
         TransactionStatus::Default
     }
@@ -1263,26 +1439,33 @@ impl<T> Default for TransactionStatus<T> {
 
 /// State data for transactions.
 #[derive(Debug)]
-pub struct Transaction<T> {
+pub struct Transaction {
     /// Plan context.
     pub pcx: PlanContext,
     /// Transaction operations.
-    pub ops: TransactionOps<T>,
+    pub ops: TransactionOps,
     /// Uniquely identifies the transaction on a per connection basis.
     /// Two transactions started from separate connections may share the
     /// same ID.
     /// If all IDs have been exhausted, this will wrap around back to 0.
     pub id: TransactionId,
-    /// Holds the coordinator's write lock.
-    write_lock_guard: Option<OwnedMutexGuard<()>>,
+    /// Locks for objects this transaction will operate on.
+    write_lock_guards: Option<WriteLocks>,
     /// Access mode (read only, read write).
     access: Option<TransactionAccessMode>,
 }
 
-impl<T> Transaction<T> {
-    /// Grants the write lock to this transaction for the remainder of its lifetime.
-    fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
-        self.write_lock_guard = Some(guard);
+impl Transaction {
+    /// Tries to grant the write lock to this transaction for the remainder of its lifetime. Errors
+    /// if this [`Transaction`] has already been granted write locks.
+    fn try_grant_write_locks(&mut self, guards: WriteLocks) -> Result<(), &WriteLocks> {
+        match &mut self.write_lock_guards {
+            Some(existing) => Err(existing),
+            locks @ None => {
+                *locks = Some(guards);
+                Ok(())
+            }
+        }
     }
 
     /// The timeline of the transaction, if one exists.
@@ -1350,9 +1533,9 @@ impl From<TransactionCode> for String {
     }
 }
 
-impl<T> From<&TransactionStatus<T>> for TransactionCode {
+impl From<&TransactionStatus> for TransactionCode {
     /// Convert from the Session's version
-    fn from(status: &TransactionStatus<T>) -> TransactionCode {
+    fn from(status: &TransactionStatus) -> TransactionCode {
         match status {
             TransactionStatus::Default => TransactionCode::Idle,
             TransactionStatus::Started(_) => TransactionCode::InTransaction,
@@ -1368,8 +1551,9 @@ impl<T> From<&TransactionStatus<T>> for TransactionCode {
 /// This is needed because we currently do not allow mixing reads and writes in
 /// a transaction. Use this to record what we have done, and what may need to
 /// happen at commit.
-#[derive(Debug)]
-pub enum TransactionOps<T> {
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub enum TransactionOps {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
     None,
@@ -1379,7 +1563,7 @@ pub enum TransactionOps<T> {
     /// perform writes.
     Peeks {
         /// The timestamp and timestamp related metadata for the peek.
-        determination: TimestampDetermination<T>,
+        determination: TimestampDetermination,
         /// The cluster used to execute peeks.
         cluster_id: ClusterId,
         /// Whether this peek needs to be linearized.
@@ -1405,13 +1589,30 @@ pub enum TransactionOps<T> {
         ops: Vec<crate::catalog::Op>,
         /// In-memory state that reflects the previously applied ops.
         state: CatalogState,
+        /// A list of side effects that should be executed if this DDL transaction commits.
+        #[derivative(Debug = "ignore")]
+        side_effects: Vec<
+            Box<
+                dyn for<'a> FnOnce(
+                        &'a mut Coordinator,
+                        Option<&'a mut ExecuteContext>,
+                    ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+                    + Send
+                    + Sync,
+            >,
+        >,
         /// Transient revision of the `Catalog` when this transaction started.
         revision: u64,
+        /// Snapshot of the durable transaction state after the last dry run.
+        /// Used to initialize the next dry run's transaction so it starts
+        /// in sync with the accumulated `state`. `None` for the first
+        /// statement in the transaction (before any dry run).
+        snapshot: Option<Snapshot>,
     },
 }
 
-impl<T> TransactionOps<T> {
-    fn timestamp_determination(self) -> Option<TimestampDetermination<T>> {
+impl TransactionOps {
+    fn timestamp_determination(self) -> Option<TimestampDetermination> {
         match self {
             TransactionOps::Peeks { determination, .. } => Some(determination),
             TransactionOps::None
@@ -1423,7 +1624,7 @@ impl<T> TransactionOps<T> {
     }
 }
 
-impl<T> Default for TransactionOps<T> {
+impl Default for TransactionOps {
     fn default() -> Self {
         Self::None
     }
@@ -1433,9 +1634,9 @@ impl<T> Default for TransactionOps<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriteOp {
     /// The target table.
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     /// The data rows.
-    pub rows: Vec<(Row, Diff)>,
+    pub rows: TableData,
 }
 
 /// Whether a transaction requires linearization.
@@ -1454,6 +1655,196 @@ impl From<&ExplainContext> for RequireLinearization {
                 RequireLinearization::Required
             }
             _ => RequireLinearization::NotRequired,
+        }
+    }
+}
+
+/// A complete set of exclusive locks for writing to collections identified by [`CatalogItemId`]s.
+///
+/// To prevent deadlocks between two sessions, we do not allow acquiring a partial set of locks.
+#[derive(Debug)]
+pub struct WriteLocks {
+    locks: BTreeMap<CatalogItemId, tokio::sync::OwnedMutexGuard<()>>,
+    /// Connection that currently holds these locks, used for tracing purposes only.
+    conn_id: ConnectionId,
+}
+
+impl WriteLocks {
+    /// Create a [`WriteLocksBuilder`] pre-defining all of the locks we need.
+    ///
+    /// When "finishing" the builder with [`WriteLocksBuilder::all_or_nothing`], if we haven't
+    /// acquired all of the necessary locks we drop any partially acquired ones.
+    pub fn builder(sources: impl IntoIterator<Item = CatalogItemId>) -> WriteLocksBuilder {
+        let locks = sources.into_iter().map(|gid| (gid, None)).collect();
+        WriteLocksBuilder { locks }
+    }
+
+    /// Validate this set of [`WriteLocks`] is sufficient for the provided collections.
+    /// Dropping the currently held locks if it's not.
+    pub fn validate(
+        self,
+        collections: impl Iterator<Item = CatalogItemId>,
+    ) -> Result<Self, BTreeSet<CatalogItemId>> {
+        let mut missing = BTreeSet::new();
+        for collection in collections {
+            if !self.locks.contains_key(&collection) {
+                missing.insert(collection);
+            }
+        }
+
+        if missing.is_empty() {
+            Ok(self)
+        } else {
+            // Explicitly drop the already acquired locks.
+            drop(self);
+            Err(missing)
+        }
+    }
+}
+
+impl Drop for WriteLocks {
+    fn drop(&mut self) {
+        // We may have merged the locks into GroupCommitWriteLocks, thus it could be empty.
+        if !self.locks.is_empty() {
+            tracing::info!(
+                conn_id = %self.conn_id,
+                locks = ?self.locks,
+                "dropping write locks",
+            );
+        }
+    }
+}
+
+/// A builder struct that helps us acquire all of the locks we need, or none of them.
+///
+/// See [`WriteLocks::builder`].
+#[derive(Debug)]
+pub struct WriteLocksBuilder {
+    locks: BTreeMap<CatalogItemId, Option<tokio::sync::OwnedMutexGuard<()>>>,
+}
+
+impl WriteLocksBuilder {
+    /// Adds a lock to this builder.
+    pub fn insert_lock(&mut self, id: CatalogItemId, lock: tokio::sync::OwnedMutexGuard<()>) {
+        self.locks.insert(id, Some(lock));
+    }
+
+    /// Finish this builder by returning either all of the necessary locks, or none of them.
+    ///
+    /// If we fail to acquire all of the locks, returns one of the [`CatalogItemId`]s that we
+    /// failed to acquire a lock for, that should be awaited so we know when to run again.
+    pub fn all_or_nothing(self, conn_id: &ConnectionId) -> Result<WriteLocks, CatalogItemId> {
+        let (locks, missing): (BTreeMap<_, _>, BTreeSet<_>) =
+            self.locks
+                .into_iter()
+                .partition_map(|(gid, lock)| match lock {
+                    Some(lock) => itertools::Either::Left((gid, lock)),
+                    None => itertools::Either::Right(gid),
+                });
+
+        match missing.iter().next() {
+            None => {
+                tracing::info!(%conn_id, ?locks, "acquired write locks");
+                Ok(WriteLocks {
+                    locks,
+                    conn_id: conn_id.clone(),
+                })
+            }
+            Some(gid) => {
+                tracing::info!(?missing, "failed to acquire write locks");
+                // Explicitly drop the already acquired locks.
+                drop(locks);
+                Err(*gid)
+            }
+        }
+    }
+}
+
+/// Collection of [`WriteLocks`] gathered during [`group_commit`].
+///
+/// Note: This struct should __never__ be used outside of group commit because it attempts to merge
+/// together several collections of [`WriteLocks`] which if not done carefully can cause deadlocks
+/// or consistency violations.
+///
+/// We must prevent writes from occurring to tables during read then write plans (e.g. `UPDATE`)
+/// but we can allow blind writes (e.g. `INSERT`) to get committed concurrently at the same
+/// timestamp when submitting the updates from a read then write plan.
+///
+/// Naively it would seem as though we could allow blind writes to occur whenever as blind writes
+/// could never cause invalid retractions, but it could cause us to violate serializability because
+/// there is no total order we could define for the transactions. Consider the following scenario:
+///
+/// ```text
+/// table: foo
+///
+///  a | b
+/// --------
+///  x   2
+///  y   3
+///  z   4
+///
+/// -- Session(A)
+/// -- read then write plan, reads at t0, writes at t3, transaction Ta
+/// DELETE FROM foo WHERE b % 2 = 0;
+///
+///
+/// -- Session(B)
+/// -- blind write into foo, writes at t1, transaction Tb
+/// INSERT INTO foo VALUES ('q', 6);
+/// -- select from foo, reads at t2, transaction Tc
+/// SELECT * FROM foo;
+///
+///
+/// The times these operations occur at are ordered:
+/// t0 < t1 < t2 < t3
+///
+/// Given the timing of the operations, the transactions must have the following order:
+///
+/// * Ta does not observe ('q', 6), so Ta < Tb
+/// * Tc does observe ('q', 6), so Tb < Tc
+/// * Tc does not observe the retractions from Ta, so Tc < Ta
+///
+/// For total order to exist, Ta < Tb < Tc < Ta, which is impossible.
+/// ```
+///
+/// [`group_commit`]: super::coord::Coordinator::group_commit
+#[derive(Debug, Default)]
+pub(crate) struct GroupCommitWriteLocks {
+    locks: BTreeMap<CatalogItemId, tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl GroupCommitWriteLocks {
+    /// Merge a set of [`WriteLocks`] into this collection for group commit.
+    pub fn merge(&mut self, mut locks: WriteLocks) {
+        // Note: Ideally we would use `.drain`, but that method doesn't exist for BTreeMap.
+        //
+        // See: <https://github.com/rust-lang/rust/issues/81074>
+        let existing = std::mem::take(&mut locks.locks);
+        self.locks.extend(existing);
+    }
+
+    /// Returns the collections we're missing locks for, if any.
+    pub fn missing_locks(
+        &self,
+        writes: impl Iterator<Item = CatalogItemId>,
+    ) -> BTreeSet<CatalogItemId> {
+        let mut missing = BTreeSet::new();
+        for write in writes {
+            if !self.locks.contains_key(&write) {
+                missing.insert(write);
+            }
+        }
+        missing
+    }
+}
+
+impl Drop for GroupCommitWriteLocks {
+    fn drop(&mut self) {
+        if !self.locks.is_empty() {
+            tracing::info!(
+                locks = ?self.locks,
+                "dropping group commit write locks",
+            );
         }
     }
 }

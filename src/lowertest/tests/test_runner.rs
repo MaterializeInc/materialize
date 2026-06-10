@@ -116,7 +116,7 @@ mod tests {
                                     return Err(format!(
                                         "unexpected second argument for MultiUnnamedArg {:?}",
                                         unexpected
-                                    ))
+                                    ));
                                 }
                             }
                         } else {

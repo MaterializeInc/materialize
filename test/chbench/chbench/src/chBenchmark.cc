@@ -843,18 +843,22 @@ static int gen(int argc, char* argv[]) {
     return 0;
 }
 int main(int argc, char* argv[]) {
+    int ret = 0;
     for (int i = 1; i < argc; ++i) {
         if (argv[i][0] == '-')
             continue;
         else if (strcmp(argv[i], "run") == 0)
-            return run(argc, argv);
+            ret = run(argc, argv);
         else if (strcmp(argv[i], "gen") == 0)
-            return gen(argc, argv);
+            ret = gen(argc, argv);
         else if (strcmp(argv[i], "version") == 0) {
             fprintf(stderr, "chBenchmark 0.1.0\n");
-            return 0;
         } else
             errx(1, "unknown command: %s\n", argv[i]);
+        // Use _exit to skip static destructors, working around a double-free
+        // bug in libpqxx's static type_name variables during library unloading
+        // on glibc 2.42+ (Ubuntu 26.04).
+        _exit(ret);
     }
     usage();
     return 0;

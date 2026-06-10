@@ -10,31 +10,26 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class CreateManagedCluster(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.58.0-dev")
-
     def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE CLUSTER create_managed_cluster1 SIZE '2-2', REPLICATION FACTOR 2;
+                >[version>=13800] CREATE CLUSTER create_managed_cluster1 SIZE 'scale=2,workers=2', REPLICATION FACTOR 2;
+                >[version<13800] CREATE CLUSTER create_managed_cluster1 SIZE 'scale=2,workers=2', REPLICATION FACTOR 1;
                 """,
                 """
-                > CREATE CLUSTER create_managed_cluster2 SIZE '2-2', REPLICATION FACTOR 2;
+                >[version>=13800] CREATE CLUSTER create_managed_cluster2 SIZE 'scale=2,workers=2', REPLICATION FACTOR 2;
+                >[version<13800] CREATE CLUSTER create_managed_cluster2 SIZE 'scale=2,workers=2', REPLICATION FACTOR 1;
                 """,
             ]
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE create_managed_cluster1_table (f1 INTEGER);
                 > CREATE TABLE create_managed_cluster2_table (f1 INTEGER);
 
@@ -61,15 +56,10 @@ class CreateManagedCluster(Check):
 
                 > DROP TABLE create_managed_cluster1_table CASCADE;
                 > DROP TABLE create_managed_cluster2_table CASCADE;
-           """
-            )
-        )
+           """))
 
 
 class DropManagedCluster(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.58.0-dev")
-
     def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -81,8 +71,10 @@ class DropManagedCluster(Check):
                 > INSERT INTO drop_managed_cluster1_table VALUES (123);
                 > INSERT INTO drop_managed_cluster2_table VALUES (234);
 
-                > CREATE CLUSTER drop_managed_cluster1 SIZE '2-2', REPLICATION FACTOR 2;
-                > CREATE CLUSTER drop_managed_cluster2 SIZE '2-2', REPLICATION FACTOR 2;
+                >[version>=13800] CREATE CLUSTER drop_managed_cluster1 SIZE 'scale=2,workers=2', REPLICATION FACTOR 2;
+                >[version<13800] CREATE CLUSTER drop_managed_cluster1 SIZE 'scale=2,workers=2', REPLICATION FACTOR 1;
+                >[version>=13800] CREATE CLUSTER drop_managed_cluster2 SIZE 'scale=2,workers=2', REPLICATION FACTOR 2;
+                >[version<13800] CREATE CLUSTER drop_managed_cluster2 SIZE 'scale=2,workers=2', REPLICATION FACTOR 1;
 
                 > SET cluster=drop_managed_cluster1
                 > CREATE DEFAULT INDEX ON drop_managed_cluster1_table;
@@ -102,9 +94,7 @@ class DropManagedCluster(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=drop_managed_cluster1
 
                 > SET cluster=drop_managed_cluster2
@@ -122,6 +112,4 @@ class DropManagedCluster(Check):
 
                 ! SELECT * FROM drop_managed_cluster2_view;
                 contains: unknown catalog item 'drop_managed_cluster2_view'
-           """
-            )
-        )
+           """))

@@ -134,13 +134,13 @@ COMPLETE 0
 # CREATE CLUSTER
 
 simple conn=joe,user=joe
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 db error: ERROR: permission denied for SYSTEM
 DETAIL: The 'joe' role needs CREATECLUSTER privileges on SYSTEM
 
 simple conn=child,user=child
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 db error: ERROR: permission denied for SYSTEM
 DETAIL: The 'child' role needs CREATECLUSTER privileges on SYSTEM
@@ -151,12 +151,12 @@ GRANT CREATECLUSTER ON SYSTEM TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=child,user=child
-CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c1 REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -168,17 +168,17 @@ COMPLETE 0
 # CREATE CLUSTER REPLICA
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE 'scale=1,workers=1';
 ----
 db error: ERROR: must be owner of CLUSTER clus
 
 simple conn=child,user=child
-CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE 'scale=1,workers=1';
 ----
 db error: ERROR: must be owner of CLUSTER clus
 
@@ -188,12 +188,12 @@ ALTER CLUSTER clus OWNER TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
 simple conn=child,user=child
-CREATE CLUSTER REPLICA clus.r3 SIZE '1';
+CREATE CLUSTER REPLICA clus.r3 SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
@@ -299,6 +299,70 @@ REVOKE CREATEROLE ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
+# ALTER ROLE - superuser attribute changes require superuser, not just CREATEROLE.
+# Both SUPERUSER and NOSUPERUSER must be guarded.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+# A non-superuser with CREATEROLE cannot grant SUPERUSER.
+simple conn=joe,user=joe
+ALTER ROLE r SUPERUSER;
+----
+db error: ERROR: permission denied to alter superuser role
+DETAIL: You must be a superuser to alter superuser role
+
+# A non-superuser with CREATEROLE cannot strip NOSUPERUSER either.
+simple conn=joe,user=joe
+ALTER ROLE r NOSUPERUSER;
+----
+db error: ERROR: permission denied to alter superuser role
+DETAIL: You must be a superuser to alter superuser role
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+# Regression test: ALTER ROLE PASSWORD + LOGIN should not bypass CREATEROLE check.
+# The RBAC match arm for self-password-change must verify that password is the
+# ONLY attribute being changed.
+
+simple conn=joe,user=joe
+ALTER ROLE joe LOGIN;
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATEROLE privileges on SYSTEM
+
+simple conn=joe,user=joe
+ALTER ROLE joe PASSWORD 'secret' LOGIN;
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATEROLE privileges on SYSTEM
+
+simple conn=joe,user=joe
+ALTER ROLE joe PASSWORD 'secret' INHERIT;
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATEROLE privileges on SYSTEM
+
+simple conn=joe,user=joe
+ALTER ROLE joe PASSWORD 'secret';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO false;
+----
+COMPLETE 0
+
 # CREATE SOURCE
 
 simple conn=joe,user=joe
@@ -335,7 +399,7 @@ CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER source_cluster REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER source_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -510,15 +574,21 @@ CREATE SOURCE s IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+CREATE TABLE s_tbl FROM SOURCE s;
+----
+COMPLETE 0
+
 simple conn=mz_support,user=mz_support
 SET CLUSTER TO "quickstart";
 ----
 COMPLETE 0
 
 simple conn=mz_support,user=mz_support
-SELECT * FROM s_progress LIMIT 0;
+SELECT * FROM s LIMIT 0;
 ----
-COMPLETE 0
+db error: ERROR: permission denied for SOURCE "materialize.public.s"
+DETAIL: The 'mz_support' role needs SELECT privileges on SOURCE "materialize.public.s"
 
 simple conn=mz_support,user=mz_support
 SET CLUSTER TO mz_catalog_server;
@@ -526,7 +596,7 @@ SET CLUSTER TO mz_catalog_server;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-DROP SOURCE s;
+DROP SOURCE s CASCADE;
 ----
 COMPLETE 0
 
@@ -1393,13 +1463,13 @@ COMPLETE 0
 simple conn=joe,user=joe
 SHOW CREATE TABLE t;
 ----
-materialize.public.t,CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4")
+materialize.public.t,CREATE TABLE materialize.public.t (a pg_catalog.int4);
 COMPLETE 1
 
 simple conn=child,user=child
 SHOW CREATE TABLE t;
 ----
-materialize.public.t,CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4")
+materialize.public.t,CREATE TABLE materialize.public.t (a pg_catalog.int4);
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
@@ -1434,16 +1504,20 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
+simple multiline,conn=joe,user=joe
 SHOW CREATE CONNECTION csr_conn;
 ----
-materialize.public.csr_conn,CREATE CONNECTION "materialize"."public"."csr_conn" TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com')
+materialize.public.csr_conn,CREATE CONNECTION materialize.public.csr_conn
+TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com');
+EOF
 COMPLETE 1
 
-simple conn=child,user=child
+simple multiline,conn=child,user=child
 SHOW CREATE CONNECTION csr_conn;
 ----
-materialize.public.csr_conn,CREATE CONNECTION "materialize"."public"."csr_conn" TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com')
+materialize.public.csr_conn,CREATE CONNECTION materialize.public.csr_conn
+TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com');
+EOF
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
@@ -1760,13 +1834,13 @@ CREATE TABLE t (a ty);
 COMPLETE 0
 
 simple conn=joe,user=joe
-EXPLAIN SELECT a::ty FROM t;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a::ty FROM t;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 DETAIL: The 'joe' role needs USAGE privileges on SCHEMA "materialize.public"
 
 simple conn=child,user=child
-EXPLAIN SELECT a::ty FROM t;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a::ty FROM t;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 DETAIL: The 'child' role needs USAGE privileges on SCHEMA "materialize.public"
@@ -1782,7 +1856,7 @@ GRANT USAGE ON TYPE ty TO joe;
 COMPLETE 0
 
 simple multiline,conn=joe,user=joe
-EXPLAIN SELECT a::ty FROM t;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a::ty FROM t;
 ----
 Explained Query:
   ReadStorage materialize.public.t
@@ -1795,7 +1869,7 @@ EOF
 COMPLETE 1
 
 simple multiline,conn=child,user=child
-EXPLAIN SELECT a::ty FROM t;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT a::ty FROM t;
 ----
 Explained Query:
   ReadStorage materialize.public.t
@@ -1946,13 +2020,13 @@ CREATE VIEW v AS SELECT * FROM t;
 COMPLETE 0
 
 simple conn=joe,user=joe
-EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM v;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 DETAIL: The 'joe' role needs USAGE privileges on SCHEMA "materialize.public"
 
 simple conn=child,user=child
-EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM v;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 DETAIL: The 'child' role needs USAGE privileges on SCHEMA "materialize.public"
@@ -1963,7 +2037,7 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 COMPLETE 0
 
 simple multiline,conn=joe,user=joe
-EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM v;
 ----
 Explained Query:
   ReadStorage materialize.public.t
@@ -1976,7 +2050,7 @@ EOF
 COMPLETE 1
 
 simple multiline,conn=child,user=child
-EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM v;
 ----
 Explained Query:
   ReadStorage materialize.public.t
@@ -2023,7 +2097,7 @@ CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart AS SELECT 1
 COMPLETE 0
 
 query error permission denied for SCHEMA "materialize.public"
-EXPLAIN MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv;
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO materialize;
@@ -2031,7 +2105,7 @@ GRANT USAGE ON SCHEMA materialize.public TO materialize;
 COMPLETE 0
 
 query T multiline
-EXPLAIN MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Constant
@@ -2066,7 +2140,7 @@ CREATE INDEX i IN CLUSTER quickstart ON t(a)
 COMPLETE 0
 
 query error permission denied for SCHEMA "materialize.public"
-EXPLAIN INDEX i;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR INDEX i;
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO materialize;
@@ -2074,10 +2148,10 @@ GRANT USAGE ON SCHEMA materialize.public TO materialize;
 COMPLETE 0
 
 query T multiline
-EXPLAIN INDEX i;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR INDEX i;
 ----
 materialize.public.i:
-  ArrangeBy keys=[[#0]]
+  ArrangeBy keys=[[#0{a}]]
     ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -3052,7 +3126,7 @@ GRANT CREATECLUSTER ON SYSTEM TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -3079,12 +3153,12 @@ GRANT CREATECLUSTER ON SYSTEM TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
@@ -3226,7 +3300,7 @@ GRANT CREATECLUSTER ON SYSTEM TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -3514,9 +3588,73 @@ DROP ROLE r1, r2, r3;
 ----
 COMPLETE 0
 
-# Disable rbac checks.
+# Temporary schema privileges should fail with correct error message.
+# With lazy temporary schema creation, the temp schema may not exist yet,
+# but we still need to return the correct error (not "unknown schema").
 
+statement error cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
+GRANT USAGE ON SCHEMA mz_temp TO PUBLIC
+
+statement error cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
+REVOKE USAGE ON SCHEMA mz_temp FROM PUBLIC
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA mz_temp TO PUBLIC
+----
+db error: ERROR: cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA mz_temp FROM PUBLIC
+----
+db error: ERROR: cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
+
+# Disable rbac checks.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
+
+# Regression tests: ALTER ... OWNER TO ... and GRANT/REVOKE retract + re-add
+# the affected catalog item via `apply_item_update`. Plans on MV / INDEX
+# items must survive, so that EXPLAIN can still show them.
+statement ok
+CREATE ROLE plan_owner_other
+
+statement ok
+CREATE TABLE t_owner_plans (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_owner_plans AS SELECT a + 1 AS b FROM t_owner_plans
+
+statement ok
+CREATE DEFAULT INDEX idx_owner_plans ON mv_owner_plans
+
+statement ok
+ALTER MATERIALIZED VIEW mv_owner_plans OWNER TO plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_owner_plans
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv_owner_plans
+
+statement ok
+ALTER INDEX idx_owner_plans OWNER TO plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX idx_owner_plans
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR INDEX idx_owner_plans
+
+statement ok
+GRANT SELECT ON mv_owner_plans TO plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_owner_plans
+
+statement ok
+REVOKE SELECT ON mv_owner_plans FROM plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_owner_plans

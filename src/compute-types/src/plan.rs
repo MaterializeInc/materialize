@@ -12,28 +12,22 @@
 #![warn(missing_debug_implementations)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroU64;
 
+use columnar::Columnar;
 use mz_expr::{
     CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr,
     OptimizedMirRelationExpr, TableFunc,
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::str::Indent;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{ColumnType, Diff, GlobalId, Row};
-use proptest::arbitrary::Arbitrary;
-use proptest::prelude::*;
-use proptest::strategy::Strategy;
-use proptest_derive::Arbitrary;
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::dataflows::DataflowDescription;
 use crate::plan::join::JoinPlan;
-use crate::plan::proto_available_collections::ProtoColumnTypes;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
@@ -41,110 +35,43 @@ use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
 
-pub mod flat_plan;
 pub mod interpret;
 pub mod join;
 pub mod reduce;
+pub mod render_plan;
 pub mod threshold;
 pub mod top_k;
 pub mod transform;
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.rs"));
-
-/// The forms in which an operator's output is available;
-/// it can be considered the plan-time equivalent of
-/// `render::context::CollectionBundle`.
+/// The forms in which an operator's output is available.
 ///
-/// These forms are either "raw", representing an unarranged collection,
-/// or "arranged", representing one that has been arranged by some key.
+/// These forms may include "raw", meaning as a streamed collection, but also any
+/// number of "arranged" representations.
 ///
-/// The raw collection, if it exists, may be consumed directly.
-///
-/// The arranged collections are slightly more complicated:
-/// Each key here is attached to a description of how the corresponding
-/// arrangement is permuted to remove value columns
-/// that are redundant with key columns. Thus, the first element in each
-/// tuple of `arranged` is the arrangement key; the second is the map of
-/// logical output columns to columns in the key or value of the deduplicated
-/// representation, and the third is a "thinning expression",
-/// or list of columns to include in the value
-/// when arranging.
-///
-/// For example, assume a 5-column collection is to be arranged by the key
-/// `[Column(2), Column(0) + Column(3), Column(1)]`.
-/// Then `Column(1)` and `Column(2)` in the value are redundant with the key, and
-/// only columns 0, 3, and 4 need to be stored separately.
-/// The thinning expression will then be `[0, 3, 4]`.
-///
-/// The permutation represents how to recover the
-/// original values (logically `[Column(0), Column(1), Column(2), Column(3), Column(4)]`)
-/// from the key and value of the arrangement, logically
-/// `[Column(2), Column(0) + Column(3), Column(1), Column(0), Column(3), Column(4)]`.
-/// Thus, the permutation in this case should be `{0: 3, 1: 2, 2: 0, 3: 4, 4: 5}`.
-///
-/// Note that this description, while true at the time of writing, is merely illustrative;
-/// users of this struct should not rely on the exact strategy used for generating
-/// the permutations. As long as clients apply the thinning expression
-/// when creating arrangements, and permute by the hashmap when reading them,
-/// the contract of the function where they are generated (`mz_expr::permutation_for_arrangement`)
-/// ensures that the correct values will be read.
+/// Each arranged representation is described by a `KeyValRowMapping`, or rather
+/// at the moment by its three fields in a triple. These fields explain how to form
+/// a "key" by applying some expressions to each row, how to select "values" from
+/// columns not explicitly captured by the key, and how to return to the original
+/// row from the concatenation of key and value. Further explanation is available
+/// in the documentation for `KeyValRowMapping`.
 #[derive(
-    Arbitrary, Clone, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
 )]
 pub struct AvailableCollections {
     /// Whether the collection exists in unarranged form.
     pub raw: bool,
-    /// The set of arrangements of the collection, along with a
-    /// column permutation mapping
-    #[proptest(strategy = "prop::collection::vec(any_arranged_thin(), 0..3)")]
-    pub arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
-    /// The types of the columns in the raw form of the collection, if known. We
-    /// only capture types when necessary to support arrangement specialization,
-    /// so this only done for specific LIR operators during lowering.
-    pub types: Option<Vec<ColumnType>>,
-}
-
-/// A strategy that produces arrangements that are thinner than the default. That is
-/// the number of direct children is limited to a maximum of 3.
-pub(crate) fn any_arranged_thin(
-) -> impl Strategy<Value = (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> {
-    (
-        prop::collection::vec(MirScalarExpr::arbitrary(), 0..3),
-        BTreeMap::<usize, usize>::arbitrary(),
-        Vec::<usize>::arbitrary(),
-    )
-}
-
-impl RustType<ProtoColumnTypes> for Vec<ColumnType> {
-    fn into_proto(&self) -> ProtoColumnTypes {
-        ProtoColumnTypes {
-            types: self.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoColumnTypes) -> Result<Self, TryFromProtoError> {
-        proto.types.into_rust()
-    }
-}
-
-impl RustType<ProtoAvailableCollections> for AvailableCollections {
-    fn into_proto(&self) -> ProtoAvailableCollections {
-        ProtoAvailableCollections {
-            raw: self.raw,
-            arranged: self.arranged.into_proto(),
-            types: self.types.into_proto(),
-        }
-    }
-
-    fn from_proto(x: ProtoAvailableCollections) -> Result<Self, TryFromProtoError> {
-        Ok({
-            Self {
-                raw: x.raw,
-                arranged: x.arranged.into_rust()?,
-                types: x.types.into_rust()?,
-            }
-        })
-    }
+    /// The list of available arrangements, presented as a `KeyValRowMapping`,
+    /// but here represented by a triple `(to_key, to_val, to_row)` instead.
+    /// The documentation for `KeyValRowMapping` explains these fields better.
+    pub arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
 }
 
 impl AvailableCollections {
@@ -153,17 +80,11 @@ impl AvailableCollections {
         Self {
             raw: true,
             arranged: Vec::new(),
-            types: None,
         }
     }
 
-    /// Represent a collection that is arranged in the
-    /// specified ways, with optionally given types describing
-    /// the rows that would be in the raw form of the collection.
-    pub fn new_arranged(
-        arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
-        types: Option<Vec<ColumnType>>,
-    ) -> Self {
+    /// Represent a collection that is arranged in the specified ways.
+    pub fn new_arranged(arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>) -> Self {
         assert!(
             !arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
@@ -171,14 +92,11 @@ impl AvailableCollections {
         Self {
             raw: false,
             arranged,
-            types,
         }
     }
 
     /// Get some arrangement, if one exists.
-    pub fn arbitrary_arrangement(
-        &self,
-    ) -> Option<&(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> {
+    pub fn arbitrary_arrangement(&self) -> Option<&(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> {
         assert!(
             self.raw || !self.arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
@@ -187,25 +105,89 @@ impl AvailableCollections {
     }
 }
 
+/// How to render the arrangements requested by an `ArrangeBy`.
+///
+/// Decided during LIR lowering and consumed by the renderer. The variant says what the
+/// renderer will do, not what it knows about the input.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
+pub enum ArrangementStrategy {
+    /// Form arrangements directly from the input collection.
+    Direct,
+    /// Insert temporal bucketing in front of the arrangement, to delay future-stamped
+    /// updates (e.g., from `mz_now()` MFPs) until their bucket boundary releases them.
+    /// Honoured only when `ENABLE_COMPUTE_TEMPORAL_BUCKETING` is set; otherwise behaves like
+    /// `Direct`.
+    TemporalBucketing,
+}
+
+impl std::fmt::Display for ArrangementStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArrangementStrategy::Direct => write!(f, "Direct"),
+            ArrangementStrategy::TemporalBucketing => write!(f, "TemporalBucketing"),
+        }
+    }
+}
+
 /// An identifier for an LIR node.
-pub type LirId = u64;
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Columnar
+)]
+pub struct LirId(u64);
+
+impl LirId {
+    fn as_u64(&self) -> u64 {
+        self.0
+    }
+}
+
+impl From<LirId> for u64 {
+    fn from(value: LirId) -> Self {
+        value.as_u64()
+    }
+}
+
+impl std::fmt::Display for LirId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Plan<T = mz_repr::Timestamp> {
+pub struct Plan {
     /// A dataflow-local identifier.
     pub lir_id: LirId,
     /// The underlying operator.
-    pub node: PlanNode<T>,
+    pub node: PlanNode,
 }
 
 /// The actual AST node of the `Plan`.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub enum PlanNode<T = mz_repr::Timestamp> {
+pub enum PlanNode {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
-        rows: Result<Vec<(Row, T, Diff)>, EvalError>,
+        rows: Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
     },
     /// A reference to a bound collection.
     ///
@@ -238,10 +220,10 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The local identifier to be used, available to `body` as `Id::Local(id)`.
         id: LocalId,
         /// The collection that should be bound to `id`.
-        value: Box<Plan<T>>,
+        value: Box<Plan>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan<T>>,
+        body: Box<Plan>,
     },
     /// Binds `values` to `ids`, evaluates them potentially recursively, and returns `body`.
     ///
@@ -253,12 +235,12 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The local identifiers to be used, available to `body` as `Id::Local(id)`.
         ids: Vec<LocalId>,
         /// The collection that should be bound to `id`.
-        values: Vec<Plan<T>>,
+        values: Vec<Plan>,
         /// Maximum number of iterations. See further info on the MIR `LetRec`.
         limits: Vec<Option<LetRecLimit>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan<T>>,
+        body: Box<Plan>,
     },
     /// Map, Filter, and Project operators.
     ///
@@ -267,7 +249,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// and sometimes reduce stages are not able to absorb this operator.
     Mfp {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
         /// Linear operator to apply to each record.
         mfp: MapFilterProject,
         /// Whether the input is from an arrangement, and if so,
@@ -287,17 +269,17 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// are being unpacked, producing quadratic output in those cases. Instead,
     /// in these cases use a `mfp` member that projects away these large fields.
     FlatMap {
-        /// The input collection.
-        input: Box<Plan<T>>,
-        /// The variable-record emitting function.
-        func: TableFunc,
-        /// Expressions that for each row prepare the arguments to `func`.
-        exprs: Vec<MirScalarExpr>,
-        /// Linear operator to apply to each record produced by `func`.
-        mfp_after: MapFilterProject,
         /// The particular arrangement of the input we expect to use,
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
+        /// The input collection.
+        input: Box<Plan>,
+        /// Expressions that for each row prepare the arguments to `func`.
+        exprs: Vec<MirScalarExpr>,
+        /// The variable-record emitting function.
+        func: TableFunc,
+        /// Linear operator to apply to each record produced by `func`.
+        mfp_after: MapFilterProject,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -306,7 +288,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// strategy we will use, and any pushed down per-record work.
     Join {
         /// An ordered list of inputs that will be joined.
-        inputs: Vec<Plan<T>>,
+        inputs: Vec<Plan>,
         /// Detailed information about the implementation of the join.
         ///
         /// This includes information about the implementation strategy, but also
@@ -316,8 +298,11 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     },
     /// Aggregation by key.
     Reduce {
+        /// The particular arrangement of the input we expect to use,
+        /// if any
+        input_key: Option<Vec<MirScalarExpr>>,
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
         /// A plan for changing input records into key, value pairs.
         key_val_plan: KeyValPlan,
         /// A plan for performing the reduce.
@@ -326,30 +311,50 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         plan: ReducePlan,
-        /// The particular arrangement of the input we expect to use,
-        /// if any
-        input_key: Option<Vec<MirScalarExpr>>,
         /// An MFP that must be applied to results. The projection part of this
         /// MFP must preserve the key for the reduction; otherwise, the results
         /// become undefined. Additionally, the MFP must be free from temporal
         /// predicates so that it can be readily evaluated.
+        /// TODO(ggevay): should we wrap this in [`mz_expr::SafeMfpPlan`]?
         mfp_after: MapFilterProject,
+        /// Strategy for forming the internal input arrangement built by `Reduce`
+        /// (materialized via `key_val_plan`).
+        ///
+        /// Set by the lowering from the input's `has_future_updates` flag. The
+        /// renderer applies it to the keyed `(key, val)` stream feeding the
+        /// reduce. See `render_reduce` for the rationale on why this is
+        /// plumbed through `Reduce` rather than handled at the arrangement site.
+        ///
+        /// Note: unrelated to the hash buckets used by hierarchical reductions
+        /// (e.g. `ReducePlan::Hierarchical`'s `buckets`), which are an internal
+        /// sharding scheme for `min`/`max`-style aggregations. Here "bucketing"
+        /// refers exclusively to temporal (time-domain) bucketing of
+        /// future-stamped updates.
+        temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
         /// A plan for performing the Top-K.
         ///
         /// The implementation of reduction has several different strategies based
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         top_k_plan: TopKPlan,
+        /// Strategy for bucketing the input collection ahead of the Top-K operator.
+        ///
+        /// Set by the lowering from the input's `has_future_updates` flag. The
+        /// renderer applies it to the per-row input stream at the top of
+        /// `render_topk`, covering all three `TopKPlan` arms uniformly. See
+        /// `PlanNode::Reduce::temporal_bucketing_strategy` for the underlying
+        /// convention.
+        temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Inverts the sign of each update.
     Negate {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
     },
     /// Filters records that accumulate negatively.
     ///
@@ -357,7 +362,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// resources proportional to the number of records with non-zero accumulation.
     Threshold {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
         /// A plan for performing the threshold.
         ///
         /// The implementation of reduction has several different strategies based
@@ -373,9 +378,18 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// implementing the "distinct" operator.
     Union {
         /// The input collections
-        inputs: Vec<Plan<T>>,
+        inputs: Vec<Plan>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
+        /// Per-input bucketing strategies. Lockstep with `inputs`: index `i` is the
+        /// strategy applied to `inputs[i]` before concatenation.
+        ///
+        /// Set by the lowering from each input's `has_future_updates` flag. Only
+        /// consolidating Unions (`consolidate_output: true`) carry non-`Direct`
+        /// entries, because bucketing only pays off ahead of a consolidating
+        /// downstream operator. See `PlanNode::Reduce::temporal_bucketing_strategy`
+        /// for the underlying convention.
+        temporal_bucketing_strategies: Vec<ArrangementStrategy>,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -384,23 +398,24 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// be important for e.g. the `Join` stage which benefits from multiple arrangements
     /// or to cap a `Plan` so that indexes can be exported.
     ArrangeBy {
-        /// The input collection.
-        input: Box<Plan<T>>,
-        /// A list of arrangement keys, and possibly a raw collection,
-        /// that will be added to those of the input.
-        ///
-        /// If any of these collection forms are already present in the input, they have no effect.
-        forms: AvailableCollections,
         /// The key that must be used to access the input.
         input_key: Option<Vec<MirScalarExpr>>,
+        /// The input collection.
+        input: Box<Plan>,
         /// The MFP that must be applied to the input.
         input_mfp: MapFilterProject,
+        /// A list of arrangement keys, and possibly a raw collection,
+        /// that will be added to those of the input. Does not include
+        /// any other existing arrangements.
+        forms: AvailableCollections,
+        /// How the renderer should form the arrangements requested by `forms`.
+        strategy: ArrangementStrategy,
     },
 }
 
-impl<T> PlanNode<T> {
+impl PlanNode {
     /// Iterates through references to child expressions.
-    pub fn children(&self) -> impl Iterator<Item = &Plan<T>> {
+    pub fn children(&self) -> impl Iterator<Item = &Plan> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
@@ -439,7 +454,7 @@ impl<T> PlanNode<T> {
     }
 
     /// Iterates through mutable references to child expressions.
-    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Plan<T>> {
+    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Plan> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
@@ -478,9 +493,9 @@ impl<T> PlanNode<T> {
     }
 }
 
-impl<T> PlanNode<T> {
+impl PlanNode {
     /// Attach an `lir_id` to a `PlanNode` to make a complete `Plan`.
-    pub fn as_plan(self, lir_id: LirId) -> Plan<T> {
+    pub fn as_plan(self, lir_id: LirId) -> Plan {
         Plan { lir_id, node: self }
     }
 }
@@ -489,274 +504,39 @@ impl Plan {
     /// Pretty-print this [Plan] to a string.
     pub fn pretty(&self) -> String {
         let config = ExplainConfig::default();
-        self.explain(&config, None)
+        self.debug_explain(&config, None)
     }
 
     /// Pretty-print this [Plan] to a string using a custom
     /// [ExplainConfig] and an optionally provided [ExprHumanizer].
-    pub fn explain(&self, config: &ExplainConfig, humanizer: Option<&dyn ExprHumanizer>) -> String {
+    /// This is intended for debugging and tests, not users.
+    pub fn debug_explain(
+        &self,
+        config: &ExplainConfig,
+        humanizer: Option<&dyn ExprHumanizer>,
+    ) -> String {
         text_string_at(self, || PlanRenderingContext {
             indent: Indent::default(),
             humanizer: humanizer.unwrap_or(&DummyHumanizer),
             annotations: BTreeMap::default(),
             config,
+            ambiguous_ids: BTreeSet::default(),
         })
-    }
-}
-
-impl Arbitrary for Plan {
-    type Strategy = BoxedStrategy<Plan>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let row_diff = prop::collection::vec(
-            (
-                Row::arbitrary_with((1..5).into()),
-                mz_repr::Timestamp::arbitrary(),
-                Diff::arbitrary(),
-            ),
-            0..2,
-        );
-        let rows = prop::result::maybe_ok(row_diff, EvalError::arbitrary());
-        let constant = (rows, any::<LirId>()).prop_map(|(rows, lir_id)| {
-            PlanNode::<mz_repr::Timestamp>::Constant { rows }.as_plan(lir_id)
-        });
-
-        let get = (
-            any::<GlobalId>(),
-            any::<AvailableCollections>(),
-            any::<GetPlan>(),
-            any::<LirId>(),
-        )
-            .prop_map(|(id, keys, plan, lir_id)| {
-                PlanNode::<mz_repr::Timestamp>::Get {
-                    id: Id::Global(id),
-                    keys,
-                    plan,
-                }
-                .as_plan(lir_id)
-            });
-
-        let leaf = prop::strategy::Union::new(vec![constant.boxed(), get.boxed()]).boxed();
-
-        leaf.prop_recursive(2, 4, 5, |inner| {
-            prop::strategy::Union::new(vec![
-                //Plan::Let
-                (
-                    any::<LocalId>(),
-                    inner.clone(),
-                    inner.clone(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(id, value, body, lir_id)| {
-                        PlanNode::<mz_repr::Timestamp>::Let {
-                            id,
-                            value: value.into(),
-                            body: body.into(),
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::Mfp
-                (
-                    inner.clone(),
-                    any::<MapFilterProject>(),
-                    any::<Option<(Vec<MirScalarExpr>, Option<Row>)>>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(input, mfp, input_key_val, lir_id)| {
-                        PlanNode::Mfp {
-                            input: input.into(),
-                            mfp,
-                            input_key_val,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::FlatMap
-                (
-                    inner.clone(),
-                    any::<TableFunc>(),
-                    any::<Vec<MirScalarExpr>>(),
-                    any::<MapFilterProject>(),
-                    any::<Option<Vec<MirScalarExpr>>>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(input, func, exprs, mfp, input_key, lir_id)| {
-                        PlanNode::FlatMap {
-                            input: input.into(),
-                            func,
-                            exprs,
-                            mfp_after: mfp,
-                            input_key,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::Join
-                (
-                    prop::collection::vec(inner.clone(), 0..2),
-                    any::<JoinPlan>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(inputs, plan, lir_id)| {
-                        PlanNode::Join { inputs, plan }.as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::Reduce
-                (
-                    inner.clone(),
-                    any::<KeyValPlan>(),
-                    any::<ReducePlan>(),
-                    any::<Option<Vec<MirScalarExpr>>>(),
-                    any::<MapFilterProject>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(
-                        |(input, key_val_plan, plan, input_key, mfp_after, lir_id)| {
-                            PlanNode::Reduce {
-                                input: input.into(),
-                                key_val_plan,
-                                plan,
-                                input_key,
-                                mfp_after,
-                            }
-                            .as_plan(lir_id)
-                        },
-                    )
-                    .boxed(),
-                //Plan::TopK
-                (inner.clone(), any::<TopKPlan>(), any::<LirId>())
-                    .prop_map(|(input, top_k_plan, lir_id)| {
-                        PlanNode::TopK {
-                            input: input.into(),
-                            top_k_plan,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::Negate
-                (inner.clone(), any::<LirId>())
-                    .prop_map(|(x, lir_id)| PlanNode::Negate { input: x.into() }.as_plan(lir_id))
-                    .boxed(),
-                //Plan::Threshold
-                (inner.clone(), any::<ThresholdPlan>(), any::<LirId>())
-                    .prop_map(|(input, threshold_plan, lir_id)| {
-                        PlanNode::Threshold {
-                            input: input.into(),
-                            threshold_plan,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                // Plan::Union
-                (
-                    prop::collection::vec(inner.clone(), 0..2),
-                    any::<bool>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(x, b, lir_id)| {
-                        PlanNode::Union {
-                            inputs: x,
-                            consolidate_output: b,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::ArrangeBy
-                (
-                    inner,
-                    any::<AvailableCollections>(),
-                    any::<Option<Vec<MirScalarExpr>>>(),
-                    any::<MapFilterProject>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(input, forms, input_key, input_mfp, lir_id)| {
-                        PlanNode::ArrangeBy {
-                            input: input.into(),
-                            forms,
-                            input_key,
-                            input_mfp,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-            ])
-        })
-        .boxed()
     }
 }
 
 /// How a `Get` stage will be rendered.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum GetPlan {
     /// Simply pass input arrangements on to the next stage.
     PassArrangements,
     /// Using the supplied key, optionally seek the row, and apply the MFP.
-    Arrangement(
-        #[proptest(strategy = "prop::collection::vec(MirScalarExpr::arbitrary(), 0..3)")]
-        Vec<MirScalarExpr>,
-        Option<Row>,
-        MapFilterProject,
-    ),
+    Arrangement(Vec<MirScalarExpr>, Option<Row>, MapFilterProject),
     /// Scan the input collection (unarranged) and apply the MFP.
     Collection(MapFilterProject),
 }
 
-impl RustType<ProtoGetPlan> for GetPlan {
-    fn into_proto(&self) -> ProtoGetPlan {
-        use proto_get_plan::Kind::*;
-
-        ProtoGetPlan {
-            kind: Some(match self {
-                GetPlan::PassArrangements => PassArrangements(()),
-                GetPlan::Arrangement(k, s, m) => {
-                    Arrangement(proto_get_plan::ProtoGetPlanArrangement {
-                        key: k.into_proto(),
-                        seek: s.into_proto(),
-                        mfp: Some(m.into_proto()),
-                    })
-                }
-                GetPlan::Collection(mfp) => Collection(mfp.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoGetPlan) -> Result<Self, TryFromProtoError> {
-        use proto_get_plan::Kind::*;
-        use proto_get_plan::ProtoGetPlanArrangement;
-        match proto.kind {
-            Some(PassArrangements(())) => Ok(GetPlan::PassArrangements),
-            Some(Arrangement(ProtoGetPlanArrangement { key, seek, mfp })) => {
-                Ok(GetPlan::Arrangement(
-                    key.into_rust()?,
-                    seek.into_rust()?,
-                    mfp.into_rust_if_some("ProtoGetPlanArrangement::mfp")?,
-                ))
-            }
-            Some(Collection(mfp)) => Ok(GetPlan::Collection(mfp.into_rust()?)),
-            None => Err(TryFromProtoError::missing_field("ProtoGetPlan::kind")),
-        }
-    }
-}
-
-impl RustType<ProtoLetRecLimit> for LetRecLimit {
-    fn into_proto(&self) -> ProtoLetRecLimit {
-        ProtoLetRecLimit {
-            max_iters: self.max_iters.get(),
-            return_at_limit: self.return_at_limit,
-        }
-    }
-
-    fn from_proto(proto: ProtoLetRecLimit) -> Result<Self, TryFromProtoError> {
-        Ok(LetRecLimit {
-            max_iters: NonZeroU64::new(proto.max_iters).expect("max_iters > 0"),
-            return_at_limit: proto.return_at_limit,
-        })
-    }
-}
-
-impl<T: timely::progress::Timestamp> Plan<T> {
+impl Plan {
     /// Convert the dataflow description into one that uses render plans.
     #[mz_ore::instrument(
         target = "optimizer",
@@ -773,9 +553,14 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
 
-        if features.enable_consolidate_after_union_negate {
-            Self::refine_union_negate_consolidation(&mut dataflow);
-        }
+        // Note: `consolidate_output` for `Union` and per-input
+        // `temporal_bucketing_strategies` are decided at lowering time (see the
+        // `Union` arm of `lower_mir_expr_stack_safe`). The pre-existing
+        // `refine_union_negate_consolidation` pass — which used to flip
+        // `consolidate_output` to `true` for Unions with a `Negate` child — has
+        // been folded into the lowering, since lowering is the only point where
+        // the bucketing decision (which depends on `has_future_updates`) is
+        // available.
 
         if dataflow.is_single_time() {
             Self::refine_single_time_operator_selection(&mut dataflow);
@@ -789,20 +574,19 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             let monotonic_ids = dataflow
                 .source_imports
                 .iter()
-                .filter_map(|(id, (_, monotonic))| if *monotonic { Some(id) } else { None })
+                .filter_map(|(id, source_import)| source_import.monotonic.then_some(*id))
                 .chain(
                     dataflow
                         .index_imports
                         .iter()
-                        .filter_map(|(id, index_import)| {
+                        .filter_map(|(_id, index_import)| {
                             if index_import.monotonic {
-                                Some(id)
+                                Some(index_import.desc.on_id)
                             } else {
                                 None
                             }
                         }),
                 )
-                .cloned()
                 .collect::<BTreeSet<_>>();
 
             let config = TransformConfig { monotonic_ids };
@@ -846,7 +630,8 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
         // Extract MFPs from Get operators for sources, and extract what we can for the source.
         // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
-        for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
+        for (source_id, source_import) in dataflow.source_imports.iter_mut() {
+            let source = &mut source_import.desc;
             let mut identity_present = false;
             let mut mfps = Vec::new();
             for build_desc in dataflow.objects_to_build.iter_mut() {
@@ -894,38 +679,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         mz_repr::explain::trace_plan(dataflow);
     }
 
-    /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
-    #[mz_ore::instrument(
-        target = "optimizer",
-        level = "debug",
-        fields(path.segment = "refine_union_negate_consolidation")
-    )]
-    fn refine_union_negate_consolidation(dataflow: &mut DataflowDescription<Self>) {
-        for build_desc in dataflow.objects_to_build.iter_mut() {
-            let mut todo = vec![&mut build_desc.plan];
-            while let Some(expression) = todo.pop() {
-                let node = &mut expression.node;
-                match node {
-                    PlanNode::Union {
-                        inputs,
-                        consolidate_output,
-                        ..
-                    } => {
-                        if inputs
-                            .iter()
-                            .any(|input| matches!(input.node, PlanNode::Negate { .. }))
-                        {
-                            *consolidate_output = true;
-                        }
-                    }
-                    _ => {}
-                }
-                todo.extend(node.children_mut());
-            }
-        }
-        mz_repr::explain::trace_plan(dataflow);
-    }
-
     /// Refines the plans of objects to be built as part of `dataflow` to take advantage
     /// of monotonic operators if the dataflow refers to a single-time, i.e., is for a
     /// one-shot SELECT query.
@@ -948,9 +701,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     PlanNode::Reduce { plan, .. } => {
                         // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
                         match plan {
-                            ReducePlan::Collation(collation) => {
-                                collation.as_monotonic(true);
-                            }
                             ReducePlan::Hierarchical(hierarchical) => {
                                 hierarchical.as_monotonic(true);
                             }
@@ -994,7 +744,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         // a single-time dataflow.
         assert!(dataflow.is_single_time());
 
-        let transform = transform::RelaxMustConsolidate::<T>::new();
+        let transform = transform::RelaxMustConsolidate;
         for build_desc in dataflow.objects_to_build.iter_mut() {
             transform
                 .transform(config, &mut build_desc.plan)
@@ -1005,7 +755,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     }
 }
 
-impl<T> CollectionPlan for PlanNode<T> {
+impl CollectionPlan for PlanNode {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         match self {
             PlanNode::Constant { rows: _ } => (),
@@ -1038,6 +788,7 @@ impl<T> CollectionPlan for PlanNode<T> {
             | PlanNode::Union {
                 inputs,
                 consolidate_output: _,
+                temporal_bucketing_strategies: _,
             } => {
                 for input in inputs {
                     input.depends_on_into(out);
@@ -1049,28 +800,31 @@ impl<T> CollectionPlan for PlanNode<T> {
                 input_key_val: _,
             }
             | PlanNode::FlatMap {
-                input,
-                func: _,
-                exprs: _,
-                mfp_after: _,
                 input_key: _,
+                input,
+                exprs: _,
+                func: _,
+                mfp_after: _,
             }
             | PlanNode::ArrangeBy {
-                input,
-                forms: _,
                 input_key: _,
+                input,
                 input_mfp: _,
+                forms: _,
+                strategy: _,
             }
             | PlanNode::Reduce {
+                input_key: _,
                 input,
                 key_val_plan: _,
                 plan: _,
-                input_key: _,
                 mfp_after: _,
+                temporal_bucketing_strategy: _,
             }
             | PlanNode::TopK {
                 input,
                 top_k_plan: _,
+                temporal_bucketing_strategy: _,
             }
             | PlanNode::Negate { input }
             | PlanNode::Threshold {
@@ -1083,7 +837,7 @@ impl<T> CollectionPlan for PlanNode<T> {
     }
 }
 
-impl<T> CollectionPlan for Plan<T> {
+impl CollectionPlan for Plan {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         self.node.depends_on_into(out);
     }
@@ -1109,34 +863,4 @@ fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64
 
     buckets.reverse();
     buckets
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(10))]
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoAvailableCollections>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(10))]
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
-            let actual = protobuf_roundtrip::<_, ProtoGetPlan>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
 }

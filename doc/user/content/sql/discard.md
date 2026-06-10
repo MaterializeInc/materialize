@@ -10,10 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "discard.svg" >}}
+```mzsql
+DISCARD TEMP|TEMPORARY|ALL ;
+```
 
-Field | Use
-------|-----
-**TEMP** | Drops any temporary objects created by the current session.
+
+Syntax element | Description
+---------------|------------
+**TEMP**  | Drops any temporary objects created by the current session.
 **TEMPORARY** | Alias for `TEMP`.
 **ALL** | Drops any temporary objects, deallocates any extant prepared statements, and closes any extant cursors that were created by the current session.

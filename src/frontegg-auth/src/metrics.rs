@@ -12,7 +12,7 @@
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
+use prometheus::{HistogramVec, IntCounterVec, IntGauge};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -21,7 +21,7 @@ pub struct Metrics {
     /// How long it takes for a request to Frontegg to complete.
     pub request_duration_seconds: HistogramVec,
     /// The number of active refresh tasks we have running.
-    pub refresh_tasks_active: IntGaugeVec,
+    pub refresh_tasks_active: IntGauge,
     /// Number of sessions that have requested to start.
     pub session_request_count: IntCounterVec,
     /// Number of sessions that get refreshed.

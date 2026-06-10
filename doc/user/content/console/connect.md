@@ -1,6 +1,6 @@
 ---
-title: "Connect"
-description: "Displays details needed to connect to Materialize."
+title: "Connect (Cloud-only)"
+description: "Displays details needed to connect clients to Materialize."
 disable_toc: true
 menu:
   main:

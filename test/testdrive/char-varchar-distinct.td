@@ -8,10 +8,11 @@
 # by the Apache License, Version 2.0.
 
 #
-# Make sure the distinct operator inside a detaflow operates correctly
+# Make sure the distinct operator inside a dataflow operates correctly
 # with respect to CHAR/VARCHAR, especially in the presence of trailing
 # spaces.
 #
+# The reason for this being a td and not slt is that td has "" wrapping on the output, which is convenient here.
 
 > SELECT 'a '::char(5) UNION DISTINCT SELECT 'a  '::char(5);
 "a    "

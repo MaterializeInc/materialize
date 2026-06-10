@@ -9,14 +9,15 @@
 
 use std::fmt::{self, Debug};
 
+use mz_ore::str::redact;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::Strategy;
 use serde::Serialize;
 
 use crate::stats::{
-    proto_primitive_stats, BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
-    OptionStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats, TrimStats,
+    BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats, OptionStats,
+    ProtoPrimitiveBytesStats, ProtoPrimitiveStats, TrimStats, proto_primitive_stats,
 };
 use crate::timestamp::try_parse_monotonic_iso8601_timestamp;
 
@@ -131,13 +132,19 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let l = serde_json::to_value(&self.lower).expect("valid json");
         let u = serde_json::to_value(&self.upper).expect("valid json");
-        Debug::fmt(&serde_json::json!({"lower": l, "upper": u}), f)
+        f.debug_struct("PrimitiveStats")
+            .field("lower", &redact(l))
+            .field("upper", &redact(u))
+            .finish()
     }
 }
 
 impl Debug for PrimitiveStats<Vec<u8>> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.debug_json(), f)
+        f.debug_struct("PrimitiveStats")
+            .field("lower", &redact(hex::encode(&self.lower)))
+            .field("upper", &redact(hex::encode(&self.upper)))
+            .finish()
     }
 }
 
@@ -256,7 +263,7 @@ macro_rules! primitive_stats_rust_type {
                     _ => {
                         return Err(TryFromProtoError::missing_field(
                             "proto_primitive_stats::Lower::$lower",
-                        ))
+                        ));
                     }
                 };
                 let upper = proto
@@ -267,7 +274,7 @@ macro_rules! primitive_stats_rust_type {
                     _ => {
                         return Err(TryFromProtoError::missing_field(
                             "proto_primitive_stats::Upper::$upper",
-                        ))
+                        ));
                     }
                 };
                 Ok(PrimitiveStats { lower, upper })
@@ -321,6 +328,7 @@ impl TrimStats for ProtoPrimitiveStats {
                     return;
                 }
 
+                #[allow(clippy::disallowed_methods)]
                 let common_prefix = lower
                     .char_indices()
                     .zip(upper.chars())
@@ -342,6 +350,7 @@ impl TrimStats for ProtoPrimitiveStats {
 
 impl TrimStats for ProtoPrimitiveBytesStats {
     fn trim(&mut self) {
+        #[allow(clippy::disallowed_methods)]
         let common_prefix = self
             .lower
             .iter()
@@ -545,7 +554,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::stats2::ColumnarStatsBuilder;
+    use crate::stats::ColumnarStatsBuilder;
 
     #[mz_ore::test]
     fn test_truncate_bytes() {

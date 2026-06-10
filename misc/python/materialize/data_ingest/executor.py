@@ -10,12 +10,14 @@
 import json
 import random
 import time
+from textwrap import dedent
 from typing import Any
 
 import confluent_kafka  # type: ignore
 import psycopg
 import pymysql
 import pymysql.cursors
+from confluent_kafka import KafkaError  # type: ignore
 from confluent_kafka.admin import AdminClient  # type: ignore
 from confluent_kafka.schema_registry import Schema, SchemaRegistryClient  # type: ignore
 from confluent_kafka.schema_registry.avro import AvroSerializer  # type: ignore
@@ -31,7 +33,9 @@ from materialize.data_ingest.field import Field, formatted_value
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
 from materialize.data_ingest.transaction import Transaction
+from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.sql_server import SqlServer
 
 
 class Executor:
@@ -44,6 +48,7 @@ class Executor:
     cluster: str | None
     logging_exe: Any | None
     mz_service: str | None = None
+    composition: Composition | None = None
 
     def __init__(
         self,
@@ -53,6 +58,7 @@ class Executor:
         schema: str = "public",
         cluster: str | None = None,
         mz_service: str | None = None,
+        composition: Composition | None = None,
     ) -> None:
         self.num_transactions = 0
         self.ports = ports
@@ -61,6 +67,7 @@ class Executor:
         self.schema = schema
         self.cluster = cluster
         self.mz_service = mz_service
+        self.composition = composition
         self.logging_exe = None
         self.reconnect()
 
@@ -73,7 +80,7 @@ class Executor:
                 else "materialized"
             )
         self.mz_conn = psycopg.connect(
-            host="localhost",
+            host="127.0.0.1",
             port=self.ports[mz_service],
             user="materialize",
             dbname=self.database,
@@ -137,7 +144,7 @@ class PrintExecutor(Executor):
         print("  ", transaction.row_lists)
 
 
-def delivery_report(err: str, msg: Any) -> None:
+def delivery_report(err: "KafkaError | None", msg: Any) -> None:
     assert err is None, f"Delivery failed for User record {msg.key()}: {err}"
 
 
@@ -159,8 +166,11 @@ class KafkaExecutor(Executor):
         schema: str = "public",
         cluster: str | None = None,
         mz_service: str | None = None,
+        composition: Composition | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster, mz_service)
+        super().__init__(
+            ports, fields, database, schema, cluster, mz_service, composition
+        )
 
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
@@ -193,7 +203,9 @@ class KafkaExecutor(Executor):
             ],
         }
 
-        kafka_conf = {"bootstrap.servers": f"localhost:{self.ports['kafka']}"}
+        kafka_conf: dict[str, str | int | float | bool] = {
+            "bootstrap.servers": f"127.0.0.1:{self.ports['kafka']}"
+        }
 
         a = AdminClient(kafka_conf)
         fs = a.create_topics(
@@ -211,16 +223,20 @@ class KafkaExecutor(Executor):
         topic = list(fs.keys())[0]
 
         schema_registry_conf = {
-            "url": f"http://localhost:{self.ports['schema-registry']}"
+            "url": f"http://127.0.0.1:{self.ports['schema-registry']}"
         }
         registry = SchemaRegistryClient(schema_registry_conf)
 
         self.avro_serializer = AvroSerializer(
-            registry, json.dumps(schema), lambda d, ctx: d
+            registry,
+            schema_str=json.dumps(schema),
+            to_dict=lambda d, ctx: d,
         )
 
         self.key_avro_serializer = AvroSerializer(
-            registry, json.dumps(key_schema), lambda d, ctx: d
+            registry,
+            schema_str=json.dumps(key_schema),
+            to_dict=lambda d, ctx: d,
         )
 
         if logging_exe is not None:
@@ -303,6 +319,150 @@ class KafkaExecutor(Executor):
         self.producer.flush()
 
 
+class SqlServerExecutor(Executor):
+    # pyodbc is a bit complicated, requires msodbcsql to be installed locally
+    # too, so use testdrive for now to make it more convenient
+    # sql_server_conn: pyodbc.Connection
+    table: str
+    source: str
+    num: int
+
+    def __init__(
+        self,
+        num: int,
+        ports: dict[str, int],
+        fields: list[Field],
+        database: str,
+        schema: str = "public",
+        cluster: str | None = None,
+        mz_service: str | None = None,
+        composition: Composition | None = None,
+    ):
+        super().__init__(
+            ports, fields, database, schema, cluster, mz_service, composition
+        )
+        self.table = f"sql_server_table{num}"
+        self.source = f"sql_server_source{num}"
+        self.num = num
+
+    def execute(self, cur: Any, query: str) -> None:
+        if cur is not None:
+            super().execute(cur, query)
+        else:
+            assert self.composition
+            self.composition.testdrive(
+                dedent(f"""
+                $ sql-server-connect name=sql-server
+                server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+                $ sql-server-execute name=sql-server
+                USE test;
+                {query}
+            """),
+                quiet=True,
+                silent=True,
+            )
+
+    def create(self, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
+
+        values = [
+            f"{identifier(field.name)} {str(field.data_type.name(Backend.SQL_SERVER)).lower()}"
+            for field in self.fields
+        ]
+        keys = [field.name for field in self.fields if field.is_key]
+
+        self.execute(None, f"DROP TABLE IF EXISTS {identifier(self.table)};")
+        primary_key = (
+            f", PRIMARY KEY ({', '.join([f'{identifier(key)}' for key in keys])})"
+            if keys
+            else ""
+        )
+        self.execute(
+            None,
+            f"CREATE TABLE {identifier(self.table)} ({', '.join(values)} {primary_key});",
+        )
+        self.execute(
+            None,
+            f"EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = '{self.table}', @role_name = 'SA', @supports_net_changes = 0;",
+        )
+
+        with self.mz_conn.cursor() as cur:
+            self.execute(
+                cur,
+                f"CREATE SECRET IF NOT EXISTS sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'",
+            )
+            self.execute(
+                cur,
+                f"""CREATE CONNECTION sql_server{self.num} FOR SQL SERVER
+                    HOST 'sql-server',
+                    DATABASE test,
+                    USER {SqlServer.DEFAULT_USER},
+                    PASSWORD SECRET sql_server_pass""",
+            )
+            self.execute(
+                cur,
+                f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
+                    {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
+                    FROM SQL SERVER CONNECTION sql_server{self.num}
+                    """,
+            )
+            self.execute(
+                cur,
+                f"""CREATE TABLE {identifier(self.table)}
+                    FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
+                    (REFERENCE {identifier(self.table)})""",
+            )
+
+    def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
+        for row_list in transaction.row_lists:
+            for row in row_list.rows:
+                if row.operation == Operation.INSERT:
+                    values_str = ", ".join(
+                        str(formatted_value(value)) for value in row.values
+                    )
+                    self.execute(
+                        None,
+                        f"INSERT INTO {identifier(self.table)} VALUES ({values_str})",
+                    )
+                elif row.operation == Operation.UPSERT:
+                    values_str = ", ".join(
+                        str(formatted_value(value)) for value in row.values
+                    )
+
+                    # Identify key columns
+                    key_columns = [
+                        identifier(field.name) for field in row.fields if field.is_key
+                    ]
+
+                    # Identify all columns
+                    all_columns = [identifier(field.name) for field in row.fields]
+
+                    # Build the UPDATE part
+                    update_str = ", ".join(
+                        f"{col} = source.{col}" for col in all_columns
+                    )
+
+                    # Build the MERGE SQL
+                    self.execute(
+                        None,
+                        f"MERGE {identifier(self.table)} AS target USING (VALUES ({values_str})) AS source ({', '.join(all_columns)}) ON ({' AND '.join([f'target.{col} = source.{col}' for col in key_columns])}) WHEN MATCHED THEN UPDATE SET {update_str} WHEN NOT MATCHED THEN INSERT ({', '.join(all_columns)}) VALUES ({', '.join(['source.' + col for col in all_columns])});",
+                    )
+                elif row.operation == Operation.DELETE:
+                    cond_str = " AND ".join(
+                        f"{identifier(field.name)} = {formatted_value(value)}"
+                        for field, value in zip(row.fields, row.values)
+                        if field.is_key
+                    )
+                    self.execute(
+                        None,
+                        f"DELETE FROM {identifier(self.table)} WHERE {cond_str}",
+                    )
+                else:
+                    raise ValueError(f"Unexpected operation {row.operation}")
+
+
 class MySqlExecutor(Executor):
     mysql_conn: pymysql.Connection
     table: str
@@ -318,8 +478,11 @@ class MySqlExecutor(Executor):
         schema: str = "public",
         cluster: str | None = None,
         mz_service: str | None = None,
+        composition: Composition | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster, mz_service)
+        super().__init__(
+            ports, fields, database, schema, cluster, mz_service, composition
+        )
         self.table = f"mytable{num}"
         self.source = f"mysql_source{num}"
         self.num = num
@@ -327,7 +490,7 @@ class MySqlExecutor(Executor):
     def create(self, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
         self.mysql_conn = pymysql.connect(
-            host="localhost",
+            host="127.0.0.1",
             user="root",
             password=MySql.DEFAULT_ROOT_PASSWORD,
             database="mysql",
@@ -446,8 +609,11 @@ class PgExecutor(Executor):
         schema: str = "public",
         cluster: str | None = None,
         mz_service: str | None = None,
+        composition: Composition | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster, mz_service)
+        super().__init__(
+            ports, fields, database, schema, cluster, mz_service, composition
+        )
         self.table = f"table{num}"
         self.source = f"postgres_source{num}"
         self.num = num
@@ -455,7 +621,7 @@ class PgExecutor(Executor):
     def create(self, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
         self.pg_conn = psycopg.connect(
-            host="localhost",
+            host="127.0.0.1",
             user="postgres",
             password="postgres",
             port=self.ports["postgres"],
@@ -576,8 +742,11 @@ class KafkaRoundtripExecutor(Executor):
         schema: str = "public",
         cluster: str | None = None,
         mz_service: str | None = None,
+        composition: Composition | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster, mz_service)
+        super().__init__(
+            ports, fields, database, schema, cluster, mz_service, composition
+        )
         self.table_original = f"table_rt_source{num}"
         self.table = f"table_rt{num}"
         self.topic = f"data-ingest-rt-{num}"
@@ -602,7 +771,9 @@ class KafkaRoundtripExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE SINK {identifier(self.database)}.{identifier(self.schema)}.sink{self.num} FROM {identifier(self.table_original)}
+                f"""CREATE SINK {identifier(self.database)}.{identifier(self.schema)}.sink{self.num}
+                    {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
+                    FROM {identifier(self.table_original)}
                     INTO KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     KEY ({", ".join([identifier(key) for key in keys])})
                     FORMAT AVRO

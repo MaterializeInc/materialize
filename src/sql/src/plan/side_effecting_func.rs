@@ -33,11 +33,13 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use enum_kinds::EnumKind;
+use itertools::Itertools;
+use mz_expr::Eval;
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt;
-use mz_repr::RelationType;
-use mz_repr::{ColumnType, Datum, RelationDesc, RowArena, ScalarType};
+use mz_repr::SqlRelationType;
+use mz_repr::{Datum, RelationDesc, RowArena, SqlColumnType, SqlScalarType};
 use mz_sql_parser::ast::{CteBlock, Expr, Function, FunctionArgs, Select, SelectItem, SetExpr};
 
 use crate::ast::{Query, SelectStatement};
@@ -54,13 +56,14 @@ use crate::plan::{PlanError, QueryContext};
 /// effects.
 ///
 /// See the module docs for details.
-#[derive(Debug, EnumKind)]
+#[derive(Debug, EnumKind, Clone)]
 #[enum_kind(SefKind)]
 pub enum SideEffectingFunc {
-    /// The `pg_cancel_backend` function, .
+    /// The `pg_cancel_backend` function.
     PgCancelBackend {
-        // The ID of the connection to cancel.
-        connection_id: u32,
+        // The ID of the connection to cancel, or `None` if the argument was
+        // `NULL`, in which case the function returns `NULL`.
+        connection_id: Option<u32>,
     },
 }
 
@@ -102,8 +105,8 @@ pub fn plan_select_if_side_effecting(
     let temp_storage = RowArena::new();
     let mut args = vec![];
     for mut arg in sef_call.args {
-        arg.bind_parameters(params)?;
-        let arg = arg.lower_uncorrelated()?;
+        arg.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
+        let arg = arg.lower_uncorrelated(scx.catalog.system_vars())?;
         args.push(arg);
     }
     let mut datums = vec![];
@@ -148,6 +151,7 @@ fn extract_sef_call(
         selection: None,
         group_by,
         having: None,
+        qualify: None,
         options,
     } = &**body
     else {
@@ -156,17 +160,19 @@ fn extract_sef_call(
     if !from.is_empty() || !group_by.is_empty() || !options.is_empty() || projection.len() != 1 {
         return Ok(None);
     }
-    let [SelectItem::Expr {
-        expr:
-            Expr::Function(Function {
-                name,
-                args: FunctionArgs::Args { args, order_by },
-                filter: None,
-                over: None,
-                distinct: false,
-            }),
-        alias: None,
-    }] = &projection[..]
+    let [
+        SelectItem::Expr {
+            expr:
+                Expr::Function(Function {
+                    name,
+                    args: FunctionArgs::Args { args, order_by },
+                    filter: None,
+                    over: None,
+                    distinct: false,
+                }),
+            alias: None,
+        },
+    ] = &projection[..]
     else {
         return Ok(None);
     };
@@ -209,13 +215,13 @@ fn extract_sef_call(
         qcx: &qcx,
         name: sef_impl.name,
         scope: &Scope::empty(),
-        relation_type: &RelationType::empty(),
+        relation_type: &SqlRelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: false,
         allow_parameters: true,
         allow_windows: false,
     };
-    for (arg, ty) in args.iter().zip(sef_impl.param_types) {
+    for (arg, ty) in args.iter().zip_eq(sef_impl.param_types) {
         // If we encounter an error when planning the argument expression, that
         // error is unrelated to planning the function call and can be returned
         // directly to the user.
@@ -257,9 +263,9 @@ pub struct SideEffectingFuncImpl {
     /// The OID of the function.
     pub oid: u32,
     /// The parameter types for the function.
-    pub param_types: &'static [ScalarType],
+    pub param_types: &'static [SqlScalarType],
     /// The return type of the function.
-    pub return_type: ColumnType,
+    pub return_type: SqlColumnType,
     /// A function that will produce a `SideEffectingFunc` given arguments
     /// that have been evaluated to `Datum`s.
     pub plan_fn: fn(&[Datum]) -> SideEffectingFunc,
@@ -282,11 +288,15 @@ pub static PG_CATALOG_SEF_BUILTINS: LazyLock<BTreeMap<u32, SideEffectingFuncImpl
 const PG_CANCEL_BACKEND: SideEffectingFuncImpl = SideEffectingFuncImpl {
     name: "pg_cancel_backend",
     oid: 2171,
-    param_types: &[ScalarType::Int32],
-    return_type: ScalarType::Bool.nullable(false),
+    param_types: &[SqlScalarType::Int32],
+    // Like in PostgreSQL, the function returns `NULL` when its argument is
+    // `NULL`, so the output column is nullable.
+    return_type: SqlScalarType::Bool.nullable(true),
     plan_fn: |datums| -> SideEffectingFunc {
-        SideEffectingFunc::PgCancelBackend {
-            connection_id: u32::reinterpret_cast(datums[0].unwrap_int32()),
-        }
+        let connection_id = match datums[0] {
+            Datum::Null => None,
+            datum => Some(u32::reinterpret_cast(datum.unwrap_int32())),
+        };
+        SideEffectingFunc::PgCancelBackend { connection_id }
     },
 };

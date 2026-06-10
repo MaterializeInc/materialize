@@ -1,0 +1,7 @@
+- name: "syntax"
+  code: |
+    UUID '<uuid_str>'
+  syntax_elements:
+    - name: "`'<uuid_str>'`"
+      description: |
+        A UUID string. The standard form consists of five groups of lowercase hexadecimal digits separated by hyphens: `8-4-4-4-12` digits. Materialize also accepts UUID input where hyphens are omitted, or where some or all hexadecimal digits are uppercase. Materialize will always output UUIDs in the standard form.

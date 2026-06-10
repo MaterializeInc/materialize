@@ -8,16 +8,18 @@ menu:
 ---
 
 `SHOW PRIVILEGES` lists the privileges granted on all objects via
-[role-based access control](/manage/access-control/#role-based-access-control-rbac) (RBAC).
+[role-based access control](/security/) (RBAC).
 
 ## Syntax
 
-{{< diagram "show-privileges.svg" >}}
+```mzsql
+SHOW PRIVILEGES [ ON <object_type> ] [ FOR <role_name> ];
+```
 
-Field                                               | Use
-----------------------------------------------------|--------------------------------------------------
-_object_name_                                       | Only shows privileges for a specific object type.
-_role_name_                                         | Only shows privileges granted directly or indirectly to _role_name_.
+Syntax element               | Description
+-----------------------------|-----------------------------------------------
+**ON** <object_type>         | If specified, only show privileges for the specified object type. Accepted object types: <div style="display: flex;"> <ul style="margin-right: 20px;"> <li><strong>CLUSTERS</strong></li> <li><strong>CONNECTION</strong></li> <li><strong>DATABASES</strong></li> <li><strong>SCHEMAS</strong></li> </ul> <ul> <li><strong>SECRETS</strong></li> <li><strong>SYSTEM</strong></li> <li><strong>TABLES</strong></li> <li><strong>TYPES</strong></li> </ul> </div>
+**FOR** <role_name>          | If specified, only show privileges for the specified role.
 
 [//]: # "TODO(morsapaes) Improve examples."
 
@@ -76,6 +78,5 @@ SHOW PRIVILEGES FOR materialize;
 
 ## Related pages
 
-- [GRANT PRIVILEGE](../grant-privilege)
-- [REVOKE PRIVILEGE](../revoke-privilege)
-- [Access control](/manage/access-control/#role-based-access-control-rbac)
+- [`GRANT PRIVILEGE`](../grant-privilege)
+- [`REVOKE PRIVILEGE`](../revoke-privilege)

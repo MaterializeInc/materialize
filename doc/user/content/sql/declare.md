@@ -16,9 +16,11 @@ fetch only some of the rows at a time.
 
 ## Syntax
 
-{{< diagram "declare.svg" >}}
+```mzsql
+DECLARE <cursor_name> CURSOR FOR <query>;
+```
 
-Field | Use
-------|-----
-_cursor&lowbar;name_ | The name of the cursor to be created.
-_query_ | The query ([`SELECT`](/sql/select) or [`SUBSCRIBE`](/sql/subscribe)) that will provide the rows to be returned by the cursor.
+Syntax element | Description
+---------------|------------
+`<cursor_name>` | The name of the cursor to be created.
+`<query>` | The query ([`SELECT`](/sql/select) or [`SUBSCRIBE`](/sql/subscribe)) that will provide the rows to be returned by the cursor.

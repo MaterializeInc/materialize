@@ -34,6 +34,7 @@ contains: unsupported scale factor 9223372036854776000
   FROM LOAD GENERATOR TPCH (SCALE FACTOR -1)
 contains: unsupported scale factor -1
 
+> BEGIN
 > CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR TPCH (SCALE FACTOR .01, UP TO 100)
@@ -46,12 +47,12 @@ contains: unsupported scale factor -1
 > CREATE TABLE partsupp FROM SOURCE gen (REFERENCE partsupp);
 > CREATE TABLE region FROM SOURCE gen (REFERENCE region);
 > CREATE TABLE supplier FROM SOURCE gen (REFERENCE supplier);
+> COMMIT
 
 > SHOW SOURCES
 name           type            cluster                          comment
 -----------------------------------------------------------------------
  gen           load-generator  ${arg.single-replica-cluster}    ""
- gen_progress  progress        <null>                           ""
 
 > SHOW TABLES
 name           comment
@@ -80,6 +81,11 @@ true
 # For each row in the CUSTOMER table, ten rows in the ORDERS table
 > SELECT count(*) FROM orders
 15000
+
+# o_totalprice is declared numeric(39,2), so generated values must not carry
+# more than two fractional digits.
+> SELECT count(*) FROM orders WHERE o_totalprice != round(o_totalprice, 2)
+0
 
 # SF * 200,000
 > SELECT count(*) FROM part
@@ -631,7 +637,7 @@ true
   ORDER BY
       o_totalprice DESC,
       o_orderdate;
-3 values hashing to 321256b5aef1aedab78f125c5925de92
+3 values hashing to 870490f2a7ea6ec18625e8f96cc91815
 
 # Query 19
 > SELECT
@@ -1352,7 +1358,7 @@ true
   ORDER BY
       o_totalprice DESC,
       o_orderdate;
-3 values hashing to 321256b5aef1aedab78f125c5925de92
+3 values hashing to 870490f2a7ea6ec18625e8f96cc91815
 
 # Query 19
 > SELECT

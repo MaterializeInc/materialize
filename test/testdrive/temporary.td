@@ -182,7 +182,7 @@ contains:non-temporary items cannot depend on temporary item
 # Make sure the mz_temp schema is protected
 
 ! DROP SCHEMA mz_temp
-contains:cannot drop schema mz_temp because it is required by the database system
+contains:cannot drop schema mz_temp because it is a temporary schema
 
 ! CREATE TABLE mz_temp.table_in_mz_temp (f1 INTEGER)
 contains:unknown schema 'mz_temp'
@@ -204,7 +204,7 @@ $ set schema={
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-contains:Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found SOURCE
+contains:Expected TABLE, or VIEW after CREATE TEMPORARY, found SOURCE
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -214,7 +214,7 @@ contains:Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECR
 ! CREATE TEMPORARY SINK data_sink FROM data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found SINK
+contains:Expected TABLE, or VIEW after CREATE TEMPORARY, found SINK
 
 #####################################################################
 

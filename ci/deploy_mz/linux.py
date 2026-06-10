@@ -10,7 +10,8 @@
 import os
 from pathlib import Path
 
-from materialize import mzbuild, spawn, ui
+from ci import tarball_uploader
+from materialize import mzbuild, spawn
 from materialize.mz_version import MzCliVersion
 from materialize.rustc_flags import Sanitizer
 
@@ -19,15 +20,11 @@ from .deploy_util import APT_BUCKET, MZ_CLI_VERSION
 
 
 def main() -> None:
-    bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
-    bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
-
     repo = mzbuild.Repository(
         Path("."),
         coverage=False,
         sanitizer=Sanitizer.none,
-        bazel=bazel,
-        bazel_remote_cache=bazel_remote_cache,
+        image_registry="materialize",
     )
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
@@ -61,7 +58,11 @@ def main() -> None:
     mzbuild.chmod_x(mz)
 
     print(f"--- Uploading {target} binary tarball")
-    deploy_util.deploy_tarball(target, mz)
+    uploader = tarball_uploader.TarballUploader(
+        package_name="mz",
+        version=deploy_util.MZ_CLI_VERSION,
+    )
+    uploader.deploy_tarball(target, mz)
 
     print("--- Publishing Debian package")
     filename = f"mz_{MZ_CLI_VERSION.str_without_prefix()}_{repo.rd.arch.go_str()}.deb"

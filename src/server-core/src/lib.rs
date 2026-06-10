@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use clap::builder::ArgPredicate;
 use futures::stream::{BoxStream, Stream, StreamExt};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::channel::trigger;
@@ -30,15 +31,20 @@ use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
 use proxy_header::{ParseConfig, ProxiedAddress, ProxyHeader};
+use schemars::JsonSchema;
 use scopeguard::ScopeGuard;
+use serde::{Deserialize, Serialize};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, Interest, ReadBuf, Ready};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
+use tokio_metrics::TaskMetrics;
 use tokio_stream::wrappers::{IntervalStream, TcpListenerStream};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
+
+pub mod listeners;
 
 /// TCP keepalive settings. The idle time and interval match CockroachDB [0].
 /// The number of retries matches the Linux default.
@@ -105,10 +111,15 @@ impl Connection {
         ) {
             Ok((header, hlen)) => (header, hlen),
             Err(proxy_header::Error::Invalid) => {
-                debug!(
-                    "Proxy header is invalid. This is likely due to no no header being provided",
-                );
+                debug!("Proxy header is invalid. This is likely due to no header being provided",);
                 return None;
+            }
+            // Data matches the PROXY v2 signature prefix but the header
+            // is incomplete — likely split across TCP segments. Read the
+            // 16-byte fixed v2 header to learn the total size, then read
+            // the remaining address bytes.
+            Err(proxy_header::Error::BufferTooShort) => {
+                return self.read_proxy_v2_header(&mut buf).await;
             }
             Err(e) => {
                 debug!("Proxy header parse error '{:?}', ignoring header.", e);
@@ -120,6 +131,49 @@ impl Connection {
         // Proxy header found, clear the bytes.
         let _ = self.read_exact(&mut buf[..hlen]).await;
         address
+    }
+
+    /// Fallback path for [`Self::take_proxy_header_address`] when the initial
+    /// peek returned an incomplete PROXY v2 header. Reads the fixed 16-byte
+    /// v2 prefix to learn the total header size, then reads the rest.
+    async fn read_proxy_v2_header(&mut self, buf: &mut [u8; 1024]) -> Option<ProxiedAddress> {
+        // PROXY v2 fixed prefix: 12-byte signature + ver/cmd + fam/proto + 2-byte length.
+        const V2_PREFIX_LEN: usize = 16;
+        if self.read_exact(&mut buf[..V2_PREFIX_LEN]).await.is_err() {
+            debug!("Failed to read PROXY v2 fixed header");
+            return None;
+        }
+        let addr_len = usize::from(u16::from_be_bytes([buf[14], buf[15]]));
+        let total = V2_PREFIX_LEN + addr_len;
+        if total > buf.len() {
+            debug!("PROXY v2 header too large: {total} bytes");
+            return None;
+        }
+        if self
+            .read_exact(&mut buf[V2_PREFIX_LEN..total])
+            .await
+            .is_err()
+        {
+            debug!("Failed to read PROXY v2 address data");
+            return None;
+        }
+        match ProxyHeader::parse(
+            &buf[..total],
+            ParseConfig {
+                include_tlvs: false,
+                allow_v1: false,
+                allow_v2: true,
+            },
+        ) {
+            Ok((header, _)) => {
+                debug!("Proxied connection with header {:?}", header);
+                header.proxied_address().map(|a| a.to_owned())
+            }
+            Err(e) => {
+                debug!("Proxy header parse error '{:?}', ignoring header.", e);
+                None
+            }
+        }
     }
 
     /// Peer address of the inner tcp_stream.
@@ -185,7 +239,7 @@ impl ConnectionUuidHandle {
         *self.0.lock().expect("lock poisoned") = Some(conn_uuid);
     }
 
-    /// Returns a displayble that renders a possibly missing connection UUID.
+    /// Returns a displayable that renders a possibly missing connection UUID.
     pub fn display(&self) -> impl fmt::Display {
         self.get().display_or("<unknown>")
     }
@@ -197,7 +251,11 @@ pub trait Server {
     const NAME: &'static str;
 
     /// Handles a single connection.
-    fn handle_connection(&self, conn: Connection) -> ConnectionHandler;
+    fn handle_connection(
+        &self,
+        conn: Connection,
+        tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
+    ) -> ConnectionHandler;
 }
 
 /// A stream of incoming connections.
@@ -208,7 +266,7 @@ impl<T> ConnectionStream for T where T: Stream<Item = io::Result<TcpStream>> + U
 /// A handle to a listener created by [`listen`].
 #[derive(Debug)]
 pub struct ListenerHandle {
-    local_addr: SocketAddr,
+    pub local_addr: SocketAddr,
     _trigger: trigger::Trigger,
 }
 
@@ -317,8 +375,10 @@ where
                 }
                 let conn = Connection::new(conn);
                 let conn_uuid = conn.uuid_handle();
-                let fut = server.handle_connection(conn);
-                set.spawn_named(|| &task_name, async move {
+                let metrics_monitor = tokio_metrics::TaskMonitor::new();
+                let tokio_metrics_intervals = metrics_monitor.intervals();
+                let fut = server.handle_connection(conn, tokio_metrics_intervals);
+                set.spawn_named(|| &task_name, metrics_monitor.instrument(async move {
                     let guard = scopeguard::guard((), |_| {
                         debug!(
                             server = S::NAME,
@@ -346,7 +406,7 @@ where
                     }
 
                     let () = ScopeGuard::into_inner(guard);
-                });
+                }));
             }
             // Actively cull completed tasks from the JoinSet so it does not grow unbounded. This
             // method is cancel safe.
@@ -405,7 +465,7 @@ pub struct TlsConfig {
 }
 
 /// Specifies how strictly to enforce TLS encryption.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub enum TlsMode {
     /// Allow TLS encryption.
     Allow,
@@ -479,7 +539,7 @@ pub struct ReloadingSslContext {
 }
 
 impl ReloadingSslContext {
-    pub fn get(&self) -> RwLockReadGuard<SslContext> {
+    pub fn get(&self) -> RwLockReadGuard<'_, SslContext> {
         self.context.read().expect("poisoned")
     }
 }
@@ -523,11 +583,11 @@ pub struct TlsCliArgs {
     /// rejected.
     #[clap(
         long, env = "TLS_MODE",
-        possible_values = &["disable", "require"],
+        value_parser = ["disable", "require"],
         default_value = "disable",
-        default_value_ifs = &[
-            ("frontegg-tenant", None, Some("require")),
-            ("frontegg-resolver-template", None, Some("require")),
+        default_value_ifs = [
+            ("frontegg_tenant", ArgPredicate::IsPresent, Some("require")),
+            ("frontegg_resolver_template", ArgPredicate::IsPresent, Some("require")),
         ],
         value_name = "MODE",
     )]
@@ -536,8 +596,8 @@ pub struct TlsCliArgs {
     #[clap(
         long,
         env = "TLS_CERT",
-        requires = "tls-key",
-        required_if_eq_any(&[("tls-mode", "require")]),
+        requires = "tls_key",
+        required_if_eq_any([("tls_mode", "require")]),
         value_name = "PATH"
     )]
     tls_cert: Option<PathBuf>,
@@ -545,8 +605,8 @@ pub struct TlsCliArgs {
     #[clap(
         long,
         env = "TLS_KEY",
-        requires = "tls-cert",
-        required_if_eq_any(&[("tls-mode", "require")]),
+        requires = "tls_cert",
+        required_if_eq_any([("tls_mode", "require")]),
         value_name = "PATH"
     )]
     tls_key: Option<PathBuf>,

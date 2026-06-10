@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 #
@@ -35,11 +34,13 @@ CREATE TABLE t1 (a INT);
 CREATE TABLE t2 (a INT);
 CREATE TABLE t3 (a INT);
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 > CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
 > CREATE TABLE t3 FROM SOURCE mz_source (REFERENCE public.t3);
+> COMMIT
 
 > SELECT count(*) FROM t1;
 0

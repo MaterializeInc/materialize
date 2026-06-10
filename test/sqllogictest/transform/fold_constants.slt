@@ -22,9 +22,14 @@ CREATE TABLE edges(src INTEGER NOT NULL, dst INTEGER NOT NULL);
 # See https://github.com/MaterializeInc/database-issues/issues/3723 .
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT count(*) FROM billion;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT count(*) FROM billion;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)] monotonic // { arity: 1 }
+        Constant // { arity: 0 }
+          - (() x 1000000000)
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
@@ -35,11 +40,6 @@ Explained Query:
               Get l0 // { arity: 1 }
           Constant // { arity: 0 }
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[count(*)] monotonic // { arity: 1 }
-        Constant // { arity: 0 }
-          - (() x 1000000000)
 
 Target cluster: quickstart
 
@@ -67,7 +67,7 @@ SELECT  (a1.f1) AS c1, (a2.f1) AS c2, (a1.f2) AS c3, (MIN ( 4 )) AS agg1 , (AVG 
 # that all initial LetRec bindings are empty. If do this, the `l0` binding
 # below will simplify to a constant.
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(src INT, dst INT) AS (
     SELECT * FROM c0
@@ -94,26 +94,20 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0
 ----
 Explained Query:
-  Return // { arity: 2 }
-    Get l0 // { arity: 2 }
   With Mutually Recursive
     cte l0 =
       Distinct project=[#0, #1] monotonic // { arity: 2 }
         Union // { arity: 2 }
-          Distinct project=[#0, #1] monotonic // { arity: 2 }
-            Union // { arity: 2 }
-              Distinct project=[#0, #1] monotonic // { arity: 2 }
-                Union // { arity: 2 }
-                  Get l0 // { arity: 2 }
-                  Constant // { arity: 2 }
-                    - (62, 64)
-                    - (66, 68)
-              Constant // { arity: 2 }
-                - (42, 43)
-                - (44, 45)
+          Get l0 // { arity: 2 }
           Constant // { arity: 2 }
+            - (42, 43)
+            - (44, 45)
             - (51, 53)
             - (52, 54)
+            - (62, 64)
+            - (66, 68)
+  Return // { arity: 2 }
+    Get l0 // { arity: 2 }
 
 Target cluster: quickstart
 
@@ -122,7 +116,7 @@ EOF
 
 # Replace subtrees rooted at `Filter false` with `Constant <empty>`
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(n INT) AS (
     SELECT src FROM edges WHERE false -- literal false
@@ -136,15 +130,15 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0
 ----
 Explained Query:
-  Return // { arity: 1 }
-    Get l0 // { arity: 1 }
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0] // { arity: 1 }
+      Distinct project=[#0{dst}] // { arity: 1 }
         Union // { arity: 1 }
-          Project (#1) // { arity: 1 }
+          Project (#1{dst}) // { arity: 1 }
             ReadStorage materialize.public.edges // { arity: 2 }
           Get l0 // { arity: 1 }
+  Return // { arity: 1 }
+    Get l0 // { arity: 1 }
 
 Source materialize.public.edges
 
@@ -158,14 +152,14 @@ DROP TABLE t1;
 statement ok
 DROP TABLE t2;
 
-###
+# Window function tests
 # These tests were mostly copied (at some point) from `window_funcs.slt`, but here they have `WITH ... VALUES ...`, i.e.
 # constant inputs. These are good to have because constant folding is a different code path from the normal execution.
-###
+# ----------------------------------------------------------------------------------------------------------------------
 
 mode cockroach
 
-statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
+statement error window function pg_catalog\.row_number requires an OVER clause
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT row_number() FROM t
 
@@ -1105,7 +1099,7 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 1  2
 3  12
 
-query II
+query II rowsort
 WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1 * f2, f1 - 1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
@@ -3058,26 +3052,26 @@ ORDER BY f2, f3, f1, first_value
 
 # Test near-overflow behavior on offsets
 # u64::MAX FOLLOWING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
 # u64::MAX PRECEDING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551615 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551614 PRECEDING)
 FROM t
@@ -4172,26 +4166,26 @@ ORDER BY f2, f3, f1, last_value
 
 # Test near-overflow behavior on offsets
 # u64::MAX FOLLOWING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551615 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551614 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
 
 # u64::MAX PRECEDING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t

@@ -50,38 +50,43 @@
 //! The error streams from both of those operators are published to the source status and also
 //! trigger a restart of the dataflow.
 
-use std::convert::Infallible;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::rc::Rc;
 
+use differential_dataflow::AsCollection;
+use itertools::Itertools;
+use mz_mysql_util::quote_identifier;
+use mz_ore::cast::CastFrom;
 use mz_repr::Diff;
+use mz_repr::GlobalId;
 use mz_storage_types::errors::{DataflowError, SourceError};
-use mz_storage_types::sources::IndexedSourceExport;
 use mz_storage_types::sources::SourceExport;
-use mz_timely_util::containers::stack::{AccountedStackBuilder, StackWrapper};
+use mz_timely_util::containers::stack::FueledBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::{CapabilitySet, Concat, Map, ToStream};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::core::Partition;
+use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::operators::{CapabilitySet, Concat};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use uuid::Uuid;
 
 use mz_mysql_util::{
-    ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    MySqlError, MySqlTableDesc,
+    MySqlError, MySqlTableDesc, ensure_full_row_binlog_format, ensure_gtid_consistency,
+    ensure_replication_commit_order,
 };
 use mz_ore::error::ErrorExt;
 use mz_storage_types::errors::SourceErrorDetails;
-use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
 use mz_storage_types::sources::{MySqlSourceConnection, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::Probe;
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
+use crate::source::types::{FuelSize, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -96,35 +101,29 @@ impl SourceRender for MySqlSourceConnection {
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
-    fn render<G: Scope<Timestamp = GtidPartition>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
-        config: RawSourceCreationConfig,
+        scope: Scope<'scope, GtidPartition>,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-        Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusMessage>,
-        Stream<G, ProgressStatisticsUpdate>,
-        Stream<G, Probe<GtidPartition>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, GtidPartition, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, GtidPartition, HealthStatusMessage>,
+        StreamVec<'scope, GtidPartition, Probe<GtidPartition>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.
         let mut source_outputs = Vec::new();
-        for (
-            id,
-            IndexedSourceExport {
-                ingestion_output,
-                export:
-                    SourceExport {
-                        details,
-                        storage_metadata: _,
-                        data_config: _,
-                    },
-            },
-        ) in &config.source_exports
-        {
+        for (idx, (id, export)) in config.source_exports.iter().enumerate() {
+            let SourceExport {
+                details,
+                storage_metadata: _,
+                data_config: _,
+            } = export;
             let details = match details {
                 SourceExportDetails::MySql(details) => details,
                 // This is an export that doesn't need any data output to it.
@@ -144,53 +143,80 @@ impl SourceRender for MySqlSourceConnection {
             );
             let name = MySqlTableName::new(&desc.schema_name, &desc.name);
             source_outputs.push(SourceOutputInfo {
+                output_index: idx,
                 table_name: name.clone(),
-                output_index: *ingestion_output,
                 desc,
                 text_columns: details.text_columns.clone(),
                 exclude_columns: details.exclude_columns.clone(),
                 initial_gtid_set: gtid_set_frontier(&initial_gtid_set).expect("invalid gtid set"),
                 resume_upper,
+                export_id: id.clone(),
+                binlog_full_metadata: details.binlog_full_metadata,
             });
         }
 
         let metrics = config.metrics.get_mysql_source_metrics(config.id);
 
-        let (snapshot_updates, rewinds, snapshot_stats, snapshot_err, snapshot_token) =
-            snapshot::render(
-                scope.clone(),
-                config.clone(),
-                self.clone(),
-                source_outputs.clone(),
-                metrics.snapshot_metrics.clone(),
-            );
+        let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
+            scope.clone(),
+            config.clone(),
+            self.clone(),
+            source_outputs.clone(),
+            metrics.snapshot_metrics.clone(),
+        );
 
-        let (repl_updates, uppers, repl_err, repl_token) = replication::render(
+        let (repl_updates, repl_err, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             self.clone(),
             source_outputs,
-            &rewinds,
+            rewinds,
             metrics,
         );
 
-        let (stats_stream, stats_err, probe_stream, stats_token) =
-            statistics::render(scope.clone(), config, self, resume_uppers);
+        let (stats_err, probe_stream, stats_token) = statistics::render(
+            scope.clone(),
+            config.clone(),
+            self,
+            resume_uppers,
+            snapshot_err.clone().concat(repl_err.clone()),
+        );
 
-        let stats_stream = stats_stream.concat(&snapshot_stats);
+        let updates = snapshot_updates.concat(repl_updates);
+        let partition_count = u64::cast_from(config.source_exports.len());
+        let data_streams: Vec<_> = updates
+            .inner
+            .partition::<CapacityContainerBuilder<_>, _, _>(
+                partition_count,
+                |((output, data), time, diff): (
+                    (usize, Result<SourceMessage, DataflowError>),
+                    _,
+                    Diff,
+                )| {
+                    let output = u64::cast_from(output);
+                    (output, (data, time, diff))
+                },
+            );
+        let mut data_collections = BTreeMap::new();
+        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+            data_collections.insert(*id, data_stream.as_collection());
+        }
 
-        let updates = snapshot_updates.concat(&repl_updates);
-
-        let health_init = std::iter::once(HealthStatusMessage {
-            index: 0,
-            namespace: Self::STATUS_NAMESPACE,
-            update: HealthStatusUpdate::Running,
-        })
-        .to_stream(scope);
+        let export_ids = config.source_exports.keys().copied();
+        let health_init = export_ids
+            .map(Some)
+            .chain(std::iter::once(None))
+            .map(|id| HealthStatusMessage {
+                id,
+                namespace: Self::STATUS_NAMESPACE,
+                update: HealthStatusUpdate::Running,
+            })
+            .collect::<Vec<_>>()
+            .to_stream(scope);
 
         let health_errs = snapshot_err
-            .concat(&repl_err)
-            .concat(&stats_err)
+            .concat(repl_err)
+            .concat(stats_err)
             .map(move |err| {
                 // This update will cause the dataflow to restart
                 let err_string = err.display_with_causes().to_string();
@@ -206,18 +232,16 @@ impl SourceRender for MySqlSourceConnection {
                 };
 
                 HealthStatusMessage {
-                    index: 0,
+                    id: None,
                     namespace: namespace.clone(),
                     update,
                 }
             });
-        let health = health_init.concat(&health_errs);
+        let health = health_init.concat(health_errs);
 
         (
-            updates,
-            Some(uppers),
+            data_collections,
             health,
-            stats_stream,
             probe_stream,
             vec![snapshot_token, repl_token, stats_token],
         )
@@ -233,6 +257,8 @@ struct SourceOutputInfo {
     exclude_columns: Vec<String>,
     initial_gtid_set: Antichain<GtidPartition>,
     resume_upper: Antichain<GtidPartition>,
+    export_id: GlobalId,
+    binlog_full_metadata: bool,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -311,7 +337,17 @@ impl From<DefiniteError> for DataflowError {
 /// A reference to a MySQL table. (schema_name, table_name)
 /// NOTE: We do not use `mz_sql_parser::ast:UnresolvedItemName` because the serialization
 /// behavior is not what we need for mysql.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub(crate) struct MySqlTableName(pub(crate) String, pub(crate) String);
 
 impl MySqlTableName {
@@ -322,7 +358,12 @@ impl MySqlTableName {
 
 impl fmt::Display for MySqlTableName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "`{}`.`{}`", self.0, self.1)
+        write!(
+            f,
+            "{}.{}",
+            quote_identifier(&self.0),
+            quote_identifier(&self.1)
+        )
     }
 }
 
@@ -341,11 +382,8 @@ pub(crate) struct RewindRequest {
     pub(crate) snapshot_upper: Antichain<GtidPartition>,
 }
 
-type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
-    T,
-    AccountedStackBuilder<CapacityContainerBuilder<StackWrapper<(D, T, Diff)>>>,
-    Tee<T, StackWrapper<(D, T, Diff)>>,
->;
+type StackedAsyncOutputHandle<T, D> =
+    AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<(D, T, Diff)>>>>;
 
 async fn return_definite_error(
     err: DefiniteError,
@@ -358,17 +396,20 @@ async fn return_definite_error(
     definite_error_handle: &AsyncOutputHandle<
         GtidPartition,
         CapacityContainerBuilder<Vec<ReplicationError>>,
-        Tee<GtidPartition, Vec<ReplicationError>>,
     >,
     definite_error_cap_set: &CapabilitySet<GtidPartition>,
 ) {
+    tracing::warn!("Returning definite error: {err}");
     for output_index in outputs {
         let update = (
             (*output_index, Err(err.clone().into())),
             GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
-            1,
+            Diff::ONE,
         );
-        data_handle.give_fueled(&data_cap_set[0], update).await;
+        let size = update.fuel_size();
+        data_handle
+            .give_fueled(&data_cap_set[0], update, size)
+            .await;
     }
     definite_error_handle.give(
         &definite_error_cap_set[0],

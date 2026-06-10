@@ -12,55 +12,38 @@ use std::fmt;
 
 use chrono::FixedOffset;
 use chrono_tz::Tz;
+use itertools::Itertools;
 use mz_lowertest::MzReflect;
-use mz_proto::chrono::{any_fixed_offset, any_timezone};
-use mz_proto::{RustType, TryFromProtoError};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
 use crate::abbrev::TIMEZONE_ABBREVS;
-
-include!(concat!(env!("OUT_DIR"), "/mz_pgtz.timezone.rs"));
 
 /// The SQL definition of the contents of the `mz_timezone_names` view.
 pub const MZ_CATALOG_TIMEZONE_NAMES_SQL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/timezone.gen.sql"));
 
 /// Parsed timezone.
-#[derive(Arbitrary, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 pub enum Timezone {
     #[serde(with = "fixed_offset_serde")]
-    FixedOffset(#[proptest(strategy = "any_fixed_offset()")] FixedOffset),
-    Tz(#[proptest(strategy = "any_timezone()")] Tz),
+    FixedOffset(FixedOffset),
+    Tz(Tz),
 }
 
 impl Timezone {
     pub fn parse(tz: &str, spec: TimezoneSpec) -> Result<Self, String> {
         build_timezone_offset_second(&tokenize_timezone(tz)?, tz, spec)
-    }
-}
-
-impl RustType<ProtoTimezone> for Timezone {
-    fn into_proto(&self) -> ProtoTimezone {
-        use proto_timezone::Kind;
-        ProtoTimezone {
-            kind: Some(match self {
-                Timezone::FixedOffset(fo) => Kind::FixedOffset(fo.into_proto()),
-                Timezone::Tz(tz) => Kind::Tz(tz.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoTimezone) -> Result<Self, TryFromProtoError> {
-        use proto_timezone::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimezone::kind"))?;
-        Ok(match kind {
-            Kind::FixedOffset(pof) => Timezone::FixedOffset(FixedOffset::from_proto(pof)?),
-            Kind::Tz(ptz) => Timezone::Tz(Tz::from_proto(ptz)?),
-        })
     }
 }
 
@@ -211,7 +194,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
     // Toggles whether or not we should skip whitespace. This would be nicer to
     // do inline but ownership makes that annoying.
     let mut space_skip_mode = false;
-    for (i, chr) in value.chars().enumerate() {
+    for (i, chr) in value.char_indices() {
         // Stay in space skip mode iff already in it and element is space.
         if space_skip_mode && chr.is_ascii_whitespace() {
             continue;
@@ -259,7 +242,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
                 return Err(format!(
                     "Error tokenizing timezone string ('{}'): invalid character {:?} at offset {}",
                     value, chr, i
-                ))
+                ));
             }
         }
     }
@@ -281,19 +264,19 @@ fn build_timezone_offset_second(
     spec: TimezoneSpec,
 ) -> Result<Timezone, String> {
     use TimeStrToken::*;
-    let all_formats = [
-        vec![Plus, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
-        vec![Dash, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
-        vec![Plus, Num(0, 1), Colon, Num(0, 1)],
-        vec![Dash, Num(0, 1), Colon, Num(0, 1)],
-        vec![Plus, Num(0, 1), Num(0, 1), Num(0, 1)],
-        vec![Dash, Num(0, 1), Num(0, 1), Num(0, 1)],
-        vec![Plus, Num(0, 1), Num(0, 1)],
-        vec![Dash, Num(0, 1), Num(0, 1)],
-        vec![Plus, Num(0, 1)],
-        vec![Dash, Num(0, 1)],
-        vec![TzName("".to_string())],
-        vec![Zulu],
+    static ALL_FORMATS: [&[TimeStrToken]; 12] = [
+        &[Plus, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
+        &[Dash, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
+        &[Plus, Num(0, 1), Colon, Num(0, 1)],
+        &[Dash, Num(0, 1), Colon, Num(0, 1)],
+        &[Plus, Num(0, 1), Num(0, 1), Num(0, 1)],
+        &[Dash, Num(0, 1), Num(0, 1), Num(0, 1)],
+        &[Plus, Num(0, 1), Num(0, 1)],
+        &[Dash, Num(0, 1), Num(0, 1)],
+        &[Plus, Num(0, 1)],
+        &[Dash, Num(0, 1)],
+        &[TzName(String::new())],
+        &[Zulu],
     ];
 
     let mut is_positive = true;
@@ -301,14 +284,14 @@ fn build_timezone_offset_second(
     let mut minute_offset: Option<i32> = None;
     let mut second_offset: Option<i32> = None;
 
-    for format in all_formats.iter() {
+    for format in ALL_FORMATS {
         let actual = tokens.iter();
 
         if actual.len() != format.len() {
             continue;
         }
 
-        for (i, (atok, etok)) in actual.zip(format).enumerate() {
+        for (i, (atok, etok)) in actual.zip_eq(format).enumerate() {
             match (atok, etok) {
                 (Colon, Colon) | (Plus, Plus) => { /* Matching punctuation */ }
                 (Dash, Dash) => {
@@ -360,7 +343,7 @@ fn build_timezone_offset_second(
                             return Err(format!(
                                 "Invalid timezone string ({}): invalid value {} at token index {}",
                                 value, val, i
-                            ))
+                            ));
                         }
                         _ => unreachable!("parsed a minute before an hour!"),
                     }
@@ -518,7 +501,10 @@ mod tests {
 
         for test in failure_test_cases.iter() {
             match Timezone::parse(test, TimezoneSpec::Iso) {
-                Ok(t) => panic!("Test passed when expected to fail test case: {} parsed tz offset (seconds): {}", test, t),
+                Ok(t) => panic!(
+                    "Test passed when expected to fail test case: {} parsed tz offset (seconds): {}",
+                    test, t
+                ),
                 Err(e) => println!("{}", e),
             }
         }

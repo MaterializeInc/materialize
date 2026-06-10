@@ -1,0 +1,25 @@
+---
+title: "M.1 to cc size mapping"
+description: "General mapping between cc and M.1 cluster sizes."
+menu:
+  main:
+    parent: reference
+    identifier: 'm1-cc-mapping'
+    weight: 50
+aliases:
+  - /sql/m1-cc-mapping/
+---
+
+The following table provides a general mapping between cc and M.1 cluster sizes:
+
+{{< tabs >}}
+{{< tab "cc to M.1" >}}
+{{< yaml-table data="cc_m1_mapping" >}}
+{{< /tab >}}
+{{< tab "M.1 to cc" >}}
+{{< yaml-table data="m1_cc_mapping" >}}
+{{< /tab >}}
+{{< /tabs >}}
+
+Some sizes have multiple mappings. When converting between cc and M.1 sizing, we
+recommend choosing the larger mapping size first.

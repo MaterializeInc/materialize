@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6a6defe53f200d855e00ceeac1eaaa6e5a83340f507dce5a6873490902b0bf8d # shrinks to (desc, rows) = (RelationDesc { typ: RelationType { column_types: [ColumnType { scalar_type: Float32, nullable: false }, ColumnType { scalar_type: Uuid, nullable: true }], keys: [] }, metadata: {ColumnIndex(0): ColumnMetadata { name: ColumnName("S^COQ"), typ_idx: 0, added: RelationVersion(0), dropped: None }, ColumnIndex(1): ColumnMetadata { name: ColumnName("\\BE"), typ_idx: 1, added: RelationVersion(0), dropped: None }} }, [Row{[Float32(OrderedFloat(0.0)), Uuid(00000000-0000-0000-0000-000000000000)]}, Row{[Float32(OrderedFloat(-0.0)), Null]}])
+cc 1e5fbbd9a921f68655a98388b0185bbe9f3930c9c0bd6fe237ebf94a03e66547 # shrinks to (ty, datums) = (ColumnType { scalar_type: Record { fields: [(ColumnName("gRqsb]"), ColumnType { scalar_type: Float64, nullable: false }), (ColumnName("QBnw"), ColumnType { scalar_type: Timestamp { precision: None }, nullable: false })], custom_id: None }, nullable: true }, [Record(PropDict(Row{[List([Float64(OrderedFloat(-0.0)), Timestamp(CheckedTimestamp { t: +46433-08-07T09:24:11.113421 })])]}, [("gRqsb]", Float64(-0.0)), ("QBnw", Timestamp(CheckedTimestamp { t: +46433-08-07T09:24:11.113421 }))])), Record(PropDict(Row{[List([Float64(OrderedFloat(0.0)), Timestamp(CheckedTimestamp { t: +46433-08-05T04:41:57.151081 })])]}, [("gRqsb]", Float64(0.0)), ("QBnw", Timestamp(CheckedTimestamp { t: +46433-08-05T04:41:57.151081 }))]))])

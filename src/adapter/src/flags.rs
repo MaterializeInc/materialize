@@ -16,11 +16,11 @@ use mz_ore::error::ErrorExt;
 use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
 use mz_storage_types::parameters::{
-    PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
+    PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters,
 };
 use mz_tracing::params::TracingParameters;
 
-use mz_timestamp_oracle::postgres_oracle::PostgresTimestampOracleParameters;
+use mz_timestamp_oracle::postgres_oracle::TimestampOracleParameters;
 
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
@@ -48,6 +48,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             config.mysql_source_snapshot_max_execution_time(),
             config.mysql_source_snapshot_lock_wait_timeout(),
             config.mysql_source_tcp_keepalive(),
+            config.mysql_source_connect_timeout(),
         ),
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),
         keep_n_sink_status_history_entries: config.keep_n_sink_status_history_entries(),
@@ -99,10 +100,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         },
         finalize_shards: config.enable_storage_shard_finalization(),
         tracing: tracing_config(config),
-        upsert_auto_spill_config: UpsertAutoSpillConfig {
-            allow_spilling_to_disk: config.upsert_rocksdb_auto_spill_to_disk(),
-            spill_to_disk_threshold_bytes: config.upsert_rocksdb_auto_spill_threshold_bytes(),
-        },
         storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: config.storage_dataflow_max_inflight_bytes(),
             // Interpret the `Numeric` as a float here, we don't need perfect
@@ -137,14 +134,11 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             config.kafka_socket_connection_setup_timeout(),
             config.kafka_fetch_metadata_timeout(),
             config.kafka_progress_record_fetch_timeout(),
-            config.kafka_default_metadata_fetch_interval(),
         ),
         statistics_interval: config.storage_statistics_interval(),
         statistics_collection_interval: config.storage_statistics_collection_interval(),
         pg_snapshot_config: PgSourceSnapshotConfig {
             collect_strict_count: config.pg_source_snapshot_collect_strict_count(),
-            fallback_to_strict_count: config.pg_source_snapshot_fallback_to_strict_count(),
-            wait_for_count: config.pg_source_snapshot_wait_for_count(),
         },
         user_storage_managed_collections_batch_duration: config
             .user_storage_managed_collections_batch_duration(),
@@ -170,8 +164,8 @@ pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
     }
 }
 
-pub fn pg_timstamp_oracle_config(config: &SystemVars) -> PostgresTimestampOracleParameters {
-    PostgresTimestampOracleParameters {
+pub fn timestamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters {
+    TimestampOracleParameters {
         pg_connection_pool_max_size: Some(config.pg_timestamp_oracle_connection_pool_max_size()),
         pg_connection_pool_max_wait: Some(config.pg_timestamp_oracle_connection_pool_max_wait()),
         pg_connection_pool_ttl: Some(config.pg_timestamp_oracle_connection_pool_ttl()),
@@ -183,6 +177,9 @@ pub fn pg_timstamp_oracle_config(config: &SystemVars) -> PostgresTimestampOracle
         // oracle.
         pg_connection_pool_connect_timeout: Some(config.crdb_connect_timeout()),
         pg_connection_pool_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
+        pg_connection_pool_keepalives_idle: Some(config.crdb_keepalives_idle()),
+        pg_connection_pool_keepalives_interval: Some(config.crdb_keepalives_interval()),
+        pg_connection_pool_keepalives_retries: Some(config.crdb_keepalives_retries()),
     }
 }
 
@@ -204,11 +201,11 @@ pub fn orchestrator_scheduling_config(config: &SystemVars) -> ServiceSchedulingC
             enabled: config.cluster_enable_topology_spread(),
             ignore_non_singular_scale: config.cluster_topology_spread_ignore_non_singular_scale(),
             max_skew: config.cluster_topology_spread_max_skew(),
+            min_domains: config.cluster_topology_spread_set_min_domains(),
             soft: config.cluster_topology_spread_soft(),
         },
         soften_az_affinity: config.cluster_soften_az_affinity(),
         soften_az_affinity_weight: config.cluster_soften_az_affinity_weight(),
-        always_use_disk: config.cluster_always_use_disk(),
         security_context_enabled: config.cluster_security_context_enabled(),
     }
 }

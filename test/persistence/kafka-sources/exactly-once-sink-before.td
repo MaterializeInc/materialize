@@ -34,12 +34,14 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE exactly_once
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-exactly-once-${testdrive.seed}')
 
 > CREATE TABLE exactly_once_tbl FROM SOURCE exactly_once (REFERENCE "testdrive-exactly-once-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

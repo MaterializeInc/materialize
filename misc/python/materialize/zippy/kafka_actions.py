@@ -120,14 +120,11 @@ class CreateTopic(Action):
 
     def run(self, c: Composition, state: State) -> None:
         c.testdrive(
-            SCHEMA
-            + dedent(
-                f"""
+            SCHEMA + dedent(f"""
                 $ kafka-create-topic topic={self.topic.name} partitions={self.topic.partitions}
                 $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} repeat=1
                 {{"key": 0}} {{"f1": 0, "pad": ""}}
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -164,12 +161,10 @@ class KafkaInsert(Ingest):
         assert self.topic.watermarks.max >= 0
         assert self.topic.watermarks.min >= 0
 
-        testdrive_str = SCHEMA + dedent(
-            f"""
+        testdrive_str = SCHEMA + dedent(f"""
             $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_max + 1} repeat={self.delta}
             {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad" : "{self.pad}"}}
-            """
-        )
+            """)
 
         if self.parallel():
             threading.Thread(target=c.testdrive, args=[testdrive_str]).start()
@@ -201,13 +196,10 @@ class KafkaUpsertFromHead(Ingest):
 
         if actual_delta > 0:
             c.testdrive(
-                SCHEMA
-                + dedent(
-                    f"""
+                SCHEMA + dedent(f"""
                     $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={start} repeat={actual_delta}
                     {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad": "{self.pad}"}}
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -230,13 +222,10 @@ class KafkaDeleteFromHead(Ingest):
 
         if actual_delta > 0:
             c.testdrive(
-                SCHEMA
-                + dedent(
-                    f"""
+                SCHEMA + dedent(f"""
                     $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.max + 1} repeat={actual_delta}
                     {{"key": ${{kafka-ingest.iteration}}}}
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -254,13 +243,10 @@ class KafkaUpsertFromTail(Ingest):
 
         if actual_delta > 0:
             c.testdrive(
-                SCHEMA
-                + dedent(
-                    f"""
+                SCHEMA + dedent(f"""
                     $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={tail} repeat={actual_delta}
                     {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad": "{self.pad}"}}
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -282,12 +268,9 @@ class KafkaDeleteFromTail(Ingest):
 
         if actual_delta > 0:
             c.testdrive(
-                SCHEMA
-                + dedent(
-                    f"""
+                SCHEMA + dedent(f"""
                    $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_min} repeat={actual_delta}
                    {{"key": ${{kafka-ingest.iteration}}}}
-                   """
-                ),
+                   """),
                 mz_service=state.mz_service,
             )

@@ -12,25 +12,101 @@
 #![allow(clippy::disallowed_types)]
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use arrow::array::{builder::*, ArrayRef};
+use arrow::array::{ArrayRef, builder::*};
 use arrow::datatypes::{
-    DataType, Field, Schema, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+    DECIMAL_DEFAULT_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, Schema,
 };
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use chrono::Timelike;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::{Datum, RelationDesc, Row, ScalarType};
+use mz_repr::{Datum, RelationDesc, Row, SqlScalarType};
+
+pub const ARROW_EXTENSION_NAME_KEY: &str = "ARROW:extension:name";
+const EXTENSION_PREFIX: &str = "materialize.v1.";
 
 pub struct ArrowBuilder {
     columns: Vec<ArrowColumn>,
     /// A crude estimate of the size of the data in the builder
     /// based on the size of the rows added to it.
     row_size_bytes: usize,
+    /// The original schema, if provided. Used to preserve metadata in to_record_batch().
+    original_schema: Option<Arc<Schema>>,
+}
+
+/// Converts a RelationDesc to an Arrow Schema.
+pub fn desc_to_schema(desc: &RelationDesc) -> Result<Schema, anyhow::Error> {
+    desc_to_schema_with_overrides(desc, |_| None)
+}
+
+/// Converts a RelationDesc to an Arrow Schema, with optional type overrides.
+///
+/// The `overrides` function receives a SqlScalarType and can return:
+/// - `Some((DataType, String))` to override the default mapping
+/// - `None` to use the default mapping from `scalar_to_arrow_datatype`
+///
+/// This allows destinations like Iceberg to customize type mappings for
+/// unsupported types (e.g., UInt64 -> Decimal128) while keeping the standard
+/// mapping for everything else.
+pub fn desc_to_schema_with_overrides<F>(
+    desc: &RelationDesc,
+    overrides: F,
+) -> Result<Schema, anyhow::Error>
+where
+    F: Fn(&SqlScalarType) -> Option<(DataType, String)>,
+{
+    let mut fields = vec![];
+    let mut errs = vec![];
+    let mut seen_names = BTreeSet::new();
+    let mut all_names = BTreeSet::new();
+    for col_name in desc.iter_names() {
+        all_names.insert(col_name.to_string());
+    }
+    for (col_name, col_type) in desc.iter() {
+        let mut col_name = col_name.to_string();
+        // If we allow columns with the same name we encounter two issues:
+        // 1. The arrow crate will accidentally reuse the same buffers for the columns
+        // 2. Many parquet readers will error when trying to read the file metadata
+        // Instead we append a number to the end of the column name for any duplicates.
+        // TODO(roshan): We should document this when writing the copy-to-s3 MZ docs.
+
+        if seen_names.contains(&col_name) {
+            let mut new_col_name = col_name.clone();
+            let mut e = 2;
+            while all_names.contains(&new_col_name) {
+                new_col_name = format!("{}{}", col_name, e);
+                e += 1;
+            }
+            col_name = new_col_name;
+        }
+
+        seen_names.insert(col_name.clone());
+        all_names.insert(col_name.clone());
+
+        // Use the override-aware version which applies overrides recursively
+        let result = scalar_to_arrow_datatype_with_overrides(&col_type.scalar_type, &overrides);
+
+        match result {
+            Ok((data_type, extension_type_name)) => {
+                fields.push(field_with_typename(
+                    &col_name,
+                    data_type,
+                    col_type.nullable,
+                    &extension_type_name,
+                ));
+            }
+            Err(err) => errs.push(err.to_string()),
+        }
+    }
+    if !errs.is_empty() {
+        anyhow::bail!("Relation contains unimplemented arrow types: {:?}", errs);
+    }
+    Ok(Schema::new(fields))
 }
 
 impl ArrowBuilder {
@@ -49,6 +125,50 @@ impl ArrowBuilder {
         Ok(())
     }
 
+    /// Helper to validate that a RelationDesc, after applying `overrides`, can
+    /// be encoded into Arrow AND converted from Arrow into parquet by
+    /// arrow-rs's `ArrowWriter`.
+    ///
+    /// Arrow encodability is a superset of parquet encodability — some Arrow
+    /// types are not (yet) implemented by arrow-rs's parquet writer. Callers
+    /// that write parquet must reject these up-front: copy-to-s3 writes an
+    /// `INCOMPLETE` sentinel during preflight and does not clean it up on a
+    /// failed upload, so a runtime failure inside the parquet writer leaves
+    /// the path in a state that blocks subsequent copies.
+    ///
+    /// Pass the same `overrides` you pass to [`desc_to_schema_with_overrides`]
+    /// — otherwise this check will reject types your sink is going to remap.
+    /// To add a new banned arrow datatype, extend `parquet_incompatible_type`.
+    pub fn validate_desc_for_parquet<F>(
+        desc: &RelationDesc,
+        overrides: F,
+    ) -> Result<(), anyhow::Error>
+    where
+        F: Fn(&SqlScalarType) -> Option<(DataType, String)>,
+    {
+        let mut errs = vec![];
+        for (col_name, col_type) in desc.iter() {
+            let dt =
+                match scalar_to_arrow_datatype_with_overrides(&col_type.scalar_type, &overrides) {
+                    Ok((dt, _)) => dt,
+                    Err(_) => {
+                        errs.push(format!("{}: {:?}", col_name, col_type.scalar_type));
+                        continue;
+                    }
+                };
+            if let Some(reason) = parquet_incompatible_type(&dt) {
+                errs.push(format!(
+                    "{}: {:?} ({})",
+                    col_name, col_type.scalar_type, reason
+                ));
+            }
+        }
+        if !errs.is_empty() {
+            anyhow::bail!("Cannot encode the following columns/types: {:?}", errs);
+        }
+        Ok(())
+    }
+
     /// Initializes a new ArrowBuilder with the schema of the provided RelationDesc.
     /// `item_capacity` is used to initialize the capacity of each column's builder which defines
     /// the number of values that can be appended to each column before reallocating.
@@ -59,43 +179,51 @@ impl ArrowBuilder {
         item_capacity: usize,
         data_capacity: usize,
     ) -> Result<Self, anyhow::Error> {
+        let schema = desc_to_schema(desc)?;
         let mut columns = vec![];
-        let mut errs = vec![];
-        let mut seen_names = BTreeMap::new();
-        for (col_name, col_type) in desc.iter() {
-            let mut col_name = col_name.to_string();
-            // If we allow columns with the same name we encounter two issues:
-            // 1. The arrow crate will accidentally reuse the same buffers for the columns
-            // 2. Many parquet readers will error when trying to read the file metadata
-            // Instead we append a number to the end of the column name for any duplicates.
-            // TODO(roshan): We should document this when writing the copy-to-s3 MZ docs.
-            seen_names
-                .entry(col_name.clone())
-                .and_modify(|e: &mut u32| {
-                    *e += 1;
-                    col_name += &e.to_string();
-                })
-                .or_insert(1);
-            match scalar_to_arrow_datatype(&col_type.scalar_type) {
-                Ok((data_type, extension_type_name)) => {
-                    columns.push(ArrowColumn::new(
-                        col_name,
-                        col_type.nullable,
-                        data_type,
-                        extension_type_name,
-                        item_capacity,
-                        data_capacity,
-                    )?);
-                }
-                Err(err) => errs.push(err.to_string()),
-            }
-        }
-        if !errs.is_empty() {
-            anyhow::bail!("Relation contains unimplemented arrow types: {:?}", errs);
+        for field in schema.fields() {
+            columns.push(ArrowColumn::new(
+                field.name().clone(),
+                field.is_nullable(),
+                field.data_type().clone(),
+                typename_from_field(field)?,
+                item_capacity,
+                data_capacity,
+            )?);
         }
         Ok(Self {
             columns,
             row_size_bytes: 0,
+            original_schema: None,
+        })
+    }
+
+    /// Initializes a new ArrowBuilder with a pre-built Arrow Schema.
+    /// This is useful when you need to preserve schema metadata (e.g., field IDs for Iceberg).
+    /// `item_capacity` is used to initialize the capacity of each column's builder which defines
+    /// the number of values that can be appended to each column before reallocating.
+    /// `data_capacity` is used to initialize the buffer size of the string and binary builders.
+    /// Errors if the schema contains an unimplemented type.
+    pub fn new_with_schema(
+        schema: Arc<Schema>,
+        item_capacity: usize,
+        data_capacity: usize,
+    ) -> Result<Self, anyhow::Error> {
+        let mut columns = vec![];
+        for field in schema.fields() {
+            columns.push(ArrowColumn::new(
+                field.name().clone(),
+                field.is_nullable(),
+                field.data_type().clone(),
+                typename_from_field(field)?,
+                item_capacity,
+                data_capacity,
+            )?);
+        }
+        Ok(Self {
+            columns,
+            row_size_bytes: 0,
+            original_schema: Some(schema),
         })
     }
 
@@ -117,13 +245,21 @@ impl ArrowBuilder {
             arrays.push(col.finish());
             fields.push((&col).into());
         }
-        RecordBatch::try_new(Schema::new(fields).into(), arrays)
+
+        // If we have an original schema, use it to preserve metadata (e.g., field IDs)
+        let schema = if let Some(original_schema) = self.original_schema {
+            original_schema
+        } else {
+            Arc::new(Schema::new(fields))
+        };
+
+        RecordBatch::try_new(schema, arrays)
     }
 
     /// Appends a row to the builder.
     /// Errors if the row contains an unimplemented or out-of-range value.
     pub fn add_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
-        for (col, datum) in self.columns.iter_mut().zip(row.iter()) {
+        for (col, datum) in self.columns.iter_mut().zip_eq(row.iter()) {
             col.append_datum(datum)?;
         }
         self.row_size_bytes += row.byte_len();
@@ -135,34 +271,124 @@ impl ArrowBuilder {
     }
 }
 
-/// Return the appropriate Arrow DataType for the given ScalarType, plus a string
+/// Return the appropriate Arrow DataType for the given SqlScalarType, plus a string
 /// that should be used as part of the Arrow 'Extension Type' name for fields using
 /// this type: <https://arrow.apache.org/docs/format/Columnar.html#extension-types>
-fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, String), anyhow::Error> {
+fn scalar_to_arrow_datatype(
+    scalar_type: &SqlScalarType,
+) -> Result<(DataType, String), anyhow::Error> {
+    scalar_to_arrow_datatype_impl(scalar_type, &|_| None)
+}
+
+/// Returns a description of why this Arrow [`DataType`] cannot be written to
+/// parquet by arrow-rs's `ArrowWriter`, or `None` if the type is supported.
+/// Recurses into composite types so a banned type is rejected even if it is
+/// nested inside a list/struct/map.
+///
+/// This is an allowlist mirroring what arrow-rs's parquet writer accepts in
+/// its `get_arrow_column_writer` and `write_leaf` paths. To support a new
+/// leaf type, add an arm to the allowlist match below — but only after
+/// verifying that arrow-rs's parquet writer can actually emit it.
+fn parquet_incompatible_type(dt: &DataType) -> Option<&'static str> {
+    use arrow::datatypes::IntervalUnit;
+    match dt {
+        DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+            parquet_incompatible_type(f.data_type())
+        }
+        DataType::Map(f, _) => parquet_incompatible_type(f.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .find_map(|f| parquet_incompatible_type(f.data_type())),
+
+        // Allowlist of supported leaf types.
+        DataType::Null
+        | DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Timestamp(_, _)
+        | DataType::Duration(_)
+        | DataType::Interval(IntervalUnit::YearMonth | IntervalUnit::DayTime)
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_)
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => None,
+
+        // Fail closed: anything not on the allowlist is rejected.
+        _ => Some("unsupported arrow datatype"),
+    }
+}
+
+/// Return the appropriate Arrow DataType for the given SqlScalarType, with optional
+/// type overrides. The override function is called for each SqlScalarType (including
+/// nested types) and can return Some((DataType, extension_name)) to override the
+/// default mapping.
+fn scalar_to_arrow_datatype_with_overrides<F>(
+    scalar_type: &SqlScalarType,
+    overrides: &F,
+) -> Result<(DataType, String), anyhow::Error>
+where
+    F: Fn(&SqlScalarType) -> Option<(DataType, String)>,
+{
+    scalar_to_arrow_datatype_impl(scalar_type, overrides)
+}
+
+/// Core implementation of scalar-to-arrow type conversion with override support.
+fn scalar_to_arrow_datatype_impl<F>(
+    scalar_type: &SqlScalarType,
+    overrides: &F,
+) -> Result<(DataType, String), anyhow::Error>
+where
+    F: Fn(&SqlScalarType) -> Option<(DataType, String)>,
+{
+    // Check for override first
+    if let Some(result) = overrides(scalar_type) {
+        return Ok(result);
+    }
     let (data_type, extension_name) = match scalar_type {
-        ScalarType::Bool => (DataType::Boolean, "boolean"),
-        ScalarType::Int16 => (DataType::Int16, "smallint"),
-        ScalarType::Int32 => (DataType::Int32, "integer"),
-        ScalarType::Int64 => (DataType::Int64, "bigint"),
-        ScalarType::UInt16 => (DataType::UInt16, "uint2"),
-        ScalarType::UInt32 => (DataType::UInt32, "uint4"),
-        ScalarType::UInt64 => (DataType::UInt64, "uint8"),
-        ScalarType::Float32 => (DataType::Float32, "real"),
-        ScalarType::Float64 => (DataType::Float64, "double"),
-        ScalarType::Date => (DataType::Date32, "date"),
+        SqlScalarType::Bool => (DataType::Boolean, "boolean"),
+        SqlScalarType::Int16 => (DataType::Int16, "smallint"),
+        SqlScalarType::Int32 => (DataType::Int32, "integer"),
+        SqlScalarType::Int64 => (DataType::Int64, "bigint"),
+        SqlScalarType::UInt16 => (DataType::UInt16, "uint2"),
+        SqlScalarType::UInt32 => (DataType::UInt32, "uint4"),
+        SqlScalarType::UInt64 => (DataType::UInt64, "uint8"),
+        SqlScalarType::Oid => (DataType::UInt32, "oid"),
+        SqlScalarType::Float32 => (DataType::Float32, "real"),
+        SqlScalarType::Float64 => (DataType::Float64, "double"),
+        SqlScalarType::Date => (DataType::Date32, "date"),
         // The resolution of our time and timestamp types is microseconds, which is lucky
         // since the original parquet 'ConvertedType's support microsecond resolution but not
         // nanosecond resolution. The newer parquet 'LogicalType's support nanosecond resolution,
         // but many readers don't support them yet.
-        ScalarType::Time => (
+        SqlScalarType::Time => (
             DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             "time",
         ),
-        ScalarType::Timestamp { .. } => (
+        SqlScalarType::Timestamp { .. } => (
             DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
             "timestamp",
         ),
-        ScalarType::TimestampTz { .. } => (
+        SqlScalarType::TimestampTz { .. } => (
             DataType::Timestamp(
                 arrow::datatypes::TimeUnit::Microsecond,
                 // When appending values we always use UTC timestamps, and setting this to a non-empty
@@ -171,30 +397,30 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, Strin
             ),
             "timestamptz",
         ),
-        ScalarType::Bytes => (DataType::LargeBinary, "bytea"),
-        ScalarType::Char { length } => {
+        SqlScalarType::Bytes => (DataType::LargeBinary, "bytea"),
+        SqlScalarType::Char { length } => {
             if length.map_or(false, |l| l.into_u32() < i32::MAX.unsigned_abs()) {
                 (DataType::Utf8, "text")
             } else {
                 (DataType::LargeUtf8, "text")
             }
         }
-        ScalarType::VarChar { max_length } => {
+        SqlScalarType::VarChar { max_length } => {
             if max_length.map_or(false, |l| l.into_u32() < i32::MAX.unsigned_abs()) {
                 (DataType::Utf8, "text")
             } else {
                 (DataType::LargeUtf8, "text")
             }
         }
-        ScalarType::String => (DataType::LargeUtf8, "text"),
+        SqlScalarType::String => (DataType::LargeUtf8, "text"),
         // Parquet does have a UUID 'Logical Type' in parquet format 2.4+, but there is no arrow
         // UUID type, so we match the format (a 16-byte fixed-length binary array) ourselves.
-        ScalarType::Uuid => (DataType::FixedSizeBinary(16), "uuid"),
+        SqlScalarType::Uuid => (DataType::FixedSizeBinary(16), "uuid"),
         // Parquet does have a JSON 'Logical Type' in parquet format 2.4+, but there is no arrow
         // JSON type, so for now we represent JSON as 'large' utf8-encoded strings.
-        ScalarType::Jsonb => (DataType::LargeUtf8, "jsonb"),
-        ScalarType::MzTimestamp => (DataType::UInt64, "mz_timestamp"),
-        ScalarType::Numeric { max_scale } => {
+        SqlScalarType::Jsonb => (DataType::LargeUtf8, "jsonb"),
+        SqlScalarType::MzTimestamp => (DataType::UInt64, "mz_timestamp"),
+        SqlScalarType::Numeric { max_scale } => {
             // Materialize allows 39 digits of precision for numeric values, but allows
             // arbitrary scales among those values. e.g. 1e38 and 1e-39 are both valid in
             // the same column. However, Arrow/Parquet only allows static declaration of both
@@ -226,16 +452,17 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, Strin
                 ),
             }
         }
-        // arrow::datatypes::IntervalUnit::MonthDayNano is not yet implemented in the arrow parquet writer
-        // https://github.com/apache/arrow-rs/blob/0d031cc8aa81296cb1bdfedea7a7cb4ec6aa54ea/parquet/src/arrow/arrow_writer/mod.rs#L859
-        // ScalarType::Interval => DataType::Interval(arrow::datatypes::IntervalUnit::DayTime)
-        ScalarType::Array(inner) => {
+        SqlScalarType::Interval => (
+            DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+            "interval",
+        ),
+        SqlScalarType::Array(inner) => {
             // Postgres / MZ Arrays are weird, since they can be multi-dimensional but this is not
             // enforced in the type system, so can change per-value.
             // We use a struct type with two fields - one containing the array elements as a list
             // and the other containing the number of dimensions the array represents. Since arrays
             // are not allowed to be ragged, the number of elements in each dimension is the same.
-            let (inner_type, inner_name) = scalar_to_arrow_datatype(inner)?;
+            let (inner_type, inner_name) = scalar_to_arrow_datatype_impl(inner, overrides)?;
             // TODO: Document these field names in our copy-to-s3 docs
             let inner_field = field_with_typename("item", inner_type, true, &inner_name);
             let list_field = Arc::new(field_with_typename(
@@ -252,20 +479,20 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, Strin
             ));
             (DataType::Struct([list_field, dims_field].into()), "array")
         }
-        ScalarType::List {
+        SqlScalarType::List {
             element_type,
             custom_id: _,
         } => {
-            let (inner_type, inner_name) = scalar_to_arrow_datatype(element_type)?;
+            let (inner_type, inner_name) = scalar_to_arrow_datatype_impl(element_type, overrides)?;
             // TODO: Document these field names in our copy-to-s3 docs
             let field = field_with_typename("item", inner_type, true, &inner_name);
             (DataType::List(field.into()), "list")
         }
-        ScalarType::Map {
+        SqlScalarType::Map {
             value_type,
             custom_id: _,
         } => {
-            let (value_type, value_name) = scalar_to_arrow_datatype(value_type)?;
+            let (value_type, value_name) = scalar_to_arrow_datatype_impl(value_type, overrides)?;
             // Arrow maps are represented as an 'entries' struct with 'keys' and 'values' fields.
             let field_names = MapFieldNames::default();
             let struct_type = DataType::Struct(
@@ -281,6 +508,73 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, Strin
                     false,
                 ),
                 "map",
+            )
+        }
+        SqlScalarType::Record {
+            fields,
+            custom_id: _,
+        } => {
+            // Records are represented as Arrow Structs with one field per record field.
+            // At runtime, records are stored as Datum::List with field values in order.
+            let mut arrow_fields = Vec::with_capacity(fields.len());
+            for (field_name, field_type) in fields.iter() {
+                let (inner_type, inner_extension_name) =
+                    scalar_to_arrow_datatype_impl(&field_type.scalar_type, overrides)?;
+                let field = field_with_typename(
+                    field_name.as_str(),
+                    inner_type,
+                    field_type.nullable,
+                    &inner_extension_name,
+                );
+                arrow_fields.push(Arc::new(field));
+            }
+            (DataType::Struct(arrow_fields.into()), "record")
+        }
+        SqlScalarType::Range { element_type } => {
+            // Ranges are represented as Arrow Structs with 5 fields:
+            //   - lower: nullable element value (the bound datum, null = infinite)
+            //   - upper: nullable element value (the bound datum, null = infinite)
+            //   - lower_inclusive: bool
+            //   - upper_inclusive: bool
+            //   - empty: bool
+            let (inner_type, inner_name) = scalar_to_arrow_datatype_impl(element_type, overrides)?;
+            let lower_field = Arc::new(field_with_typename(
+                "lower",
+                inner_type.clone(),
+                true,
+                &inner_name,
+            ));
+            let upper_field = Arc::new(field_with_typename("upper", inner_type, true, &inner_name));
+            let lower_inclusive_field = Arc::new(field_with_typename(
+                "lower_inclusive",
+                DataType::Boolean,
+                false,
+                "boolean",
+            ));
+            let upper_inclusive_field = Arc::new(field_with_typename(
+                "upper_inclusive",
+                DataType::Boolean,
+                false,
+                "boolean",
+            ));
+            let empty_field = Arc::new(field_with_typename(
+                "empty",
+                DataType::Boolean,
+                false,
+                "boolean",
+            ));
+            (
+                DataType::Struct(
+                    [
+                        lower_field,
+                        upper_field,
+                        lower_inclusive_field,
+                        upper_inclusive_field,
+                        empty_field,
+                    ]
+                    .into(),
+                ),
+                "range",
             )
         }
         _ => anyhow::bail!("{:?} unimplemented", scalar_type),
@@ -377,8 +671,9 @@ fn builder_for_datatype(
                         fields.len()
                     )
                 }
-                let key_builder = StringBuilder::with_capacity(item_capacity, data_capacity);
+                let key_field = &fields[0];
                 let value_field = &fields[1];
+                let key_builder = StringBuilder::with_capacity(item_capacity, data_capacity);
                 let value_builder = ArrowColumn::new(
                     value_field.name().clone(),
                     value_field.is_nullable(),
@@ -387,18 +682,37 @@ fn builder_for_datatype(
                     item_capacity,
                     data_capacity,
                 )?;
+                // Use the names from the schema's entries struct rather than
+                // arrow-rs's defaults (`entries`/`keys`/`values`) — when the
+                // schema came from Iceberg (`key_value`/`key`/`value`) the
+                // RecordBatch validation rejects the mismatched DataType.
+                let field_names = MapFieldNames {
+                    entry: entries_field.name().clone(),
+                    key: key_field.name().clone(),
+                    value: value_field.name().clone(),
+                };
+                // Forward both inner fields so any metadata the schema set
+                // (e.g. Iceberg's PARQUET:field_id) survives onto the
+                // MapArray's nested fields; otherwise RecordBatch::try_new
+                // rejects the batch as schema-mismatched.
                 ColBuilder::MapBuilder(Box::new(
                     MapBuilder::with_capacity(
-                        Some(MapFieldNames::default()),
+                        Some(field_names),
                         key_builder,
                         value_builder,
                         item_capacity,
                     )
+                    .with_keys_field(Arc::clone(key_field))
                     .with_values_field(Arc::clone(value_field)),
                 ))
             } else {
                 anyhow::bail!("Expected map entries to be a struct")
             }
+        }
+        DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano) => {
+            ColBuilder::IntervalMonthDayNanoBuilder(IntervalMonthDayNanoBuilder::with_capacity(
+                item_capacity,
+            ))
         }
         _ => anyhow::bail!("{:?} unimplemented", data_type),
     };
@@ -433,22 +747,29 @@ fn field_with_typename(
     extension_type_name: &str,
 ) -> Field {
     Field::new(name, data_type, nullable).with_metadata(HashMap::from([(
-        "ARROW:extension:name".to_string(),
-        format!("materialize.v1.{}", extension_type_name),
+        ARROW_EXTENSION_NAME_KEY.to_string(),
+        format!("{}{}", EXTENSION_PREFIX, extension_type_name),
     )]))
 }
 
 /// Extract the materialize 'type name' from the metadata of a Field.
+/// Returns an error if the field doesn't have extension metadata.
 fn typename_from_field(field: &Field) -> Result<String, anyhow::Error> {
     let metadata = field.metadata();
     let extension_name = metadata
-        .get("ARROW:extension:name")
-        .ok_or_else(|| anyhow::anyhow!("Missing extension name in metadata"))?;
-    if let Some(name) = extension_name.strip_prefix("materialize.v1") {
-        Ok(name.to_string())
-    } else {
-        anyhow::bail!("Extension name {} does not match expected", extension_name,)
-    }
+        .get(ARROW_EXTENSION_NAME_KEY)
+        .ok_or_else(|| anyhow::anyhow!("Field '{}' missing extension metadata", field.name()))?;
+    extension_name
+        .strip_prefix(EXTENSION_PREFIX)
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Field '{}' extension name '{}' missing expected prefix '{}'",
+                field.name(),
+                extension_name,
+                EXTENSION_PREFIX
+            )
+        })
 }
 
 impl ArrowColumn {
@@ -577,7 +898,8 @@ make_col_builder!(
     FixedSizeBinaryBuilder,
     StringBuilder,
     LargeStringBuilder,
-    Decimal128Builder
+    Decimal128Builder,
+    IntervalMonthDayNanoBuilder
 );
 
 impl ArrowColumn {
@@ -615,12 +937,42 @@ impl ArrowColumn {
                 builder.append_value(val.as_bytes())?
             }
             (ColBuilder::StringBuilder(builder), Datum::String(s)) => builder.append_value(s),
+            (ColBuilder::StringBuilder(builder), _) if self.extension_type_name == "jsonb" => {
+                builder.append_value(JsonbRef::from_datum(datum).to_serde_json().to_string())
+            }
             (ColBuilder::LargeStringBuilder(builder), _) if self.extension_type_name == "jsonb" => {
                 builder.append_value(JsonbRef::from_datum(datum).to_serde_json().to_string())
             }
             (ColBuilder::LargeStringBuilder(builder), Datum::String(s)) => builder.append_value(s),
             (ColBuilder::UInt64Builder(builder), Datum::MzTimestamp(ts)) => {
                 builder.append_value(ts.into())
+            }
+            // Lossless unsigned-to-signed promotions for destinations that don't
+            // support unsigned types (e.g., Iceberg).
+            (ColBuilder::Int32Builder(builder), Datum::UInt16(i)) => {
+                builder.append_value(i32::from(i))
+            }
+            // Lossless signed-to-signed widening for destinations that don't
+            // support narrow integers (e.g., Iceberg has no smallint).
+            (ColBuilder::Int32Builder(builder), Datum::Int16(i)) => {
+                builder.append_value(i32::from(i))
+            }
+            (ColBuilder::Int64Builder(builder), Datum::UInt32(i)) => {
+                builder.append_value(i64::from(i))
+            }
+            (ColBuilder::Decimal128Builder(builder), Datum::UInt64(i)) => {
+                builder.append_value(i128::from(i))
+            }
+            (ColBuilder::Decimal128Builder(builder), Datum::MzTimestamp(ts)) => {
+                builder.append_value(i128::from(u64::from(ts)))
+            }
+            // Interval-to-string conversion for destinations that don't support
+            // interval types natively (e.g., Iceberg).
+            (ColBuilder::StringBuilder(builder), Datum::Interval(iv)) => {
+                builder.append_value(iv.to_string())
+            }
+            (ColBuilder::LargeStringBuilder(builder), Datum::Interval(iv)) => {
+                builder.append_value(iv.to_string())
             }
             (ColBuilder::Decimal128Builder(builder), Datum::Numeric(mut dec)) => {
                 if dec.0.is_special() {
@@ -706,8 +1058,109 @@ impl ArrowColumn {
                 }
                 builder.append(true).unwrap()
             }
-            (_builder, datum) => {
-                anyhow::bail!("Datum {:?} does not match builder", datum)
+            // Records are stored as Datum::List at runtime but written to a StructBuilder.
+            // Arrays use Datum::Array (handled above), so Datum::List with StructBuilder is a record.
+            (ColBuilder::StructBuilder(struct_builder), Datum::List(list)) => {
+                let field_count = struct_builder.num_fields();
+                for (i, datum) in list.into_iter().enumerate() {
+                    if i >= field_count {
+                        anyhow::bail!(
+                            "Record has more elements ({}) than struct fields ({})",
+                            i + 1,
+                            field_count
+                        );
+                    }
+                    let field_builder: &mut ArrowColumn = struct_builder
+                        .field_builder(i)
+                        .ok_or_else(|| anyhow::anyhow!("Missing field builder at index {}", i))?;
+                    field_builder.append_datum(datum)?;
+                }
+                struct_builder.append(true);
+            }
+            (ColBuilder::StructBuilder(struct_builder), Datum::Range(range)) => {
+                // Ranges are represented as a struct with 5 fields:
+                //   0: lower (nullable element value)
+                //   1: upper (nullable element value)
+                //   2: lower_inclusive (bool)
+                //   3: upper_inclusive (bool)
+                //   4: empty (bool)
+                match range.inner {
+                    None => {
+                        // Empty range: null bounds, inclusive=false, empty=true
+                        struct_builder
+                            .field_builder::<ArrowColumn>(0)
+                            .unwrap()
+                            .append_datum(Datum::Null)?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(1)
+                            .unwrap()
+                            .append_datum(Datum::Null)?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(2)
+                            .unwrap()
+                            .append_datum(Datum::False)?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(3)
+                            .unwrap()
+                            .append_datum(Datum::False)?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(4)
+                            .unwrap()
+                            .append_datum(Datum::True)?;
+                    }
+                    Some(inner) => {
+                        struct_builder
+                            .field_builder::<ArrowColumn>(0)
+                            .unwrap()
+                            .append_datum(
+                                inner.lower.bound.map(|n| n.datum()).unwrap_or(Datum::Null),
+                            )?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(1)
+                            .unwrap()
+                            .append_datum(
+                                inner.upper.bound.map(|n| n.datum()).unwrap_or(Datum::Null),
+                            )?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(2)
+                            .unwrap()
+                            .append_datum(if inner.lower.inclusive {
+                                Datum::True
+                            } else {
+                                Datum::False
+                            })?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(3)
+                            .unwrap()
+                            .append_datum(if inner.upper.inclusive {
+                                Datum::True
+                            } else {
+                                Datum::False
+                            })?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(4)
+                            .unwrap()
+                            .append_datum(Datum::False)?;
+                    }
+                }
+                // Mark the struct row as non-null. StructBuilder tracks per-row
+                // validity independently from the child builders, so this call
+                // is required once per outer row regardless of the field values.
+                struct_builder.append(true);
+            }
+            (ColBuilder::IntervalMonthDayNanoBuilder(builder), Datum::Interval(iv)) => {
+                let nanos = iv.micros.checked_mul(1_000).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "interval microseconds {} overflow i64 nanoseconds",
+                        iv.micros
+                    )
+                })?;
+                builder.append_value(arrow::datatypes::IntervalMonthDayNano::new(
+                    iv.months, iv.days, nanos,
+                ));
+            }
+            (builder, datum) => {
+                anyhow::bail!("Datum {:?} does not match builder {:?}", datum, builder)
             }
         }
         Ok(())

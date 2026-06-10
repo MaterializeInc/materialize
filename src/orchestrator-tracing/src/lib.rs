@@ -9,14 +9,13 @@
 
 //! Service orchestration for tracing-aware services.
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use clap::{FromArgMatches, IntoApp};
+use clap::{CommandFactory, FromArgMatches};
 use derivative::Derivative;
 use futures_core::stream::BoxStream;
 use http::header::{HeaderName, HeaderValue};
@@ -24,7 +23,7 @@ use mz_build_info::BuildInfo;
 #[cfg(feature = "tokio-console")]
 use mz_orchestrator::ServicePort;
 use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
+    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics,
 };
 use mz_ore::cli::KeyValueArg;
@@ -35,7 +34,7 @@ use mz_ore::netio::SocketAddr;
 use mz_ore::tracing::TokioConsoleConfig;
 use mz_ore::tracing::{
     OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
-    TracingGuard, TracingHandle,
+    TracingHandle,
 };
 use mz_tracing::CloneableEnvFilter;
 use opentelemetry::KeyValue;
@@ -109,7 +108,7 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_MAX_BATCH_QUEUE_SIZE",
         default_value = "2048",
-        requires = "opentelemetry-endpoint"
+        requires = "opentelemetry_endpoint"
     )]
     pub opentelemetry_max_batch_queue_size: usize,
     /// The max number of spans to export in a single batch.
@@ -117,7 +116,7 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_MAX_EXPORT_BATCH_SIZE",
         default_value = "512",
-        requires = "opentelemetry-endpoint"
+        requires = "opentelemetry_endpoint"
     )]
     pub opentelemetry_max_export_batch_size: usize,
     /// The max number of concurrent export tasks.
@@ -125,7 +124,7 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_MAX_CONCURRENT_EXPORTS",
         default_value = "1",
-        requires = "opentelemetry-endpoint"
+        requires = "opentelemetry_endpoint"
     )]
     pub opentelemetry_max_concurrent_exports: usize,
     /// The delay between sequential sending of batches.
@@ -133,8 +132,8 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_SCHED_DELAY",
         default_value = "5000ms",
-        requires = "opentelemetry-endpoint",
-        parse(try_from_str = humantime::parse_duration)
+        requires = "opentelemetry_endpoint",
+        value_parser = humantime::parse_duration,
     )]
     pub opentelemetry_sched_delay: Duration,
     /// The max time to attempt exporting a batch.
@@ -142,8 +141,8 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_MAX_EXPORT_TIMEOUT",
         default_value = "30s",
-        requires = "opentelemetry-endpoint",
-        parse(try_from_str = humantime::parse_duration)
+        requires = "opentelemetry_endpoint",
+        value_parser = humantime::parse_duration,
     )]
     pub opentelemetry_max_export_timeout: Duration,
     /// Export OpenTelemetry tracing events to the provided endpoint.
@@ -162,7 +161,7 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "OPENTELEMETRY_HEADER",
-        requires = "opentelemetry-endpoint",
+        requires = "opentelemetry_endpoint",
         value_name = "NAME=VALUE",
         use_value_delimiter = true
     )]
@@ -177,7 +176,7 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "STARTUP_OPENTELEMETRY_FILTER",
-        requires = "opentelemetry-endpoint",
+        requires = "opentelemetry_endpoint",
         default_value = "info"
     )]
     pub startup_opentelemetry_filter: CloneableEnvFilter,
@@ -208,8 +207,8 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "TOKIO_CONSOLE_PUBLISH_INTERVAL",
-        requires = "tokio-console-listen-addr",
-        parse(try_from_str = humantime::parse_duration),
+        requires = "tokio_console_listen_addr",
+        value_parser = humantime::parse_duration,
         default_value = "1s",
     )]
     pub tokio_console_publish_interval: Duration,
@@ -220,8 +219,8 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "TOKIO_CONSOLE_RETENTION",
-        requires = "tokio-console-listen-addr",
-        parse(try_from_str = humantime::parse_duration),
+        requires = "tokio_console_listen_addr",
+        value_parser = humantime::parse_duration,
         default_value = "1h",
     )]
     pub tokio_console_retention: Duration,
@@ -269,7 +268,7 @@ impl TracingCliArgs {
             build_info,
         }: StaticTracingConfig,
         registry: MetricsRegistry,
-    ) -> Result<(TracingHandle, TracingGuard), anyhow::Error> {
+    ) -> Result<TracingHandle, anyhow::Error> {
         mz_ore::tracing::configure(TracingConfig {
             service_name,
             stderr_log: StderrLogConfig {
@@ -295,12 +294,16 @@ impl TracingCliArgs {
                     max_concurrent_exports: self.opentelemetry_max_concurrent_exports,
                     batch_scheduled_delay: self.opentelemetry_sched_delay,
                     max_export_timeout: self.opentelemetry_max_export_timeout,
-                    resource: Resource::new(
-                        self.opentelemetry_resource
-                            .iter()
-                            .cloned()
-                            .map(|kv| KeyValue::new(kv.key, kv.value)),
-                    ),
+                    resource: {
+                        Resource::builder()
+                            .with_attributes(
+                                self.opentelemetry_resource
+                                    .iter()
+                                    .cloned()
+                                    .map(|kv| KeyValue::new(kv.key, kv.value)),
+                            )
+                            .build()
+                    },
                 }
             }),
             #[cfg(feature = "tokio-console")]
@@ -325,7 +328,6 @@ impl TracingCliArgs {
             }),
             build_version: build_info.version,
             build_sha: build_info.sha,
-            build_time: build_info.time,
             registry,
             #[cfg(feature = "capture")]
             capture: self.capture.clone(),
@@ -399,10 +401,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let tracing_args = self.tracing_args.clone();
         let log_prefix_arg = format!("{}-{}", self.namespace, id);
-        let args_fn = move |listen_addrs: &BTreeMap<String, String>| {
+        let args_fn = move |assigned: ServiceAssignments| {
             #[cfg(feature = "tokio-console")]
-            let tokio_console_listen_addr = listen_addrs.get("tokio-console");
-            let mut args = (service_config.args)(listen_addrs);
+            let tokio_console_listen_addr = assigned.listen_addrs.get("tokio-console");
+            let mut args = (service_config.args)(assigned);
             let TracingCliArgs {
                 startup_log_filter,
                 log_prefix,

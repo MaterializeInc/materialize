@@ -21,7 +21,6 @@ class Minio(Service):
     def __init__(
         self,
         name: str = "minio",
-        image: str = "minio/minio:RELEASE.2023-07-07T07-13-57Z",
         setup_materialize: bool = False,
         additional_directories: list[str] = [],
         ports: list[int | str] = [9000, 9001],
@@ -40,10 +39,15 @@ class Minio(Service):
             config={
                 "entrypoint": ["sh", "-c"],
                 "command": [command],
-                "image": image,
+                "mzbuild": "minio",
                 "ports": ports,
                 "allow_host_ports": allow_host_ports,
-                "environment": ["MINIO_STORAGE_CLASS_STANDARD=EC:0"],
+                "environment": [
+                    "MINIO_STORAGE_CLASS_STANDARD=EC:0",
+                    "MINIO_HEAL_DISABLE=on",
+                    "MINIO_DISK_WATERMARK_LOW=1",
+                    "MINIO_DISK_WATERMARK_HIGH=1",
+                ],
                 "healthcheck": {
                     "test": [
                         "CMD",
@@ -63,7 +67,7 @@ class Mc(Service):
     def __init__(
         self,
         name: str = "mc",
-        image: str = "minio/mc:RELEASE.2023-07-07T05-25-51Z",
+        image: str = "minio/mc:RELEASE.2025-08-13T08-35-41Z",
     ) -> None:
         super().__init__(
             name=name,

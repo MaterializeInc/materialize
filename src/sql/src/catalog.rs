@@ -16,12 +16,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
+use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
+use mz_cloud_provider::{CloudProvider, InvalidCloudProviderError};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -30,7 +33,9 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_repr::{
+    CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
@@ -46,9 +51,9 @@ use crate::names::{
     QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
     SchemaSpecifier, SystemObjectId,
 };
-use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
-use crate::plan::{query, ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice};
+use crate::plan::statement::ddl::PlannedRoleAttributes;
+use crate::plan::{ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice, query};
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -76,8 +81,8 @@ use crate::session::vars::{OwnedVarInput, SystemVars};
 ///   * Session management, such as managing variables' states and adding
 ///     notices to the session.
 ///
-/// [`list_databases`]: Catalog::list_databases
-/// [`get_item`]: Catalog::resolve_item
+/// [`get_databases`]: SessionCatalog::get_databases
+/// [`get_item`]: SessionCatalog::get_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionResolver {
     /// Returns the id of the role that is issuing the query.
@@ -102,6 +107,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Returns the descriptor of the named prepared statement on the session, or
     /// None if the prepared statement does not exist.
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc>;
+
+    /// Retrieves a reference to the specified portal's descriptor.
+    ///
+    /// If there is no such portal, returns `None`.
+    fn get_portal_desc_unverified(&self, portal_name: &str) -> Option<&StatementDesc>;
 
     /// Resolves the named database.
     ///
@@ -161,6 +171,12 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
 
+    /// Resolves the named network policy.
+    fn resolve_network_policy(
+        &self,
+        network_policy_name: &str,
+    ) -> Result<&dyn CatalogNetworkPolicy, CatalogError>;
+
     /// Gets a role by its ID.
     fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole>;
 
@@ -192,13 +208,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn resolve_cluster<'a, 'b>(
         &'a self,
         cluster_name: Option<&'b str>,
-    ) -> Result<&dyn CatalogCluster<'a>, CatalogError>;
+    ) -> Result<&'a dyn CatalogCluster<'a>, CatalogError>;
 
     /// Resolves the named cluster replica.
     fn resolve_cluster_replica<'a, 'b>(
         &'a self,
         cluster_replica_name: &'b QualifiedReplica,
-    ) -> Result<&dyn CatalogClusterReplica<'a>, CatalogError>;
+    ) -> Result<&'a dyn CatalogClusterReplica<'a>, CatalogError>;
 
     /// Resolves a partially-specified item name, that is NOT a function or
     /// type. (For resolving functions or types, please use
@@ -246,12 +262,28 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn get_system_type(&self, name: &str) -> &dyn CatalogItem;
 
     /// Gets an item by its ID.
-    fn try_get_item(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
+    fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn CatalogItem>;
+
+    /// Tries to get an item by a [`GlobalId`], returning `None` if the [`GlobalId`] does not
+    /// exist.
+    ///
+    /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
+    fn try_get_item_by_global_id<'a>(
+        &'a self,
+        id: &GlobalId,
+    ) -> Option<Box<dyn CatalogCollectionItem + 'a>>;
 
     /// Gets an item by its ID.
     ///
     /// Panics if `id` does not specify a valid item.
-    fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem;
+    fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem;
+
+    /// Gets an item by a [`GlobalId`].
+    ///
+    /// Panics if `id` does not specify a valid item.
+    ///
+    /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
+    fn get_item_by_global_id<'a>(&'a self, id: &GlobalId) -> Box<dyn CatalogCollectionItem + 'a>;
 
     /// Gets all items.
     fn get_items(&self) -> Vec<&dyn CatalogItem>;
@@ -263,20 +295,20 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<&dyn CatalogItem>;
 
     /// Gets a cluster by ID.
-    fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster;
+    fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster<'_>;
 
     /// Gets all clusters.
-    fn get_clusters(&self) -> Vec<&dyn CatalogCluster>;
+    fn get_clusters(&self) -> Vec<&dyn CatalogCluster<'_>>;
 
     /// Gets a cluster replica by ID.
     fn get_cluster_replica(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-    ) -> &dyn CatalogClusterReplica;
+    ) -> &dyn CatalogClusterReplica<'_>;
 
     /// Gets all cluster replicas.
-    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
+    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>>;
 
     /// Gets all system privileges.
     fn get_system_privileges(&self) -> &PrivilegeMap;
@@ -298,6 +330,16 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// readable schema name
     fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName;
 
+    /// Returns the [`CatalogItemId`] for from a [`GlobalId`].
+    fn resolve_item_id(&self, global_id: &GlobalId) -> CatalogItemId;
+
+    /// Returns the [`GlobalId`] for the specificed Catalog Item, at the specified version.
+    fn resolve_global_id(
+        &self,
+        item_id: &CatalogItemId,
+        version: RelationVersionSelector,
+    ) -> GlobalId;
+
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
 
@@ -308,6 +350,14 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
 
     /// Returns the set of supported AWS PrivateLink availability zone ids.
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
+
+    /// Returns true if the session has `restrict_to_user_objects` active.
+    ///
+    /// Defaults to false so that non-session catalog implementations (e.g. those used during
+    /// catalog rehydration) are unaffected.
+    fn restrict_to_user_objects(&self) -> bool {
+        false
+    }
 
     /// Returns system vars
     fn system_vars(&self) -> &SystemVars;
@@ -338,7 +388,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
     /// earlier in the list than `id`. This is particularly userful for the order to drop
     /// objects.
-    fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId>;
+    fn item_dependents(&self, id: CatalogItemId) -> Vec<ObjectId>;
 
     /// Returns all possible privileges associated with an object type.
     fn all_object_privileges(&self, object_type: SystemObjectType) -> AclMode;
@@ -358,7 +408,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn add_notice(&self, notice: PlanNotice);
 
     /// Returns the associated comments for the given `id`
-    fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>>;
+    fn get_item_comments(&self, id: &CatalogItemId) -> Option<&BTreeMap<Option<usize>, String>>;
+
+    /// Reports whether the specified cluster size is a modern "cc" size rather
+    /// than a legacy T-shirt size.
+    fn is_cluster_size_cc(&self, size: &str) -> bool;
 }
 
 /// Configuration associated with a catalog.
@@ -379,15 +433,13 @@ pub struct CatalogConfig {
     pub session_id: Uuid,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// Default timestamp interval.
-    pub timestamp_interval: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
     /// Context for source and sink connections.
     pub connection_context: ConnectionContext,
-    /// Which system builtins to include. Not allowed to change dynamically.
-    pub builtins_cfg: BuiltinsConfig,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 }
 
 /// A database in a [`SessionCatalog`].
@@ -430,7 +482,7 @@ pub trait CatalogSchema {
     fn has_items(&self) -> bool;
 
     /// Returns the IDs of the items in the schema.
-    fn item_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_>;
+    fn item_ids(&self) -> Box<dyn Iterator<Item = CatalogItemId> + '_>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -439,13 +491,116 @@ pub trait CatalogSchema {
     fn privileges(&self) -> &PrivilegeMap;
 }
 
+/// Parameters used to modify password
+#[derive(Debug, Clone, Eq, PartialEq, Arbitrary)]
+pub struct PasswordConfig {
+    /// The Password.
+    pub password: Password,
+    /// a non default iteration count for hashing the password.
+    pub scram_iterations: NonZeroU32,
+}
+
+/// A modification of a role password in the catalog
+#[derive(Debug, Clone, Eq, PartialEq, Arbitrary)]
+pub enum PasswordAction {
+    /// Set a new password.
+    Set(PasswordConfig),
+    /// Remove the existing password.
+    Clear,
+    /// Leave the existing password unchanged.
+    NoChange,
+}
+
+/// The authenticator that auto-provisioned a role on first login.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
+pub enum AutoProvisionSource {
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::Oidc`].
+    Oidc,
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::Frontegg`].
+    Frontegg,
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::None`]
+    None,
+}
+
+/// A raw representation of attributes belonging to a [`CatalogRole`] that we might
+/// get as input from the user. This includes the password.
+/// This struct explicitly does not implement `Serialize` or `Deserialize` to avoid
+/// accidentally serializing passwords.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
+pub struct RoleAttributesRaw {
+    /// Indicates whether the role has inheritance of privileges.
+    pub inherit: bool,
+    /// The raw password of the role. This is for self managed auth, not cloud.
+    pub password: Option<Password>,
+    /// Hash iterations used to securely store passwords. This is for self-managed auth
+    pub scram_iterations: Option<NonZeroU32>,
+    /// Whether or not this user is a superuser.
+    pub superuser: Option<bool>,
+    /// Whether this role is login
+    pub login: Option<bool>,
+    /// The authenticator that auto-provisioned this role, if any.
+    pub auto_provision_source: Option<AutoProvisionSource>,
+    // Force use of constructor.
+    _private: (),
+}
+
 /// Attributes belonging to a [`CatalogRole`].
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Arbitrary
+)]
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
+    /// Whether or not this user is a superuser.
+    pub superuser: Option<bool>,
+    /// Whether this role is login
+    pub login: Option<bool>,
+    /// The authenticator that auto-provisioned this role, if any.
+    pub auto_provision_source: Option<AutoProvisionSource>,
     // Force use of constructor.
     _private: (),
+}
+
+impl RoleAttributesRaw {
+    /// Creates a new [`RoleAttributesRaw`] with default attributes.
+    pub const fn new() -> RoleAttributesRaw {
+        RoleAttributesRaw {
+            inherit: true,
+            password: None,
+            scram_iterations: None,
+            superuser: None,
+            login: None,
+            auto_provision_source: None,
+            _private: (),
+        }
+    }
+
+    /// Adds all attributes excluding password.
+    pub const fn with_all(mut self) -> RoleAttributesRaw {
+        self.inherit = true;
+        self.superuser = Some(true);
+        self.login = Some(true);
+        self
+    }
 }
 
 impl RoleAttributes {
@@ -453,13 +608,18 @@ impl RoleAttributes {
     pub const fn new() -> RoleAttributes {
         RoleAttributes {
             inherit: true,
+            superuser: None,
+            login: None,
+            auto_provision_source: None,
             _private: (),
         }
     }
 
-    /// Adds all attributes.
+    /// Adds all attributes except password and auto_provision_source.
     pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
+        self.superuser = Some(true);
+        self.login = Some(true);
         self
     }
 
@@ -469,11 +629,67 @@ impl RoleAttributes {
     }
 }
 
-impl From<PlannedRoleAttributes> for RoleAttributes {
-    fn from(PlannedRoleAttributes { inherit }: PlannedRoleAttributes) -> RoleAttributes {
-        let default_attributes = RoleAttributes::new();
+impl From<RoleAttributesRaw> for RoleAttributes {
+    fn from(
+        RoleAttributesRaw {
+            inherit,
+            superuser,
+            login,
+            auto_provision_source,
+            ..
+        }: RoleAttributesRaw,
+    ) -> RoleAttributes {
         RoleAttributes {
+            inherit,
+            superuser,
+            login,
+            auto_provision_source,
+            _private: (),
+        }
+    }
+}
+
+impl From<RoleAttributes> for RoleAttributesRaw {
+    fn from(
+        RoleAttributes {
+            inherit,
+            superuser,
+            login,
+            auto_provision_source,
+            ..
+        }: RoleAttributes,
+    ) -> RoleAttributesRaw {
+        RoleAttributesRaw {
+            inherit,
+            password: None,
+            scram_iterations: None,
+            superuser,
+            login,
+            auto_provision_source,
+            _private: (),
+        }
+    }
+}
+
+impl From<PlannedRoleAttributes> for RoleAttributesRaw {
+    fn from(
+        PlannedRoleAttributes {
+            inherit,
+            password,
+            scram_iterations,
+            superuser,
+            login,
+            ..
+        }: PlannedRoleAttributes,
+    ) -> RoleAttributesRaw {
+        let default_attributes = RoleAttributesRaw::new();
+        RoleAttributesRaw {
             inherit: inherit.unwrap_or(default_attributes.inherit),
+            password,
+            scram_iterations,
+            superuser,
+            login,
+            auto_provision_source: None,
             _private: (),
         }
     }
@@ -531,17 +747,17 @@ pub trait CatalogCluster<'a> {
     fn id(&self) -> ClusterId;
 
     /// Returns the objects that are bound to this cluster.
-    fn bound_objects(&self) -> &BTreeSet<GlobalId>;
+    fn bound_objects(&self) -> &BTreeSet<CatalogItemId>;
 
     /// Returns the replicas of the cluster as a map from replica name to
     /// replica ID.
     fn replica_ids(&self) -> &BTreeMap<String, ReplicaId>;
 
     /// Returns the replicas of the cluster.
-    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
+    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>>;
 
     /// Returns the replica belonging to the cluster with replica ID `id`.
-    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica;
+    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica<'_>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -589,17 +805,14 @@ pub trait CatalogItem {
     /// Returns the fully qualified name of the catalog item.
     fn name(&self) -> &QualifiedItemName;
 
-    /// Returns a stable ID for the catalog item.
-    fn id(&self) -> GlobalId;
+    /// Returns the [`CatalogItemId`] for the item.
+    fn id(&self) -> CatalogItemId;
+
+    /// Returns the [`GlobalId`]s associated with this item.
+    fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_>;
 
     /// Returns the catalog item's OID.
     fn oid(&self) -> u32;
-
-    /// Returns a description of the result set produced by the catalog item.
-    ///
-    /// If the catalog item is not of a type that produces data (i.e., a sink or
-    /// an index), it returns an error.
-    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
 
     /// Returns the resolved function.
     ///
@@ -631,24 +844,26 @@ pub trait CatalogItem {
 
     /// Returns the IDs of the catalog items upon which this catalog item
     /// depends.
-    fn uses(&self) -> BTreeSet<GlobalId>;
+    fn uses(&self) -> BTreeSet<CatalogItemId>;
 
     /// Returns the IDs of the catalog items that directly reference this catalog item.
-    fn referenced_by(&self) -> &[GlobalId];
+    fn referenced_by(&self) -> &[CatalogItemId];
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
-    fn used_by(&self) -> &[GlobalId];
+    fn used_by(&self) -> &[CatalogItemId];
 
     /// Reports whether this catalog entry is a subsource and, if it is, the
     /// ingestion it is an export of, as well as the item it exports.
-    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)>;
+    fn subsource_details(
+        &self,
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)>;
 
     /// Reports whether this catalog entry is a source export and, if it is, the
     /// ingestion it is an export of, as well as the item it exports.
     fn source_export_details(
         &self,
     ) -> Option<(
-        GlobalId,
+        CatalogItemId,
         &UnresolvedItemName,
         &SourceExportDetails,
         &SourceExportDataConfig<ReferencedConnection>,
@@ -658,7 +873,7 @@ pub trait CatalogItem {
     fn is_progress_source(&self) -> bool;
 
     /// If this catalog item is a source, it return the IDs of its progress collection.
-    fn progress_id(&self) -> Option<GlobalId>;
+    fn progress_id(&self) -> Option<CatalogItemId>;
 
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.
@@ -667,6 +882,9 @@ pub trait CatalogItem {
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table that accepts writes.
     fn writable_table_details(&self) -> Option<&[Expr<Aug>]>;
+
+    /// The item this catalog item replaces, if any.
+    fn replacement_target(&self) -> Option<CatalogItemId>;
 
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.
@@ -680,10 +898,41 @@ pub trait CatalogItem {
 
     /// Returns the cluster the item belongs to.
     fn cluster_id(&self) -> Option<ClusterId>;
+
+    /// Returns the [`CatalogCollectionItem`] for a specific version of this
+    /// [`CatalogItem`].
+    fn at_version(&self, version: RelationVersionSelector) -> Box<dyn CatalogCollectionItem>;
+
+    /// The latest version of this item, if it's version-able.
+    fn latest_version(&self) -> Option<RelationVersion>;
+}
+
+/// An item in a [`SessionCatalog`] and the specific "collection"/pTVC that it
+/// refers to.
+pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
+    /// Returns a description of the result set produced by the catalog item.
+    ///
+    /// If the catalog item is not of a type that produces data (e.g., a sink or
+    /// an index), it returns `None`.
+    fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>>;
+
+    /// The [`GlobalId`] for this item.
+    fn global_id(&self) -> GlobalId;
 }
 
 /// The type of a [`CatalogItem`].
-#[derive(Debug, Deserialize, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Debug,
+    Deserialize,
+    Clone,
+    Copy,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum CatalogItemType {
     /// A table.
     Table,
@@ -705,8 +954,6 @@ pub enum CatalogItemType {
     Secret,
     /// A connection.
     Connection,
-    /// A continual task.
-    ContinualTask,
 }
 
 impl CatalogItemType {
@@ -740,7 +987,6 @@ impl CatalogItemType {
             CatalogItemType::Func => false,
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
-            CatalogItemType::ContinualTask => true,
         }
     }
 }
@@ -758,7 +1004,6 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
-            CatalogItemType::ContinualTask => f.write_str("continual task"),
         }
     }
 }
@@ -776,7 +1021,6 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
-            CatalogItemType::ContinualTask => ObjectType::ContinualTask,
         }
     }
 }
@@ -794,7 +1038,6 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
-            CatalogItemType::ContinualTask => mz_audit_log::ObjectType::ContinualTask,
         }
     }
 }
@@ -803,7 +1046,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogTypeDetails<T: TypeReference> {
     /// The ID of the type with this type as the array element, if available.
-    pub array_id: Option<GlobalId>,
+    pub array_id: Option<CatalogItemId>,
     /// The description of this type.
     pub typ: CatalogType<T>,
     /// Additional metadata about the type in PostgreSQL, if relevant.
@@ -838,12 +1081,12 @@ impl TypeReference for NameReference {
 pub struct IdReference;
 
 impl TypeReference for IdReference {
-    type Reference = GlobalId;
+    type Reference = CatalogItemId;
 }
 
 /// A type stored in the catalog.
 ///
-/// The variants correspond one-to-one with [`mz_repr::ScalarType`], but with type
+/// The variants correspond one-to-one with [`mz_repr::SqlScalarType`], but with type
 /// modifiers removed and with embedded types replaced with references to other
 /// types in the catalog.
 #[allow(missing_docs)]
@@ -1135,61 +1378,6 @@ impl From<InvalidCloudProviderError> for InvalidEnvironmentIdError {
     }
 }
 
-/// Identifies a supported cloud provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CloudProvider {
-    /// A pseudo-provider value used by local development environments.
-    Local,
-    /// A pseudo-provider value used by Docker.
-    Docker,
-    /// A deprecated psuedo-provider value used by mzcompose.
-    // TODO(benesch): remove once v0.39 ships.
-    MzCompose,
-    /// A pseudo-provider value used by cloudtest.
-    Cloudtest,
-    /// Amazon Web Services.
-    Aws,
-}
-
-impl fmt::Display for CloudProvider {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CloudProvider::Local => f.write_str("local"),
-            CloudProvider::Docker => f.write_str("docker"),
-            CloudProvider::MzCompose => f.write_str("mzcompose"),
-            CloudProvider::Cloudtest => f.write_str("cloudtest"),
-            CloudProvider::Aws => f.write_str("aws"),
-        }
-    }
-}
-
-impl FromStr for CloudProvider {
-    type Err = InvalidCloudProviderError;
-
-    fn from_str(s: &str) -> Result<CloudProvider, InvalidCloudProviderError> {
-        match s {
-            "local" => Ok(CloudProvider::Local),
-            "docker" => Ok(CloudProvider::Docker),
-            "mzcompose" => Ok(CloudProvider::MzCompose),
-            "cloudtest" => Ok(CloudProvider::Cloudtest),
-            "aws" => Ok(CloudProvider::Aws),
-            _ => Err(InvalidCloudProviderError),
-        }
-    }
-}
-
-/// The error type for [`CloudProvider::from_str`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct InvalidCloudProviderError;
-
-impl fmt::Display for InvalidCloudProviderError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("invalid cloud provider")
-    }
-}
-
-impl Error for InvalidCloudProviderError {}
-
 /// An error returned by the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogError {
@@ -1217,12 +1405,14 @@ pub enum CatalogError {
     ClusterAlreadyExists(String),
     /// Unknown cluster replica.
     UnknownClusterReplica(String),
+    /// Unknown cluster replica size.
+    UnknownClusterReplicaSize(String),
     /// Duplicate Replica. #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
     DuplicateReplica(String, String),
     /// Unknown item.
     UnknownItem(String),
     /// Item already exists.
-    ItemAlreadyExists(GlobalId, String),
+    ItemAlreadyExists(CatalogItemId, String),
     /// Unknown function.
     UnknownFunction {
         /// The identifier of the function we couldn't find
@@ -1247,13 +1437,6 @@ pub enum CatalogError {
         actual_type: CatalogItemType,
         /// The expected type of the item.
         expected_type: CatalogItemType,
-    },
-    /// Invalid attempt to depend on a non-dependable item.
-    InvalidDependency {
-        /// The invalid item's name.
-        name: String,
-        /// The invalid item's type.
-        typ: CatalogItemType,
     },
     /// Ran out of unique IDs.
     IdExhaustion,
@@ -1283,18 +1466,32 @@ impl fmt::Display for CatalogError {
             Self::SchemaAlreadyExists(name) => write!(f, "schema '{name}' already exists"),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::RoleAlreadyExists(name) => write!(f, "role '{name}' already exists"),
-            Self::NetworkPolicyAlreadyExists(name) => write!(f, "network policy '{name}' already exists"),
+            Self::NetworkPolicyAlreadyExists(name) => {
+                write!(f, "network policy '{name}' already exists")
+            }
             Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
             Self::UnknownNetworkPolicy(name) => write!(f, "unknown network policy '{}'", name),
-            Self::UnexpectedBuiltinCluster(name) => write!(f, "Unexpected builtin cluster '{}'", name),
-            Self::UnexpectedBuiltinClusterType(name) => write!(f, "Unexpected builtin cluster type'{}'", name),
+            Self::UnexpectedBuiltinCluster(name) => {
+                write!(f, "Unexpected builtin cluster '{}'", name)
+            }
+            Self::UnexpectedBuiltinClusterType(name) => {
+                write!(f, "Unexpected builtin cluster type'{}'", name)
+            }
             Self::ClusterAlreadyExists(name) => write!(f, "cluster '{name}' already exists"),
             Self::UnknownClusterReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)
             }
-            Self::DuplicateReplica(replica_name, cluster_name) => write!(f, "cannot create multiple replicas named '{replica_name}' on cluster '{cluster_name}'"),
+            Self::UnknownClusterReplicaSize(name) => {
+                write!(f, "unknown cluster replica size '{}'", name)
+            }
+            Self::DuplicateReplica(replica_name, cluster_name) => write!(
+                f,
+                "cannot create multiple replicas named '{replica_name}' on cluster '{cluster_name}'"
+            ),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::ItemAlreadyExists(_gid, name) => write!(f, "catalog item '{name}' already exists"),
+            Self::ItemAlreadyExists(_gid, name) => {
+                write!(f, "catalog item '{name}' already exists")
+            }
             Self::UnexpectedType {
                 name,
                 actual_type,
@@ -1302,23 +1499,16 @@ impl fmt::Display for CatalogError {
             } => {
                 write!(f, "\"{name}\" is a {actual_type} not a {expected_type}")
             }
-            Self::InvalidDependency { name, typ } => write!(
-                f,
-                "catalog item '{}' is {} {} and so cannot be depended upon",
-                name,
-                if matches!(typ, CatalogItemType::Index) {
-                    "an"
-                } else {
-                    "a"
-                },
-                typ,
-            ),
             Self::IdExhaustion => write!(f, "id counter overflows i64"),
             Self::OidExhaustion => write!(f, "oid counter overflows u32"),
             Self::TimelineAlreadyExists(name) => write!(f, "timeline '{name}' already exists"),
-            Self::IdAllocatorAlreadyExists(name) => write!(f, "ID allocator '{name}' already exists"),
+            Self::IdAllocatorAlreadyExists(name) => {
+                write!(f, "ID allocator '{name}' already exists")
+            }
             Self::ConfigAlreadyExists(key) => write!(f, "config '{key}' already exists"),
-            Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
+            Self::FailedBuiltinSchemaMigration(objects) => {
+                write!(f, "failed to migrate schema of builtin objects: {objects}")
+            }
             Self::StorageCollectionMetadataAlreadyExists(key) => {
                 write!(f, "storage metadata for '{key}' already exists")
             }
@@ -1345,7 +1535,18 @@ impl Error for CatalogError {}
 
 // Enum variant docs would be useless here.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Copy,
+    Deserialize,
+    Serialize
+)]
 /// The types of objects stored in the catalog.
 pub enum ObjectType {
     Table,
@@ -1363,7 +1564,6 @@ pub enum ObjectType {
     Database,
     Schema,
     Func,
-    ContinualTask,
     NetworkPolicy,
 }
 
@@ -1374,8 +1574,7 @@ impl ObjectType {
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
-            | ObjectType::Source
-            | ObjectType::ContinualTask => true,
+            | ObjectType::Source => true,
             ObjectType::Sink
             | ObjectType::Index
             | ObjectType::Type
@@ -1411,7 +1610,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
-            mz_sql_parser::ast::ObjectType::ContinualTask => ObjectType::ContinualTask,
+            mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         }
     }
 }
@@ -1434,7 +1633,6 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Schema(_) => ObjectType::Schema,
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
-            CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
             CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
         }
     }
@@ -1458,13 +1656,23 @@ impl Display for ObjectType {
             ObjectType::Database => "DATABASE",
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
-            ObjectType::ContinualTask => "CONTINUAL TASK",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
         })
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Copy,
+    Deserialize,
+    Serialize
+)]
 /// The types of objects in the system.
 pub enum SystemObjectType {
     /// Catalog object type.
@@ -1691,17 +1899,6 @@ impl DefaultPrivilegeAclItem {
     }
 }
 
-/// Which builtins to return in `BUILTINS::iter`.
-///
-/// All calls to `BUILTINS::iter` within the lifetime of an environmentd process
-/// must provide an equal `BuiltinsConfig`. It is not allowed to change
-/// dynamically.
-#[derive(Debug, Clone)]
-pub struct BuiltinsConfig {
-    /// If true, include system builtin continual tasks.
-    pub include_continual_tasks: bool,
-}
-
 #[cfg(test)]
 mod tests {
     use super::{CloudProvider, EnvironmentId, InvalidEnvironmentIdError};
@@ -1723,6 +1920,33 @@ mod tests {
                 Ok(EnvironmentId {
                     cloud_provider: CloudProvider::Aws,
                     cloud_provider_region: "us-east-1".into(),
+                    organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
+                    ordinal: 0,
+                }),
+            ),
+            (
+                "gcp-us-central1-1497a3b7-a455-4fc4-8752-b44a94b5f90a-0",
+                Ok(EnvironmentId {
+                    cloud_provider: CloudProvider::Gcp,
+                    cloud_provider_region: "us-central1".into(),
+                    organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
+                    ordinal: 0,
+                }),
+            ),
+            (
+                "azure-australiaeast-1497a3b7-a455-4fc4-8752-b44a94b5f90a-0",
+                Ok(EnvironmentId {
+                    cloud_provider: CloudProvider::Azure,
+                    cloud_provider_region: "australiaeast".into(),
+                    organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
+                    ordinal: 0,
+                }),
+            ),
+            (
+                "generic-moon-station-11-darkside-1497a3b7-a455-4fc4-8752-b44a94b5f90a-0",
+                Ok(EnvironmentId {
+                    cloud_provider: CloudProvider::Generic,
+                    cloud_provider_region: "moon-station-11-darkside".into(),
                     organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
                     ordinal: 0,
                 }),

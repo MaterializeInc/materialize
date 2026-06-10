@@ -59,7 +59,7 @@ interference of any defaults that may be in effect and that can change over time
 
 ## Running manually in Buildkite
 
-Go to [Trigger CI](https://trigger-ci.dev.materialize.com/) and enter your pull request, select Feature Benchmark to only run that test.
+Go to [Trigger CI](https://ci.dev.materialize.com/trigger) and enter your pull request, select Feature Benchmark to only run that test.
 If you want to run a specific senario only, enter a Feature Benchmark Scenario in the extra args.
 For example, to run all scenarios that are subclasses of `Kafka`, use `--scenario=Kafka`.
 
@@ -82,7 +82,7 @@ The table is printed periodically as new rows arrive so that the information is 
 
 # Available scenarios
 
-The `test/feature-benchmark/scenarios.py` file contains the definitive list of scenarios. Scenarios follow a hierarchical structure.
+The `misc/python/materialize/feature_benchmark/scenarios` directory contains the definitive list of scenarios. Scenarios follow a hierarchical structure.
 
 The default scenarios derive from the `Scenario` class, those that take longer to execute derive from the `ScenarioBig` class.
 

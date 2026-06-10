@@ -17,19 +17,23 @@ use crate::{TransformCtx, TransformError};
 pub struct Reduce;
 
 impl crate::Transform for Reduce {
+    fn name(&self) -> &'static str {
+        "ReduceFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "reduce_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        let result = relation.visit_pre_mut(|e| self.action(e));
+        relation.visit_pre_mut(|e| self.action(e));
         mz_repr::explain::trace_plan(&*relation);
-        Ok(result)
+        Ok(())
     }
 }
 
@@ -56,7 +60,7 @@ impl Reduce {
                 let mut outer_cols = vec![];
                 for expr in group_key.iter() {
                     expr.visit_pre(|e| {
-                        if let MirScalarExpr::Column(i) = e {
+                        if let MirScalarExpr::Column(i, _) = e {
                             outer_cols.push(*i);
                         }
                     });
@@ -75,7 +79,7 @@ impl Reduce {
 
                     let arity = inner_input.arity();
                     for e in inner_group_key {
-                        if let MirScalarExpr::Column(i) = e {
+                        if let MirScalarExpr::Column(i, _) = e {
                             outputs.push(*i);
                         } else {
                             outputs.push(arity + scalars.len());

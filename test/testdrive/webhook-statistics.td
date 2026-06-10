@@ -11,7 +11,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
-> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT;

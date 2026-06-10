@@ -14,9 +14,6 @@ $ set-arg-default single-replica-cluster=quickstart
 #
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET min_timestamp_interval = '100ms'
 
 $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "type": "int"} ] }
@@ -26,6 +23,7 @@ $ kafka-create-topic topic=fetch-concurrent-two-sources
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE fetch_concurrent_two_sources1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}')
@@ -34,7 +32,9 @@ $ kafka-create-topic topic=fetch-concurrent-two-sources
 > CREATE TABLE fetch_concurrent_two_sources1_tbl FROM SOURCE fetch_concurrent_two_sources1 (REFERENCE "testdrive-fetch-concurrent-two-sources-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE fetch_concurrent_two_sources2
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}')
@@ -43,6 +43,7 @@ $ kafka-create-topic topic=fetch-concurrent-two-sources
 > CREATE TABLE fetch_concurrent_two_sources2_tbl FROM SOURCE fetch_concurrent_two_sources2 (REFERENCE "testdrive-fetch-concurrent-two-sources-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+> COMMIT
 
 > CREATE MATERIALIZED VIEW fetch_concurrent_two_sources1_view AS SELECT * FROM fetch_concurrent_two_sources1_tbl ORDER BY f1;
 

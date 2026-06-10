@@ -42,11 +42,15 @@ class NoFilter(Filter):
 
 
 class FilterFirst(Filter):
+    def __init__(self, count: int = 1) -> None:
+        super().__init__()
+        self._count = count
+
     def filter(self, measurement: Measurement) -> bool:
         self._data.append(measurement.value)
 
-        if len(self._data) == 1:
-            print("Discarding first measurement.")
+        if len(self._data) <= self._count:
+            print(f"Discarding warmup measurement {len(self._data)}/{self._count}.")
             return True
         else:
             return False

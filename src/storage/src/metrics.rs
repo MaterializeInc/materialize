@@ -30,18 +30,12 @@
 
 use std::sync::Arc;
 
-use mz_ore::channel::{
-    instrumented_unbounded_channel, InstrumentedUnboundedReceiver, InstrumentedUnboundedSender,
-};
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::metrics::{DeleteOnDropCounter, MetricVecExt};
 use mz_repr::GlobalId;
-use prometheus::core::AtomicU64;
 
 use crate::statistics::{SinkStatisticsMetricDefs, SourceStatisticsMetricDefs};
 use mz_storage_operators::metrics::BackpressureMetrics;
 
-pub mod channel;
 pub mod decode;
 pub mod sink;
 pub mod source;
@@ -125,7 +119,6 @@ impl StorageMetrics {
         primary_source_id: GlobalId,
         worker_id: usize,
         data_shard: &mz_persist_client::ShardId,
-        output_index: usize,
     ) -> source::SourcePersistSinkMetrics {
         source::SourcePersistSinkMetrics::new(
             &self.source_defs.source_defs,
@@ -133,21 +126,19 @@ impl StorageMetrics {
             primary_source_id,
             worker_id,
             data_shard,
-            output_index,
         )
     }
 
     /// Get a `SourceMetrics` for the given id and worker id.
     pub(crate) fn get_source_metrics(
         &self,
-        name: &str,
         id: GlobalId,
         worker_id: usize,
     ) -> source::SourceMetrics {
-        source::SourceMetrics::new(&self.source_defs.source_defs, name, id, worker_id)
+        source::SourceMetrics::new(&self.source_defs.source_defs, id, worker_id)
     }
 
-    /// Get a `PgMetrics` for the given id.
+    /// Get a `PgSourceMetrics` for the given id.
     pub(crate) fn get_postgres_source_metrics(
         &self,
         id: GlobalId,
@@ -161,6 +152,19 @@ impl StorageMetrics {
         id: GlobalId,
     ) -> source::mysql::MySqlSourceMetrics {
         source::mysql::MySqlSourceMetrics::new(&self.source_defs.mysql_defs, id)
+    }
+
+    /// Get a `SqlServerSourceMetrics` for the given id.
+    pub(crate) fn get_sql_server_source_metrics(
+        &self,
+        source_id: GlobalId,
+        worker_id: usize,
+    ) -> source::sql_server::SqlServerSourceMetrics {
+        source::sql_server::SqlServerSourceMetrics::new(
+            &self.source_defs.sql_server_defs,
+            source_id,
+            worker_id,
+        )
     }
 
     /// Get an `OffsetCommitMetrics` for the given id.
@@ -191,38 +195,12 @@ impl StorageMetrics {
         sink::kafka::KafkaSinkMetrics::new(&self.sink_defs.kafka_defs, sink_id)
     }
 
-    /// Produce an instrumented channel for use in the source pipeline.
-    pub(crate) fn get_instrumented_source_channel<T>(
+    /// Get an `IcebergSinkMetrics` for the given configuration.
+    pub(crate) fn get_iceberg_sink_metrics(
         &self,
-        id: GlobalId,
+        sink_id: GlobalId,
         worker_id: usize,
-        worker_count: usize,
-        location: &str,
-    ) -> (
-        InstrumentedUnboundedSender<T, DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
-        InstrumentedUnboundedReceiver<T, DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
-    ) {
-        let sender_metric = self
-            .source_defs
-            .channel_metric_defs
-            .sends
-            .get_delete_on_drop_metric(vec![
-                id.to_string(),
-                worker_id.to_string(),
-                worker_count.to_string(),
-                location.to_string(),
-            ]);
-        let recv_metric = self
-            .source_defs
-            .channel_metric_defs
-            .recvs
-            .get_delete_on_drop_metric(vec![
-                id.to_string(),
-                worker_id.to_string(),
-                worker_count.to_string(),
-                location.to_string(),
-            ]);
-
-        instrumented_unbounded_channel(sender_metric, recv_metric)
+    ) -> sink::iceberg::IcebergSinkMetrics {
+        sink::iceberg::IcebergSinkMetrics::new(&self.sink_defs.iceberg_defs, sink_id, worker_id)
     }
 }

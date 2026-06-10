@@ -20,32 +20,32 @@ use chrono::{DateTime, Utc};
 use maplit::{btreemap, btreeset};
 use tracing::warn;
 
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, Source, View};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, TableDataSource, View};
 use mz_compute_client::controller::error::InstanceMissing;
-use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 use mz_controller::Controller;
 use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
-    UnmaterializableFunc, RECURSION_LIMIT,
+    RECURSION_LIMIT, UnmaterializableFunc,
 };
 use mz_ore::cast::ReinterpretCast;
-use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError, maybe_grow};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::explain::trace_plan;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{Datum, GlobalId, ReprRelationType, Row};
 use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_transform::analysis::monotonic::Monotonic;
 use mz_transform::analysis::DerivedBuilder;
+use mz_transform::analysis::monotonic::Monotonic;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::optimize::{view, Optimize, OptimizerCatalog, OptimizerConfig, OptimizerError};
+use crate::optimize::{Optimize, OptimizerCatalog, OptimizerConfig, OptimizerError, view};
 use crate::session::{SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::viewable_variables;
 
@@ -54,7 +54,11 @@ use crate::util::viewable_variables;
 #[derive(Debug, Clone)]
 pub struct ComputeInstanceSnapshot {
     instance_id: ComputeInstanceId,
-    collections: BTreeSet<GlobalId>,
+    /// The collections that exist on this compute instance. If it's None, then any collection that
+    /// a caller asks us about is considered to exist.
+    /// TODO(peek-seq): Remove this completely once all callers are able to handle suddenly missing
+    /// collections, in which case we won't need a `ComputeInstanceSnapshot` at all.
+    collections: Option<BTreeSet<GlobalId>>,
 }
 
 impl ComputeInstanceSnapshot {
@@ -64,8 +68,22 @@ impl ComputeInstanceSnapshot {
             .collection_ids(id)
             .map(|collection_ids| Self {
                 instance_id: id,
-                collections: collection_ids.collect(),
+                collections: Some(collection_ids.collect()),
             })
+    }
+
+    pub fn new_from_parts(instance_id: ComputeInstanceId, collections: BTreeSet<GlobalId>) -> Self {
+        Self {
+            instance_id,
+            collections: Some(collections),
+        }
+    }
+
+    pub fn new_without_collections(instance_id: ComputeInstanceId) -> Self {
+        Self {
+            instance_id,
+            collections: None,
+        }
     }
 
     /// Return the ID of this compute instance.
@@ -73,14 +91,20 @@ impl ComputeInstanceSnapshot {
         self.instance_id
     }
 
-    /// Reports whether the instance contains the indicated collection.
+    /// Reports whether the instance contains the indicated collection. If the snapshot doesn't
+    /// track collections, then it returns true.
     pub fn contains_collection(&self, id: &GlobalId) -> bool {
-        self.collections.contains(id)
+        self.collections
+            .as_ref()
+            .map_or(true, |collections| collections.contains(id))
     }
 
     /// Inserts the given collection into the snapshot.
     pub fn insert_collection(&mut self, id: GlobalId) {
-        self.collections.insert(id);
+        self.collections
+            .as_mut()
+            .expect("insert_collection called on snapshot with None collections")
+            .insert(id);
     }
 }
 
@@ -106,32 +130,140 @@ pub struct DataflowBuilder<'a> {
     recursion_guard: RecursionGuard,
 }
 
-/// The styles in which an expression can be prepared for use in a dataflow.
-#[derive(Clone, Copy, Debug)]
-pub enum ExprPrepStyle<'a> {
-    /// The expression is being prepared for installation as a maintained index.
-    Index,
-    /// The expression is being prepared to run once at the specified logical
-    /// time in the specified session.
-    OneShot {
-        logical_time: EvalTime,
-        session: &'a dyn SessionMetadata,
-        catalog_state: &'a CatalogState,
-    },
-    /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
-    AsOfUpTo,
-    /// The expression is being prepared for evaluation in a CHECK expression of a webhook source.
-    WebhookValidation {
-        /// Time at which this expression is being evaluated.
-        now: DateTime<Utc>,
-    },
+/// Behavior to prepare relation and scalar expressions for use in a dataflow.
+pub trait ExprPrep {
+    /// Prepare a relation expression.
+    fn prep_relation_expr(&self, expr: &mut OptimizedMirRelationExpr)
+    -> Result<(), OptimizerError>;
+
+    /// Prepare a scalar expression.
+    fn prep_scalar_expr(&self, expr: &mut MirScalarExpr) -> Result<(), OptimizerError>;
+}
+
+/// A no-op expression preparer.
+pub struct ExprPrepNoop;
+impl ExprPrep for ExprPrepNoop {
+    fn prep_relation_expr(&self, _: &mut OptimizedMirRelationExpr) -> Result<(), OptimizerError> {
+        Ok(())
+    }
+    fn prep_scalar_expr(&self, _expr: &mut MirScalarExpr) -> Result<(), OptimizerError> {
+        Ok(())
+    }
+}
+
+/// Preparing an expression for maintained dataflow, e.g., index, materialized view, or subscribe.
+/// Produces errors for calls to unmaterializable functions.
+pub struct ExprPrepMaintained;
+
+impl ExprPrep for ExprPrepMaintained {
+    fn prep_relation_expr(
+        &self,
+        expr: &mut OptimizedMirRelationExpr,
+    ) -> Result<(), OptimizerError> {
+        expr.0.try_visit_mut_post(&mut |e| {
+            // Carefully test filter expressions, which may represent temporal filters.
+            if let MirRelationExpr::Filter { input, predicates } = &*e {
+                let mfp = MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
+                match mfp.into_plan() {
+                    Err(e) => Err(OptimizerError::UnsupportedTemporalExpression(e)),
+                    Ok(mut mfp) => {
+                        for s in mfp.iter_nontemporal_exprs() {
+                            self.prep_scalar_expr(s)?;
+                        }
+                        Ok(())
+                    }
+                }
+            } else {
+                e.try_visit_scalars_mut1(&mut |s| self.prep_scalar_expr(s))
+            }
+        })
+    }
+
+    fn prep_scalar_expr(&self, expr: &mut MirScalarExpr) -> Result<(), OptimizerError> {
+        // Reject the query if it contains any unmaterializable function calls.
+        let mut last_observed_unmaterializable_func = None;
+        expr.visit_mut_post(&mut |e| {
+            if let MirScalarExpr::CallUnmaterializable(f) = e {
+                last_observed_unmaterializable_func = Some(f.clone());
+            }
+        });
+
+        if let Some(f) = last_observed_unmaterializable_func {
+            Err(OptimizerError::UnmaterializableFunction(f))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Prepare an expression to run once at a logical time in a session.
+/// Calls to all unmaterializable functions are replaced with constants.
+pub struct ExprPrepOneShot<'a> {
+    pub logical_time: EvalTime,
+    pub session: &'a dyn SessionMetadata,
+    pub catalog_state: &'a CatalogState,
+}
+
+impl ExprPrep for ExprPrepOneShot<'_> {
+    fn prep_relation_expr(
+        &self,
+        expr: &mut OptimizedMirRelationExpr,
+    ) -> Result<(), OptimizerError> {
+        expr.0
+            .try_visit_scalars_mut(&mut |s| self.prep_scalar_expr(s))
+    }
+
+    fn prep_scalar_expr(&self, expr: &mut MirScalarExpr) -> Result<(), OptimizerError> {
+        // Evaluate each unmaterializable function and replace the
+        // invocation with the result.
+        expr.try_visit_mut_post(&mut |e| {
+            if let MirScalarExpr::CallUnmaterializable(f) = e {
+                *e = eval_unmaterializable_func(
+                    self.catalog_state,
+                    f,
+                    self.logical_time,
+                    self.session,
+                )?;
+            }
+            Ok(())
+        })
+    }
+}
+
+/// Prepare an expression for evaluation in a CHECK expression of a webhook source.
+/// Replaces calls to `UnmaterializableFunc::CurrentTimestamp`, others are left untouched.
+pub struct ExprPrepWebhookValidation {
+    /// Time at which this expression is being evaluated.
+    pub now: DateTime<Utc>,
+}
+
+impl ExprPrep for ExprPrepWebhookValidation {
+    fn prep_relation_expr(
+        &self,
+        expr: &mut OptimizedMirRelationExpr,
+    ) -> Result<(), OptimizerError> {
+        expr.0
+            .try_visit_scalars_mut(&mut |s| self.prep_scalar_expr(s))
+    }
+
+    fn prep_scalar_expr(&self, expr: &mut MirScalarExpr) -> Result<(), OptimizerError> {
+        let now = self.now;
+        expr.try_visit_mut_post(&mut |e| {
+            if let MirScalarExpr::CallUnmaterializable(f @ UnmaterializableFunc::CurrentTimestamp) =
+                e
+            {
+                let now: Datum = now.try_into()?;
+                let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
+                *e = const_expr;
+            }
+            Ok(())
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum EvalTime {
     Time(mz_repr::Timestamp),
-    /// Skips mz_now() calls.
-    Deferred,
     /// Errors on mz_now() calls.
     NotAvailable,
 }
@@ -171,6 +303,8 @@ impl<'a> DataflowBuilder<'a> {
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description. [`OptimizerFeatures`] is used while running
     /// the [`Monotonic`] analysis.
+    ///
+    /// Panics if `id` refers to a non-importable item, such as an index or sink.
     pub fn import_into_dataflow(
         &mut self,
         id: &GlobalId,
@@ -198,38 +332,50 @@ impl<'a> DataflowBuilder<'a> {
                     };
                     let entry = self.catalog.get_entry(id);
                     let desc = entry
-                        .desc(
-                            &self
-                                .catalog
-                                .resolve_full_name(entry.name(), entry.conn_id()),
-                        )
+                        .relation_desc()
                         .expect("indexes can only be built on items with descs");
-                    dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
+                    dataflow.import_index(
+                        index_id,
+                        index_desc,
+                        ReprRelationType::from(desc.typ()),
+                        monotonic,
+                    );
                 }
             } else {
                 drop(valid_indexes);
                 let entry = self.catalog.get_entry(id);
+                // Note that the following match should be kept in sync with `sufficient_collections`.
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        dataflow.import_source(*id, table.desc.typ().clone(), monotonic);
+                        dataflow.import_source(*id, table.desc_for(id).into_typ(), monotonic);
                     }
                     CatalogItem::Source(source) => {
                         dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::View(view) => {
-                        let expr = view.optimized_expr.as_ref();
+                        let expr = view.locally_optimized_expr.as_ref();
+                        self.import_view_into_dataflow(id, expr, dataflow, features)?;
+                    }
+                    CatalogItem::MaterializedView(mview) if mview.replacement_target.is_some() => {
+                        // Can't read from replacements, use the view definition directly.
+                        let expr = mview.locally_optimized_expr.as_ref();
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
-                        dataflow.import_source(*id, mview.desc.typ().clone(), monotonic);
+                        dataflow.import_source(*id, mview.desc_for(id).into_typ(), monotonic);
                     }
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), monotonic);
                     }
-                    CatalogItem::ContinualTask(ct) => {
-                        dataflow.import_source(*id, ct.desc.typ().clone(), monotonic);
+                    CatalogItem::Sink(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_) => {
+                        // Non-importable thing; can't get here.
+                        unreachable!()
                     }
-                    _ => unreachable!(),
                 }
             }
             Ok(())
@@ -296,17 +442,12 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Determine the given source's monotonicity.
-    fn monotonic_source(&self, source: &Source) -> bool {
-        match &source.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                // Check if the primary export of this source is monotonic
-                ingestion_desc
-                    .desc
-                    .primary_export
-                    .as_ref()
-                    .map(|e| e.monotonic(&ingestion_desc.desc.connection))
-                    .unwrap_or(false)
-            }
+    fn monotonic_source(&self, data_source: &DataSourceDesc) -> bool {
+        match data_source {
+            DataSourceDesc::Ingestion { .. } => false,
+            DataSourceDesc::OldSyntaxIngestion {
+                desc, data_config, ..
+            } => data_config.monotonic(&desc.connection),
             DataSourceDesc::Webhook { .. } => true,
             DataSourceDesc::IngestionExport {
                 ingestion_id,
@@ -315,13 +456,15 @@ impl<'a> DataflowBuilder<'a> {
             } => {
                 let source_desc = self
                     .catalog
-                    .get_entry(ingestion_id)
+                    .get_entry_by_item_id(ingestion_id)
                     .source_desc()
                     .expect("ingestion export must reference a source")
                     .expect("ingestion export must reference a source");
                 data_config.monotonic(&source_desc.connection)
             }
-            DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => false,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => false,
         }
     }
 
@@ -356,8 +499,17 @@ impl<'a> DataflowBuilder<'a> {
 
         let monotonic = self.checked_recur(|_| {
             match self.catalog.get_entry(&id).item() {
-                CatalogItem::Source(source) => Ok(self.monotonic_source(source)),
-                CatalogItem::View(View { optimized_expr, .. }) => {
+                CatalogItem::Source(source) => Ok(self.monotonic_source(&source.data_source)),
+                CatalogItem::Table(table) => match &table.data_source {
+                    TableDataSource::TableWrites { .. } => Ok(false),
+                    TableDataSource::DataSource { desc, timeline: _ } => {
+                        Ok(self.monotonic_source(desc))
+                    }
+                },
+                CatalogItem::View(View {
+                    locally_optimized_expr: optimized_expr,
+                    ..
+                }) => {
                     let view_expr = optimized_expr.as_ref().clone().into_inner();
 
                     // Inspect global ids that occur in the Gets in view_expr, and collect the ids
@@ -397,12 +549,10 @@ impl<'a> DataflowBuilder<'a> {
                 CatalogItem::Secret(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Connection(_)
-                | CatalogItem::Table(_)
                 | CatalogItem::Log(_)
                 | CatalogItem::MaterializedView(_)
                 | CatalogItem::Sink(_)
-                | CatalogItem::Func(_)
-                | CatalogItem::ContinualTask(_) => Ok(false),
+                | CatalogItem::Func(_) => Ok(false),
             }
         })?;
 
@@ -418,121 +568,20 @@ impl<'a> CheckedRecursion for DataflowBuilder<'a> {
     }
 }
 
-/// Prepares a relation expression for dataflow execution by preparing all
-/// contained scalar expressions (see `prep_scalar_expr`) in the specified
-/// style.
-pub fn prep_relation_expr(
-    expr: &mut OptimizedMirRelationExpr,
-    style: ExprPrepStyle,
-) -> Result<(), OptimizerError> {
-    match style {
-        ExprPrepStyle::Index => {
-            expr.0.try_visit_mut_post(&mut |e| {
-                // Carefully test filter expressions, which may represent temporal filters.
-                if let MirRelationExpr::Filter { input, predicates } = &*e {
-                    let mfp =
-                        MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
-                    match mfp.into_plan() {
-                        Err(e) => Err(OptimizerError::Internal(e)),
-                        Ok(mut mfp) => {
-                            for s in mfp.iter_nontemporal_exprs() {
-                                prep_scalar_expr(s, style)?;
-                            }
-                            Ok(())
-                        }
-                    }
-                } else {
-                    e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(s, style))
-                }
-            })
-        }
-        ExprPrepStyle::OneShot { .. }
-        | ExprPrepStyle::AsOfUpTo
-        | ExprPrepStyle::WebhookValidation { .. } => expr
-            .0
-            .try_visit_scalars_mut(&mut |s| prep_scalar_expr(s, style)),
-    }
-}
-
-/// Prepares a scalar expression for execution by handling unmaterializable
-/// functions.
-///
-/// How we prepare the scalar expression depends on which `style` is specificed.
-///
-/// * `OneShot`: Calls to all unmaterializable functions are replaced.
-/// * `Index`: An error is produced if a call to an unmaterializable function is encountered.
-/// * `AsOfUpTo`: An error is produced if a call to an unmaterializable function is encountered.
-/// * `WebhookValidation`: Only calls to `UnmaterializableFunc::CurrentTimestamp` are replaced,
-///   others are left untouched.
-///
-pub fn prep_scalar_expr(
-    expr: &mut MirScalarExpr,
-    style: ExprPrepStyle,
-) -> Result<(), OptimizerError> {
-    match style {
-        // Evaluate each unmaterializable function and replace the
-        // invocation with the result.
-        ExprPrepStyle::OneShot {
-            logical_time,
-            session,
-            catalog_state,
-        } => expr.try_visit_mut_post(&mut |e| {
-            if let MirScalarExpr::CallUnmaterializable(f) = e {
-                *e = eval_unmaterializable_func(catalog_state, f, logical_time, session)?;
-            }
-            Ok(())
-        }),
-
-        // Reject the query if it contains any unmaterializable function calls.
-        ExprPrepStyle::Index | ExprPrepStyle::AsOfUpTo => {
-            let mut last_observed_unmaterializable_func = None;
-            expr.visit_mut_post(&mut |e| {
-                if let MirScalarExpr::CallUnmaterializable(f) = e {
-                    last_observed_unmaterializable_func = Some(f.clone());
-                }
-            })?;
-
-            if let Some(f) = last_observed_unmaterializable_func {
-                let err = match style {
-                    ExprPrepStyle::Index => OptimizerError::UnmaterializableFunction(f),
-                    ExprPrepStyle::AsOfUpTo => OptimizerError::UncallableFunction {
-                        func: f,
-                        context: "AS OF or UP TO",
-                    },
-                    _ => unreachable!(),
-                };
-                return Err(err);
-            }
-            Ok(())
-        }
-
-        ExprPrepStyle::WebhookValidation { now } => {
-            expr.try_visit_mut_post(&mut |e| {
-                if let MirScalarExpr::CallUnmaterializable(
-                    f @ UnmaterializableFunc::CurrentTimestamp,
-                ) = e
-                {
-                    let now: Datum = now.try_into()?;
-                    let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
-                    *e = const_expr;
-                }
-                Ok::<_, anyhow::Error>(())
-            })?;
-            Ok(())
-        }
-    }
-}
-
 fn eval_unmaterializable_func(
     state: &CatalogState,
     f: &UnmaterializableFunc,
     logical_time: EvalTime,
     session: &dyn SessionMetadata,
 ) -> Result<MirScalarExpr, OptimizerError> {
+    if session.restrict_to_user_objects() && !f.allowed_in_restricted_session() {
+        return Err(OptimizerError::RestrictedFunction(f.clone()));
+    }
+
     let pack_1d_array = |datums: Vec<Datum>| {
         let mut row = Row::default();
         row.packer()
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: datums.len(),
@@ -540,7 +589,10 @@ fn eval_unmaterializable_func(
                 datums,
             )
             .expect("known to be a valid array");
-        Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+        Ok(MirScalarExpr::literal_from_single_element_row(
+            row,
+            f.output_type().scalar_type,
+        ))
     };
     let pack_dict = |mut datums: Vec<(String, String)>| {
         datums.sort();
@@ -550,7 +602,10 @@ fn eval_unmaterializable_func(
                 .iter()
                 .map(|(key, value)| (key.as_str(), Datum::from(value.as_str()))),
         );
-        Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+        Ok(MirScalarExpr::literal_from_single_element_row(
+            row,
+            f.output_type().scalar_type,
+        ))
     };
     let pack = |datum| {
         Ok(MirScalarExpr::literal_ok(
@@ -617,7 +672,6 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzIsSuperuser => pack(Datum::from(session.is_superuser())),
         UnmaterializableFunc::MzNow => match logical_time {
             EvalTime::Time(logical_time) => pack(Datum::MzTimestamp(logical_time)),
-            EvalTime::Deferred => Ok(MirScalarExpr::CallUnmaterializable(f.clone())),
             EvalTime::NotAvailable => Err(OptimizerError::UncallableFunction {
                 func: UnmaterializableFunc::MzNow,
                 context: "this",
@@ -642,7 +696,7 @@ fn eval_unmaterializable_func(
             row.packer().push_dict_with(|row| {
                 for (role_id, role_membership) in &role_memberships {
                     row.push(Datum::from(role_id.as_str()));
-                    row.push_array(
+                    row.try_push_array(
                         &[ArrayDimension {
                             lower_bound: 1,
                             length: role_membership.len(),
@@ -651,17 +705,29 @@ fn eval_unmaterializable_func(
                     ).expect("role_membership is 1 dimensional, and its length is used for the array length");
                 }
             });
-            Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+            Ok(MirScalarExpr::literal_from_single_element_row(
+                row,
+                f.output_type().scalar_type,
+            ))
         }
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
+        UnmaterializableFunc::MzSessionRoleMemberships => {
+            let role_id = session.current_role_id();
+            let mut names = session_role_memberships(state, role_id);
+            names.sort();
+            pack_1d_array(names.iter().map(|n| Datum::from(n.as_str())).collect())
+        }
         UnmaterializableFunc::MzUptime => {
             let uptime = state.config().start_instant.elapsed();
             let uptime = chrono::Duration::from_std(uptime).map_or(Datum::Null, Datum::from);
             pack(uptime)
         }
-        UnmaterializableFunc::MzVersion => {
-            pack(Datum::from(&*state.config().build_info.human_version()))
-        }
+        UnmaterializableFunc::MzVersion => pack(Datum::from(
+            &*state
+                .config()
+                .build_info
+                .human_version(state.config().helm_chart_version.clone()),
+        )),
         UnmaterializableFunc::MzVersionNum => {
             pack(Datum::Int32(state.config().build_info.version_num()))
         }
@@ -719,5 +785,30 @@ fn role_oid_memberships_inner<'a>(
             .get_mut(&role.oid)
             .expect("inserted above")
             .extend(parent_membership);
+    }
+}
+
+/// Returns the names of all roles that the given role is transitively a member
+/// of, including itself. Used to evaluate `mz_session_role_memberships()`.
+fn session_role_memberships(catalog: &CatalogState, role_id: &RoleId) -> Vec<String> {
+    let mut visited = BTreeSet::new();
+    session_role_memberships_inner(catalog, role_id, &mut visited);
+    visited.into_iter().collect()
+}
+
+fn session_role_memberships_inner(
+    catalog: &CatalogState,
+    role_id: &RoleId,
+    visited: &mut BTreeSet<String>,
+) {
+    let role = catalog.get_role(role_id);
+    // Role names are unique and role membership graphs are enforced to be
+    // DAGs by DDL, so this visited check is a safety guard rather than an
+    // expected cycle-breaker.
+    if !visited.insert(role.name.clone()) {
+        return;
+    }
+    for parent_role_id in role.membership.map.keys() {
+        session_role_memberships_inner(catalog, parent_role_id, visited);
     }
 }

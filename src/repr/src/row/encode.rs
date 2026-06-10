@@ -21,8 +21,8 @@ use arrow::array::{
     BooleanBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder, Float32Array, Float32Builder,
     Float64Array, Float64Builder, Int16Array, Int16Builder, Int32Array, Int32Builder, Int64Array,
     Int64Builder, ListArray, ListBuilder, MapArray, StringArray, StringBuilder, StructArray,
-    UInt16Array, UInt16Builder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder, UInt8Array,
-    UInt8Builder,
+    UInt8Array, UInt8Builder, UInt16Array, UInt16Builder, UInt32Array, UInt32Builder, UInt64Array,
+    UInt64Builder, make_array,
 };
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields, ToByteSlice};
@@ -32,16 +32,16 @@ use dec::{Context, Decimal, OrderedDecimal};
 use itertools::{EitherOrBoth, Itertools};
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
-use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
-use mz_persist_types::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, OptionStats, PrimitiveStats, StructStats,
-};
-use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
+use mz_persist_types::arrow::ArrayOrd;
+use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema};
+use mz_persist_types::stats::{
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, ColumnarStatsBuilder, FixedSizeBytesStatsKind,
+    OptionStats, PrimitiveStats, StructStats,
+};
 use mz_proto::chrono::ProtoNaiveTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use prost::Message;
-use timely::Container;
 use uuid::Uuid;
 
 use crate::adt::array::{ArrayDimension, PackedArrayDimension};
@@ -58,11 +58,8 @@ use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
-use crate::stats2::{
-    stats_for_json, IntervalStatsBuilder, NaiveDateTimeStatsBuilder, NaiveTimeStatsBuilder,
-    NumericStatsBuilder, UuidStatsBuilder,
-};
-use crate::{Datum, ProtoRelationDesc, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
+use crate::stats::{fixed_stats_from_column, numeric_stats_from_column, stats_for_json};
+use crate::{Datum, ProtoRelationDesc, RelationDesc, Row, RowPacker, SqlScalarType, Timestamp};
 
 // TODO(parkmycar): Benchmark the difference between `FixedSizeBinaryArray` and `BinaryArray`.
 //
@@ -83,6 +80,59 @@ mod fixed_binary_sizes {
     static_assertions::const_assert_eq!(UUID_FIXED_BYTES as usize, std::mem::size_of::<Uuid>());
 }
 use fixed_binary_sizes::*;
+
+/// Returns true iff the ordering of the "raw" and Persist-encoded versions of this columm would match:
+/// ie. `sort(encode(column)) == encode(sort(column))`. This encoding has been designed so that this
+/// is true for many types.
+pub fn preserves_order(scalar_type: &SqlScalarType) -> bool {
+    match scalar_type {
+        // These types have short, fixed-length encodings that are designed to sort identically.
+        SqlScalarType::Bool
+        | SqlScalarType::Int16
+        | SqlScalarType::Int32
+        | SqlScalarType::Int64
+        | SqlScalarType::UInt16
+        | SqlScalarType::UInt32
+        | SqlScalarType::UInt64
+        | SqlScalarType::Date
+        | SqlScalarType::Time
+        | SqlScalarType::Timestamp { .. }
+        | SqlScalarType::TimestampTz { .. }
+        | SqlScalarType::Interval
+        | SqlScalarType::Bytes
+        | SqlScalarType::String
+        | SqlScalarType::Uuid
+        | SqlScalarType::MzTimestamp
+        | SqlScalarType::MzAclItem
+        | SqlScalarType::AclItem => true,
+        // We sort records lexicographically; a record has a meaningful sort if all its fields do.
+        SqlScalarType::Record { fields, .. } => fields
+            .iter()
+            .all(|(_, field_type)| preserves_order(&field_type.scalar_type)),
+        // Our floating-point encoding preserves order generally, but differs when comparing
+        // -0 and 0. Opt these out for now.
+        SqlScalarType::Float32 | SqlScalarType::Float64 => false,
+        // Numeric is sensitive to similar ordering issues as floating point numbers, and requires
+        // some special handling we don't have yet.
+        SqlScalarType::Numeric { .. } => false,
+        // For all other types: either the encoding is known to not preserve ordering, or we
+        // don't yet care to make strong guarantees one way or the other.
+        SqlScalarType::PgLegacyChar
+        | SqlScalarType::PgLegacyName
+        | SqlScalarType::Char { .. }
+        | SqlScalarType::VarChar { .. }
+        | SqlScalarType::Jsonb
+        | SqlScalarType::Array(_)
+        | SqlScalarType::List { .. }
+        | SqlScalarType::Oid
+        | SqlScalarType::Map { .. }
+        | SqlScalarType::RegProc
+        | SqlScalarType::RegType
+        | SqlScalarType::RegClass
+        | SqlScalarType::Int2Vector
+        | SqlScalarType::Range { .. } => false,
+    }
+}
 
 /// An encoder for a column of [`Datum`]s.
 #[derive(Debug)]
@@ -200,7 +250,7 @@ enum DatumColumnEncoder {
         /// Number of values we've pushed into this builder thus far.
         length: usize,
     },
-    /// Special encoder for a [`ScalarType::Record`] that has no inner fields.
+    /// Special encoder for a [`SqlScalarType::Record`] that has no inner fields.
     ///
     /// We have a special case for this scenario because Arrow does not allow a
     /// [`StructArray`] (what normally use to encod a `Record`) with no fields.
@@ -389,7 +439,7 @@ impl DatumColumnEncoder {
 
                 // Store the values of the array.
                 let mut count = 0;
-                for datum in &array.elements() {
+                for datum in array.elements() {
                     count += 1;
                     vals.push(datum);
                 }
@@ -408,7 +458,7 @@ impl DatumColumnEncoder {
                 Datum::List(list),
             ) => {
                 let mut count = 0;
-                for datum in &list {
+                for datum in list {
                     count += 1;
                     values.push(datum);
                 }
@@ -778,7 +828,12 @@ impl DatumColumnEncoder {
                     .into_iter()
                     .enumerate()
                     .map(|(tag, encoder)| {
-                        let nullable = encoder.nullable;
+                        // Note: We mark all columns as nullable at the Arrow/Parquet level because
+                        // it has a negligible performance difference, but it protects us from
+                        // unintended nullability changes in the columns of SQL objects.
+                        //
+                        // See: <https://github.com/MaterializeInc/database-issues/issues/2488>
+                        let nullable = true;
                         let array = encoder.finish();
                         let field =
                             Field::new(tag.to_string(), array.data_type().clone(), nullable);
@@ -1130,20 +1185,26 @@ impl DatumColumnDecoder {
             DatumColumnDecoder::I64(a) => PrimitiveStats::<i64>::from_column(a).into(),
             DatumColumnDecoder::F32(a) => PrimitiveStats::<f32>::from_column(a).into(),
             DatumColumnDecoder::F64(a) => PrimitiveStats::<f64>::from_column(a).into(),
-            DatumColumnDecoder::Numeric(a) => NumericStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Numeric(a) => numeric_stats_from_column(a),
             DatumColumnDecoder::String(a) => PrimitiveStats::<String>::from_column(a).into(),
             DatumColumnDecoder::Bytes(a) => PrimitiveStats::<Vec<u8>>::from_column(a).into(),
             DatumColumnDecoder::Date(a) => PrimitiveStats::<i32>::from_column(a).into(),
-            DatumColumnDecoder::Time(a) => NaiveTimeStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Time(a) => {
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedTime)
+            }
             DatumColumnDecoder::Timestamp(a) => {
-                NaiveDateTimeStatsBuilder::from_column(a).finish().into()
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedDateTime)
             }
             DatumColumnDecoder::TimestampTz(a) => {
-                NaiveDateTimeStatsBuilder::from_column(a).finish().into()
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedDateTime)
             }
             DatumColumnDecoder::MzTimestamp(a) => PrimitiveStats::<u64>::from_column(a).into(),
-            DatumColumnDecoder::Interval(a) => IntervalStatsBuilder::from_column(a).finish().into(),
-            DatumColumnDecoder::Uuid(a) => UuidStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Interval(a) => {
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedInterval)
+            }
+            DatumColumnDecoder::Uuid(a) => {
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::Uuid)
+            }
             DatumColumnDecoder::AclItem(_)
             | DatumColumnDecoder::MzAclItem(_)
             | DatumColumnDecoder::Range(_) => ColumnStatKinds::None,
@@ -1155,9 +1216,47 @@ impl DatumColumnDecoder {
             | DatumColumnDecoder::RecordEmpty(_) => ColumnStatKinds::None,
         }
     }
+
+    fn goodbytes(&self) -> usize {
+        match self {
+            DatumColumnDecoder::Bool(a) => ArrayOrd::Bool(a.clone()).goodbytes(),
+            DatumColumnDecoder::U8(a) => ArrayOrd::UInt8(a.clone()).goodbytes(),
+            DatumColumnDecoder::U16(a) => ArrayOrd::UInt16(a.clone()).goodbytes(),
+            DatumColumnDecoder::U32(a) => ArrayOrd::UInt32(a.clone()).goodbytes(),
+            DatumColumnDecoder::U64(a) => ArrayOrd::UInt64(a.clone()).goodbytes(),
+            DatumColumnDecoder::I16(a) => ArrayOrd::Int16(a.clone()).goodbytes(),
+            DatumColumnDecoder::I32(a) => ArrayOrd::Int32(a.clone()).goodbytes(),
+            DatumColumnDecoder::I64(a) => ArrayOrd::Int64(a.clone()).goodbytes(),
+            DatumColumnDecoder::F32(a) => ArrayOrd::Float32(a.clone()).goodbytes(),
+            DatumColumnDecoder::F64(a) => ArrayOrd::Float64(a.clone()).goodbytes(),
+            DatumColumnDecoder::Numeric(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
+            DatumColumnDecoder::String(a) => ArrayOrd::String(a.clone()).goodbytes(),
+            DatumColumnDecoder::Bytes(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Date(a) => ArrayOrd::Int32(a.clone()).goodbytes(),
+            DatumColumnDecoder::Time(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Timestamp(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::TimestampTz(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::MzTimestamp(a) => ArrayOrd::UInt64(a.clone()).goodbytes(),
+            DatumColumnDecoder::Interval(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Uuid(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::AclItem(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::MzAclItem(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Range(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Json(a) => ArrayOrd::String(a.clone()).goodbytes(),
+            DatumColumnDecoder::Array { dims, vals, .. } => {
+                (dims.len() * PackedArrayDimension::SIZE) + vals.goodbytes()
+            }
+            DatumColumnDecoder::List { values, .. } => values.goodbytes(),
+            DatumColumnDecoder::Map { keys, vals, .. } => {
+                ArrayOrd::String(keys.clone()).goodbytes() + vals.goodbytes()
+            }
+            DatumColumnDecoder::Record { fields, .. } => fields.iter().map(|f| f.goodbytes()).sum(),
+            DatumColumnDecoder::RecordEmpty(a) => ArrayOrd::Bool(a.clone()).goodbytes(),
+        }
+    }
 }
 
-impl Schema2<Row> for RelationDesc {
+impl Schema<Row> for RelationDesc {
     type ArrowColumn = arrow::array::StructArray;
     type Statistics = OptionStats<StructStats>;
 
@@ -1188,6 +1287,24 @@ pub struct RowColumnarDecoder {
     nullability: Option<NullBuffer>,
 }
 
+/// Merge the provided null buffer with the existing array's null buffer, if any.
+fn mask_nulls(column: &ArrayRef, null_mask: Option<&NullBuffer>) -> ArrayRef {
+    if null_mask.is_none() {
+        Arc::clone(column)
+    } else {
+        // We calculate stats on the nested arrays, so make sure we don't count entries
+        // that are masked off at a higher level.
+        let nulls = NullBuffer::union(null_mask, column.nulls());
+        let data = column
+            .to_data()
+            .into_builder()
+            .nulls(nulls)
+            .build()
+            .expect("changed only null mask");
+        make_array(data)
+    }
+}
+
 impl RowColumnarDecoder {
     /// Creates a [`RowColumnarDecoder`] that decodes from the provided [`StructArray`].
     ///
@@ -1197,26 +1314,29 @@ impl RowColumnarDecoder {
         let inner_columns = col.columns();
         let desc_columns = desc.typ().columns();
 
-        if inner_columns.len() != desc_columns.len() {
+        if desc_columns.len() > inner_columns.len() {
             anyhow::bail!(
-                "provided array has {inner_columns:?}, relation desc has {desc_columns:?}"
+                "provided array has too few columns! {desc_columns:?} > {inner_columns:?}"
             );
         }
 
         // For performance reasons we downcast just a single time.
         let mut decoders = Vec::with_capacity(desc_columns.len());
 
+        let null_mask = col.nulls();
+
         // The columns of the `StructArray` are named with their column index.
-        for (col_idx, (col_name, col_type)) in desc.iter().enumerate() {
-            let field_name = col_idx.to_string();
+        for (col_idx, col_name, col_type) in desc.iter_all() {
+            let field_name = col_idx.to_stable_name();
             let column = col.column_by_name(&field_name).ok_or_else(|| {
                 anyhow::anyhow!(
                     "StructArray did not contain column name {field_name}, found {:?}",
                     col.column_names()
                 )
             })?;
+            let column = mask_nulls(column, null_mask);
             let null_count = col_type.nullable.then(|| column.null_count());
-            let decoder = array_to_decoder(column, &col_type.scalar_type)?;
+            let decoder = array_to_decoder(&column, &col_type.scalar_type)?;
             decoders.push((col_name.as_str().into(), null_count, decoder));
         }
 
@@ -1249,6 +1369,21 @@ impl ColumnDecoder<Row> for RowColumnarDecoder {
             return false;
         };
         nullability.is_null(idx)
+    }
+
+    fn goodbytes(&self) -> usize {
+        let decoders_size: usize = self
+            .decoders
+            .iter()
+            .map(|(_name, _null_count, decoder)| decoder.goodbytes())
+            .sum();
+
+        decoders_size
+            + self
+                .nullability
+                .as_ref()
+                .map(|nulls| nulls.inner().inner().len())
+                .unwrap_or(0)
     }
 
     fn stats(&self) -> StructStats {
@@ -1296,9 +1431,8 @@ impl RowColumnarEncoder {
         }
 
         let (col_names, encoders): (Vec<_>, Vec<_>) = desc
-            .iter()
-            .enumerate()
-            .map(|(idx, (col_name, col_type))| {
+            .iter_all()
+            .map(|(col_idx, col_name, col_type)| {
                 let encoder = scalar_type_to_encoder(&col_type.scalar_type)
                     .expect("failed to create encoder");
                 let encoder = DatumEncoder {
@@ -1308,7 +1442,7 @@ impl RowColumnarEncoder {
 
                 // We name the Fields in Parquet with the column index, but for
                 // backwards compat use the column name for stats.
-                let name = (idx, col_name.as_str().into());
+                let name = (col_idx.to_raw(), col_name.as_str().into());
 
                 (name, encoder)
             })
@@ -1331,7 +1465,7 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
 
     fn append(&mut self, val: &Row) {
         let mut num_datums = 0;
-        for (datum, encoder) in val.iter().zip(self.encoders.iter_mut()) {
+        for (datum, encoder) in val.iter().zip_eq(self.encoders.iter_mut()) {
             encoder.push(datum);
             num_datums += 1;
         }
@@ -1364,7 +1498,12 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
             .iter()
             .zip_eq(encoders)
             .map(|((col_idx, _col_name), encoder)| {
-                let nullable = encoder.nullable;
+                // Note: We mark all columns as nullable at the Arrow/Parquet level because it has
+                // a negligible performance difference, but it protects us from unintended
+                // nullability changes in the columns of SQL objects.
+                //
+                // See: <https://github.com/MaterializeInc/database-issues/issues/2488>
+                let nullable = true;
                 let array = encoder.finish();
                 let field = Field::new(col_idx.to_string(), array.data_type().clone(), nullable);
 
@@ -1398,57 +1537,57 @@ fn downcast_array<T: 'static>(array: &Arc<dyn Array>) -> Result<&T, anyhow::Erro
 /// very hot path and downcasting is relatively slow
 fn array_to_decoder(
     array: &Arc<dyn Array>,
-    col_ty: &ScalarType,
+    col_ty: &SqlScalarType,
 ) -> Result<DatumColumnDecoder, anyhow::Error> {
     let decoder = match (array.data_type(), col_ty) {
-        (DataType::Boolean, ScalarType::Bool) => {
+        (DataType::Boolean, SqlScalarType::Bool) => {
             let array = downcast_array::<BooleanArray>(array)?;
             DatumColumnDecoder::Bool(array.clone())
         }
-        (DataType::UInt8, ScalarType::PgLegacyChar) => {
+        (DataType::UInt8, SqlScalarType::PgLegacyChar) => {
             let array = downcast_array::<UInt8Array>(array)?;
             DatumColumnDecoder::U8(array.clone())
         }
-        (DataType::UInt16, ScalarType::UInt16) => {
+        (DataType::UInt16, SqlScalarType::UInt16) => {
             let array = downcast_array::<UInt16Array>(array)?;
             DatumColumnDecoder::U16(array.clone())
         }
         (
             DataType::UInt32,
-            ScalarType::UInt32
-            | ScalarType::Oid
-            | ScalarType::RegClass
-            | ScalarType::RegProc
-            | ScalarType::RegType,
+            SqlScalarType::UInt32
+            | SqlScalarType::Oid
+            | SqlScalarType::RegClass
+            | SqlScalarType::RegProc
+            | SqlScalarType::RegType,
         ) => {
             let array = downcast_array::<UInt32Array>(array)?;
             DatumColumnDecoder::U32(array.clone())
         }
-        (DataType::UInt64, ScalarType::UInt64) => {
+        (DataType::UInt64, SqlScalarType::UInt64) => {
             let array = downcast_array::<UInt64Array>(array)?;
             DatumColumnDecoder::U64(array.clone())
         }
-        (DataType::Int16, ScalarType::Int16) => {
+        (DataType::Int16, SqlScalarType::Int16) => {
             let array = downcast_array::<Int16Array>(array)?;
             DatumColumnDecoder::I16(array.clone())
         }
-        (DataType::Int32, ScalarType::Int32) => {
+        (DataType::Int32, SqlScalarType::Int32) => {
             let array = downcast_array::<Int32Array>(array)?;
             DatumColumnDecoder::I32(array.clone())
         }
-        (DataType::Int64, ScalarType::Int64) => {
+        (DataType::Int64, SqlScalarType::Int64) => {
             let array = downcast_array::<Int64Array>(array)?;
             DatumColumnDecoder::I64(array.clone())
         }
-        (DataType::Float32, ScalarType::Float32) => {
+        (DataType::Float32, SqlScalarType::Float32) => {
             let array = downcast_array::<Float32Array>(array)?;
             DatumColumnDecoder::F32(array.clone())
         }
-        (DataType::Float64, ScalarType::Float64) => {
+        (DataType::Float64, SqlScalarType::Float64) => {
             let array = downcast_array::<Float64Array>(array)?;
             DatumColumnDecoder::F64(array.clone())
         }
-        (DataType::Struct(_), ScalarType::Numeric { .. }) => {
+        (DataType::Struct(_), SqlScalarType::Numeric { .. }) => {
             let array = downcast_array::<StructArray>(array)?;
             // Note: We only use the approx column for sorting, and ignore it
             // when decoding.
@@ -1461,66 +1600,66 @@ fn array_to_decoder(
         }
         (
             DataType::Utf8,
-            ScalarType::String
-            | ScalarType::PgLegacyName
-            | ScalarType::Char { .. }
-            | ScalarType::VarChar { .. },
+            SqlScalarType::String
+            | SqlScalarType::PgLegacyName
+            | SqlScalarType::Char { .. }
+            | SqlScalarType::VarChar { .. },
         ) => {
             let array = downcast_array::<StringArray>(array)?;
             DatumColumnDecoder::String(array.clone())
         }
-        (DataType::Binary, ScalarType::Bytes) => {
+        (DataType::Binary, SqlScalarType::Bytes) => {
             let array = downcast_array::<BinaryArray>(array)?;
             DatumColumnDecoder::Bytes(array.clone())
         }
-        (DataType::Int32, ScalarType::Date) => {
+        (DataType::Int32, SqlScalarType::Date) => {
             let array = downcast_array::<Int32Array>(array)?;
             DatumColumnDecoder::Date(array.clone())
         }
-        (DataType::FixedSizeBinary(TIME_FIXED_BYTES), ScalarType::Time) => {
+        (DataType::FixedSizeBinary(TIME_FIXED_BYTES), SqlScalarType::Time) => {
             let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::Time(array.clone())
         }
-        (DataType::FixedSizeBinary(TIMESTAMP_FIXED_BYTES), ScalarType::Timestamp { .. }) => {
+        (DataType::FixedSizeBinary(TIMESTAMP_FIXED_BYTES), SqlScalarType::Timestamp { .. }) => {
             let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::Timestamp(array.clone())
         }
-        (DataType::FixedSizeBinary(TIMESTAMP_FIXED_BYTES), ScalarType::TimestampTz { .. }) => {
+        (DataType::FixedSizeBinary(TIMESTAMP_FIXED_BYTES), SqlScalarType::TimestampTz { .. }) => {
             let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::TimestampTz(array.clone())
         }
-        (DataType::UInt64, ScalarType::MzTimestamp) => {
+        (DataType::UInt64, SqlScalarType::MzTimestamp) => {
             let array = downcast_array::<UInt64Array>(array)?;
             DatumColumnDecoder::MzTimestamp(array.clone())
         }
-        (DataType::FixedSizeBinary(INTERVAL_FIXED_BYTES), ScalarType::Interval) => {
+        (DataType::FixedSizeBinary(INTERVAL_FIXED_BYTES), SqlScalarType::Interval) => {
             let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::Interval(array.clone())
         }
-        (DataType::FixedSizeBinary(UUID_FIXED_BYTES), ScalarType::Uuid) => {
+        (DataType::FixedSizeBinary(UUID_FIXED_BYTES), SqlScalarType::Uuid) => {
             let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::Uuid(array.clone())
         }
-        (DataType::FixedSizeBinary(ACL_ITEM_FIXED_BYTES), ScalarType::AclItem) => {
+        (DataType::FixedSizeBinary(ACL_ITEM_FIXED_BYTES), SqlScalarType::AclItem) => {
             let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::AclItem(array.clone())
         }
-        (DataType::Binary, ScalarType::MzAclItem) => {
+        (DataType::Binary, SqlScalarType::MzAclItem) => {
             let array = downcast_array::<BinaryArray>(array)?;
             DatumColumnDecoder::MzAclItem(array.clone())
         }
-        (DataType::Binary, ScalarType::Range { .. }) => {
+        (DataType::Binary, SqlScalarType::Range { .. }) => {
             let array = downcast_array::<BinaryArray>(array)?;
             DatumColumnDecoder::Range(array.clone())
         }
-        (DataType::Utf8, ScalarType::Jsonb) => {
+        (DataType::Utf8, SqlScalarType::Jsonb) => {
             let array = downcast_array::<StringArray>(array)?;
             DatumColumnDecoder::Json(array.clone())
         }
-        (DataType::Struct(_), s @ ScalarType::Array(_) | s @ ScalarType::Int2Vector) => {
+        (DataType::Struct(_), s @ SqlScalarType::Array(_) | s @ SqlScalarType::Int2Vector) => {
             let element_type = match s {
-                ScalarType::Array(inner) => inner,
-                ScalarType::Int2Vector => &ScalarType::Int16,
+                SqlScalarType::Array(inner) => inner,
+                SqlScalarType::Int2Vector => &SqlScalarType::Int16,
                 _ => unreachable!("checked above"),
             };
 
@@ -1547,7 +1686,7 @@ fn array_to_decoder(
                 nulls,
             }
         }
-        (DataType::List(_), ScalarType::List { element_type, .. }) => {
+        (DataType::List(_), SqlScalarType::List { element_type, .. }) => {
             let array = downcast_array::<ListArray>(array)?;
             let inner_decoder = array_to_decoder(array.values(), &*element_type)?;
             DatumColumnDecoder::List {
@@ -1556,7 +1695,7 @@ fn array_to_decoder(
                 nulls: array.nulls().cloned(),
             }
         }
-        (DataType::Map(_, true), ScalarType::Map { value_type, .. }) => {
+        (DataType::Map(_, true), SqlScalarType::Map { value_type, .. }) => {
             let array = downcast_array::<MapArray>(array)?;
             let keys = downcast_array::<StringArray>(array.keys())?;
             let vals = array_to_decoder(array.values(), value_type)?;
@@ -1567,7 +1706,7 @@ fn array_to_decoder(
                 nulls: array.nulls().cloned(),
             }
         }
-        (DataType::List(_), ScalarType::Map { value_type, .. }) => {
+        (DataType::List(_), SqlScalarType::Map { value_type, .. }) => {
             let array: &ListArray = downcast_array(array)?;
             let entries: &StructArray = downcast_array(array.values())?;
             let [keys, values]: &[ArrayRef; 2] = entries.columns().try_into()?;
@@ -1580,19 +1719,20 @@ fn array_to_decoder(
                 nulls: array.nulls().cloned(),
             }
         }
-        (DataType::Boolean, ScalarType::Record { fields, .. }) if fields.is_empty() => {
+        (DataType::Boolean, SqlScalarType::Record { fields, .. }) if fields.is_empty() => {
             let empty_record_array = downcast_array::<BooleanArray>(array)?;
             DatumColumnDecoder::RecordEmpty(empty_record_array.clone())
         }
-        (DataType::Struct(_), ScalarType::Record { fields, .. }) => {
+        (DataType::Struct(_), SqlScalarType::Record { fields, .. }) => {
             let record_array = downcast_array::<StructArray>(array)?;
-
+            let null_mask = record_array.nulls();
             let mut decoders = Vec::with_capacity(fields.len());
             for (tag, (_name, col_type)) in fields.iter().enumerate() {
                 let inner_array = record_array
                     .column_by_name(&tag.to_string())
                     .ok_or_else(|| anyhow::anyhow!("no column named '{tag}'"))?;
-                let inner_decoder = array_to_decoder(inner_array, &col_type.scalar_type)?;
+                let inner_array = mask_nulls(inner_array, null_mask);
+                let inner_decoder = array_to_decoder(&inner_array, &col_type.scalar_type)?;
 
                 decoders.push(Box::new(inner_decoder));
             }
@@ -1612,60 +1752,64 @@ fn array_to_decoder(
     Ok(decoder)
 }
 
-/// Small helper function to create a [`DatumColumnEncoder`] from a [`ScalarType`]
-fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, anyhow::Error> {
+/// Small helper function to create a [`DatumColumnEncoder`] from a [`SqlScalarType`]
+fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, anyhow::Error> {
     let encoder = match &col_ty {
-        ScalarType::Bool => DatumColumnEncoder::Bool(BooleanBuilder::new()),
-        ScalarType::PgLegacyChar => DatumColumnEncoder::U8(UInt8Builder::new()),
-        ScalarType::UInt16 => DatumColumnEncoder::U16(UInt16Builder::new()),
-        ScalarType::UInt32
-        | ScalarType::Oid
-        | ScalarType::RegClass
-        | ScalarType::RegProc
-        | ScalarType::RegType => DatumColumnEncoder::U32(UInt32Builder::new()),
-        ScalarType::UInt64 => DatumColumnEncoder::U64(UInt64Builder::new()),
-        ScalarType::Int16 => DatumColumnEncoder::I16(Int16Builder::new()),
-        ScalarType::Int32 => DatumColumnEncoder::I32(Int32Builder::new()),
-        ScalarType::Int64 => DatumColumnEncoder::I64(Int64Builder::new()),
-        ScalarType::Float32 => DatumColumnEncoder::F32(Float32Builder::new()),
-        ScalarType::Float64 => DatumColumnEncoder::F64(Float64Builder::new()),
-        ScalarType::Numeric { .. } => DatumColumnEncoder::Numeric {
+        SqlScalarType::Bool => DatumColumnEncoder::Bool(BooleanBuilder::new()),
+        SqlScalarType::PgLegacyChar => DatumColumnEncoder::U8(UInt8Builder::new()),
+        SqlScalarType::UInt16 => DatumColumnEncoder::U16(UInt16Builder::new()),
+        SqlScalarType::UInt32
+        | SqlScalarType::Oid
+        | SqlScalarType::RegClass
+        | SqlScalarType::RegProc
+        | SqlScalarType::RegType => DatumColumnEncoder::U32(UInt32Builder::new()),
+        SqlScalarType::UInt64 => DatumColumnEncoder::U64(UInt64Builder::new()),
+        SqlScalarType::Int16 => DatumColumnEncoder::I16(Int16Builder::new()),
+        SqlScalarType::Int32 => DatumColumnEncoder::I32(Int32Builder::new()),
+        SqlScalarType::Int64 => DatumColumnEncoder::I64(Int64Builder::new()),
+        SqlScalarType::Float32 => DatumColumnEncoder::F32(Float32Builder::new()),
+        SqlScalarType::Float64 => DatumColumnEncoder::F64(Float64Builder::new()),
+        SqlScalarType::Numeric { .. } => DatumColumnEncoder::Numeric {
             approx_values: Float64Builder::new(),
             binary_values: BinaryBuilder::new(),
             numeric_context: crate::adt::numeric::cx_datum().clone(),
         },
-        ScalarType::String
-        | ScalarType::PgLegacyName
-        | ScalarType::Char { .. }
-        | ScalarType::VarChar { .. } => DatumColumnEncoder::String(StringBuilder::new()),
-        ScalarType::Bytes => DatumColumnEncoder::Bytes(BinaryBuilder::new()),
-        ScalarType::Date => DatumColumnEncoder::Date(Int32Builder::new()),
-        ScalarType::Time => DatumColumnEncoder::Time(FixedSizeBinaryBuilder::new(TIME_FIXED_BYTES)),
-        ScalarType::Timestamp { .. } => {
+        SqlScalarType::String
+        | SqlScalarType::PgLegacyName
+        | SqlScalarType::Char { .. }
+        | SqlScalarType::VarChar { .. } => DatumColumnEncoder::String(StringBuilder::new()),
+        SqlScalarType::Bytes => DatumColumnEncoder::Bytes(BinaryBuilder::new()),
+        SqlScalarType::Date => DatumColumnEncoder::Date(Int32Builder::new()),
+        SqlScalarType::Time => {
+            DatumColumnEncoder::Time(FixedSizeBinaryBuilder::new(TIME_FIXED_BYTES))
+        }
+        SqlScalarType::Timestamp { .. } => {
             DatumColumnEncoder::Timestamp(FixedSizeBinaryBuilder::new(TIMESTAMP_FIXED_BYTES))
         }
-        ScalarType::TimestampTz { .. } => {
+        SqlScalarType::TimestampTz { .. } => {
             DatumColumnEncoder::TimestampTz(FixedSizeBinaryBuilder::new(TIMESTAMP_FIXED_BYTES))
         }
-        ScalarType::MzTimestamp => DatumColumnEncoder::MzTimestamp(UInt64Builder::new()),
-        ScalarType::Interval => {
+        SqlScalarType::MzTimestamp => DatumColumnEncoder::MzTimestamp(UInt64Builder::new()),
+        SqlScalarType::Interval => {
             DatumColumnEncoder::Interval(FixedSizeBinaryBuilder::new(INTERVAL_FIXED_BYTES))
         }
-        ScalarType::Uuid => DatumColumnEncoder::Uuid(FixedSizeBinaryBuilder::new(UUID_FIXED_BYTES)),
-        ScalarType::AclItem => {
+        SqlScalarType::Uuid => {
+            DatumColumnEncoder::Uuid(FixedSizeBinaryBuilder::new(UUID_FIXED_BYTES))
+        }
+        SqlScalarType::AclItem => {
             DatumColumnEncoder::AclItem(FixedSizeBinaryBuilder::new(ACL_ITEM_FIXED_BYTES))
         }
-        ScalarType::MzAclItem => DatumColumnEncoder::MzAclItem(BinaryBuilder::new()),
-        ScalarType::Range { .. } => DatumColumnEncoder::Range(BinaryBuilder::new()),
-        ScalarType::Jsonb => DatumColumnEncoder::Jsonb {
+        SqlScalarType::MzAclItem => DatumColumnEncoder::MzAclItem(BinaryBuilder::new()),
+        SqlScalarType::Range { .. } => DatumColumnEncoder::Range(BinaryBuilder::new()),
+        SqlScalarType::Jsonb => DatumColumnEncoder::Jsonb {
             offsets: vec![0],
             buf: Vec::new(),
             nulls: None,
         },
-        s @ ScalarType::Array(_) | s @ ScalarType::Int2Vector => {
+        s @ SqlScalarType::Array(_) | s @ SqlScalarType::Int2Vector => {
             let element_type = match s {
-                ScalarType::Array(inner) => inner,
-                ScalarType::Int2Vector => &ScalarType::Int16,
+                SqlScalarType::Array(inner) => inner,
+                SqlScalarType::Int2Vector => &SqlScalarType::Int16,
                 _ => unreachable!("checked above"),
             };
             let inner = scalar_type_to_encoder(element_type)?;
@@ -1676,7 +1820,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
                 nulls: None,
             }
         }
-        ScalarType::List { element_type, .. } => {
+        SqlScalarType::List { element_type, .. } => {
             let inner = scalar_type_to_encoder(&*element_type)?;
             DatumColumnEncoder::List {
                 lengths: Vec::new(),
@@ -1684,7 +1828,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
                 nulls: None,
             }
         }
-        ScalarType::Map { value_type, .. } => {
+        SqlScalarType::Map { value_type, .. } => {
             let inner = scalar_type_to_encoder(&*value_type)?;
             DatumColumnEncoder::Map {
                 lengths: Vec::new(),
@@ -1693,10 +1837,10 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
                 nulls: None,
             }
         }
-        ScalarType::Record { fields, .. } if fields.is_empty() => {
+        SqlScalarType::Record { fields, .. } if fields.is_empty() => {
             DatumColumnEncoder::RecordEmpty(BooleanBuilder::new())
         }
-        ScalarType::Record { fields, .. } => {
+        SqlScalarType::Record { fields, .. } => {
             let encoders = fields
                 .iter()
                 .map(|(_name, ty)| {
@@ -1774,7 +1918,7 @@ impl Codec for Row {
     fn validate(row: &Self, desc: &Self::Schema) -> Result<(), String> {
         for x in Itertools::zip_longest(desc.iter_types(), row.iter()) {
             match x {
-                EitherOrBoth::Both(typ, datum) if datum.is_instance_of(typ) => continue,
+                EitherOrBoth::Both(typ, datum) if datum.is_instance_of_sql(typ) => continue,
                 _ => return Err(format!("row {:?} did not match desc {:?}", row, desc)),
             };
         }
@@ -1899,7 +2043,7 @@ impl RowPacker<'_> {
                     // We plan to remove the `Dummy` variant soon (materialize#17099). To prepare for that, we
                     // emit a log to Sentry here, to notify us of any instances that might have
                     // been made durable.
-                    #[cfg(feature = "tracing_")]
+                    #[cfg(feature = "tracing")]
                     tracing::error!("protobuf decoding found Dummy datum");
                     self.push(Datum::Dummy);
                 }
@@ -1966,12 +2110,12 @@ impl RowPacker<'_> {
                     })
                     .collect::<Vec<_>>();
                 match x.elements.as_ref() {
-                    None => self.push_array(&dims, [].iter()),
+                    None => self.try_push_array(&dims, [].iter()),
                     Some(elements) => {
                         // TODO: Could we avoid this Row alloc if we made a
                         // push_array_with?
                         let elements_row = Row::try_from(elements)?;
-                        self.push_array(&dims, elements_row.iter())
+                        self.try_push_array(&dims, elements_row.iter())
                     }
                 }
                 .map_err(|err| err.to_string())?
@@ -2070,7 +2214,9 @@ impl RustType<ProtoRow> for Row {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{make_array, ArrayData};
+    use std::collections::BTreeSet;
+
+    use arrow::array::{ArrayData, make_array};
     use arrow::compute::SortOptions;
     use arrow::datatypes::ArrowNativeType;
     use arrow::row::SortField;
@@ -2079,9 +2225,9 @@ mod tests {
     use mz_ore::collections::CollectionExt;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
-    use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
-    use mz_persist_types::columnar::{codec_to_schema2, schema2_to_codec};
     use mz_persist_types::Codec;
+    use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
+    use mz_persist_types::columnar::{codec_to_schema, schema_to_codec};
     use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
@@ -2092,13 +2238,14 @@ mod tests {
     use crate::adt::interval::Interval;
     use crate::adt::numeric::Numeric;
     use crate::adt::timestamp::CheckedTimestamp;
+    use crate::fixed_length::ToDatumIter;
     use crate::relation::arb_relation_desc;
-    use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType, RowArena};
-    use crate::{Datum, RelationDesc, Row, ScalarType};
+    use crate::{ColumnName, RowArena, SqlColumnType, arb_datum_for_column, arb_row_for_relation};
+    use crate::{Datum, RelationDesc, Row, SqlScalarType};
 
     #[track_caller]
     fn roundtrip_datum<'a>(
-        ty: ColumnType,
+        ty: SqlColumnType,
         datum: impl Iterator<Item = Datum<'a>>,
         metrics: &ColumnarMetrics,
     ) {
@@ -2109,7 +2256,7 @@ mod tests {
 
     #[track_caller]
     fn roundtrip_rows(desc: &RelationDesc, rows: Vec<Row>, metrics: &ColumnarMetrics) {
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<Row>>::encoder(desc).unwrap();
         for row in &rows {
             encoder.append(row);
         }
@@ -2132,7 +2279,7 @@ mod tests {
             assert_eq!(&col, col_dyn);
         }
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col.clone()).unwrap();
+        let decoder = <RelationDesc as Schema<Row>>::decoder(desc, col.clone()).unwrap();
         let stats = decoder.stats();
 
         // Collect all of our lower and upper bounds.
@@ -2141,11 +2288,11 @@ mod tests {
             .iter()
             .map(|(name, ty)| {
                 let col_stats = stats.cols.get(name.as_str()).unwrap();
-                let (lower, upper) =
-                    crate::stats2::col_values(&ty.scalar_type, &col_stats.values, &arena);
+                let lower_upper =
+                    crate::stats::col_values(&ty.scalar_type, &col_stats.values, &arena);
                 let null_count = col_stats.nulls.map_or(0, |n| n.count);
 
-                ((lower, upper), null_count)
+                (lower_upper, null_count)
             })
             .unzip();
         // Track how many nulls we saw for each column so we can assert stats match.
@@ -2159,31 +2306,27 @@ mod tests {
             // Check for each Datum in each Row that we're within our stats bounds.
             for (c_idx, (rnd_datum, ty)) in rnd_row.iter().zip_eq(desc.typ().columns()).enumerate()
             {
-                let (lower, upper) = stats[c_idx];
+                let lower_upper = stats[c_idx];
 
                 // Assert our stat bounds are correct.
                 if rnd_datum.is_null() {
                     actual_nulls[c_idx] += 1;
-                } else if lower.is_some() || upper.is_some() {
-                    if let Some(lower) = lower {
-                        assert!(rnd_datum >= lower, "{rnd_datum:?} is not >= {lower:?}");
-                    }
-                    if let Some(upper) = upper {
-                        assert!(rnd_datum <= upper, "{rnd_datum:?} is not <= {upper:?}");
-                    }
+                } else if let Some((lower, upper)) = lower_upper {
+                    assert!(rnd_datum >= lower, "{rnd_datum:?} is not >= {lower:?}");
+                    assert!(rnd_datum <= upper, "{rnd_datum:?} is not <= {upper:?}");
                 } else {
                     match &ty.scalar_type {
                         // JSON stats are handled separately.
-                        ScalarType::Jsonb => (),
+                        SqlScalarType::Jsonb => (),
                         // We don't collect stats for these types.
-                        ScalarType::AclItem
-                        | ScalarType::MzAclItem
-                        | ScalarType::Range { .. }
-                        | ScalarType::Array(_)
-                        | ScalarType::Map { .. }
-                        | ScalarType::List { .. }
-                        | ScalarType::Record { .. }
-                        | ScalarType::Int2Vector => (),
+                        SqlScalarType::AclItem
+                        | SqlScalarType::MzAclItem
+                        | SqlScalarType::Range { .. }
+                        | SqlScalarType::Array(_)
+                        | SqlScalarType::Map { .. }
+                        | SqlScalarType::List { .. }
+                        | SqlScalarType::Record { .. }
+                        | SqlScalarType::Int2Vector => (),
                         other => panic!("should have collected stats for {other:?}"),
                     }
                 }
@@ -2201,8 +2344,8 @@ mod tests {
         }
 
         // Validate that we can convert losslessly to codec and back
-        let codec = schema2_to_codec::<Row>(desc, &col).unwrap();
-        let col2 = codec_to_schema2::<Row>(desc, &codec).unwrap();
+        let codec = schema_to_codec::<Row>(desc, &col).unwrap();
+        let col2 = codec_to_schema::<Row>(desc, &codec).unwrap();
         assert_eq!(col2.as_ref(), &col);
 
         // Validate that we only generate supported array types
@@ -2232,6 +2375,36 @@ mod tests {
         let ord_col = ::arrow::compute::take(&col, &indices, None).expect("takeable");
         assert_eq!(row_col.as_ref(), ord_col.as_ref());
 
+        // Check that our order matches the datum-native order when `preserves_order` is true.
+        let ordered_prefix_len = desc
+            .iter()
+            .take_while(|(_, c)| preserves_order(&c.scalar_type))
+            .count();
+        let decoder = <RelationDesc as Schema<Row>>::decoder_any(desc, ord_col.as_ref()).unwrap();
+        let rows = (0..ord_col.len()).map(|i| {
+            let mut row = Row::default();
+            decoder.decode(i, &mut row);
+            row
+        });
+        for (a, b) in rows.tuple_windows() {
+            let a_prefix = a.iter().take(ordered_prefix_len);
+            let b_prefix = b.iter().take(ordered_prefix_len);
+            assert!(
+                a_prefix.cmp(b_prefix).is_le(),
+                "ordering should be consistent on preserves_order columns: {:#?}\n{:?}\n{:?}",
+                desc.iter().take(ordered_prefix_len).collect_vec(),
+                a.to_datum_iter().take(ordered_prefix_len).collect_vec(),
+                b.to_datum_iter().take(ordered_prefix_len).collect_vec()
+            );
+        }
+
+        // Check that our size estimates are consistent.
+        assert_eq!(
+            ord.goodbytes(),
+            (0..col.len()).map(|i| ord.at(i).goodbytes()).sum::<usize>(),
+            "total size should match the sum of the sizes at each index"
+        );
+
         // Check that our lower bounds work as expected.
         if !ord_col.is_empty() {
             let min_idx = indices.values()[0].as_usize();
@@ -2255,8 +2428,8 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn proptest_datums() {
-        let strat = any::<ColumnType>().prop_flat_map(|ty| {
-            proptest::collection::vec(arb_datum_for_column(&ty), 0..16)
+        let strat = any::<SqlColumnType>().prop_flat_map(|ty| {
+            proptest::collection::vec(arb_datum_for_column(ty.clone()), 0..16)
                 .prop_map(move |d| (ty.clone(), d))
         });
         let metrics = ColumnarMetrics::disconnected();
@@ -2283,7 +2456,7 @@ mod tests {
     #[mz_ore::test]
     fn empty_relation_desc_returns_error() {
         let empty_desc = RelationDesc::empty();
-        let result = <RelationDesc as Schema2<Row>>::encoder(&empty_desc);
+        let result = <RelationDesc as Schema<Row>>::encoder(&empty_desc);
         assert_err!(result);
     }
 
@@ -2294,7 +2467,7 @@ mod tests {
         let metrics = ColumnarMetrics::disconnected();
 
         packer
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 0,
                     length: 3,
@@ -2305,7 +2478,7 @@ mod tests {
 
         let array = row.unpack_first();
         roundtrip_datum(
-            ScalarType::Array(Box::new(ScalarType::UInt32)).nullable(true),
+            SqlScalarType::Array(Box::new(SqlScalarType::UInt32)).nullable(true),
             [array].into_iter(),
             &metrics,
         );
@@ -2314,27 +2487,27 @@ mod tests {
     #[mz_ore::test]
     fn smoketest_row() {
         let desc = RelationDesc::builder()
-            .with_column("a", ScalarType::Int64.nullable(true))
-            .with_column("b", ScalarType::String.nullable(true))
-            .with_column("c", ScalarType::Bool.nullable(true))
+            .with_column("a", SqlScalarType::Int64.nullable(true))
+            .with_column("b", SqlScalarType::String.nullable(true))
+            .with_column("c", SqlScalarType::Bool.nullable(true))
             .with_column(
                 "d",
-                ScalarType::List {
-                    element_type: Box::new(ScalarType::UInt32),
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::UInt32),
                     custom_id: None,
                 }
                 .nullable(true),
             )
             .with_column(
                 "e",
-                ScalarType::Map {
-                    value_type: Box::new(ScalarType::Int16),
+                SqlScalarType::Map {
+                    value_type: Box::new(SqlScalarType::Int16),
                     custom_id: None,
                 }
                 .nullable(true),
             )
             .finish();
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<Row>>::encoder(&desc).unwrap();
 
         let mut og_row = Row::default();
         {
@@ -2359,7 +2532,7 @@ mod tests {
         encoder.append(&og_row_2);
         let col = encoder.finish();
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
+        let decoder = <RelationDesc as Schema<Row>>::decoder(&desc, col).unwrap();
 
         let mut rnd_row = Row::default();
         decoder.decode(0, &mut rnd_row);
@@ -2375,9 +2548,9 @@ mod tests {
         let desc = RelationDesc::builder()
             .with_column(
                 "a",
-                ScalarType::List {
-                    element_type: Box::new(ScalarType::List {
-                        element_type: Box::new(ScalarType::Int64),
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::List {
+                        element_type: Box::new(SqlScalarType::Int64),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2385,7 +2558,7 @@ mod tests {
                 .nullable(false),
             )
             .finish();
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<Row>>::encoder(&desc).unwrap();
 
         let mut og_row = Row::default();
         {
@@ -2400,7 +2573,7 @@ mod tests {
         encoder.append(&og_row);
         let col = encoder.finish();
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
+        let decoder = <RelationDesc as Schema<Row>>::decoder(&desc, col).unwrap();
         let mut rnd_row = Row::default();
         decoder.decode(0, &mut rnd_row);
 
@@ -2412,14 +2585,20 @@ mod tests {
         let desc = RelationDesc::builder()
             .with_column(
                 "a",
-                ScalarType::Record {
+                SqlScalarType::Record {
                     fields: [
-                        (ColumnName::from("foo"), ScalarType::Int64.nullable(false)),
-                        (ColumnName::from("bar"), ScalarType::String.nullable(true)),
+                        (
+                            ColumnName::from("foo"),
+                            SqlScalarType::Int64.nullable(false),
+                        ),
+                        (
+                            ColumnName::from("bar"),
+                            SqlScalarType::String.nullable(true),
+                        ),
                         (
                             ColumnName::from("baz"),
-                            ScalarType::List {
-                                element_type: Box::new(ScalarType::UInt32),
+                            SqlScalarType::List {
+                                element_type: Box::new(SqlScalarType::UInt32),
                                 custom_id: None,
                             }
                             .nullable(false),
@@ -2431,7 +2610,7 @@ mod tests {
                 .nullable(true),
             )
             .finish();
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<Row>>::encoder(&desc).unwrap();
 
         let mut og_row = Row::default();
         {
@@ -2448,7 +2627,7 @@ mod tests {
         encoder.append(&null_row);
         let col = encoder.finish();
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
+        let decoder = <RelationDesc as Schema<Row>>::decoder(&desc, col).unwrap();
         let mut rnd_row = Row::default();
 
         decoder.decode(0, &mut rnd_row);
@@ -2513,7 +2692,7 @@ mod tests {
             Datum::Null,
         ]);
         packer
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 2,
                     length: 2,
@@ -2545,11 +2724,54 @@ mod tests {
         for (idx, _) in row.iter().enumerate() {
             // HACK(parkmycar): We don't currently validate the types of the `RelationDesc` are
             // correct, just the number of columns. So we can fill in any type here.
-            desc = desc.with_column(idx.to_string(), ScalarType::Int32.nullable(true));
+            desc = desc.with_column(idx.to_string(), SqlScalarType::Int32.nullable(true));
         }
         let desc = desc.finish();
 
         let encoded = row.encode_to_vec();
         assert_eq!(Row::decode(&encoded, &desc), Ok(row));
+    }
+
+    #[mz_ore::test]
+    fn smoketest_projection() {
+        let desc = RelationDesc::builder()
+            .with_column("a", SqlScalarType::Int64.nullable(true))
+            .with_column("b", SqlScalarType::String.nullable(true))
+            .with_column("c", SqlScalarType::Bool.nullable(true))
+            .finish();
+        let mut encoder = <RelationDesc as Schema<Row>>::encoder(&desc).unwrap();
+
+        let mut og_row = Row::default();
+        {
+            let mut packer = og_row.packer();
+            packer.push(Datum::Int64(100));
+            packer.push(Datum::String("hello world"));
+            packer.push(Datum::True);
+        }
+        let mut og_row_2 = Row::default();
+        {
+            let mut packer = og_row_2.packer();
+            packer.push(Datum::Null);
+            packer.push(Datum::Null);
+            packer.push(Datum::Null);
+        }
+
+        encoder.append(&og_row);
+        encoder.append(&og_row_2);
+        let col = encoder.finish();
+
+        let projected_desc = desc.apply_demand(&BTreeSet::from([0, 2]));
+
+        let decoder = <RelationDesc as Schema<Row>>::decoder(&projected_desc, col).unwrap();
+
+        let mut rnd_row = Row::default();
+        decoder.decode(0, &mut rnd_row);
+        let expected_row = Row::pack_slice(&[Datum::Int64(100), Datum::True]);
+        assert_eq!(expected_row, rnd_row);
+
+        let mut rnd_row = Row::default();
+        decoder.decode(1, &mut rnd_row);
+        let expected_row = Row::pack_slice(&[Datum::Null, Datum::Null]);
+        assert_eq!(expected_row, rnd_row);
     }
 }

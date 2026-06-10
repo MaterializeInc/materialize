@@ -18,17 +18,13 @@
 //! not create any new stateful operators.
 
 use mz_expr::{
-    join_permutations, permutation_for_arrangement, JoinInputCharacteristics, JoinInputMapper,
-    MapFilterProject, MirScalarExpr,
+    Columns, JoinInputCharacteristics, JoinInputMapper, MapFilterProject, MirScalarExpr,
+    join_permutations, permutation_for_arrangement,
 };
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::join::{
-    JoinBuildState, JoinClosure, ProtoDeltaJoinPlan, ProtoDeltaPathPlan, ProtoDeltaStagePlan,
-};
 use crate::plan::AvailableCollections;
+use crate::plan::join::{JoinBuildState, JoinClosure};
 
 /// A delta query is implemented by a set of paths, one for each input.
 ///
@@ -43,31 +39,6 @@ pub struct DeltaJoinPlan {
     /// Each path identifies its source relation, so the order is only
     /// important for determinism of dataflow construction.
     pub path_plans: Vec<DeltaPathPlan>,
-}
-
-impl Arbitrary for DeltaJoinPlan {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop::collection::vec(any::<DeltaPathPlan>(), 0..3)
-            .prop_map(|path_plans| DeltaJoinPlan { path_plans })
-            .boxed()
-    }
-}
-
-impl RustType<ProtoDeltaJoinPlan> for DeltaJoinPlan {
-    fn into_proto(&self) -> ProtoDeltaJoinPlan {
-        ProtoDeltaJoinPlan {
-            path_plans: self.path_plans.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoDeltaJoinPlan) -> Result<Self, TryFromProtoError> {
-        Ok(DeltaJoinPlan {
-            path_plans: proto.path_plans.into_rust()?,
-        })
-    }
 }
 
 /// A delta query path is implemented by a sequences of stages,
@@ -85,56 +56,6 @@ pub struct DeltaPathPlan {
     ///
     /// Values of `None` indicate the identity closure.
     pub final_closure: Option<JoinClosure>,
-}
-
-impl Arbitrary for DeltaPathPlan {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<usize>(),
-            prop::collection::vec(any::<MirScalarExpr>(), 0..3),
-            any::<JoinClosure>(),
-            prop::collection::vec(any::<DeltaStagePlan>(), 0..1),
-            any::<Option<JoinClosure>>(),
-        )
-            .prop_map(
-                |(source_relation, source_key, initial_closure, stage_plans, final_closure)| {
-                    DeltaPathPlan {
-                        source_relation,
-                        source_key,
-                        initial_closure,
-                        stage_plans,
-                        final_closure,
-                    }
-                },
-            )
-            .boxed()
-    }
-}
-
-impl RustType<ProtoDeltaPathPlan> for DeltaPathPlan {
-    fn into_proto(&self) -> ProtoDeltaPathPlan {
-        ProtoDeltaPathPlan {
-            source_relation: self.source_relation.into_proto(),
-            source_key: self.source_key.into_proto(),
-            initial_closure: Some(self.initial_closure.into_proto()),
-            stage_plans: self.stage_plans.into_proto(),
-            final_closure: self.final_closure.into_proto(),
-        }
-    }
-    fn from_proto(proto: ProtoDeltaPathPlan) -> Result<Self, TryFromProtoError> {
-        Ok(DeltaPathPlan {
-            source_relation: proto.source_relation.try_into()?,
-            source_key: proto.source_key.into_rust()?,
-            initial_closure: proto
-                .initial_closure
-                .into_rust_if_some("ProtoDeltaPathPlan::initial_closure")?,
-            stage_plans: proto.stage_plans.into_rust()?,
-            final_closure: proto.final_closure.into_rust()?,
-        })
-    }
 }
 
 /// A delta query stage performs a stream lookup into an arrangement.
@@ -155,57 +76,6 @@ pub struct DeltaStagePlan {
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     pub closure: JoinClosure,
-}
-
-impl Arbitrary for DeltaStagePlan {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<usize>(),
-            prop::collection::vec(any::<MirScalarExpr>(), 0..3),
-            prop::collection::vec(any::<usize>(), 0..3),
-            prop::collection::vec(any::<MirScalarExpr>(), 0..3),
-            any::<JoinClosure>(),
-        )
-            .prop_map(
-                |(lookup_relation, stream_key, stream_thinning, lookup_key, closure)| {
-                    DeltaStagePlan {
-                        lookup_relation,
-                        stream_key,
-                        stream_thinning,
-                        lookup_key,
-                        closure,
-                    }
-                },
-            )
-            .boxed()
-    }
-}
-
-impl RustType<ProtoDeltaStagePlan> for DeltaStagePlan {
-    fn into_proto(&self) -> ProtoDeltaStagePlan {
-        ProtoDeltaStagePlan {
-            lookup_relation: self.lookup_relation.into_proto(),
-            stream_key: self.stream_key.into_proto(),
-            stream_thinning: self.stream_thinning.into_proto(),
-            lookup_key: self.lookup_key.into_proto(),
-            closure: Some(self.closure.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoDeltaStagePlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            lookup_relation: proto.lookup_relation.into_rust()?,
-            stream_key: proto.stream_key.into_rust()?,
-            stream_thinning: proto.stream_thinning.into_rust()?,
-            lookup_key: proto.lookup_key.into_rust()?,
-            closure: proto
-                .closure
-                .into_rust_if_some("ProtoDeltaStagePlan::closure")?,
-        })
-    }
 }
 
 impl DeltaJoinPlan {
@@ -261,7 +131,7 @@ impl DeltaJoinPlan {
             let (initial_permutation, initial_thinning) =
                 permutation_for_arrangement(source_key, input_mapper.input_arity(source_relation));
             let initial_closure = join_build_state.extract_closure(
-                initial_permutation,
+                initial_permutation.into_iter().enumerate().collect(),
                 source_key.len() + initial_thinning.len(),
             );
 

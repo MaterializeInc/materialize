@@ -16,8 +16,7 @@ PAD_128B = "X" * 128
 PAD_1K = "Y" * 1000
 
 # A schema that allows null values
-SCHEMA = dedent(
-    """
+SCHEMA = dedent("""
        $ set keyschema={
            "type": "record",
            "name": "Key",
@@ -33,8 +32,7 @@ SCHEMA = dedent(
                {"name":"f1", "type": ["null", "string"], "default": null }
            ]
          }
-    """
-)
+    """)
 
 
 class UpsertEnrichValue(Check):
@@ -43,10 +41,7 @@ class UpsertEnrichValue(Check):
     """
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            SCHEMA
-            + dedent(
-                f"""
+        return Testdrive(SCHEMA + dedent(f"""
                 $ kafka-create-topic topic=upsert-enrich-value
                 # 'A...' records start as NULLs
                 $ kafka-ingest format=avro key-format=avro topic=upsert-enrich-value key-schema=${{keyschema}} schema=${{schema}} repeat=1000
@@ -56,14 +51,9 @@ class UpsertEnrichValue(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-enrich-value key-schema=${{keyschema}} schema=${{schema}} repeat=1000
                 {{"key1": "B${{kafka-ingest.iteration}}"}} {{"f1": {{"string":"{PAD_1K}"}}}}
 
-                >[version<11900] CREATE SOURCE upsert_enrich_value
+                > CREATE SOURCE upsert_enrich_value_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-enrich-value-${{testdrive.seed}}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE UPSERT
-
-                >[version>=11900] CREATE SOURCE upsert_enrich_value_src
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-enrich-value-${{testdrive.seed}}')
-                >[version>=11900] CREATE TABLE upsert_enrich_value FROM SOURCE upsert_enrich_value_src (REFERENCE "testdrive-upsert-enrich-value-${{testdrive.seed}}")
+                > CREATE TABLE upsert_enrich_value FROM SOURCE upsert_enrich_value_src (REFERENCE "testdrive-upsert-enrich-value-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -72,9 +62,7 @@ class UpsertEnrichValue(Check):
                   LENGTH(f1), COUNT(*), SUM(CASE WHEN f1 IS NULL THEN 1 ELSE 0 END) AS nulls, COUNT(f1) AS not_nulls
                   FROM upsert_enrich_value
                   GROUP BY LEFT(key1, 1), f1
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -101,12 +89,8 @@ class UpsertEnrichValue(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM upsert_enrich_value_view
                 A Y Y 1000 1000 0 1000
                 B <null> <null> <null> 1000 1000 0
-                """
-            )
-        )
+                """))

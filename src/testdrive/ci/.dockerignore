@@ -1,0 +1,6 @@
+# Exclude unused duckdb build artifacts from Docker context.
+# Only libduckdb.so is needed at runtime.
+duckdb-download/*/*/libduckdb_static.a
+duckdb-download/*/*/libduckdb-linux-amd64.zip
+duckdb-download/*/*/*.h
+duckdb-download/*/*/*.hpp

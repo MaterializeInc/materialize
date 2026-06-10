@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-max-tries max-tries=20
-
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 
 
@@ -18,14 +16,13 @@ $ mysql-connect name=mysql-replica url=mysql://root@mysql-replica password=${arg
 
 #
 # Create some data on the primary
-# and use RESET MASTER to clear any previous state
+# and use RESET ... to clear any previous state
 # from the binlogs that may slow down the replication
 # process on the replica and cause us to be in an unknown
 # state when we create our source.
 #
 $ mysql-execute name=mysql
-DROP DATABASE IF EXISTS public;
-RESET MASTER;
+DROP DATABASE IF EXISTS public; ${arg.reset-binlog};
 CREATE DATABASE public;
 USE public;
 CREATE TABLE t1 (f1 INTEGER);

@@ -11,8 +11,8 @@
 
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::raw::IntCounterVec;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::raw::IntCounterVec;
 
 use crate::decode::{DataDecoderInner, PreDelimitedFormat};
 
@@ -61,6 +61,6 @@ impl DecodeMetricDefs {
     /// Create (if it doesn't exist yet) an error counter for the given decoder, and increment
     /// it `n` times.
     pub(crate) fn count_errors(&self, decoder: &DataDecoderInner, n: usize) {
-        self.counter_inc(decoder, true, n);
+        self.counter_inc(decoder, false, n);
     }
 }

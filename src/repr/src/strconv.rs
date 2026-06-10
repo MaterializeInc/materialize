@@ -11,7 +11,7 @@
 //! representation.
 //!
 //! The functions in this module are tightly related to the variants of
-//! [`ScalarType`](crate::ScalarType). Each variant has a pair of functions in
+//! [`SqlScalarType`](crate::SqlScalarType). Each variant has a pair of functions in
 //! this module named `parse_VARIANT` and `format_VARIANT`. The type returned
 //! by `parse` functions, and the type accepted by `format` functions, will
 //! be a type that is easily converted into the [`Datum`](crate::Datum) variant
@@ -28,12 +28,12 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::num::FpCategory;
+use std::str::FromStr;
 use std::sync::LazyLock;
 
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use dec::OrderedDecimal;
-use fast_float::FastFloat;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::error::ErrorExt;
@@ -43,6 +43,7 @@ use mz_ore::str::StrExt;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use num_traits::Float as NumFloat;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
@@ -55,7 +56,7 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclItem, MzAclItem};
-use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::adt::numeric::{self, NUMERIC_DATUM_MAX_PRECISION, Numeric};
 use crate::adt::pg_legacy_name::NAME_MAX_BYTES;
 use crate::adt::range::{Range, RangeBound, RangeInner};
 use crate::adt::timestamp::CheckedTimestamp;
@@ -249,7 +250,7 @@ pub fn parse_oid(s: &str) -> Result<u32, ParseError> {
 
 fn parse_float<Fl>(type_name: &'static str, s: &str) -> Result<Fl, ParseError>
 where
-    Fl: NumFloat + FastFloat,
+    Fl: NumFloat + FromStr,
 {
     // Matching PostgreSQL's float parsing behavior is tricky. PostgreSQL's
     // implementation delegates almost entirely to strtof(3)/strtod(3), which
@@ -260,9 +261,9 @@ where
     //
     // To @benesch's knowledge, there is no Rust implementation of float parsing
     // that reports whether underflow or overflow occurred. So we figure it out
-    // ourselves after the fact. If fast_float returns infinity and the input
+    // ourselves after the fact. If parsing the float returns infinity and the input
     // was not an explicitly-specified infinity, then we know overflow occurred.
-    // If fast_float returns zero and the input was not an explicitly-specified
+    // If parsing the float returns zero and the input was not an explicitly-specified
     // zero, then we know underflow occurred.
 
     // Matches `0`, `-0`, `+0`, `000000.00000`, `0.0e10`, 0., .0, et al.
@@ -271,14 +272,17 @@ where
     // Matches `inf`, `-inf`, `+inf`, `infinity`, et al.
     static INF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new("(?i-u)^[-+]?inf").unwrap());
 
-    let buf = s.trim().as_bytes();
-    let f: Fl =
-        fast_float::parse(buf).map_err(|_| ParseError::invalid_input_syntax(type_name, s))?;
+    let buf = s.trim();
+    let f: Fl = buf
+        .parse()
+        .map_err(|_| ParseError::invalid_input_syntax(type_name, s))?;
     match f.classify() {
-        FpCategory::Infinite if !INF_RE.is_match(buf) => {
+        FpCategory::Infinite if !INF_RE.is_match(buf.as_bytes()) => {
             Err(ParseError::out_of_range(type_name, s))
         }
-        FpCategory::Zero if !ZERO_RE.is_match(buf) => Err(ParseError::out_of_range(type_name, s)),
+        FpCategory::Zero if !ZERO_RE.is_match(buf.as_bytes()) => {
+            Err(ParseError::out_of_range(type_name, s))
+        }
         _ => Ok(f),
     }
 }
@@ -386,9 +390,9 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), S
         ));
     }
 
-    let (ts_string, tz_string) = datetime::split_timestamp_string(s);
+    let (ts_string, tz_string, era) = datetime::split_timestamp_string(s);
 
-    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(ts_string)?;
+    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(ts_string, era)?;
     let d: NaiveDate = pdt.compute_date()?;
     let t: NaiveTime = pdt.compute_time()?;
 
@@ -462,7 +466,7 @@ where
 {
     let (year_ad, year) = ts.year_ce();
     write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
-    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    format_nanos_to_micros(buf, ts.and_utc().timestamp_subsec_nanos());
     if !year_ad {
         write!(buf, " BC");
     }
@@ -670,7 +674,7 @@ pub fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
     // Bytes are interpreted literally, save for the special escape sequences
     // "\\", which represents a single backslash, and "\NNN", where each N
     // is an octal digit, which represents the byte whose octal value is NNN.
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(s.len());
     let mut bytes = s.as_bytes().iter().fuse();
     while let Some(&b) = bytes.next() {
         if b != b'\\' {
@@ -680,7 +684,7 @@ pub fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
         match bytes.next() {
             None => {
                 return Err(ParseError::invalid_input_syntax("bytea", s)
-                    .with_details("ends with escape character"))
+                    .with_details("ends with escape character"));
             }
             Some(b'\\') => out.push(b'\\'),
             b => match (b, bytes.next(), bytes.next()) {
@@ -689,7 +693,7 @@ pub fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
                 }
                 _ => {
                     return Err(ParseError::invalid_input_syntax("bytea", s)
-                        .with_details("invalid escape sequence"))
+                        .with_details("invalid escape sequence"));
                 }
             },
         }
@@ -1042,11 +1046,11 @@ where
 
     let mut elems = Vec::with_capacity(raw_elems.len());
 
-    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let mut generated = |elem| gen_elem(elem).map_err(|e| e.to_string());
 
     for elem in raw_elems.into_iter() {
         elems.push(match elem {
-            Some(elem) => gen(elem)?,
+            Some(elem) => generated(elem)?,
             None => make_null(),
         });
     }
@@ -1093,7 +1097,7 @@ where
     }
 
     // Simplifies calls to `gen_elem` by handling errors
-    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let mut generated = |elem| gen_elem(elem).map_err(|e| e.to_string());
     let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
     let is_end_of_literal = |c| matches!(c, ',' | '}');
 
@@ -1116,7 +1120,7 @@ where
         buf.take_while(|ch| ch.is_ascii_whitespace());
         // Get elements.
         let elem = match buf.peek() {
-            Some('"') => gen(lex_quoted_element(buf)?)?,
+            Some('"') => generated(lex_quoted_element(buf)?)?,
             Some('{') => {
                 if !is_element_type_list {
                     bail!(
@@ -1124,10 +1128,10 @@ where
                         want a nested list, e.g. '{{a}}'::text list list"
                     )
                 }
-                gen(lex_embedded_element(buf)?)?
+                generated(lex_embedded_element(buf)?)?
             }
             Some(_) => match lex_unquoted_element(buf, is_special_char, is_end_of_literal)? {
-                Some(elem) => gen(elem)?,
+                Some(elem) => generated(elem)?,
                 None => make_null(),
             },
             None => bail!("unexpected end of input"),
@@ -1157,6 +1161,10 @@ where
         .map_err(|details| ParseError::invalid_input_syntax("int2vector", s).with_details(details))
 }
 
+/// Parses PostgreSQL's legacy whitespace-separated vector syntax (used in
+/// Materialize for `int2vector`). Unlike [`parse_array`], this grammar has
+/// no token for `NULL`, which is why `int2vector` cannot represent `NULL`
+/// elements. See [`crate::scalar::Int2Vector`].
 pub fn parse_legacy_vector_inner<'a, T, E>(
     s: &'a str,
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
@@ -1167,14 +1175,14 @@ where
     let mut elems = vec![];
     let buf = &mut LexBuf::new(s);
 
-    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let mut generated = |elem| gen_elem(elem).map_err(|e| e.to_string());
 
     loop {
         buf.take_while(|ch| ch.is_ascii_whitespace());
         match buf.peek() {
             Some(_) => {
                 let elem = buf.take_while(|ch| !ch.is_ascii_whitespace());
-                elems.push(gen(elem.into())?);
+                elems.push(generated(elem.into())?);
             }
             None => break,
         }
@@ -1777,11 +1785,7 @@ impl ElementEscaper for RecordElementEscaper {
     }
 
     fn escape_char(c: u8) -> u8 {
-        if c == b'"' {
-            b'"'
-        } else {
-            b'\\'
-        }
+        if c == b'"' { b'"' } else { b'\\' }
     }
 }
 
@@ -1930,8 +1934,18 @@ where
 
 /// An error while parsing an input as a type.
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ParseError {
     pub kind: ParseErrorKind,
     pub type_name: Box<str>,
@@ -1940,7 +1954,6 @@ pub struct ParseError {
 }
 
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -1951,8 +1964,9 @@ pub struct ParseError {
     Serialize,
     Deserialize,
     Hash,
-    MzReflect,
+    MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum ParseErrorKind {
     OutOfRange,
     InvalidInputSyntax,
@@ -2027,8 +2041,8 @@ impl Error for ParseError {}
 
 impl RustType<ProtoParseError> for ParseError {
     fn into_proto(&self) -> ProtoParseError {
-        use proto_parse_error::*;
         use Kind::*;
+        use proto_parse_error::*;
         let kind = match self.kind {
             ParseErrorKind::OutOfRange => OutOfRange(()),
             ParseErrorKind::InvalidInputSyntax => InvalidInputSyntax(()),
@@ -2061,7 +2075,6 @@ impl RustType<ProtoParseError> for ParseError {
 }
 
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Copy,
@@ -2072,8 +2085,9 @@ impl RustType<ProtoParseError> for ParseError {
     Serialize,
     Deserialize,
     Hash,
-    MzReflect,
+    MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum ParseHexError {
     InvalidHexDigit(char),
     OddLength,
@@ -2095,8 +2109,8 @@ impl fmt::Display for ParseHexError {
 
 impl RustType<ProtoParseHexError> for ParseHexError {
     fn into_proto(&self) -> ProtoParseHexError {
-        use proto_parse_hex_error::*;
         use Kind::*;
+        use proto_parse_hex_error::*;
         let kind = match self {
             ParseHexError::InvalidHexDigit(v) => InvalidHexDigit(v.into_proto()),
             ParseHexError::OddLength => OddLength(()),

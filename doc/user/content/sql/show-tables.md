@@ -10,11 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-tables.svg" >}}
+```mzsql
+SHOW TABLES [FROM <schema_name>];
+```
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show tables from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Syntax element                | Description
+------------------------------|------------
+**FROM** <schema_name>        | If specified, only show tables from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 

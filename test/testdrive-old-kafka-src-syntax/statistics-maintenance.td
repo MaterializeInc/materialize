@@ -7,13 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=120s
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
-> CREATE CLUSTER cluster1 (SIZE '2')
+> CREATE CLUSTER cluster1 (SIZE 'scale=1,workers=2')
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
@@ -56,7 +57,7 @@ sink1 1 1 true true
   SUM(u.updates_committed) > 0,
   SUM(u.messages_received)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
 upsert1 true 1
@@ -76,7 +77,7 @@ sink1 1 1 true true
   SUM(u.updates_committed) > 0,
   SUM(u.messages_received)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
 upsert1 true 1
@@ -100,7 +101,7 @@ sink1 2 2 true true
   SUM(u.updates_committed) > 0,
   SUM(u.messages_received)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
 upsert1 true 2

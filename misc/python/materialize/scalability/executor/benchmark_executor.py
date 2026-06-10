@@ -29,6 +29,7 @@ from materialize.scalability.result.scalability_result import BenchmarkResult
 from materialize.scalability.result.workload_result import WorkloadResult
 from materialize.scalability.schema.schema import Schema
 from materialize.scalability.workload.workload import Workload, WorkloadWithContext
+from materialize.scalability.workload.workload_markers import ConnectionWorkload
 from materialize.scalability.workload.workloads.connection_workloads import *  # noqa: F401 F403
 from materialize.scalability.workload.workloads.ddl_workloads import *  # noqa: F401 F403
 from materialize.scalability.workload.workloads.dml_dql_workloads import *  # noqa: F401 F403
@@ -36,6 +37,8 @@ from materialize.scalability.workload.workloads.self_test_workloads import *  # 
 
 # number of retries in addition to the first run
 MAX_RETRIES_ON_REGRESSION = 2
+
+next_worker_id: int = 0
 
 
 class BenchmarkExecutor:
@@ -84,7 +87,7 @@ class BenchmarkExecutor:
 
         for other_endpoint in self.other_endpoints:
             comparison_outcome = self.run_and_evaluate_workload_for_endpoint(
-                workload_cls, other_endpoint, baseline_result, try_count=0
+                workload_cls, other_endpoint, baseline_result
             )
 
             self.result.add_regression(comparison_outcome)
@@ -94,7 +97,6 @@ class BenchmarkExecutor:
         workload_cls: type[Workload],
         other_endpoint: Endpoint,
         baseline_result: WorkloadResult | None,
-        try_count: int,
     ) -> ComparisonOutcome | None:
         workload_name = workload_cls.__name__
         other_endpoint_result = self.run_workload_for_endpoint(
@@ -113,16 +115,127 @@ class BenchmarkExecutor:
             other_endpoint_result,
         )
 
-        if outcome.has_regressions() and try_count < MAX_RETRIES_ON_REGRESSION:
+        # Targeted retries: re-run both baseline and HEAD at regressed
+        # concurrency levels. Re-running only HEAD is not sufficient because
+        # the baseline may have had an anomalously good measurement.
+        for retry in range(MAX_RETRIES_ON_REGRESSION):
+            if not outcome.has_regressions():
+                break
+
+            regressed_concurrencies = [r.concurrency for r in outcome.regressions]
             print(
-                f"Potential regression in workload {workload_name} at endpoint {other_endpoint},"
-                f" triggering retry {try_count + 1} of {MAX_RETRIES_ON_REGRESSION}"
+                f"Potential regression in workload {workload_name} at concurrencies "
+                f"{regressed_concurrencies}, triggering retry {retry + 1} of "
+                f"{MAX_RETRIES_ON_REGRESSION}"
             )
-            return self.run_and_evaluate_workload_for_endpoint(
-                workload_cls, other_endpoint, baseline_result, try_count=try_count + 1
+
+            # Re-run baseline at regressed concurrency levels
+            baseline_workload = self.create_workload_instance(
+                workload_cls, endpoint=self.baseline_endpoint
+            )
+            baseline_retry_result = self.run_workload_for_endpoint_with_concurrencies(
+                self.baseline_endpoint,
+                baseline_workload,
+                regressed_concurrencies,
+            )
+
+            # Re-run HEAD at regressed concurrency levels
+            other_workload = self.create_workload_instance(
+                workload_cls, endpoint=other_endpoint
+            )
+            other_retry_result = self.run_workload_for_endpoint_with_concurrencies(
+                other_endpoint, other_workload, regressed_concurrencies
+            )
+
+            # Replace retried concurrency rows in the baseline result
+            baseline_keep_totals = baseline_result.df_totals.data[
+                ~baseline_result.df_totals.data[df_totals_cols.CONCURRENCY].isin(
+                    regressed_concurrencies
+                )
+            ]
+            baseline_keep_details = baseline_result.df_details.data[
+                ~baseline_result.df_details.data[df_details_cols.CONCURRENCY].isin(
+                    regressed_concurrencies
+                )
+            ]
+            baseline_result = WorkloadResult(
+                baseline_result.workload,
+                baseline_result.endpoint,
+                DfTotals(
+                    pd.concat(
+                        [
+                            baseline_keep_totals,
+                            baseline_retry_result.df_totals.data,
+                        ]
+                    )
+                ),
+                DfDetails(
+                    pd.concat(
+                        [
+                            baseline_keep_details,
+                            baseline_retry_result.df_details.data,
+                        ]
+                    )
+                ),
+            )
+
+            # Replace retried concurrency rows in the HEAD result
+            keep_totals = other_endpoint_result.df_totals.data[
+                ~other_endpoint_result.df_totals.data[df_totals_cols.CONCURRENCY].isin(
+                    regressed_concurrencies
+                )
+            ]
+            keep_details = other_endpoint_result.df_details.data[
+                ~other_endpoint_result.df_details.data[
+                    df_details_cols.CONCURRENCY
+                ].isin(regressed_concurrencies)
+            ]
+            other_endpoint_result = WorkloadResult(
+                other_endpoint_result.workload,
+                other_endpoint_result.endpoint,
+                DfTotals(pd.concat([keep_totals, other_retry_result.df_totals.data])),
+                DfDetails(
+                    pd.concat([keep_details, other_retry_result.df_details.data])
+                ),
+            )
+
+            # Re-evaluate with fresh measurements on both sides
+            outcome = self.result_analyzer.perform_comparison_in_workload(
+                workload_name,
+                self.baseline_endpoint,
+                other_endpoint,
+                baseline_result,
+                other_endpoint_result,
             )
 
         return outcome
+
+    def run_workload_for_endpoint_with_concurrencies(
+        self,
+        endpoint: Endpoint,
+        workload: Workload,
+        concurrencies: list[int],
+    ) -> WorkloadResult:
+        """Run a workload for only the specified concurrency levels."""
+        print(
+            f"--- Re-running workload {workload.name()} on {endpoint} "
+            f"for concurrencies {concurrencies}"
+        )
+
+        df_totals = DfTotals()
+        df_details = DfDetails()
+
+        for concurrency in concurrencies:
+            df_total, df_detail = self.run_workload_for_endpoint_with_concurrency(
+                endpoint,
+                workload,
+                concurrency,
+                self.config.get_count_for_concurrency(concurrency),
+            )
+            df_totals = concat_df_totals([df_totals, df_total])
+            df_details = concat_df_details([df_details, df_detail])
+
+        return WorkloadResult(workload, endpoint, df_totals, df_details)
 
     def run_workload_for_endpoint(
         self,
@@ -136,6 +249,9 @@ class BenchmarkExecutor:
         df_details = DfDetails()
 
         concurrencies = self._get_concurrencies()
+        workload_max = workload.max_concurrency()
+        if workload_max is not None:
+            concurrencies = [c for c in concurrencies if c <= workload_max]
         print(f"Concurrencies: {concurrencies}")
 
         for concurrency in concurrencies:
@@ -190,10 +306,17 @@ class BenchmarkExecutor:
                 init_operation, init_cursor, -1, -1, self.config.verbose
             )
 
-        print(
-            f"Creating a cursor pool with {concurrency} entries against endpoint: {endpoint.url()}"
-        )
-        cursor_pool = self._create_cursor_pool(concurrency, endpoint)
+        use_cursor_pool = not isinstance(workload, ConnectionWorkload)
+        cursor_pool = None
+        if use_cursor_pool:
+            print(
+                f"Creating a cursor pool with {concurrency} entries against endpoint: {endpoint.url()}"
+            )
+            cursor_pool = self._create_cursor_pool(concurrency, endpoint)
+        else:
+            print(
+                "Skipping cursor pool creation for connection workload to avoid extra idle connections."
+            )
 
         print(
             f"Benchmarking workload '{workload.name()}' at concurrency {concurrency} ..."
@@ -201,10 +324,33 @@ class BenchmarkExecutor:
         operations = workload.operations()
 
         global next_worker_id
-        next_worker_id = 0
         local = threading.local()
         lock = threading.Lock()
 
+        warmup_count = max(1, min(32, int(count / 10)))
+        print(f"Warming up with {warmup_count} operations ...")
+        next_worker_id = 0
+        with futures.ThreadPoolExecutor(
+            concurrency, initializer=self.initialize_worker, initargs=(local, lock)
+        ) as executor:
+            list(
+                executor.map(
+                    self.execute_operation,
+                    [
+                        (
+                            workload,
+                            concurrency,
+                            local,
+                            cursor_pool,
+                            operations[i % len(operations)],
+                            int(i / len(operations)),
+                        )
+                        for i in range(warmup_count)
+                    ],
+                )
+            )
+
+        next_worker_id = 0
         start = time.time()
         with futures.ThreadPoolExecutor(
             concurrency, initializer=self.initialize_worker, initargs=(local, lock)
@@ -260,14 +406,20 @@ class BenchmarkExecutor:
         return DfTotals(df_total), DfDetails(df_detail)
 
     def execute_operation(
-        self, args: tuple[Workload, int, threading.local, list[Cursor], Operation, int]
+        self,
+        args: tuple[
+            Workload, int, threading.local, list[Cursor] | None, Operation, int
+        ],
     ) -> dict[str, Any]:
         workload, concurrency, local, cursor_pool, operation, transaction_index = args
         worker_id = local.worker_id
-        assert (
-            len(cursor_pool) >= worker_id + 1
-        ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {worker_id}"
-        cursor = cursor_pool[worker_id]
+        if cursor_pool is None:
+            cursor = None
+        else:
+            assert (
+                len(cursor_pool) >= worker_id + 1
+            ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {worker_id}"
+            cursor = cursor_pool[worker_id]
 
         start = time.time()
         workload.execute_operation(

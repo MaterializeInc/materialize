@@ -83,7 +83,27 @@ impl Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.source.display_with_causes())
+        match &self.location {
+            Some(location) => {
+                if let Some(filename) = &location.filename {
+                    write!(
+                        f,
+                        "{}:{}:{}: ",
+                        filename.display(),
+                        location.line,
+                        location.col
+                    )?;
+                } else {
+                    write!(f, "{}:{}: ", location.line, location.col)?;
+                }
+                writeln!(f, "{}", self.source.display_with_causes())?;
+                write!(f, "{}", location.snippet)?;
+                writeln!(f, "{}^", " ".repeat(location.col - 1))
+            }
+            None => {
+                write!(f, "{}", self.source.display_with_causes())
+            }
+        }
     }
 }
 

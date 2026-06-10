@@ -129,25 +129,25 @@ http
 {"query":"begin; select 1/0; commit; select 2;"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"22012"},"notices":[]}]}
 
 http
 {"query":"begin; select 1; commit; select 1/0;"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[["1"]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"COMMIT","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[["1"]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"COMMIT","notices":[]},{"error":{"message":"division by zero","code":"22012"},"notices":[]}]}
 
 http
 {"query":"select 1/0; begin; select 2; commit;"}
 ----
 200 OK
-{"results":[{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"error":{"message":"division by zero","code":"22012"},"notices":[]}]}
 
 http
 {"query":"select 1; begin; select 1/0; commit;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[["1"]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[["1"]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"22012"},"notices":[]}]}
 
 # Txns w/ writes
 
@@ -156,7 +156,7 @@ http
 {"query":"insert into t values (1); select 1/0; insert into t values (2)"}
 ----
 200 OK
-{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"22012"},"notices":[]}]}
 
  # Values not successfully written due to aborted txn
 http
@@ -170,7 +170,7 @@ http
 {"query":"begin; insert into t values (1); commit; insert into t values (2); select 1/0;"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"22012"},"notices":[]}]}
 
 http
 {"query":"select * from t;"}
@@ -248,7 +248,7 @@ http
 {"results":[{"error":{"message":"unsupported via this API: COPY (SELECT 1) TO STDOUT","code":"XX000"},"notices":[]}]}
 
 http
-{"query":"EXPLAIN SELECT 1"}
+{"query":"EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT 1"}
 ----
 200 OK
 {"results":[{"tag":"SELECT 1","rows":[["Explained Query (fast path):\n  Constant\n    - (1)\n\nTarget cluster: mz_catalog_server\n"]],"desc":{"columns":[{"name":"Optimized Plan","type_oid":25,"type_len":-1,"type_mod":-1}]},"notices":[]}]}
@@ -324,7 +324,7 @@ http
 {"queries":[{"query":"select $1+$2::int as col","params":["1"]}]}
 ----
 200 OK
-{"results":[{"error":{"message":"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2","code":"XX000"},"notices":[]}]}
+{"results":[{"error":{"message":"request supplied 1 parameters, but SELECT $1 + $2::int4 AS col requires 2","code":"XX000"},"notices":[]}]}
 
 # NaN
 http
@@ -393,7 +393,7 @@ http
 {"queries":[{"query":"insert into t values (1);","params":[]},{"query":"select 1/0;","params":[]}]}
 ----
 200 OK
-{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"22012"},"notices":[]}]}
 
 # Implicit transactions are each committed, so the INSERT committed before the SELECT error.
 http
@@ -407,7 +407,7 @@ http
 {"queries":[{"query":"begin;","params":[]},{"query":"insert into t values (1);","params":[]},{"query":"select 1/0;","params":[]},{"query":"select * from t","params":[]},{"query":"commit","params":[]}]}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"22012"},"notices":[]}]}
 
 # Because of the explicit transaction, the INSERT did not commit.
 http
@@ -434,7 +434,7 @@ http
 {"queries":[{"query":"insert into t values ($1);","params":["1"]},{"query":"begin;","params":[]},{"query":"insert into t values ($1);","params":["2"]},{"query":"insert into t values ($1);","params":["3"]},{"query":"commit;","params":[]},{"query":"select 1/0","params":[]}]}
 ----
 200 OK
-{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"error":{"message":"division by zero","code":"22012"},"notices":[]}]}
 
 http
 {"queries":[{"query":"select * from t","params":[]}]}
@@ -447,7 +447,7 @@ http
 {"queries":[{"query":"insert into t values ($1);","params":["4"]},{"query":"begin;","params":[]},{"query":"select 1/0;","params":[]},{"query":"commit;","params":[]}]}
 ----
 200 OK
-{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"22012"},"notices":[]}]}
 
 # We expect to see the INSERT (4) above.
 http

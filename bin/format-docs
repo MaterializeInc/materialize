@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+. misc/shlib/shlib.bash
+
+format_file() {
+    local file="$1"
+
+    local -a SED_INPLACE
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        SED_INPLACE=(-i '')
+    else
+        SED_INPLACE=(-i)
+    fi
+
+    # Trim trailing whitespace
+    sed "${SED_INPLACE[@]}" 's/[[:space:]]*$//' "$file"
+
+    # Ensure file ends with a newline
+    if [[ -s "$file" ]]; then
+        if [[ -n "$(tail -c 1 "$file" 2>/dev/null)" ]]; then
+            printf '\n' >> "$file"
+        fi
+    fi
+}
+
+export -f format_file
+
+find doc/user -name "*.md" -type f -print0 | \
+  xargs -0 -P 0 -I {} bash -c 'format_file "$@"' _ {} > /dev/null 2>&1
+
+echo "Formatted all markdown files in doc/user"

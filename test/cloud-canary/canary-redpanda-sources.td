@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO(def-) Reenable when Redpanda Cloud is working with Testdrive again
+$ skip-if
+SELECT true
+
 $ kafka-create-topic topic=bytes replication-factor=3
 
 $ kafka-ingest format=bytes key-terminator=: key-format=bytes topic=bytes repeat=100
@@ -25,6 +29,7 @@ abc:abc
   SASL PASSWORD = SECRET redpanda_password
   );
 
+> BEGIN
 > CREATE SOURCE redpanda_bytes
   IN CLUSTER canary_sources
   FROM KAFKA CONNECTION redpanda_conn (TOPIC 'testdrive-bytes-${testdrive.seed}');
@@ -32,6 +37,7 @@ abc:abc
 > CREATE TABLE redpanda_bytes_tbl FROM SOURCE redpanda_bytes (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
   ENVELOPE NONE;
+> COMMIT
 
 > CREATE MATERIALIZED VIEW redpanda_bytes_view AS SELECT COUNT(*) AS cnt FROM redpanda_bytes_tbl;
 

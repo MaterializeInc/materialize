@@ -15,16 +15,6 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use std::time::Instant;
 
-use differential_dataflow::difference::Semigroup;
-use differential_dataflow::lattice::Lattice;
-use mz_dyncfg::Config;
-use mz_ore::cast::CastFrom;
-use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
-use mz_persist_types::schema::SchemaId;
-use mz_persist_types::{Codec, Codec64};
-use timely::progress::{Antichain, Timestamp};
-use tracing::debug;
-
 use crate::cache::{LockingTypedState, StateCache};
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::gc::GcReq;
@@ -32,16 +22,28 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    EncodedSchemas, ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState,
-    Upper, ROLLUP_THRESHOLD,
+    ActiveGc, ActiveRollup, EncodedSchemas, ExpiryMetrics, GC_FALLBACK_THRESHOLD_MS,
+    GC_MAX_VERSIONS, GC_MIN_VERSIONS, GC_USE_ACTIVE_GC, GcConfig, HollowBatch, LeasedReaderState,
+    ROLLUP_FALLBACK_THRESHOLD_MS, ROLLUP_THRESHOLD, ROLLUP_USE_ACTIVE_ROLLUP, Since, SnapshotErr,
+    StateCollections, TypedState,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
-use crate::rpc::{PubSubSender, PUBSUB_PUSH_DIFF_ENABLED};
+use crate::read::LeasedReaderId;
+use crate::rpc::{PUBSUB_PUSH_DIFF_ENABLED, PubSubSender};
 use crate::schema::SchemaCache;
-use crate::{Diagnostics, PersistConfig, ShardId};
+use crate::{Diagnostics, PersistConfig, ShardId, cfg};
+use differential_dataflow::difference::Monoid;
+use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
+use mz_ore::soft_assert_or_log;
+use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
+use mz_persist_types::schema::SchemaId;
+use mz_persist_types::{Codec, Codec64};
+use timely::progress::{Antichain, Timestamp};
+use tracing::debug;
 
 /// An applier of persist commands.
 ///
@@ -53,7 +55,6 @@ pub struct Applier<K, V, T, D> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_metrics: Arc<ShardMetrics>,
     pub(crate) state_versions: Arc<StateVersions>,
-    shared_states: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
     pub(crate) shard_id: ShardId,
 
@@ -76,7 +77,6 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
             metrics: Arc::clone(&self.metrics),
             shard_metrics: Arc::clone(&self.shard_metrics),
             state_versions: Arc::clone(&self.state_versions),
-            shared_states: Arc::clone(&self.shared_states),
             pubsub_sender: Arc::clone(&self.pubsub_sender),
             shard_id: self.shard_id,
             state: Arc::clone(&self.state),
@@ -84,19 +84,12 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
     }
 }
 
-/// If set, we round-trip the spine structure through Proto.
-pub(crate) const ROUNDTRIP_SPINE: Config<bool> = Config::new(
-    "persist_roundtrip_spine",
-    true,
-    "Roundtrip the structure of Spine through Proto.",
-);
-
 impl<K, V, T, D> Applier<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64,
 {
     pub async fn new(
         cfg: PersistConfig,
@@ -124,7 +117,6 @@ where
             metrics,
             shard_metrics,
             state_versions,
-            shared_states,
             pubsub_sender,
             shard_id,
             state,
@@ -189,6 +181,19 @@ where
             })
     }
 
+    /// Does a lease for the provided reader exist in the current state?
+    ///
+    /// This is useful when we encounter a condition that should only be possible when the lease
+    /// has expired, so we can distinguish between scary bugs and expected-but-unusual cases.
+    /// This returns whatever lease is present in the latest version of state - so to avoid false
+    /// positives, this should be checked only after the surprising condition has occurred.
+    pub fn reader_lease(&self, id: LeasedReaderId) -> Option<LeasedReaderState<T>> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                state.state.collections.leased_readers.get(&id).cloned()
+            })
+    }
+
     /// A point-in-time read of `seqno` from the current state.
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may
@@ -243,6 +248,22 @@ where
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
                 let (id, x) = state.collections.schemas.last_key_value()?;
                 Some((*id, K::decode_schema(&x.key), V::decode_schema(&x.val)))
+            })
+    }
+
+    /// Returns the ID of the given schema, if known at the current state.
+    pub fn find_schema(&self, key_schema: &K::Schema, val_schema: &V::Schema) -> Option<SchemaId> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                // The common case is that the requested schema is a recent one, so as a minor
+                // optimization, do this search in reverse order.
+                let mut schemas = state.collections.schemas.iter().rev();
+                schemas
+                    .find(|(_, x)| {
+                        K::decode_schema(&x.key) == *key_schema
+                            && V::decode_schema(&x.val) == *val_schema
+                    })
+                    .map(|(id, _)| *id)
             })
     }
 
@@ -307,7 +328,7 @@ where
             })
     }
 
-    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Result<(), Upper<T>>, Since<T>> {
+    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
                 state.verify_listen(as_of)
@@ -399,6 +420,12 @@ where
         shard_metrics: &ShardMetrics,
         state_versions: &StateVersions,
     ) -> ApplyCmdResult<K, V, T, D, R, E> {
+        // While it's safe for more than one cmd to try and update the state, only one of those
+        // concurrent requests could actually succeed. This call will wait until previous requests
+        // have completed or timed out, and holding the resulting permit will delay other cmds until
+        // this attempt completes or times out.
+        let _permit_opt = state.lease_for_update().await;
+
         let computed_next_state = state
             .read_lock(&metrics.locks.applier_read_noncacheable, |state| {
                 Self::compute_next_state_locked(state, work_fn, metrics, cmd, cfg)
@@ -411,12 +438,11 @@ where
                     seqno,
                     err,
                     RoutineMaintenance::default(),
-                ))
+                ));
             }
         };
 
         let NextState {
-            expected,
             diff,
             state,
             expiry_metrics,
@@ -425,24 +451,26 @@ where
             work_ret,
         } = next_state;
 
+        {
+            let build_version = &cfg.build_version;
+            let state_version = &state.state.collections.version;
+            soft_assert_or_log!(
+                cfg::code_can_write_data(build_version, state_version),
+                "current version {build_version} does not support state format {state_version}"
+            );
+        }
+
         // SUBTLE! Unlike the other consensus and blob uses, we can't
         // automatically retry indeterminate ExternalErrors here. However,
         // if the state change itself is _idempotent_, then we're free to
         // retry even indeterminate errors. See
         // [Self::apply_unbatched_idempotent_cmd].
         let cas_res = state_versions
-            .try_compare_and_set_current(&cmd.name, shard_metrics, Some(expected), &state, &diff)
+            .try_compare_and_set_current(&cmd.name, shard_metrics, &state, &diff)
             .await;
 
         match cas_res {
             Ok((CaSResult::Committed, diff)) => {
-                assert!(
-                    expected <= state.seqno,
-                    "state seqno regressed: {} vs {}",
-                    expected,
-                    state.seqno
-                );
-
                 metrics
                     .lease
                     .timeout_read
@@ -465,7 +493,7 @@ where
                 ApplyCmdResult::Committed((diff, state, work_ret, maintenance))
             }
             Ok((CaSResult::ExpectationMismatch, _diff)) => {
-                ApplyCmdResult::ExpectationMismatch(expected)
+                ApplyCmdResult::ExpectationMismatch(state.seqno())
             }
             Err(err) => ApplyCmdResult::Indeterminate(err),
         }
@@ -486,6 +514,17 @@ where
         let is_rollup = cmd.name == metrics.cmds.add_rollup.name;
         let is_become_tombstone = cmd.name == metrics.cmds.become_tombstone.name;
 
+        let gc_config = GcConfig {
+            use_active_gc: GC_USE_ACTIVE_GC.get(cfg),
+            fallback_threshold_ms: u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg)),
+            min_versions: GC_MIN_VERSIONS.get(cfg),
+            max_versions: GC_MAX_VERSIONS.get(cfg),
+        };
+
+        let use_active_rollup = ROLLUP_USE_ACTIVE_ROLLUP.get(cfg);
+        let rollup_threshold = ROLLUP_THRESHOLD.get(cfg);
+        let rollup_fallback_threshold_ms = u64::cast_from(ROLLUP_FALLBACK_THRESHOLD_MS.get(cfg));
+
         let expected = state.seqno;
         let was_tombstone_before = state.collections.is_tombstone();
 
@@ -496,7 +535,7 @@ where
             }
         };
         let expiry_metrics = new_state.expire_at((cfg.now)());
-        new_state.state.collections.trace.roundtrip_structure = ROUNDTRIP_SPINE.get(&cfg.configs);
+        new_state.state.collections.trace.roundtrip_structure = true;
 
         // Sanity check that all state transitions have special case for
         // being a tombstone. The ones that do will return a Break and
@@ -514,24 +553,41 @@ where
             );
         }
 
-        let write_rollup = new_state.need_rollup(ROLLUP_THRESHOLD.get(cfg));
+        let now = (cfg.now)();
+        let write_rollup = new_state.need_rollup(
+            rollup_threshold,
+            use_active_rollup,
+            rollup_fallback_threshold_ms,
+            now,
+        );
+
+        if let Some(write_rollup_seqno) = write_rollup {
+            if use_active_rollup {
+                new_state.collections.active_rollup = Some(ActiveRollup {
+                    seqno: write_rollup_seqno,
+                    start_ms: now,
+                });
+            }
+        }
 
         // Find out if this command has been selected to perform gc, so
         // that it will fire off a background request to the
         // GarbageCollector to delete eligible blobs and truncate the
         // state history. This is dependant both on `maybe_gc` returning
         // Some _and_ on this state being successfully compare_and_set.
-        //
-        // NB: Make sure this overwrites `garbage_collection` on every
-        // run though the loop (i.e. no `if let Some` here). When we
-        // lose a CaS race, we might discover that the winner got
-        // assigned the gc.
-        let garbage_collection = new_state.maybe_gc(is_write);
+        let garbage_collection = new_state.maybe_gc(is_write, now, gc_config);
 
-        // NB: Make sure this is the very last thing before the
-        // `try_compare_and_set_current` call. (In particular, it needs
-        // to come after anything that might modify new_state, such as
-        // `maybe_gc`.)
+        if let Some(gc) = garbage_collection.as_ref() {
+            if gc_config.use_active_gc {
+                new_state.collections.active_gc = Some(ActiveGc {
+                    seqno: gc.new_seqno_since,
+                    start_ms: now,
+                });
+            }
+        }
+
+        // Make sure `new_state` is not modified after this point!
+        // The new state and the diff must be consistent with each other for correctness.
         let diff = StateDiff::from_diff(&state.state, &new_state);
         // Sanity check that our diff logic roundtrips and adds back up
         // correctly.
@@ -542,8 +598,12 @@ where
             }
         }
 
+        assert_eq!(
+            expected.next(),
+            new_state.seqno(),
+            "successive states should have successive seqnos"
+        );
         Ok(NextState {
-            expected,
             diff,
             state: new_state,
             expiry_metrics,
@@ -660,7 +720,6 @@ enum ApplyCmdResult<K, V, T, D, R, E> {
 }
 
 struct NextState<K, V, T, D, R> {
-    expected: SeqNo,
     diff: StateDiff<T>,
     state: TypedState<K, V, T, D>,
     expiry_metrics: ExpiryMetrics,

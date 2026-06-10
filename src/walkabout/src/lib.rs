@@ -36,12 +36,12 @@ use std::path::Path;
 
 use anyhow::Result;
 
-mod gen;
+mod generated;
 mod parse;
 
 pub mod ir;
 
-pub use gen::{gen_fold, gen_visit, gen_visit_mut};
+pub use generated::{gen_fold, gen_visit, gen_visit_mut};
 
 /// Loads type definitions from the specified module.
 ///

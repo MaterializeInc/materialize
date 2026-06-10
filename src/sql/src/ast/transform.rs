@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::str::StrExt;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::CreateTableFromSourceStatement;
 
 use crate::ast::visit::{self, Visit};
@@ -199,17 +199,28 @@ pub fn create_stmt_rename_refs(
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
             maybe_update_item_name(from.name_mut());
         }
+        Statement::CreateTableFromSource(CreateTableFromSourceStatement { source, .. }) => {
+            maybe_update_item_name(source.name_mut());
+        }
         Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { query, .. },
             ..
-        })
-        | Statement::CreateMaterializedView(CreateMaterializedViewStatement { query, .. }) => {
+        }) => {
+            rewrite_query(from_name, to_item_name, query)?;
+        }
+        Statement::CreateMaterializedView(CreateMaterializedViewStatement {
+            replacement_for,
+            query,
+            ..
+        }) => {
+            if let Some(target) = replacement_for {
+                maybe_update_item_name(target.name_mut());
+            }
             rewrite_query(from_name, to_item_name, query)?;
         }
         Statement::CreateSource(_)
         | Statement::CreateSubsource(_)
         | Statement::CreateTable(_)
-        | Statement::CreateTableFromSource(_)
         | Statement::CreateSecret(_)
         | Statement::CreateConnection(_)
         | Statement::CreateWebhookSource(_) => {}
@@ -357,7 +368,7 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
     }
 
     fn visit_ident(&mut self, ident: &'ast Ident) {
-        self.check_failure(&[ident.clone()]);
+        self.check_failure(std::slice::from_ref(ident));
         // This is an unqualified item using `self.name`, e.g. an alias, which
         // we cannot unambiguously resolve.
         if ident == self.name {
@@ -459,17 +470,17 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
     }
 }
 
-/// Updates all `GlobalId`s from the keys of `ids` to the values of `ids` within `create_stmt`.
+/// Updates all `CatalogItemId`s from the keys of `ids` to the values of `ids` within `create_stmt`.
 pub fn create_stmt_replace_ids(
     create_stmt: &mut Statement<Raw>,
-    ids: &BTreeMap<GlobalId, GlobalId>,
+    ids: &BTreeMap<CatalogItemId, CatalogItemId>,
 ) {
     let mut id_replacer = CreateSqlIdReplacer { ids };
     id_replacer.visit_statement_mut(create_stmt);
 }
 
 struct CreateSqlIdReplacer<'a> {
-    ids: &'a BTreeMap<GlobalId, GlobalId>,
+    ids: &'a BTreeMap<CatalogItemId, CatalogItemId>,
 }
 
 impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
@@ -481,7 +492,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
             RawItemName::Id(id, _, _) => {
                 let old_id = match id.parse() {
                     Ok(old_id) => old_id,
-                    Err(_) => panic!("invalid persisted global id {id}"),
+                    Err(e) => panic!("invalid persisted global id {id}: {e}"),
                 };
                 if let Some(new_id) = self.ids.get(&old_id) {
                     *id = new_id.to_string();

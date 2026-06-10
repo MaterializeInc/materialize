@@ -4,7 +4,7 @@ description: "Learn the basics of Materialize."
 menu:
   main:
     parent: "get-started"
-    weight: 15
+    weight: 10
     name: "Quickstart"
 aliases:
   - /katacoda/
@@ -15,7 +15,7 @@ aliases:
 {{% text-style %}}
 
 Materialize provides always-fresh results while also providing [strong
-consistency guarantees](/get-started/isolation-level/). In Materialize, both
+consistency guarantees](/reference/isolation-level/). In Materialize, both
 [indexes](/concepts/indexes/ "Indexes represents query results stored in memory
 within a cluster") and [materialized views](/concepts/views/#materialized-views)
 **incrementally update** results when Materialize ingests new data; i.e., work
@@ -43,26 +43,33 @@ flippers. Specifically, you will:
 
 ## Prerequisite
 
-A Materialize account. If you do not have an account, you can [sign up for a
-free
+To get started with Materialize Cloud, you will need a Materialize account. If
+you do not have an account, you can [sign up for a free
 trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
-Alternatively, you can [download the Materialize
-Emulator](/get-started/install-materialize-emulator/) to test locally. However,
-the Materialize Emulator does not provide the full experience of using
-Materialize.
+Alternatively:
 
-## Step 0. Open the SQL Shell or a SQL client.
+- You can [download the Materialize
+Emulator](/get-started/install-materialize-emulator/). However, the Materialize
+Emulator does not provide the full experience of using Materialize.
+
+- You can run against your [Self-managed
+  Materialize](/self-managed-deployments/).
+
+
+## Step 0. Open the SQL Shell
 
 - If you have a Materialize account, navigate to the [Materialize
-  Console](https://console.materialize.com/) and sign in. By default, you should
+  Console](/console/) and sign in. By default, you should
   be in the SQL Shell. If you're already signed in, you can access the SQL Shell in the left-hand menu.
 
-- If you are using the Materialize Emulator, [connect to the Materialize
-  Emulator](/get-started/install-materialize-emulator/#materialize-emulator-connect-client)
-  using your preferred SQL client.
+- If you are using the Materialize Emulator, open the Materialize Console in
+  your browser at [http://localhost:6874](http://localhost:6874).
 
-## Step 1. Create a schema.
+- If you are running against your own [Self-managed
+  Materialize], open your deployment's Materialize Console.
+
+## Step 1. Create a schema
 
 By default, you are using the `quickstart` cluster, working in the
 `materialize.public` [namespace](/sql/namespaces/), where:
@@ -88,37 +95,12 @@ not, cannot contain the dot (`.`).
 
 See also [Naming restrictions](/sql/identifiers/#naming-restrictions).
 
-{{< tabs >}}
-{{< tab "Materialize Console" >}}
-
 1. Enter a schema name in the text field and click the `Create` button.
 
 1. Switch to the new schema. From the top of the SQL Shell, select your schema
    from the namespace dropdown.
 
-{{</ tabs >}}
-
-{{< tab "Other Clients" >}}
-
-1. Use [`CREATE SCHEMA`](/sql/create-schema/) to create your schema.
-
-   ```mzsql
-   -- Replace <schema> with the name for your schema
-   CREATE SCHEMA materialize.<schema>;
-   ```
-
-1. Select your schema.
-
-   ```mzsql
-   -- Replace <schema> with the name for your schema
-   SET SCHEMA <schema>;
-   ```
-
-{{</ tabs >}}
-{{</ tabs >}}
-
-
-## Step 2. Create the source.
+## Step 2. Create the source
 
 [Sources](/concepts/sources/) are external systems from which Materialize reads
 in data. This tutorial uses Materialize's [sample `Auction` load
@@ -232,7 +214,7 @@ generator](/sql/create-source/load-generator/#auction) to create the source.
       auctions to show how Materialize uses views and indexes to provide
       immediately available up-to-date results for various queries.
 
-## Step 3. Create a view to find winning bids.
+## Step 3. Create a view to find winning bids
 
 A [view](/concepts/views/) is a saved name for the underlying `SELECT`
 statement, providing an alias/shorthand when referencing the query. The
@@ -245,8 +227,8 @@ auction ended. As new auction and bid data appears, the query must be rerun to
 get up-to-date results.
 
 1. Using the [`CREATE VIEW`](/sql/create-view/) command, create a
-   [**view**](/concepts/views/ "Saved name/alias for a query") `winning_bids`
-   for the query that finds winning bids for auctions that have ended.
+   [**view**](/concepts/views/ "Saved name/alias for a query") to find the
+   winning (highest) bids.
 
    ```mzsql
    CREATE VIEW winning_bids AS
@@ -262,10 +244,10 @@ get up-to-date results.
      b.buyer;
    ```
 
-   [`SELECT DISTINCT ON
-   (...)`](https://www.postgresql.org/docs/current/sql-select.html#SQL-DISTINCT)
-   is a PostgreSQL expression that keeps only the first row of each set of
-   matching rows.
+   Materialize provides an idiomatic way to perform [Top-K queries](/transform-data/idiomatic-materialize-sql/top-k/)
+   using the [`DISTINCT ON`](/transform-data/idiomatic-materialize-sql/top-k/#for-k--1-1)
+   clause. This clause is used to group by account `id` and return the first
+   element within that group according to the specified ordering.
 
 1. [`SELECT`](/sql/select/) from the view to execute the underlying query.
    For example:
@@ -298,7 +280,7 @@ get up-to-date results.
 
    In the next step, you will create an index on `winning_bids`.
 
-## Step 4. Create an index to provide up-to-date results.
+## Step 4. Create an index to provide up-to-date results
 
 Indexes in Materialize represents query results stored in memory within a
 cluster. In Materialize, you can create [indexes](/concepts/indexes/) on views
@@ -347,7 +329,7 @@ point lookups and joins.
    The queries should be faster since they use the in-memory, already up-to-date
    results computed by the index.
 
-## Step 5. Create views and a table to find flippers in real time.
+## Step 5. Create views and a table to find flippers in real time
 
 For this quickstart, auction flipping activities are defined as when a user buys
 an item in one auction and resells the same item at a higher price within an
@@ -431,7 +413,7 @@ you will serve results may be preferred.
 
 {{</ note >}}
 
-## Step 6. Subscribe to see results change.
+## Step 6. Subscribe to see results change
 
 [`SUBSCRIBE`](/sql/subscribe/) to `flippers` to see new flippers appear as new
 data arrives (either from the known_flippers table or the flip_activities view).
@@ -442,8 +424,6 @@ data arrives (either from the known_flippers table or the flip_activities view).
    source, table, view, or materialized view as they occur, in this case, the
    view `flippers`.
 
-   {{< tabs >}}
-   {{< tab "Materialize Console" >}}
    ```mzsql
    SUBSCRIBE TO (
       SELECT *
@@ -457,69 +437,23 @@ data arrives (either from the known_flippers table or the flip_activities view).
    only the new flippers that come in after the start of the `SUBSCRIBE`
    operation, and not the flippers in the view at the start of the operation.
 
-   1. In the Materialize Console quickstart page, enter an id (for example
-      `450`) into the text input field to insert a new user into the
-      `known-flippers` table. You can specify any number for the flipper id.
+1. In the Materialize Console quickstart page, enter an id (for example `450`)
+   into the text input field to insert a new user into the `known-flippers`
+   table. You can specify any number for the flipper id.
 
-      The flipper should immediately appear in the `SUBSCRIBE` results.
+   The flipper should immediately appear in the `SUBSCRIBE` results.
 
-      You should also see flippers who are flagged by their flip activities.
-      Because of the randomness of the auction data being generated, user
-      activity data that match the definition of a flipper may take some time
-      even though auction data is constantly being ingested. However, once
-      new matching data comes in, you will see it immediately in the `SUBSCRIBE`
-      results. While waiting, you can enter additional flippers into the `known_flippers` table.
+   You should also see flippers who are flagged by their flip activities.
+   Because of the randomness of the auction data being generated, user
+   activity data that match the definition of a flipper may take some time
+   even though auction data is constantly being ingested. However, once
+   new matching data comes in, you will see it immediately in the `SUBSCRIBE`
+   results. While waiting, you can enter additional flippers into the
+   `known_flippers` table.
 
-   1. To cancel out of the `SUBSCRIBE`, click the **Stop streaming** button.
+1. To cancel out of the `SUBSCRIBE`, click the **Stop streaming** button.
 
-   {{< /tab >}}
-   {{< tab "Other Clients" >}}
-
-   If running Materialize in a Docker container, run the following command in
-   your preferred SQL client:
-   ```mzsql
-   COPY (SUBSCRIBE TO (
-        SELECT *
-        FROM flippers
-   ) WITH (snapshot = false)) TO STDOUT;
-   ```
-
-   The optional [`WITH (snapshot = false)`
-   option](/sql/subscribe/#with-options) indicates that the command displays
-   only the new flippers that come in after the start of the `SUBSCRIBE`
-   operation, and not the flippers in the view at the start of the operation.
-
-   1. Open another SQL client and connect to your Materialize.
-
-   1. Select your schema.
-
-      ```mzsql
-      -- Replace <schema> with the name for your schema
-      SET SCHEMA <schema>;
-      ```
-
-   1. Manually insert a row into the `known_flippers` table. You can specify any
-      number for the flipper id.
-
-      ```mzsql
-      INSERT INTO known_flippers values (450);
-      ```
-
-      In the other client, the flipper should immediately appear in the `SUBSCRIBE` results.
-
-      You should also see flippers who are flagged by their flip activities.
-      Because of the randomness of the auction data being generated, user
-      activity data that match the definition of a flipper may take some time
-      even though auction data is constantly being ingested. However, once
-      new matching data comes in, you will see it immediately in the `SUBSCRIBE`
-      results. While waiting, you can enter additional flippers into the `known_flippers` table.
-
-   1. Cancel out of the `SUBSCRIBE`.
-
-   {{< /tab >}}
-   {{< /tabs >}}
-
-## Step 7. Create views to verify that Materialize returns consistent data.
+## Step 7. Create views to verify that Materialize returns consistent data
 
 To verify that Materialize serves **consistent results**, even as new
 data comes in, this step creates the following views for completed auctions:
@@ -576,8 +510,6 @@ data comes in, this step creates the following views for completed auctions:
    To see that the sums always equal even as new data comes in, you can
    `SUBSCRIBE` to this query:
 
-   {{< tabs >}}
-   {{< tab "Materialize Console" >}}
    ```mzsql
    SUBSCRIBE TO (
       SELECT *
@@ -591,25 +523,8 @@ data comes in, this step creates the following views for completed auctions:
      `total_debits` values should change but the `total_difference` should
      remain `0`.
    - To cancel out of the `SUBSCRIBE`, click the **Stop streaming** button.
-   {{< /tab >}}
-   {{< tab "Other Clients" >}}
-   If running Materialize in a Docker container, run the following command in
-   your preferred SQL client:
-   ```mzsql
-   COPY (SUBSCRIBE TO (
-      SELECT *
-      FROM funds_movement
-   )) TO STDOUT;
-   ```
-   - As new data comes in and auctions complete, the `total_credits` and
-    `total_debits` values should change but the `total_difference` should
-    remain `0`.
-   - Cancel out of the `SUBSCRIBE`.
-   {{< /tab >}}
-   {{< /tabs >}}
 
-
-## Step 8. Clean up.
+## Step 8. Clean up
 
 To clean up the quickstart environment:
 
@@ -644,7 +559,7 @@ views incrementally update the view results. Materialized views persist the
 query results in durable storage and is available across clusters while indexes
 maintain the view results in memory within a single cluster.
 
-{{% views-indexes/table-usage-pattern %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 
 The quickstart used an index since:
 
@@ -655,7 +570,7 @@ The quickstart used an index since:
 - Although used, `SUBSCRIBE` operations were for illustrative/validation
   purposes and were not the final consumer of the views.
 
-### Considerations
+### Best practices
 
 Before creating an index (which represents query results stored in memory),
 consider its memory usage as well as its [compute cost
@@ -668,6 +583,8 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 - [Indexes](/concepts/indexes)
 - [Sources](/concepts/sources)
 - [Views](/concepts/views/)
+- [Idiomatic Materialize SQL
+  chart](/transform-data/idiomatic-materialize-sql/appendix/idiomatic-sql-chart/)
 - [Usage & Billing](/administration/billing/#compute)
 - [`CREATE INDEX`](/sql/create-index/)
 - [`CREATE SCHEMA`](/sql/create-schema/)
@@ -686,7 +603,7 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 
 To get started ingesting your own data from an external system like Kafka, MySQL
 or PostgreSQL, check the documentation for [sources](/sql/create-source/), and
-navigate to **Data** > **Sources** > **New source** in the [Materialize Console](https://console.materialize.com/)
+navigate to **Data** > **Sources** > **New source** in the [Materialize Console](/console/)
 to create your first source.
 
 For help getting started with your data or other questions about Materialize,

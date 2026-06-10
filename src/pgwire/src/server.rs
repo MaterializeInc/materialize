@@ -11,22 +11,23 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use async_trait::async_trait;
-use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_authenticator::GenericOidcAuthenticator;
+use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
+use mz_ore::now::{SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_pgwire_common::{
-    decode_startup, Conn, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY,
-    MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
+    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ConnectionCounter, FrontendStartupMessage,
+    MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, decode_startup,
 };
+use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
-use mz_sql::session::vars::ConnectionCounter;
 use openssl::ssl::Ssl;
 use tokio::io::AsyncWriteExt;
+use tokio_metrics::TaskMetrics;
 use tokio_openssl::SslStream;
 use tracing::{debug, error, trace};
-use uuid::Uuid;
 
 use crate::codec::FramedConn;
 use crate::metrics::{Metrics, MetricsConfig};
@@ -44,40 +45,53 @@ pub struct Config {
     /// If not present, then TLS is not enabled, and clients requests to
     /// negotiate TLS will be rejected.
     pub tls: Option<ReloadingTlsConfig>,
-    /// The Frontegg authentication configuration.
-    ///
-    /// If present, Frontegg authentication is enabled, and users may present
-    /// a valid Frontegg API token as a password to authenticate. Otherwise,
-    /// password authentication is disabled.
-    pub frontegg: Option<FronteggAuthentication>,
+    /// Frontegg JWT authenticator.
+    pub frontegg: Option<FronteggAuthenticator>,
+    /// OIDC authenticator.
+    pub oidc: GenericOidcAuthenticator,
+    /// The authentication method defined by the server's listener
+    /// configuration.
+    pub authenticator_kind: AuthenticatorKind,
     /// The registry entries that the pgwire server uses to report metrics.
     pub metrics: MetricsConfig,
-    /// Whether this is an internal server that permits access to restricted
-    /// system resources.
-    pub internal: bool,
     /// Global connection limit and count
-    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub active_connection_counter: ConnectionCounter,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
+    /// Whether to allow reserved users (ie: mz_system).
+    pub allowed_roles: AllowedRoles,
 }
 
 /// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
     tls: Option<ReloadingTlsConfig>,
     adapter_client: mz_adapter::Client,
-    frontegg: Option<FronteggAuthentication>,
+    authenticator_kind: AuthenticatorKind,
+    frontegg: Option<FronteggAuthenticator>,
+    oidc: GenericOidcAuthenticator,
     metrics: Metrics,
-    internal: bool,
-    active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    active_connection_counter: ConnectionCounter,
+    helm_chart_version: Option<String>,
+    allowed_roles: AllowedRoles,
 }
 
 #[async_trait]
 impl mz_server_core::Server for Server {
     const NAME: &'static str = "pgwire";
 
-    fn handle_connection(&self, conn: Connection) -> ConnectionHandler {
+    fn handle_connection(
+        &self,
+        conn: Connection,
+        tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
+    ) -> ConnectionHandler {
         // Using fully-qualified syntax means we won't accidentally call
         // ourselves (i.e., silently infinitely recurse) if the name or type of
         // `crate::Server::handle_connection` changes.
-        Box::pin(crate::Server::handle_connection(self, conn))
+        Box::pin(crate::Server::handle_connection(
+            self,
+            conn,
+            tokio_metrics_intervals,
+        ))
     }
 }
 
@@ -87,10 +101,13 @@ impl Server {
         Server {
             tls: config.tls,
             adapter_client: config.adapter_client,
+            authenticator_kind: config.authenticator_kind,
             frontegg: config.frontegg,
+            oidc: config.oidc,
             metrics: Metrics::new(config.metrics, config.label),
-            internal: config.internal,
-            active_connection_count: config.active_connection_count,
+            active_connection_counter: config.active_connection_counter,
+            helm_chart_version: config.helm_chart_version,
+            allowed_roles: config.allowed_roles,
         }
     }
 
@@ -98,13 +115,18 @@ impl Server {
     pub fn handle_connection(
         &self,
         conn: Connection,
-    ) -> impl Future<Output = Result<(), anyhow::Error>> + 'static + Send {
+        tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + Send + 'static {
         let adapter_client = self.adapter_client.clone();
+        let authenticator_kind = self.authenticator_kind;
         let frontegg = self.frontegg.clone();
+        let oidc = self.oidc.clone();
         let tls = self.tls.clone();
-        let internal = self.internal;
         let metrics = self.metrics.clone();
-        let active_connection_count = Arc::clone(&self.active_connection_count);
+        let active_connection_counter = self.active_connection_counter.clone();
+        let helm_chart_version = self.helm_chart_version.clone();
+        let allowed_roles = self.allowed_roles;
+
         // TODO(guswynn): remove this redundant_closure_call
         #[allow(clippy::redundant_closure_call)]
         async move {
@@ -135,11 +157,30 @@ impl Server {
                                 let conn_uuid_handle = conn.inner_mut().uuid_handle();
                                 let conn_uuid = params
                                     .remove(CONN_UUID_KEY)
-                                    .and_then(|uuid| uuid.parse().inspect_err(|e| error!("pgwire connection with invalid conn UUID: {e}")).ok());
+                                    .and_then(|uuid| {
+                                        uuid.parse()
+                                            .inspect_err(|e| {
+                                                error!(
+                                                    "pgwire connection with invalid conn UUID: {e}",
+                                                )
+                                            })
+                                            .ok()
+                                    });
                                 let conn_uuid_forwarded = conn_uuid.is_some();
-                                let conn_uuid = conn_uuid.unwrap_or_else(Uuid::new_v4);
+                                // FIXME(ptravers): we should be able to inject
+                                // the clock when instantiating the `Server`
+                                // but as of writing there's no great way, I can
+                                // see, to harmonize the lifetimes of the return
+                                // type and &self which must house `NowFn`.
+                                let conn_uuid = conn_uuid.unwrap_or_else(
+                                    || epoch_to_uuid_v7(&(SYSTEM_TIME.clone())()),
+                                );
                                 conn_uuid_handle.set(conn_uuid);
-                                debug!(conn_uuid = %conn_uuid_handle.display(), conn_uuid_forwarded, "starting new pgwire connection in adapter");
+                                debug!(
+                                    conn_uuid = %conn_uuid_handle.display(),
+                                    conn_uuid_forwarded,
+                                    "starting new pgwire connection in adapter",
+                                );
 
                                 let direct_peer_addr = conn
                                     .inner_mut()
@@ -171,9 +212,13 @@ impl Server {
                                     conn_uuid,
                                     version,
                                     params,
-                                    frontegg: frontegg.as_ref(),
-                                    internal,
-                                    active_connection_count,
+                                    frontegg,
+                                    oidc,
+                                    authenticator_kind,
+                                    active_connection_counter,
+                                    helm_chart_version,
+                                    allowed_roles,
+                                    tokio_metrics_intervals,
                                 })
                                 .await?;
                                 conn.flush().await?;

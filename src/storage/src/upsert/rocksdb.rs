@@ -10,30 +10,31 @@
 //! An `UpsertStateBackend` that stores values in RocksDB.
 
 use mz_rocksdb::{KeyUpdate, RocksDBInstance};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
+use super::UpsertKey;
 use super::types::{
     GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
     UpsertValueAndSize, ValueMetadata,
 };
-use super::UpsertKey;
 
 /// A `UpsertStateBackend` implementation backed by RocksDB.
 /// This is currently untested, and simply compiles.
-pub struct RocksDB<O> {
-    rocksdb: RocksDBInstance<UpsertKey, StateValue<O>>,
+pub struct RocksDB<T, O> {
+    rocksdb: RocksDBInstance<UpsertKey, StateValue<T, O>>,
 }
 
-impl<O> RocksDB<O> {
-    pub fn new(rocksdb: RocksDBInstance<UpsertKey, StateValue<O>>) -> Self {
+impl<T, O> RocksDB<T, O> {
+    pub fn new(rocksdb: RocksDBInstance<UpsertKey, StateValue<T, O>>) -> Self {
         Self { rocksdb }
     }
 }
 
 #[async_trait::async_trait(?Send)]
-impl<O> UpsertStateBackend<O> for RocksDB<O>
+impl<T, O> UpsertStateBackend<T, O> for RocksDB<T, O>
 where
     O: Send + Sync + Serialize + DeserializeOwned + 'static,
+    T: Send + Sync + Serialize + DeserializeOwned + 'static,
 {
     fn supports_merge(&self) -> bool {
         self.rocksdb.supports_merges
@@ -41,7 +42,7 @@ where
 
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<T, O>>)>,
     {
         let mut p_stats = PutStats::default();
         let stats = self
@@ -72,7 +73,7 @@ where
 
     async fn multi_merge<M>(&mut self, merges: M) -> Result<MergeStats, anyhow::Error>
     where
-        M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<O>>)>,
+        M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<T, O>>)>,
     {
         let mut m_stats = MergeStats::default();
         let stats =
@@ -84,7 +85,7 @@ where
         m_stats.written_merge_operands += stats.processed_updates;
         m_stats.size_written += stats.size_written;
         if let Some(diff) = stats.size_diff {
-            m_stats.size_diff += diff;
+            m_stats.size_diff += diff.into_inner();
         }
         Ok(m_stats)
     }
@@ -96,7 +97,7 @@ where
     ) -> Result<GetStats, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut UpsertValueAndSize<O>>,
+        R: IntoIterator<Item = &'r mut UpsertValueAndSize<T, O>>,
     {
         let mut g_stats = GetStats::default();
         let stats = self

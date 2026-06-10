@@ -17,26 +17,33 @@ import requests
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 
 SENTRY_DSN = os.getenv("BUILDKITE_SENTRY_DSN")
 
 SERVICES = [
+    Mz(app_password=""),
     Materialized(
         options=[
             "--opentelemetry-endpoint=whatever:7777",
             f"--sentry-dsn={SENTRY_DSN}",
             "--sentry-environment=development",
-        ]
+        ],
+        support_external_clusterd=True,
     ),
     Clusterd(name="clusterd"),
 ]
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
-        if name != "default":
-            with c.test_case(name):
-                c.workflow(name)
+    def process(name: str) -> None:
+        if name == "default":
+            return
+
+        with c.test_case(name):
+            c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_with_everything(c: Composition) -> None:
@@ -151,13 +158,12 @@ def workflow_clusterd(c: Composition) -> None:
     port = c.port("clusterd", 6878)
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
 
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER c REPLICAS (r1 (
             STORAGECTL ADDRESSES ['clusterd:2100'],
             STORAGE ADDRESSES ['clusterd:2103'],
@@ -165,8 +171,7 @@ def workflow_clusterd(c: Composition) -> None:
             COMPUTE ADDRESSES ['clusterd:2102'],
             WORKERS 1
         ))
-    """
-    )
+    """)
 
     c.sql(
         "ALTER SYSTEM SET log_filter = 'foo=debug,info'",

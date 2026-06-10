@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 # Test Avro Sinks in general. This tests things that are not specific to an
@@ -85,7 +87,8 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
   (DATE '2000-01-01', TIMESTAMP '2000-01-01 10:10:10.111', TIMESTAMPTZ '2000-01-01 10:10:10.111+02'),
   (DATE '2000-02-01', TIMESTAMP '2000-02-01 10:10:10.111', TIMESTAMPTZ '2000-02-01 10:10:10.111+02'),
   (('0001-01-01'::DATE - '1721389days'::INTERVAL)::DATE, ('0001-01-01'::DATE - '1721389days'::INTERVAL)::TIMESTAMP, ('0001-01-01'::DATE - '1721389days'::INTERVAL)::TIMESTAMPTZ),
-  (('0001-01-01'::DATE + '262141years 11months 30days'::INTERVAL)::DATE, ('0001-01-01'::DATE + '262141years 11months 30days'::INTERVAL)::TIMESTAMP, ('0001-01-01'::DATE + '262141years 11months 30days'::INTERVAL)::TIMESTAMPTZ)
+  (('0001-01-01'::DATE + '262141years 11months 30days'::INTERVAL)::DATE, ('0001-01-01'::DATE + '262141years 11months 30days'::INTERVAL)::TIMESTAMP, ('0001-01-01'::DATE + '262141years 11months 30days'::INTERVAL)::TIMESTAMPTZ),
+  (DATE '1969-12-31', TIMESTAMP '1969-12-31 23:59:59.5', TIMESTAMPTZ '1969-12-31 23:59:59.5+00')
 
 > CREATE CLUSTER datetime_data_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK datetime_data_sink
@@ -96,6 +99,7 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
   ENVELOPE DEBEZIUM
 
 $ kafka-verify-data format=avro sink=materialize.public.datetime_data_sink sort-messages=true
+{"before": null, "after": {"row": {"date": -1, "ts": -500000, "ts_tz": -500000}}}
 {"before": null, "after": {"row": {"date": -2440551, "ts": -210863606400000000, "ts_tz": -210863606400000000}}}
 {"before": null, "after": {"row": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
 {"before": null, "after": {"row": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}

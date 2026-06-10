@@ -16,10 +16,9 @@
 use std::path::PathBuf;
 use std::{env, fs};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono_tz::TZ_VARIANTS;
-use mz_ore::codegen::CodegenBuf;
-use mz_ore::str::StrExt;
+use mz_ore_build::codegen::CodegenBuf;
 use uncased::UncasedStr;
 
 const DEFAULT_TZNAMES: &str = "tznames/Default";
@@ -31,15 +30,6 @@ enum TimezoneAbbrevSpec<'a> {
 
 fn main() -> Result<()> {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
-
-    // Build protobufs.
-    {
-        prost_build::Config::new()
-            .protoc_executable(mz_build_tools::protoc())
-            .btree_map(["."])
-            .extern_path(".mz_proto", "::mz_proto")
-            .compile_protos(&["pgtz/src/timezone.proto"], &[".."])?;
-    }
 
     // Convert the default PostgreSQL timezone abbreviation file into a Rust
     // constants, one for each abbrevation in the file, and the SQL definition
@@ -82,7 +72,7 @@ fn main() -> Result<()> {
             rust_buf.write_block(
                 format!("pub const {abbrev}: TimezoneAbbrev = TimezoneAbbrev"),
                 |rust_buf| {
-                    rust_buf.writeln(format!("abbrev: {},", abbrev.quoted()));
+                    rust_buf.writeln(format!("abbrev: \"{abbrev}\","));
                     match &spec {
                         TimezoneAbbrevSpec::FixedOffset {
                             utc_offset_secs,

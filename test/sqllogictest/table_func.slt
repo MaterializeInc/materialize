@@ -17,7 +17,7 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ----
 COMPLETE 0
 
@@ -26,13 +26,29 @@ ALTER SYSTEM SET enable_repeat_row = true
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_repeat_row_non_negative = true
+----
+COMPLETE 0
+
 statement ok
-CREATE TABLE y (a JSONB)
+CREATE TABLE y (a JSONB);
+
+statement ok
+INSERT INTO y VALUES ('[-1, 27]');
 
 # Ensure this does not panic.
-query TTTT
-SELECT * FROM y a, y b, jsonb_each(a.a);
+query TTT
+SELECT * FROM y a, y b, jsonb_array_elements(a.a);
 ----
+[-1,27]  [-1,27]  -1
+[-1,27]  [-1,27]  27
+
+query TTTI
+SELECT * FROM y a, y b, jsonb_array_elements(a.a) WITH ORDINALITY;
+----
+[-1,27]  [-1,27]  -1  1
+[-1,27]  [-1,27]  27  2
 
 query I rowsort
 SELECT generate_series FROM generate_series(1, 3)
@@ -55,6 +71,85 @@ generate_series ordinality
 2 1
 3 2
 4 3
+
+query TI colnames,rowsort
+SELECT *
+FROM unnest(ARRAY['a','b','c']) WITH ORDINALITY AS t(letter, position);
+----
+letter position
+a  1
+b  2
+c  3
+
+# Weird order; supported only for backcompat reasons
+query TI colnames,rowsort
+SELECT *
+FROM unnest(ARRAY['a','b','c']) AS t(letter, position) WITH ORDINALITY;
+----
+letter position
+a  1
+b  2
+c  3
+
+query T colnames,rowsort
+SELECT *
+FROM unnest(ARRAY['a','b','c']) AS t(letter);
+----
+letter
+a
+b
+c
+
+query II colnames,rowsort
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5))
+----
+generate_series generate_series
+1  3
+2  4
+NULL  5
+
+query III colnames,rowsort
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY
+----
+generate_series generate_series ordinality
+1  3  1
+2  4  2
+NULL  5  3
+
+query II colnames,rowsort
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) AS t (a)
+----
+a generate_series
+1  3
+2  4
+NULL  5
+
+query II colnames,rowsort
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) AS t (a, b)
+----
+a b
+1  3
+2  4
+NULL  5
+
+query III colnames,rowsort
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY AS t (a, b)
+----
+a b ordinality
+1  3  1
+2  4  2
+NULL  5  3
+
+query III colnames,rowsort
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY AS t (a, b, c)
+----
+a b c
+1  3  1
+2  4  2
+NULL  5  3
+
+query error t has 3 columns available but 4 columns specified
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY AS t (a, b, c, d)
 
 query I rowsort
 SELECT generate_series FROM generate_series(-2, 2)
@@ -82,7 +177,7 @@ query I
 SELECT generate_series FROM generate_series(1, null)
 ----
 
-query error db error: ERROR: function generate_series\(unknown, unknown\) is not unique
+query error function generate_series\(unknown, unknown\) is not unique
 SELECT generate_series FROM generate_series(null, null)
 ----
 
@@ -92,7 +187,7 @@ SELECT generate_series FROM generate_series('foo', 2)
 statement error invalid input syntax for type integer: invalid digit found in string: "foo"
 SELECT generate_series FROM generate_series(1, 'foo')
 
-statement error db error: ERROR: function generate_series\(integer\) does not exist
+statement error function generate_series\(integer\) does not exist
 SELECT generate_series FROM generate_series(2)
 
 query T multiline
@@ -105,7 +200,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT generate_series FROM generate_series(-2, 2)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT generate_series FROM generate_series(-2, 2)
 ----
 Explained Query (fast path):
   Constant
@@ -168,7 +263,7 @@ SELECT * FROM x x1, x x2, generate_series(x2.a, x2.b) WHERE x1.b = x2.b
 3  4  3  4  4
 
 # One from each.
-query IIIII
+query IIIII rowsort
 SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
 1  2  1  2  1
@@ -187,9 +282,31 @@ SELECT x.a, generate_series FROM x, LATERAL (SELECT * FROM generate_series(1, x.
 3  2
 3  3
 
+query III
+SELECT x.a, generate_series, ordinality
+FROM x, LATERAL (SELECT * FROM generate_series(1, x.a) WITH ORDINALITY)
+----
+1  1  1
+2  1  1
+2  2  2
+3  1  1
+3  2  2
+3  3  3
+
+query III
+SELECT x.a, g, o
+FROM x, LATERAL (SELECT * FROM generate_series(1, x.a) WITH ORDINALITY AS t(g, o))
+----
+1  1  1
+2  1  1
+2  2  2
+3  1  1
+3  2  2
+3  3  3
+
 # Regression test for database-issues#1700: crash when a filter references an output column of
 # a table function
-query IIIII
+query IIIII rowsort
 SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
 ----
 1 2 1 2 1
@@ -201,7 +318,7 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
 CrossJoin
   Get materialize.public.x
-  CallTable generate_series(1, #^0, 1)
+  CallTable generate_series(1, #^0{a}, 1)
 
 Target cluster: quickstart
 
@@ -212,14 +329,14 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 ----
 CrossJoin
   Get materialize.public.x
-  CallTable generate_series(integer_to_bigint(100), integer_to_bigint(#^0), 1)
+  CallTable generate_series(integer_to_bigint(100), integer_to_bigint(#^0{a}), 1)
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM x, generate_series(1, 10)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x, generate_series(1, 10)
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 3 }
@@ -247,10 +364,10 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM x, generate_series(1, a)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x, generate_series(1, a)
 ----
 Explained Query:
-  FlatMap generate_series(1, #0, 1) // { arity: 3 }
+  FlatMap generate_series(1, #0{a}, 1) // { arity: 3 }
     ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -260,52 +377,52 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
 Explained Query:
-  Return // { arity: 5 }
-    Project (#0..=#2, #1, #3) // { arity: 5 }
-      FlatMap generate_series(#0, #2, 1) // { arity: 4 }
-        Project (#0..=#2) // { arity: 3 }
-          Join on=(#1 = #3) type=differential // { arity: 4 }
-            implementation
-              %0:l0[#1]K » %1:l0[#1]K
-            Get l0 // { arity: 2 }
-            Get l0 // { arity: 2 }
   With
     cte l0 =
-      ArrangeBy keys=[[#1]] // { arity: 2 }
-        Filter (#1) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#1{b}]] // { arity: 2 }
+        Filter (#1{b}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.x // { arity: 2 }
+  Return // { arity: 5 }
+    Project (#0{a}..=#2{a}, #1{b}, #3) // { arity: 5 }
+      FlatMap generate_series(#0{a}, #2{a}, 1) // { arity: 4 }
+        Project (#0{a}..=#2{a}) // { arity: 3 }
+          Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
+            implementation
+              %0:l0[#1{b}]K » %1:l0[#1{b}]K
+            Get l0 // { arity: 2 }
+            Get l0 // { arity: 2 }
 
 Source materialize.public.x
-  filter=((#1) IS NOT NULL)
+  filter=((#1{b}) IS NOT NULL)
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
 Explained Query:
-  Return // { arity: 5 }
-    Project (#0..=#2, #1, #3) // { arity: 5 }
-      FlatMap generate_series(#0, #2, 1) // { arity: 4 }
-        Project (#0..=#2) // { arity: 3 }
-          Join on=(#1 = #3) type=differential // { arity: 4 }
-            implementation
-              %0:l0[#1]K » %1:l0[#1]K
-            Get l0 // { arity: 2 }
-            Get l0 // { arity: 2 }
   With
     cte l0 =
-      ArrangeBy keys=[[#1]] // { arity: 2 }
-        Filter (#1) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#1{b}]] // { arity: 2 }
+        Filter (#1{b}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.x // { arity: 2 }
+  Return // { arity: 5 }
+    Project (#0{a}..=#2{a}, #1{b}, #3) // { arity: 5 }
+      FlatMap generate_series(#0{a}, #2{a}, 1) // { arity: 4 }
+        Project (#0{a}..=#2{a}) // { arity: 3 }
+          Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
+            implementation
+              %0:l0[#1{b}]K » %1:l0[#1{b}]K
+            Get l0 // { arity: 2 }
+            Get l0 // { arity: 2 }
 
 Source materialize.public.x
-  filter=((#1) IS NOT NULL)
+  filter=((#1{b}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -314,27 +431,27 @@ EOF
 # Regression test for database-issues#1700: crash when a filter references an output column of
 # a table function around a join
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
 ----
 Explained Query:
-  Return // { arity: 5 }
-    Project (#0..=#2, #1, #3) // { arity: 5 }
-      Filter (#0 = #3) // { arity: 4 }
-        FlatMap generate_series(#0, #1, 1) // { arity: 4 }
-          Project (#0..=#2) // { arity: 3 }
-            Join on=(#1 = #3) type=differential // { arity: 4 }
-              implementation
-                %0:l0[#1]K » %1:l0[#1]K
-              Get l0 // { arity: 2 }
-              Get l0 // { arity: 2 }
   With
     cte l0 =
-      ArrangeBy keys=[[#1]] // { arity: 2 }
-        Filter (#1) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#1{b}]] // { arity: 2 }
+        Filter (#1{b}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.x // { arity: 2 }
+  Return // { arity: 5 }
+    Project (#0{a}..=#2{a}, #1{b}, #3) // { arity: 5 }
+      Filter (#0{a} = #3{b}) // { arity: 4 }
+        FlatMap generate_series(#0{a}, #1{b}, 1) // { arity: 4 }
+          Project (#0{a}..=#2{a}) // { arity: 3 }
+            Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
+              implementation
+                %0:l0[#1{b}]K » %1:l0[#1{b}]K
+              Get l0 // { arity: 2 }
+              Get l0 // { arity: 2 }
 
 Source materialize.public.x
-  filter=((#1) IS NOT NULL)
+  filter=((#1{b}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -351,10 +468,58 @@ SELECT * FROM generate_series(0,3), repeat_row(generate_series);
 3
 
 query I
+SELECT * FROM generate_series(0,3), repeat_row_non_negative(generate_series);
+----
+1
+2
+2
+3
+3
+3
+
+query error WITH ORDINALITY on repeat_row not yet supported
+SELECT * FROM generate_series(0,3), repeat_row(generate_series) WITH ORDINALITY;
+
+query II
+SELECT * FROM generate_series(0,3), repeat_row_non_negative(generate_series) WITH ORDINALITY;
+----
+1  1
+2  1
+2  2
+3  1
+3  2
+3  3
+
+query error WITH ORDINALITY on repeat_row not yet supported
+SELECT * FROM generate_series(0,3), repeat_row(abs(generate_series - 1)) WITH ORDINALITY;
+
+query II
+SELECT * FROM generate_series(0,3), repeat_row_non_negative(abs(generate_series - 1)) WITH ORDINALITY;
+----
+0  1
+2  1
+3  1
+3  2
+
+query I
 SELECT abs(generate_series) FROM generate_series(-1, 2), repeat_row(generate_series);
 ----
 2
 2
+
+query error repeat_row_non_negative got \-1
+SELECT abs(generate_series) FROM generate_series(-1, 2), repeat_row_non_negative(generate_series);
+
+query error repeat_row_non_negative got \-7
+SELECT 4 FROM repeat_row_non_negative(-7);
+
+query I
+SELECT 5 FROM repeat_row(null);
+----
+
+query I
+SELECT 5 FROM repeat_row_non_negative(null);
+----
 
 statement error  Negative multiplicity in constant result: -1
 SELECT * FROM (values ('a')), repeat_row(-1)
@@ -426,13 +591,13 @@ SELECT generate_series FROM generate_series(2::bigint, 4::bigint, 2::bigint)
 2
 4
 
-query I
+query I rowsort
 SELECT generate_series FROM generate_series(-2, 2, 3)
 ----
 1
 -2
 
-query I
+query I rowsort
 SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 3::bigint)
 ----
 1
@@ -483,7 +648,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT generate_series FROM generate_series(-2, 2, 2)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT generate_series FROM generate_series(-2, 2, 2)
 ----
 Explained Query (fast path):
   Constant
@@ -496,7 +661,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 2::bigint)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 2::bigint)
 ----
 Explained Query (fast path):
   Constant
@@ -510,10 +675,10 @@ EOF
 
 # information_schema._pg_expandarray
 
-query error db error: ERROR: function information_schema\._pg_expandarray\(\) does not exist
+query error function information_schema\._pg_expandarray\(\) does not exist
 SELECT information_schema._pg_expandarray()
 
-query error db error: ERROR: function information_schema\._pg_expandarray\(\) does not exist
+query error function information_schema\._pg_expandarray\(\) does not exist
 SELECT * FROM information_schema._pg_expandarray()
 
 query error cannot determine type of empty array
@@ -665,10 +830,25 @@ SELECT jsonb_array_elements.generate_series FROM ROWS FROM (jsonb_array_elements
 generate_series
 1
 
-query T colnames
+query error repeat_row in ROWS FROM not yet supported
 SELECT repeat_row FROM ROWS FROM (repeat_row(2), generate_series(1, 1));
+
+query error repeat_row in a SELECT clause with multiple table functions not yet supported
+SELECT repeat_row(5), generate_series(1,2);
+
+query TI
+SELECT repeat_row_non_negative(5), generate_series(1,2);
 ----
-repeat_row
+()  NULL
+()  NULL
+()  NULL
+()  1
+()  2
+
+query T colnames,rowsort
+SELECT repeat_row_non_negative FROM ROWS FROM (repeat_row_non_negative(2), generate_series(1, 1));
+----
+repeat_row_non_negative
 ()
 (1)
 
@@ -810,7 +990,7 @@ SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb
 query error key cannot be null
 SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb_build_object(jsonb_object_keys('{"a":2}'), 1, 'c', 3)
 
-query TT
+query TT rowsort
 SELECT jsonb_build_array(jsonb_object_keys('{"a":2, "b":3}')), jsonb_build_array(jsonb_object_keys('{"a":2}'));
 ----
 ["b"]  [null]
@@ -1095,6 +1275,18 @@ NULL  NULL  NULL  10
 NULL  NULL  NULL  11
 NULL  NULL  NULL  12
 
+########################################################################################################################
+# All these tests that involve `_pg_expandarray` and `ROWS FROM` currently emit
+# ERROR mz_sql::plan::query: Using the legacy WITH ORDINALITY / ROWS FROM implementation for table function information_schema._pg_expandarray
+# We are hoping that this is a rare combination in practice, but sooner or later we'll probably need to do something
+# about this. For further details, see comment in `plan_table_function_internal`.
+########################################################################################################################
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_ordinality_legacy_fallback = true
+----
+COMPLETE 0
+
 query IIII colnames
 SELECT * FROM ROWS FROM (generate_series(1, 2), information_schema._pg_expandarray(array[9]), generate_series(3, 6)) ORDER BY 4;
 ----
@@ -1193,6 +1385,17 @@ SELECT * FROM LATERAL ROWS FROM (generate_series(1,1), information_schema._pg_ex
 ----
 a b c
 1 1 1
+
+# ROWS FROM together with WITH ORDINALITY explicitly specified
+query III colnames
+SELECT *
+FROM ROWS FROM (generate_series(6, 7), generate_series(10, 12)) WITH ORDINALITY
+ORDER BY ordinality;
+----
+generate_series generate_series ordinality
+6  10  1
+7  11  2
+NULL  12  3
 
 # Multiple table funcs in SELECT projection.
 
@@ -1375,6 +1578,24 @@ select generate_subscripts(ARRAY[ARRAY[1,2,3], ARRAY[4,5,6]], 2);
 query error could not determine polymorphic type because input has type unknown
 SELECT generate_subscripts(NULL, 1)
 
+# Regression test for database-issues#11268: generate_subscripts must respect
+# the array's lower bound. array_fill with a custom lower bound of 5 and length
+# 3 yields subscripts 5, 6, 7.
+query I
+SELECT * FROM generate_subscripts(array_fill(7, ARRAY[3], ARRAY[5]), 1);
+----
+5
+6
+7
+
+# A multi-dimensional array_fill with custom lower bounds.
+query I
+SELECT * FROM generate_subscripts(array_fill(0, ARRAY[2, 3], ARRAY[10, 20]), 2);
+----
+20
+21
+22
+
 # Regression test for database-issues#2939: LATERAL column references in ROWS FROM
 
 query III
@@ -1407,6 +1628,13 @@ SELECT * FROM generate_series(1, 3) as foo(a), ROWS FROM (generate_series(foo.a,
 statement ok
 create view bar as select * from y, rows from (generate_series(1, 2), jsonb_array_elements(y.a));
 
+query TIT
+SELECT *
+FROM bar
+----
+[-1,27]  1  -1
+[-1,27]  2  27
+
 # Regression for database-issues#3078
 query IT
 WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY generate_series
@@ -1418,11 +1646,11 @@ WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY genera
 # Plan should be just a simple FlatMap + Project
 # Regression test for database-issues#3173
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT jsonb_object_keys(a) FROM y;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT jsonb_object_keys(a) FROM y;
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
-    FlatMap jsonb_object_keys(#0) // { arity: 2 }
+    FlatMap jsonb_object_keys(#0{a}) // { arity: 2 }
       ReadStorage materialize.public.y // { arity: 1 }
 
 Source materialize.public.y
@@ -1446,14 +1674,13 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT jsonb_object_keys('{"1":2}'::JSONB), jsonb_object_keys('{"3":4}'::JSONB);
 ----
 Project (#5, #6)
-  Map (case when (#1) IS NULL then null else #0 end, case when (#3) IS NULL then null else #2 end)
+  Map (case when (#1) IS NULL then null else #0{jsonb_object_keys} end, case when (#3) IS NULL then null else #2{jsonb_object_keys} end)
     Project (#0, #1, #3..=#5)
       Map (coalesce(#2, #4))
         FullOuterJoin (#2 = #4)
-          Map (row_number() over (order by []), #1)
-            CallTable jsonb_object_keys(text_to_jsonb("{\"1\":2}"))
-          Map (row_number() over (order by []))
-            CallTable jsonb_object_keys(text_to_jsonb("{\"3\":4}"))
+          Map (#1)
+            CallTable jsonb_object_keys[with_ordinality](text_to_jsonb("{\"1\":2}"))
+          CallTable jsonb_object_keys[with_ordinality](text_to_jsonb("{\"3\":4}"))
 
 Target cluster: quickstart
 
@@ -1474,5 +1701,199 @@ query error Expected right parenthesis, found number "1"
 SELECT generate_series FROM generate_series(DISTINCT 1, 3);
 
 # Regression for https://github.com/MaterializeInc/database-issues/issues/6180
-query error db error: ERROR: regexp_extract must specify at least one capture group
+query error regexp_extract must specify at least one capture group
 select regexp_extract('aaa', 'a')
+
+# Test `FlatMapElimination`
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT unnest(LIST[5]) from x;
+----
+Explained Query:
+  Project (#2)
+    Map (5)
+      ReadStorage materialize.public.x
+
+Source materialize.public.x
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT unnest(LIST[5]) from x;
+----
+5
+5
+5
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT *
+FROM x, unnest(LIST[5]) WITH ORDINALITY;
+----
+Explained Query:
+  Map (5, 1)
+    ReadStorage materialize.public.x
+
+Source materialize.public.x
+
+Target cluster: quickstart
+
+EOF
+
+query IIII
+SELECT *
+FROM x, unnest(LIST[5]) WITH ORDINALITY;
+----
+1  2  5  1
+2  3  5  1
+3  4  5  1
+
+# Regression test for the ordering issue with the old WITH ORDINALITY implementation
+# https://github.com/MaterializeInc/database-issues/issues/4764
+query TTI
+SELECT *
+FROM
+  (VALUES (ARRAY['bb','a'])) AS v(x),
+  LATERAL unnest(x) WITH ORDINALITY;
+----
+{bb,a}  a  2
+{bb,a}  bb  1
+
+# This query is carefully constructed to exercise `FlatMapElimination`:
+# - The CASE is there to prevent HIR lowering from seeing unnest's argument as a constant, in which case it would make
+#   it a cross join with a FlatMap on a constant, which would be simplified by `FoldConstants` before
+#   `FlatMapElimination` would have a chance to see it.
+# - However, MIR optimization is able to remove the CASE, because `x.a` can never be null, as it is a primary key.
+#   Therefore, `unnest`'s argument becomes a constant (later than HIR lowering), on which `FlatMapElimination` can do
+#   its magic.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT * FROM
+  x,
+  LATERAL unnest(LIST[1 + CASE WHEN x.a IS NULL THEN x.a ELSE 0 END]) WITH ORDINALITY;
+----
+Explained Query:
+  Map (1, 1)
+    ReadStorage materialize.public.x
+
+Source materialize.public.x
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (NO FAST PATH) FOR
+SELECT *
+FROM x, generate_series(1, x.a)
+WHERE x.a = 1;
+----
+Explained Query:
+  Project (#0, #1, #0)
+    Filter (#0{a} = 1)
+      ReadStorage materialize.public.x
+
+Source materialize.public.x
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (NO FAST PATH) FOR
+SELECT *
+FROM x, generate_series(5, x.a)
+WHERE x.a = 1;
+----
+Explained Query:
+  Constant <empty>
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (NO FAST PATH) FOR
+SELECT *
+FROM x, LATERAL (VALUES ((1), (x.a)))
+WHERE x.a = 1;
+----
+Explained Query:
+  Project (#0, #1, #0, #0)
+    Filter (#0{a} = 1)
+      ReadStorage materialize.public.x
+
+Source materialize.public.x
+
+Target cluster: quickstart
+
+EOF
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/9592:
+# ROWS FROM + WITH ORDINALITY with many table functions.
+query II
+SELECT * FROM ROWS FROM (generate_series(1, 1)) WITH ORDINALITY AS t(g1, o);
+----
+1  1
+
+query III
+SELECT * FROM ROWS FROM (generate_series(1, 1), generate_series(1, 2)) WITH ORDINALITY AS t(g1, g2, o);
+----
+NULL  2  2
+1  1  1
+
+query IIII
+SELECT * FROM ROWS FROM (generate_series(1, 1), generate_series(1, 2), generate_series(1,3)) WITH ORDINALITY AS t(g1, g2, g3, o);
+----
+NULL  NULL  3  3
+NULL  2  2  2
+1  1  1  1
+
+query IIIII
+SELECT * FROM ROWS FROM (generate_series(1, 1), generate_series(1, 2), generate_series(1,3), generate_series(1,4)) WITH ORDINALITY AS t(g1, g2, g3, g4, o);
+----
+NULL  NULL  NULL  4  4
+NULL  NULL  3  3  3
+NULL  2  2  2  2
+1  1  1  1  1
+
+query IIIIII
+SELECT * FROM ROWS FROM (generate_series(1, 1), generate_series(1, 2), generate_series(1,3), generate_series(1,4), generate_series(1,5)) WITH ORDINALITY AS t(g1, g2, g3, g4, g5, o);
+----
+NULL  NULL  NULL  NULL  5  5
+NULL  NULL  NULL  4  4  4
+NULL  NULL  3  3  3  3
+NULL  2  2  2  2  2
+1  1  1  1  1  1
+
+query IIIIIII
+SELECT * FROM ROWS FROM (generate_series(1, 1), generate_series(1, 2), generate_series(1,3), generate_series(1,4), generate_series(1,5), generate_series(1,6)) WITH ORDINALITY AS t(g1, g2, g3, g4, g5, g6, o);
+----
+NULL  NULL  NULL  NULL  NULL  6  6
+NULL  NULL  NULL  NULL  5  5  5
+NULL  NULL  NULL  4  4  4  4
+NULL  NULL  3  3  3  3  3
+NULL  2  2  2  2  2  2
+1  1  1  1  1  1  1
+
+query IIIIIII
+SELECT * FROM ROWS FROM (generate_series(1,6), generate_series(1, 1), generate_series(1, 2), generate_series(1,3), generate_series(1,4), generate_series(1,5)) WITH ORDINALITY AS t(g1, g2, g3, g4, g5, g6, o);
+----
+6  NULL  NULL  NULL  NULL  NULL  6
+5  NULL  NULL  NULL  NULL  5  5
+4  NULL  NULL  NULL  4  4  4
+3  NULL  NULL  3  3  3  3
+2  NULL  2  2  2  2  2
+1  1  1  1  1  1  1
+
+query IIIIIII
+SELECT * FROM ROWS FROM (generate_series(1, 1), generate_series(1, 2), generate_series(1,6), generate_series(1,3), generate_series(1,4), generate_series(1,5)) WITH ORDINALITY AS t(g1, g2, g3, g4, g5, g6, o);
+----
+NULL  NULL  6  NULL  NULL  NULL  6
+NULL  NULL  5  NULL  NULL  5  5
+NULL  NULL  4  NULL  4  4  4
+NULL  NULL  3  3  3  3  3
+NULL  2  2  2  2  2  2
+1  1  1  1  1  1  1

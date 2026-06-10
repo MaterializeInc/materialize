@@ -7,11 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 ALTER SYSTEM SET max_clusters = 20
 
 # Test support for Avro sources without using the Confluent Schema Registry.
@@ -267,7 +266,6 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
   IN CLUSTER non_dbz_data_varying_partition_cluster
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL = '10ms',
     START OFFSET=[1]
   )
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
@@ -297,7 +295,6 @@ a  b
   IN CLUSTER non_dbz_data_varying_partition_2_cluster
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL = '10ms',
     START OFFSET=[1,1]
   )
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'

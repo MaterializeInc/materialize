@@ -15,7 +15,7 @@ reset-server
 # ---- NewClusterForm.tsx
 
 statement ok
-CREATE CLUSTER foo REPLICAS ( r1 (SIZE = '1') );
+CREATE CLUSTER foo REPLICAS ( r1 (SIZE = 'scale=1,workers=1') );
 
 query T
 SELECT id FROM mz_clusters WHERE name = 'foo';
@@ -43,7 +43,7 @@ LEFT JOIN mz_introspection.mz_dataflow_operator_parents AS mdop ON mdod.id = mdo
 LEFT JOIN mz_introspection.mz_dataflow_addresses AS mda ON mdod.id = mda.id;
 
 # Note(parkmycar): This suceeds on web, but fails because of pg_repr using binary encoding.
-statement error binary encoding of list types is not implemented
+statement error no binary output function available for type list
 SELECT mdco.id, from_operator_id, from_operator_address, from_port, to_operator_id, to_operator_address, to_port, COALESCE(sum(sent), 0) AS sent
 FROM mz_introspection.mz_dataflow_channel_operators AS mdco
 JOIN mz_introspection.mz_dataflow_channels AS mdc ON mdc.id = mdco.id
@@ -53,12 +53,12 @@ WHERE mce.export_id = 'does_not_exist'
 GROUP BY mdco.id, from_operator_id, from_operator_address, to_operator_id, to_operator_address, from_port, to_port;
 
 # Note(parkmycar): This suceeds on web, but fails because of pg_repr using binary encoding.
-statement error binary encoding of list types is not implemented
+statement error no binary output function available for type list
 SELECT id, address, name, parent_id, arrangement_records, elapsed_ns FROM all_ops WHERE export_id = 'does_not_exist';
 
 # Ensure indexes are used where expected.
 query T multiline
-EXPLAIN SELECT * FROM mz_catalog.mz_kafka_sources
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM mz_catalog.mz_kafka_sources
 ----
 Explained Query (fast path):
   ReadIndex on=mz_catalog.mz_kafka_sources mz_kafka_sources_ind=[*** full scan ***]
@@ -71,7 +71,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM mz_internal.mz_webhook_sources
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM mz_internal.mz_webhook_sources
 ----
 Explained Query (fast path):
   ReadIndex on=mz_internal.mz_webhook_sources mz_webhook_sources_ind=[*** full scan ***]
@@ -109,16 +109,16 @@ u1  u1  materialized-view  1970-01-01␠00:00:00.666+00  1970-01-01␠00:00:00.6
 # ---- mz_cluster_replica_name_history
 
 statement ok
-CREATE CLUSTER foo REPLICAS ( weewoo1 (SIZE = '1') );
+CREATE CLUSTER foo REPLICAS ( weewoo1 (SIZE = 'scale=1,workers=1') );
 
 statement ok
 ALTER CLUSTER REPLICA foo.weewoo1 RENAME TO weewoo2;
 
-query TTT
-SELECT id, previous_name, new_name FROM mz_internal.mz_cluster_replica_name_history WHERE new_name = 'weewoo1' OR new_name = 'weewoo2';
+query TT rowsort
+SELECT previous_name, new_name FROM mz_internal.mz_cluster_replica_name_history WHERE new_name = 'weewoo1' OR new_name = 'weewoo2';
 ----
-u2  NULL  weewoo1
-u2  weewoo1  weewoo2
+NULL  weewoo1
+weewoo1  weewoo2
 
 statement ok
 DROP CLUSTER foo;

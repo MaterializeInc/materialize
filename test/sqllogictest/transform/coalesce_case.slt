@@ -1,0 +1,88 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the CoalesceCase optimizer transform, which pushes
+# COALESCE into CASE when one of the branches is a literal null
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_coalesce_case_transform TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (x int, y int, z int not null)
+
+# rewrite a CASE where the ELSE branch is a not-null constant
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  COALESCE(
+    CASE WHEN x = 1
+      THEN NULL
+      ELSE 0
+    END,
+    2)
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case when (#0{x} = 1) then 2 else 0 end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# rewrite a CASE where the ELSE branch is a not-null column reference
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  COALESCE(
+    CASE WHEN x = 1
+      THEN NULL
+      ELSE z
+    END,
+    2)
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case when (#0{x} = 1) then 2 else #2{z} end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# rewrite a CASE where the ELSE branch is a nullable column reference
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  COALESCE(
+    CASE WHEN x = 1
+      THEN NULL
+      ELSE y
+    END,
+    2)
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case when (#0{x} = 1) then 2 else coalesce(#1{y}, 2) end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF

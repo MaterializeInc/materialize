@@ -156,30 +156,26 @@ data.
 You can run a sqllogictest file like so:
 
 ```shell
-$ bin/sqllogictest [--release] -- test/sqllogictest/TESTFILE.slt
+$ bin/sqllogictest [--release] [--optimized] -- test/sqllogictest/TESTFILE.slt
 ```
 
-For larger test files, it is imperative that you compile in release mode, i.e.,
-by passing the `--release` flag as above. The extra compile time will quickly be
-made up for by a much faster execution.
+For larger test files, it is imperative that you compile in optimized mode, i.e.,
+by passing the `--optimized` flag as above. The extra compile time will quickly be
+made up for by a much faster execution. Release mode is usually not worth the
+extra compile time locally.
 
 To add logging for tests, append `-vv`, e.g.:
 
 ```shell
-$ bin/sqllogictest [--release] -- test/sqllogictest/TESTFILE.slt -vv
+$ bin/sqllogictest [--release] [--optimized] -- test/sqllogictest/TESTFILE.slt -vv
 ```
 
 There are currently three classes of sqllogictest files:
 
   1. The offical SQLite test files are in
      [test/sqllogictest/sqlite](/test/sqllogictest/sqlite). Note that the
-     directory is a git submodule, so the folder will start off as empty if you
-     did not clone this repository with `--recurse-submodules`. To populate it,
-     run:
-
-     ```shell
-     $ git submodule update --init
-     ```
+     directory is a git repository that gets automatically cloned when you run
+     the tests.
 
   2. Additional test files from CockroachDB are in
      [test/sqllogictest/cockroach](/test/sqllogictest/cockroach). Note that we

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::str;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use rdkafka::admin::{AdminClient, AdminOptions, ResourceSpecifier};
@@ -96,7 +96,7 @@ pub async fn run_verify_topic(
                 .topics()
                 .iter()
                 .find(|t| t.name() == topic)
-                .ok_or(anyhow::anyhow!("topic not found"))?;
+                .ok_or_else(|| anyhow::anyhow!("topic not found"))?;
 
             if let Some(partitions) = partition_count {
                 if topic.partitions().len() != partitions {
@@ -179,7 +179,7 @@ pub async fn run_verify_topic(
                     .await?
                     .iter()
                     .find(|subject| subject == &&schema_subject)
-                    .ok_or(anyhow::anyhow!("schema not found"))
+                    .ok_or_else(|| anyhow::anyhow!("schema not found"))
                     .map(|_| ())
             })
             .await?;

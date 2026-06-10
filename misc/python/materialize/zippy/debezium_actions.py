@@ -95,9 +95,7 @@ class CreateDebeziumSource(Action):
 
     def run(self, c: Composition, state: State) -> None:
         if self.new_debezium_source:
-            c.testdrive(
-                dedent(
-                    f"""
+            c.testdrive(dedent(f"""
                     $ http-request method=POST url=http://debezium:8083/connectors content-type=application/json
                     {{
                       "name": "{self.debezium_source.name}",
@@ -136,9 +134,7 @@ class CreateDebeziumSource(Action):
                     > CREATE TABLE {self.debezium_source.get_name_for_query()} FROM SOURCE {self.debezium_source.name} (REFERENCE "postgres.public.{self.postgres_table.name}")
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE DEBEZIUM
-                    """
-                )
-            )
+                    """))
 
     def provides(self) -> list[Capability]:
         return [self.debezium_source] if self.new_debezium_source else []

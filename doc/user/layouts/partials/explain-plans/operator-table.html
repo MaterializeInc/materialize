@@ -1,0 +1,46 @@
+The following table lists the operators that are available in the {{ .planType
+}} plan.
+
+<ul>
+<li>For those operators that require memory to maintain intermediate state,
+<strong>Uses memory</strong> is marked with <strong>Yes</strong>. </li>
+<li>For those operators that expand the data size (either rows or columns),
+<strong>Can increase data size</strong> is marked with <strong>Yes</strong>. </li>
+</ul>
+
+<table>
+<thead>
+<tr>
+<th>Operator</th>
+<th>Description</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+{{ range .operators }}
+<tr>
+<td><strong>{{ .operator }}</strong></td>
+<td>
+    {{ .description | markdownify }}<br/><br />
+    <strong>Can increase data size:</strong> {{ if .expansive
+    }} {{ .expansive_details | markdownify }}{{ else }}No{{ end }}
+    <br />
+    <strong>Uses memory:</strong> {{ if .uses_memory }} ✅ {{ .memory_details |
+    markdownify }} {{ else }}No{{ end }}
+
+</td>
+<td>{{ .example | markdownify }}</td>
+</tr>
+{{ end }}
+</tbody>
+</table>
+
+<span class="caption">
+<ul >
+<li><strong>Can increase data size:</strong> Specifies whether the operator can
+increase the data size (can be the number of rows or the number of columns).
+</li>
+<li><strong>Uses memory:</strong> Specifies whether the operator use memory to
+maintain state for its inputs.</li>
+</ul>
+</span>

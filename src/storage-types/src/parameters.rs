@@ -11,14 +11,10 @@
 
 use std::time::Duration;
 
-use mz_ore::cast::CastFrom;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_service::params::GrpcClientParameters;
 use mz_ssh_util::tunnel::SshTimeoutConfig;
 use mz_tracing::params::TracingParameters;
 use serde::{Deserialize, Serialize};
-
-include!(concat!(env!("OUT_DIR"), "/mz_storage_types.parameters.rs"));
 
 // Some of these defaults were recommended by @ph14
 // https://github.com/MaterializeInc/materialize/pull/18644#discussion_r1160071692
@@ -28,7 +24,7 @@ pub const DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE: Duration = Duration::from_secs(
 pub const DEFAULT_PG_SOURCE_TCP_KEEPALIVES_RETRIES: u32 = 5;
 // This is meant to be DEFAULT_KEEPALIVE_IDLE
 // + DEFAULT_KEEPALIVE_RETRIES * DEFAULT_KEEPALIVE_INTERVAL
-pub const DEFAULT_PG_SOURCE_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
+pub const DEFAULT_PG_SOURCE_TCP_USER_TIMEOUT: Duration = Duration::from_secs(40);
 
 /// Whether to apply TCP settings to the server as well as the client.
 ///
@@ -73,8 +69,6 @@ pub struct StorageParameters {
     /// finalization.
     pub finalize_shards: bool,
     pub tracing: TracingParameters,
-    /// A set of parameters used to configure auto spill behaviour if disk is used.
-    pub upsert_auto_spill_config: UpsertAutoSpillConfig,
     /// A set of parameters used to configure the maximum number of in-flight bytes
     /// emitted by persist_sources feeding storage dataflows
     pub storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig,
@@ -138,7 +132,6 @@ impl Default for StorageParameters {
             upsert_rocksdb_tuning_config: Default::default(),
             finalize_shards: Default::default(),
             tracing: Default::default(),
-            upsert_auto_spill_config: Default::default(),
             storage_dataflow_max_inflight_bytes_config: Default::default(),
             grpc_client: Default::default(),
             shrink_upsert_unused_buffers_by_ratio: Default::default(),
@@ -176,49 +169,6 @@ impl Default for StorageMaxInflightBytesConfig {
     }
 }
 
-impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesConfig {
-    fn into_proto(&self) -> ProtoStorageMaxInflightBytesConfig {
-        ProtoStorageMaxInflightBytesConfig {
-            max_in_flight_bytes_default: self.max_inflight_bytes_default.map(u64::cast_from),
-            max_in_flight_bytes_cluster_size_fraction: self
-                .max_inflight_bytes_cluster_size_fraction,
-            disk_only: self.disk_only,
-        }
-    }
-    fn from_proto(proto: ProtoStorageMaxInflightBytesConfig) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            max_inflight_bytes_default: proto.max_in_flight_bytes_default.map(usize::cast_from),
-            max_inflight_bytes_cluster_size_fraction: proto
-                .max_in_flight_bytes_cluster_size_fraction,
-            disk_only: proto.disk_only,
-        })
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-pub struct UpsertAutoSpillConfig {
-    /// A flag to whether allow automatically spilling to disk or not
-    pub allow_spilling_to_disk: bool,
-    /// The size in bytes of the upsert state after which rocksdb will be used
-    /// instead of in memory hashmap
-    pub spill_to_disk_threshold_bytes: usize,
-}
-
-impl RustType<ProtoUpsertAutoSpillConfig> for UpsertAutoSpillConfig {
-    fn into_proto(&self) -> ProtoUpsertAutoSpillConfig {
-        ProtoUpsertAutoSpillConfig {
-            allow_spilling_to_disk: self.allow_spilling_to_disk,
-            spill_to_disk_threshold_bytes: u64::cast_from(self.spill_to_disk_threshold_bytes),
-        }
-    }
-    fn from_proto(proto: ProtoUpsertAutoSpillConfig) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            allow_spilling_to_disk: proto.allow_spilling_to_disk,
-            spill_to_disk_threshold_bytes: usize::cast_from(proto.spill_to_disk_threshold_bytes),
-        })
-    }
-}
-
 impl StorageParameters {
     /// Update the parameter values with the set ones from `other`.
     ///
@@ -243,7 +193,6 @@ impl StorageParameters {
             upsert_rocksdb_tuning_config,
             finalize_shards,
             tracing,
-            upsert_auto_spill_config,
             storage_dataflow_max_inflight_bytes_config,
             grpc_client,
             shrink_upsert_unused_buffers_by_ratio,
@@ -274,7 +223,6 @@ impl StorageParameters {
         self.finalize_shards = finalize_shards;
         self.tracing.update(tracing);
         self.finalize_shards = finalize_shards;
-        self.upsert_auto_spill_config = upsert_auto_spill_config;
         self.storage_dataflow_max_inflight_bytes_config =
             storage_dataflow_max_inflight_bytes_config;
         self.grpc_client.update(grpc_client);
@@ -297,153 +245,13 @@ impl StorageParameters {
     }
 }
 
-impl RustType<ProtoStorageParameters> for StorageParameters {
-    fn into_proto(&self) -> ProtoStorageParameters {
-        ProtoStorageParameters {
-            pg_source_connect_timeout: self.pg_source_connect_timeout.into_proto(),
-            pg_source_tcp_keepalives_retries: self.pg_source_tcp_keepalives_retries,
-            pg_source_tcp_keepalives_idle: self.pg_source_tcp_keepalives_idle.into_proto(),
-            pg_source_tcp_keepalives_interval: self.pg_source_tcp_keepalives_interval.into_proto(),
-            pg_source_tcp_user_timeout: self.pg_source_tcp_user_timeout.into_proto(),
-            pg_source_snapshot_statement_timeout: Some(
-                self.pg_source_snapshot_statement_timeout.into_proto(),
-            ),
-            pg_source_tcp_configure_server: self.pg_source_tcp_configure_server,
-            pg_source_wal_sender_timeout: self.pg_source_wal_sender_timeout.into_proto(),
-            mysql_source_timeouts: Some(self.mysql_source_timeouts.into_proto()),
-            keep_n_source_status_history_entries: u64::cast_from(
-                self.keep_n_source_status_history_entries,
-            ),
-            keep_n_sink_status_history_entries: u64::cast_from(
-                self.keep_n_sink_status_history_entries,
-            ),
-            keep_n_privatelink_status_history_entries: u64::cast_from(
-                self.keep_n_privatelink_status_history_entries,
-            ),
-            replica_status_history_retention_window: Some(
-                self.replica_status_history_retention_window.into_proto(),
-            ),
-            upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
-            finalize_shards: self.finalize_shards,
-            tracing: Some(self.tracing.into_proto()),
-            upsert_auto_spill_config: Some(self.upsert_auto_spill_config.into_proto()),
-            storage_dataflow_max_inflight_bytes_config: Some(
-                self.storage_dataflow_max_inflight_bytes_config.into_proto(),
-            ),
-            grpc_client: Some(self.grpc_client.into_proto()),
-            shrink_upsert_unused_buffers_by_ratio: u64::cast_from(
-                self.shrink_upsert_unused_buffers_by_ratio,
-            ),
-            record_namespaced_errors: self.record_namespaced_errors,
-            ssh_timeout_config: Some(self.ssh_timeout_config.into_proto()),
-            kafka_timeout_config: Some(self.kafka_timeout_config.into_proto()),
-            statistics_interval: Some(self.statistics_interval.into_proto()),
-            statistics_collection_interval: Some(self.statistics_collection_interval.into_proto()),
-            pg_snapshot_config: Some(self.pg_snapshot_config.into_proto()),
-            user_storage_managed_collections_batch_duration: Some(
-                self.user_storage_managed_collections_batch_duration
-                    .into_proto(),
-            ),
-            dyncfg_updates: Some(self.dyncfg_updates.clone()),
-        }
-    }
-
-    fn from_proto(proto: ProtoStorageParameters) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            pg_source_connect_timeout: proto.pg_source_connect_timeout.into_rust()?,
-            pg_source_tcp_keepalives_retries: proto.pg_source_tcp_keepalives_retries,
-            pg_source_tcp_keepalives_idle: proto.pg_source_tcp_keepalives_idle.into_rust()?,
-            pg_source_tcp_keepalives_interval: proto
-                .pg_source_tcp_keepalives_interval
-                .into_rust()?,
-            pg_source_tcp_user_timeout: proto.pg_source_tcp_user_timeout.into_rust()?,
-            pg_source_tcp_configure_server: proto.pg_source_tcp_configure_server,
-            pg_source_snapshot_statement_timeout: proto
-                .pg_source_snapshot_statement_timeout
-                .into_rust_if_some(
-                    "ProtoStorageParameters::pg_source_snapshot_statement_timeout",
-                )?,
-            pg_source_wal_sender_timeout: proto.pg_source_wal_sender_timeout.into_rust()?,
-            mysql_source_timeouts: proto
-                .mysql_source_timeouts
-                .into_rust_if_some("ProtoStorageParameters::mysql_source_timeouts")?,
-            keep_n_source_status_history_entries: usize::cast_from(
-                proto.keep_n_source_status_history_entries,
-            ),
-            keep_n_sink_status_history_entries: usize::cast_from(
-                proto.keep_n_sink_status_history_entries,
-            ),
-            keep_n_privatelink_status_history_entries: usize::cast_from(
-                proto.keep_n_privatelink_status_history_entries,
-            ),
-            replica_status_history_retention_window: proto
-                .replica_status_history_retention_window
-                .into_rust_if_some(
-                    "ProtoStorageParameters::replica_status_history_retention_window",
-                )?,
-            upsert_rocksdb_tuning_config: proto
-                .upsert_rocksdb_tuning_config
-                .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,
-            finalize_shards: proto.finalize_shards,
-            tracing: proto
-                .tracing
-                .into_rust_if_some("ProtoStorageParameters::tracing")?,
-            upsert_auto_spill_config: proto
-                .upsert_auto_spill_config
-                .into_rust_if_some("ProtoStorageParameters::upsert_auto_spill_config")?,
-            storage_dataflow_max_inflight_bytes_config: proto
-                .storage_dataflow_max_inflight_bytes_config
-                .into_rust_if_some(
-                    "ProtoStorageParameters::storage_dataflow_max_inflight_bytes_config",
-                )?,
-            grpc_client: proto
-                .grpc_client
-                .into_rust_if_some("ProtoStorageParameters::grpc_client")?,
-            shrink_upsert_unused_buffers_by_ratio: usize::cast_from(
-                proto.shrink_upsert_unused_buffers_by_ratio,
-            ),
-            record_namespaced_errors: proto.record_namespaced_errors,
-            ssh_timeout_config: proto
-                .ssh_timeout_config
-                .into_rust_if_some("ProtoStorageParameters::ssh_timeout_config")?,
-            kafka_timeout_config: proto
-                .kafka_timeout_config
-                .into_rust_if_some("ProtoStorageParameters::kafka_timeout_config")?,
-            statistics_interval: proto
-                .statistics_interval
-                .into_rust_if_some("ProtoStorageParameters::statistics_interval")?,
-            statistics_collection_interval: proto
-                .statistics_collection_interval
-                .into_rust_if_some("ProtoStorageParameters::statistics_collection_interval")?,
-            pg_snapshot_config: proto
-                .pg_snapshot_config
-                .into_rust_if_some("ProtoStorageParameters::pg_snapshot_config")?,
-            user_storage_managed_collections_batch_duration: proto
-                .user_storage_managed_collections_batch_duration
-                .into_rust_if_some(
-                    "ProtoStorageParameters::user_storage_managed_collections_batch_duration",
-                )?,
-            dyncfg_updates: proto.dyncfg_updates.ok_or_else(|| {
-                TryFromProtoError::missing_field("ProtoStorageParameters::dyncfg_updates")
-            })?,
-        })
-    }
-}
-
 /// Configuration for how storage performs Postgres snapshots.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PgSourceSnapshotConfig {
     /// Whether or not to collect a strict `count(*)` for each table during snapshotting.
     /// This is more accurate but way more expensive compared to an estimate in `pg_class`.
+    /// For this reason it is only attempted when the estimated count is low enough.
     pub collect_strict_count: bool,
-    /// If a table is not vacuumed or analyzed (usually if it has a low number of writes, or low
-    /// number of rows in general) in postgres, the estimate count in `pg_class` is just `-1.
-    /// This config controls whether we should fallback to `count(*)` in that case. It does
-    /// nothing if `collect_strict_count=true`.
-    pub fallback_to_strict_count: bool,
-    /// Whether or not we wait for `count(*)` to finish before beginning to read the snapshot for
-    /// the given table.
-    pub wait_for_count: bool,
 }
 
 impl PgSourceSnapshotConfig {
@@ -451,9 +259,6 @@ impl PgSourceSnapshotConfig {
         PgSourceSnapshotConfig {
             // We want accurate values, if its not too expensive.
             collect_strict_count: true,
-            fallback_to_strict_count: true,
-            // For now, wait to start snapshotting until after we have the count.
-            wait_for_count: true,
         }
     }
 }
@@ -461,111 +266,5 @@ impl PgSourceSnapshotConfig {
 impl Default for PgSourceSnapshotConfig {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl RustType<ProtoPgSourceSnapshotConfig> for PgSourceSnapshotConfig {
-    fn into_proto(&self) -> ProtoPgSourceSnapshotConfig {
-        ProtoPgSourceSnapshotConfig {
-            collect_strict_count: self.collect_strict_count,
-            fallback_to_strict_count: self.fallback_to_strict_count,
-            wait_for_count: self.wait_for_count,
-        }
-    }
-
-    fn from_proto(proto: ProtoPgSourceSnapshotConfig) -> Result<Self, TryFromProtoError> {
-        Ok(PgSourceSnapshotConfig {
-            collect_strict_count: proto.collect_strict_count,
-            fallback_to_strict_count: proto.fallback_to_strict_count,
-            wait_for_count: proto.wait_for_count,
-        })
-    }
-}
-
-impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
-    fn into_proto(&self) -> ProtoKafkaTimeouts {
-        ProtoKafkaTimeouts {
-            keepalive: self.keepalive,
-            socket_timeout: Some(self.socket_timeout.into_proto()),
-            transaction_timeout: Some(self.transaction_timeout.into_proto()),
-            socket_connection_setup_timeout: Some(
-                self.socket_connection_setup_timeout.into_proto(),
-            ),
-            fetch_metadata_timeout: Some(self.fetch_metadata_timeout.into_proto()),
-            progress_record_fetch_timeout: Some(self.progress_record_fetch_timeout.into_proto()),
-            default_metadata_fetch_interval: Some(
-                self.default_metadata_fetch_interval.into_proto(),
-            ),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaTimeouts) -> Result<Self, TryFromProtoError> {
-        Ok(mz_kafka_util::client::TimeoutConfig {
-            keepalive: proto.keepalive,
-            socket_timeout: proto
-                .socket_timeout
-                .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::socket_timeout")?,
-            transaction_timeout: proto
-                .transaction_timeout
-                .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::transaction_timeout")?,
-            socket_connection_setup_timeout: proto
-                .socket_connection_setup_timeout
-                .into_rust_if_some(
-                    "ProtoKafkaSourceTcpTimeouts::socket_connection_setup_timeout",
-                )?,
-            fetch_metadata_timeout: proto
-                .fetch_metadata_timeout
-                .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::fetch_metadata_timeout")?,
-            progress_record_fetch_timeout: proto
-                .progress_record_fetch_timeout
-                .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::progress_record_fetch_timeout")?,
-            default_metadata_fetch_interval: proto
-                .default_metadata_fetch_interval
-                .into_rust_if_some(
-                    "ProtoKafkaSourceTcpTimeouts::default_metadata_fetch_interval",
-                )?,
-        })
-    }
-}
-
-impl RustType<ProtoMySqlSourceTimeouts> for mz_mysql_util::TimeoutConfig {
-    fn into_proto(&self) -> ProtoMySqlSourceTimeouts {
-        ProtoMySqlSourceTimeouts {
-            tcp_keepalive: self.tcp_keepalive.into_proto(),
-            snapshot_max_execution_time: self.snapshot_max_execution_time.into_proto(),
-            snapshot_lock_wait_timeout: self.snapshot_lock_wait_timeout.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMySqlSourceTimeouts) -> Result<Self, TryFromProtoError> {
-        Ok(mz_mysql_util::TimeoutConfig {
-            tcp_keepalive: proto.tcp_keepalive.into_rust()?,
-            snapshot_max_execution_time: proto.snapshot_max_execution_time.into_rust()?,
-            snapshot_lock_wait_timeout: proto.snapshot_lock_wait_timeout.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoSshTimeoutConfig> for SshTimeoutConfig {
-    fn into_proto(&self) -> ProtoSshTimeoutConfig {
-        ProtoSshTimeoutConfig {
-            check_interval: Some(self.check_interval.into_proto()),
-            connect_timeout: Some(self.connect_timeout.into_proto()),
-            keepalives_idle: Some(self.keepalives_idle.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoSshTimeoutConfig) -> Result<Self, TryFromProtoError> {
-        Ok(SshTimeoutConfig {
-            check_interval: proto
-                .check_interval
-                .into_rust_if_some("ProtoSshTimeoutConfig::check_interval")?,
-            connect_timeout: proto
-                .connect_timeout
-                .into_rust_if_some("ProtoSshTimeoutConfig::connect_timeout")?,
-            keepalives_idle: proto
-                .keepalives_idle
-                .into_rust_if_some("ProtoSshTimeoutConfig::keepalives_idle")?,
-        })
     }
 }

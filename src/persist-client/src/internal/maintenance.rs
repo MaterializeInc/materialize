@@ -15,10 +15,10 @@ use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
@@ -57,8 +57,8 @@ impl RoutineMaintenance {
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let _ = self.perform_in_background(machine, gc);
     }
@@ -75,8 +75,8 @@ impl RoutineMaintenance {
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let mut more_maintenance = RoutineMaintenance::default();
         for future in self.perform_in_background(machine, gc) {
@@ -103,8 +103,8 @@ impl RoutineMaintenance {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let mut futures = vec![];
         if let Some(gc_req) = self.garbage_collection {
@@ -135,7 +135,6 @@ impl RoutineMaintenance {
                         );
                         machine.add_rollup_for_current_seqno().await
                     })
-                    .map(Result::unwrap_or_default)
                     .boxed(),
             );
         }
@@ -184,7 +183,7 @@ impl<T> Default for WriterMaintenance<T> {
 
 impl<T> WriterMaintenance<T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
 {
     /// Initiates any writer maintenance necessary in background tasks
     pub(crate) fn start_performing<K, V, D>(
@@ -195,7 +194,7 @@ where
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let machine = machine.clone();
         let gc = gc.clone();
@@ -215,7 +214,7 @@ where
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let Self {
             routine,

@@ -30,10 +30,6 @@ pub(crate) struct UpsertMetricDefs {
     pub(crate) rehydration_total: UIntGaugeVec,
     pub(crate) rehydration_updates: UIntGaugeVec,
 
-    // Metric will contain either 0 to denote in-memory state usage,
-    // and 1 to denote auto spill to rocksdb
-    pub(crate) rocksdb_autospill_in_use: UIntGaugeVec,
-
     // These are used by `shared`.
     pub(crate) merge_snapshot_latency: HistogramVec,
     pub(crate) merge_snapshot_updates: IntCounterVec,
@@ -48,9 +44,6 @@ pub(crate) struct UpsertMetricDefs {
     pub(crate) multi_get_result_bytes: IntCounterVec,
     pub(crate) multi_put_latency: HistogramVec,
     pub(crate) multi_put_size: IntCounterVec,
-
-    /// The number of legacy errors encountered during rehydration
-    pub(crate) legacy_value_errors: UIntGaugeVec,
 
     // These are used by `rocksdb`.
     pub(crate) rocksdb_multi_get_latency: HistogramVec,
@@ -96,12 +89,6 @@ impl UpsertMetricDefs {
                 help: "The number of updates (both negative and positive), \
                     per-worker, rehydrated into the upsert state for \
                     this source",
-                var_labels: ["source_id", "worker_id"],
-            )),
-            rocksdb_autospill_in_use: registry.register(metric!(
-                name: "mz_storage_upsert_state_rocksdb_autospill_in_use",
-                help: "Flag to denote whether upsert state has spilled to rocksdb \
-                    or using in-memory state",
                 var_labels: ["source_id", "worker_id"],
             )),
             // Choose a relatively low number of representative buckets.
@@ -247,12 +234,6 @@ impl UpsertMetricDefs {
                 var_labels: ["source_id", "worker_id"],
             )),
             rocksdb_shared,
-            legacy_value_errors: registry.register(metric!(
-                name: "mz_storage_upsert_legacy_value_errors",
-                help: "The total number of legacy errors encountered during \
-                    rehydration for this source",
-                var_labels: ["source_id", "worker_id"],
-            )),
         }
     }
 
@@ -267,9 +248,11 @@ impl UpsertMetricDefs {
             }
         }
         let shared_metrics = Arc::new(UpsertSharedMetrics::new(self, *source_id));
-        assert!(shared
-            .insert(source_id.clone(), Arc::downgrade(&shared_metrics))
-            .is_none());
+        assert!(
+            shared
+                .insert(source_id.clone(), Arc::downgrade(&shared_metrics))
+                .is_none()
+        );
         shared_metrics
     }
 
@@ -300,9 +283,11 @@ impl UpsertMetricDefs {
         };
 
         let rocksdb_metrics = Arc::new(rocksdb_metrics);
-        assert!(rocksdb
-            .insert(source_id.clone(), Arc::downgrade(&rocksdb_metrics))
-            .is_none());
+        assert!(
+            rocksdb
+                .insert(source_id.clone(), Arc::downgrade(&rocksdb_metrics))
+                .is_none()
+        );
         rocksdb_metrics
     }
 }
@@ -310,9 +295,9 @@ impl UpsertMetricDefs {
 /// Metrics for upsert source shared across workers.
 #[derive(Debug)]
 pub(crate) struct UpsertSharedMetrics {
-    pub(crate) merge_snapshot_latency: DeleteOnDropHistogram<'static, Vec<String>>,
-    pub(crate) multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
-    pub(crate) multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub(crate) merge_snapshot_latency: DeleteOnDropHistogram<Vec<String>>,
+    pub(crate) multi_get_latency: DeleteOnDropHistogram<Vec<String>>,
+    pub(crate) multi_put_latency: DeleteOnDropHistogram<Vec<String>>,
 }
 
 impl UpsertSharedMetrics {
@@ -371,23 +356,20 @@ impl UpsertBackpressureMetricDefs {
 
 /// Metrics for the `upsert` operator.
 pub struct UpsertMetrics {
-    pub(crate) rehydration_latency: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
-    pub(crate) rehydration_total: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) rehydration_updates: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    pub(crate) rehydration_latency: DeleteOnDropGauge<AtomicF64, Vec<String>>,
+    pub(crate) rehydration_total: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) rehydration_updates: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 
-    pub(crate) merge_snapshot_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) upsert_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) upsert_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) upsert_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-
-    pub(crate) legacy_value_errors: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) upsert_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) upsert_updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) upsert_deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) multi_get_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) multi_get_result_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) multi_get_result_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) multi_put_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
@@ -417,10 +399,6 @@ impl UpsertMetrics {
             rehydration_updates: defs
                 .rehydration_updates
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
-            rocksdb_autospill_in_use: Arc::new(
-                defs.rocksdb_autospill_in_use
-                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
-            ),
             merge_snapshot_updates: defs
                 .merge_snapshot_updates
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
@@ -450,10 +428,6 @@ impl UpsertMetrics {
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_put_size: defs
                 .multi_put_size
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
-
-            legacy_value_errors: defs
-                .legacy_value_errors
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: defs.shared(&source_id),

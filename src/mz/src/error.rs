@@ -36,7 +36,9 @@ pub enum Error {
     #[error(transparent)]
     AuthError(#[from] mz_frontegg_auth::Error),
     /// Indicates an error parsing an endpoint.
-    #[error("Error parsing URL: {0}.\n\nTo resolve this issue, please verify the correctness of the URLs in the configuration file or the ones passed as parameters.")]
+    #[error(
+        "Error parsing URL: {0}.\n\nTo resolve this issue, please verify the correctness of the URLs in the configuration file or the ones passed as parameters."
+    )]
     UrlParseError(#[from] ParseError),
     /// Error parsing (serializing/deserializing) a JSON.
     #[error("Error parsing JSON: {0}")]
@@ -45,16 +47,22 @@ pub enum Error {
     #[error("Error parsing request JSON: {0}")]
     ReqwestJsonParseError(#[from] reqwest::Error),
     /// Error parsing an App Password.
-    #[error("Error: {0}. \n\nTo resolve this issue, please verify the correctness of the app-password in the configuration file.")]
+    #[error(
+        "Error: {0}. \n\nTo resolve this issue, please verify the correctness of the app-password in the configuration file."
+    )]
     AppPasswordParseError(#[from] mz_frontegg_auth::AppPasswordParseError),
     /// Error indicating that a profile is missing the app-password.
     #[error("Error: The current profile does not have an app-password.")]
     AppPasswordMissing,
     /// Error indicating that the profiles are missing in the config file.
-    #[error("Error: No profiles available in the configuration file. \n\nTo resolve this issue, you can add a new profile using the following command: `mz profile init`")]
+    #[error(
+        "Error: No profiles available in the configuration file. \n\nTo resolve this issue, you can add a new profile using the following command: `mz profile init`"
+    )]
     ProfilesMissing,
     /// Error indicating that the profile is missing in the config file.
-    #[error("Error: The profile '{0}' is missing in the configuration file. \n\nTo resolve this issue, you can either: \n1. Add the missing profile using the command `mz profile --profile {0} init` \n2. Set another existing profile using the command: `mz config set profile <profile_name>`.")]
+    #[error(
+        "Error: The profile '{0}' is missing in the configuration file. \n\nTo resolve this issue, you can either: \n1. Add the missing profile using the command `mz profile --profile {0} init` \n2. Set another existing profile using the command: `mz config set profile <profile_name>`."
+    )]
     ProfileMissing(String),
     /// Error finding the region's cloud provider.
     #[error("Cloud region not found.")]
@@ -124,7 +132,9 @@ pub enum Error {
     HeaderToStrError(ToStrError),
     /// Error that raises when the request response
     /// is invalid. Chances are that the request is not a 301.
-    #[error("Error the latest version header from the redirect request was not found. Verify the request is redirecting.")]
+    #[error(
+        "Error the latest version header from the redirect request was not found. Verify the request is redirecting."
+    )]
     LatestVersionHeaderMissingError,
     /// Error that occurs when attempting to find the home directory.
     #[error("An error occurred while trying to find the home directory.")]
@@ -137,6 +147,8 @@ pub enum Error {
     #[error("Vault value for the profile is invalid.")]
     InvalidVaultError,
     /// Error that raises when the user tries to create a new profile with a name that already exists.
-    #[error("The profile name '{0}' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name.")]
+    #[error(
+        "The profile name '{0}' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name."
+    )]
     ProfileNameAlreadyExistsError(String),
 }

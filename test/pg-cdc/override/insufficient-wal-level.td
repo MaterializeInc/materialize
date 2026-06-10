@@ -11,12 +11,20 @@
 
 > CREATE SECRET pgpass AS 'postgres'
 
-> CREATE CONNECTION pg TO POSTGRES (
+! CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
+contains:server must have wal_level >= logical
+
+> CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  ) WITH (VALIDATE = false)
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;

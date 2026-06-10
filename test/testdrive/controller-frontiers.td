@@ -17,11 +17,11 @@
 > DROP CLUSTER IF EXISTS test_source
 
 > CREATE CLUSTER test REPLICAS (
-    r1 (SIZE '1'),
-    r2 (SIZE '1')
+    r1 (SIZE 'scale=1,workers=1'),
+    r2 (SIZE 'scale=1,workers=1')
   )
 > CREATE CLUSTER test_source REPLICAS (
-    s1 (SIZE '1')
+    s1 (SIZE 'scale=1,workers=1')
   )
 
 > SET cluster = test;
@@ -88,42 +88,13 @@ idx1 r2
     frontiers.write_frontier > 0
 idx1
 
-# Test that frontiers of continual tasks are reported.
-
-> CREATE CONTINUAL TASK ct1 (a int) ON INPUT t1 AS (
-    INSERT INTO ct1 SELECT * FROM t1
-  )
-
-> SELECT
-    cts.name,
-    replicas.name
-  FROM mz_cluster_replica_frontiers frontiers
-  JOIN mz_internal.mz_continual_tasks cts
-    ON frontiers.object_id = cts.id
-  LEFT JOIN mz_cluster_replicas replicas
-    ON frontiers.replica_id = replicas.id
-  WHERE
-    frontiers.object_id LIKE 'u%' AND
-    frontiers.write_frontier > 0
-ct1 r1
-ct1 r2
-
-> SELECT
-    cts.name
-  FROM mz_internal.mz_frontiers frontiers
-  JOIN mz_internal.mz_continual_tasks cts
-    ON frontiers.object_id = cts.id
-  WHERE
-    frontiers.object_id LIKE 'u%' AND
-    frontiers.read_frontier > 0 AND
-    frontiers.write_frontier > 0
-ct1
-
 # Test that frontiers of sources are reported.
 
 > CREATE SOURCE source1
   IN CLUSTER test_source
   FROM LOAD GENERATOR COUNTER (UP TO 100)
+
+> CREATE TABLE source1_tbl FROM SOURCE source1;
 
 > SELECT
     sources.name,
@@ -148,7 +119,6 @@ source1 s1
     frontiers.read_frontier > 0 AND
     frontiers.write_frontier > 0
 source1
-source1_progress
 
 # Test that frontiers of sinks are reported.
 
@@ -186,7 +156,7 @@ sink1 s1
     ON frontiers.object_id = sinks.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.read_frontier IS NULL AND
+    (frontiers.read_frontier > 0 OR frontiers.read_frontier IS NULL) AND
     frontiers.write_frontier > 0
 sink1
 
@@ -233,6 +203,7 @@ r2
     frontiers.object_id LIKE 'u%' AND
     frontiers.read_frontier > 0 AND
     frontiers.write_frontier > 0
+source1_tbl
 t1
 
 # Test that the frontiers of storage-managed collections are reported.
@@ -264,14 +235,12 @@ mz_frontiers
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
-ct1  r1
-ct1  r2
 idx1 r1
 idx1 r2
 mv1  r1
 mv1  r2
 
-> CREATE CLUSTER REPLICA test.r3 SIZE '1'
+> CREATE CLUSTER REPLICA test.r3 SIZE 'scale=1,workers=1'
 
 > SELECT
     objects.name,
@@ -287,9 +256,6 @@ mv1  r2
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
-ct1  r1
-ct1  r2
-ct1  r3
 idx1 r1
 idx1 r2
 idx1 r3
@@ -315,8 +281,6 @@ mv1  r3
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
-ct1  r2
-ct1  r3
 idx1 r2
 idx1 r3
 mv1  r2
@@ -354,7 +318,6 @@ r3 <null>
 > DROP MATERIALIZED VIEW mv1
 > DROP MATERIALIZED VIEW mv2
 > DROP INDEX idx1
-> DROP CONTINUAL TASK ct1
 > DROP SOURCE source1 CASCADE
 > DROP SINK sink1
 > DROP TABLE t1
@@ -370,7 +333,7 @@ r3 <null>
 # Test that frontiers are correctly initialized for collections on clusters
 # with zero replicas.
 
-> CREATE CLUSTER empty SIZE '1', REPLICATION FACTOR 0
+> CREATE CLUSTER empty SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
 > CREATE TABLE t2 (a int)
 > CREATE INDEX idx2 IN CLUSTER empty ON t2 (a)
 

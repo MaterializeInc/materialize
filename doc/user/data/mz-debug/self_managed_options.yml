@@ -1,0 +1,38 @@
+columns:
+  - column: "Option"
+  - column: "Description"
+rows:
+  - Option: "`--k8s-namespace <NAMESPACE>`"
+    Description: |
+
+      <a name="k8s-namespace"></a> **Required**. The Kubernetes namespace of the Materialize instance.
+
+  - Option: "`--mz-instance-name <MZ_INSTANCE_NAME>`"
+    Description: |
+
+      <a name="mz-instance-name"></a> **Required**. The Materialize instance to target.
+
+  - Option: "`--dump-k8s <boolean>`"
+    Description: |
+
+      <a name="dump-k8s"></a>
+      If `true`, dump debug information from the Kubernetes cluster.
+
+      Defaults to `true`.
+
+  - Option: "`--additional-k8s-namespace <NAMESPACE>`"
+    Description: |
+
+      <a name="additional-k8s-namespace"></a> Additional k8s namespaces to dump.
+
+  - Option: "`--k8s-context <CONTEXT>`"
+    Description: |
+
+      <a name="k8s-context"></a> The Kubernetes context to use.
+
+      Defaults to the `KUBERNETES_CONTEXT` environment variable.
+
+  - Option: "`-h`, `--help`"
+    Description: |
+
+      <a name="help"></a> Print help information.

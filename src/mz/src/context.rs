@@ -26,9 +26,9 @@ use crate::config_file::ConfigFile;
 use crate::error::Error;
 use crate::sql_client::{Client as SqlClient, ClientConfig as SqlClientConfig};
 use crate::ui::{OutputFormat, OutputFormatter};
+use mz_cloud_api::client::Client as CloudClient;
 use mz_cloud_api::client::cloud_provider::CloudProvider;
 use mz_cloud_api::client::region::{Region, RegionInfo};
-use mz_cloud_api::client::Client as CloudClient;
 use mz_cloud_api::config::{
     ClientBuilder as CloudClientBuilder, ClientConfig as CloudClientConfig,
 };
@@ -213,7 +213,7 @@ impl ProfileContext {
             .context
             .region
             .clone()
-            .or(profile.region().map(|r| r.to_string()))
+            .or_else(|| profile.region().map(|r| r.to_string()))
             .ok_or_else(|| panic!("no region configured"))
             .unwrap()
             .to_lowercase();
@@ -249,7 +249,7 @@ impl ProfileContext {
     pub fn get_profile(&self) -> String {
         self.context
             .get_global_profile()
-            .unwrap_or(self.config_file().profile().to_string())
+            .unwrap_or_else(|| self.config_file().profile().to_string())
     }
 }
 

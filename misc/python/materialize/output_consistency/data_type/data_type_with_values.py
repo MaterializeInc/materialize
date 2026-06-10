@@ -55,12 +55,6 @@ class DataTypeWithValues:
 
         self.raw_values.append(raw_value)
 
-    def add_characteristic_to_all_values(
-        self, characteristic: ExpressionCharacteristics
-    ) -> None:
-        for raw_value in self.raw_values:
-            raw_value.own_characteristics.add(characteristic)
-
     def create_unassigned_vertical_storage_column(self) -> DataColumn:
         return DataColumn(self.data_type, self.raw_values)
 

@@ -41,9 +41,9 @@ use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Params, Plan, SubscribePlan};
-use mz_sql::session::user::{RoleMetadata, MZ_SYSTEM_ROLE_ID};
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, RoleMetadata};
 use mz_storage_client::controller::{IntrospectionType, StorageWriteOp};
-use tracing::{info, Span};
+use tracing::{Span, info};
 
 use crate::coord::{
     Coordinator, IntrospectionSubscribeFinish, IntrospectionSubscribeOptimizeMir,
@@ -51,7 +51,7 @@ use crate::coord::{
     StageResult, Staged,
 };
 use crate::optimize::Optimize;
-use crate::{optimize, AdapterError, ExecuteResponse};
+use crate::{AdapterError, ExecuteResponse, optimize};
 
 // State tracked about an active introspection subscribe.
 #[derive(Derivative)]
@@ -128,7 +128,7 @@ impl Coordinator {
         replica_id: ReplicaId,
         spec: &'static SubscribeSpec,
     ) {
-        let id = self.allocate_transient_id();
+        let (_, id) = self.allocate_transient_id();
         info!(
             %id,
             %replica_id,
@@ -162,9 +162,15 @@ impl Coordinator {
         let plan = spec.to_plan(&catalog).expect("valid spec");
 
         let role_metadata = RoleMetadata::new(MZ_SYSTEM_ROLE_ID);
+        let dependencies = plan
+            .from
+            .depends_on()
+            .iter()
+            .map(|id| self.catalog().resolve_item_id(id))
+            .collect();
         let validity = PlanValidity::new(
             self.catalog.transient_revision(),
-            plan.from.depends_on(),
+            dependencies,
             Some(cluster_id),
             Some(replica_id),
             role_metadata,
@@ -193,7 +199,7 @@ impl Coordinator {
         } = stage;
 
         let compute_instance = self.instance_snapshot(cluster_id).expect("must exist");
-        let view_id = self.allocate_transient_id();
+        let (_, view_id) = self.allocate_transient_id();
 
         let vars = self.catalog().system_config();
         let overrides = self.catalog.get_cluster(cluster_id).config.features();
@@ -204,13 +210,13 @@ impl Coordinator {
             compute_instance,
             view_id,
             subscribe_id,
-            None,
             plan.with_snapshot,
             None,
             format!("introspection-subscribe-{subscribe_id}"),
             optimizer_config,
             self.optimizer_metrics(),
         );
+        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -218,10 +224,11 @@ impl Coordinator {
             move || {
                 span.in_scope(|| {
                     // MIR ⇒ MIR optimization (global)
-                    let global_mir_plan = optimizer.catch_unwind_optimize(plan.from)?;
+                    let global_mir_plan = optimizer.catch_unwind_optimize(plan)?;
                     // Add introduced indexes as validity dependencies.
                     let id_bundle = global_mir_plan.id_bundle(cluster_id);
-                    validity.extend_dependencies(id_bundle.iter());
+                    let item_ids = id_bundle.iter().map(|id| catalog.resolve_item_id(&id));
+                    validity.extend_dependencies(item_ids);
 
                     let stage = IntrospectionSubscribeStage::TimestampOptimizeLir(
                         IntrospectionSubscribeTimestampOptimizeLir {
@@ -255,11 +262,7 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = read_holds.least_valid_read();
 
-        // Introspection subscribes only read from system collections, which are always in
-        // the `EpochMilliseconds` timeline.
-        let is_timeline_epoch_ms = true;
-
-        let global_mir_plan = global_mir_plan.resolve(as_of, is_timeline_epoch_ms);
+        let global_mir_plan = global_mir_plan.resolve(as_of);
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -383,7 +386,7 @@ impl Coordinator {
             ..
         } = subscribe;
         let old_id = id;
-        let new_id = self.allocate_transient_id();
+        let (_, new_id) = self.allocate_transient_id();
 
         info!(
             %old_id, %new_id, %replica_id,
@@ -446,11 +449,13 @@ impl Coordinator {
         let replica_id = subscribe.replica_id.to_string();
         let mut new_updates = Vec::with_capacity(updates.len());
         let mut new_row = Row::default();
-        for (_time, row, diff) in updates {
-            let mut packer = new_row.packer();
-            packer.push(Datum::String(&replica_id));
-            packer.extend_by_row(&row);
-            new_updates.push((new_row.clone(), diff));
+        for collection in updates {
+            for (row, _time, diff) in collection.iter() {
+                let mut packer = new_row.packer();
+                packer.push(Datum::String(&replica_id));
+                packer.extend_by_row_ref(row);
+                new_updates.push((new_row.clone(), diff));
+            }
         }
 
         // If we have a pending deferred write, we need to apply it _before_ the append of the new
@@ -518,7 +523,8 @@ impl SubscribeSpec {
     fn to_plan(&self, catalog: &dyn SessionCatalog) -> Result<SubscribePlan, anyhow::Error> {
         let parsed = mz_sql::parse::parse(self.sql)?.into_element();
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, parsed.ast)?;
-        let plan = mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
+        let (plan, _sql_impl_ids) =
+            mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
         match plan {
             Plan::Subscribe(plan) => Ok(plan),
             _ => bail!("unexpected plan type: {plan:?}"),
@@ -548,6 +554,61 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
             WHERE export_id NOT LIKE 't%'
             GROUP BY export_id
             OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
+        )",
+    },
+    SubscribeSpec {
+        introspection_type: IntrospectionType::ComputeOperatorHydrationStatus,
+        sql: "SUBSCRIBE (
+            SELECT
+                export_id,
+                lir_id,
+                bool_and(hydrated) AS hydrated
+            FROM mz_introspection.mz_compute_operator_hydration_statuses_per_worker
+            GROUP BY export_id, lir_id
+        )",
+    },
+    // Per-object arrangement sizes, one row per `(object_id, replica)`,
+    // populating `mz_object_arrangement_sizes`.
+    //
+    // `mz_arrangement_heap_size_raw` and `mz_arrangement_batcher_size_raw` are
+    // differential logs where each `+1` row represents one byte of heap delta;
+    // after consolidation, `COUNT(*)` is the current arrangement size in bytes.
+    //
+    // The `HAVING` floor drops objects below 10 MiB. Below that threshold the
+    // heap-size collection wiggles by a few bytes per second from ordinary
+    // allocator activity, and emitting exact bytes would push a downstream
+    // update on every wiggle. Quantizing to the nearest 10 MiB keeps the
+    // emitted size stable across in-bucket wiggle.
+    //
+    // `mz_dataflow_addresses.address[1]` is the root of each operator's address
+    // tree, which equals the owning `dataflow_id` — so we can go addresses →
+    // operator → dataflow without joining `mz_dataflow_operator_dataflows`.
+    //
+    // Joining on `ce.dataflow_id` assumes one dataflow exports a single object;
+    // if that stops holding, the same arrangement bytes would be attributed
+    // to multiple `export_id`s and we'd need to revisit the granularity.
+    //
+    // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes,
+    // including this one); we drop them to avoid self-feedback churn.
+    SubscribeSpec {
+        introspection_type: IntrospectionType::ComputeObjectArrangementSizes,
+        sql: "SUBSCRIBE (
+            SELECT
+                ce.export_id AS object_id,
+                ((COUNT(*) + 5242880) / 10485760 * 10485760)::int8 AS size
+            FROM mz_introspection.mz_compute_exports AS ce
+            JOIN (
+                SELECT addrs.address[1] AS dataflow_id, addrs.id AS operator_id
+                FROM mz_introspection.mz_dataflow_addresses addrs
+            ) AS od ON od.dataflow_id = ce.dataflow_id
+            JOIN (
+                SELECT operator_id FROM mz_introspection.mz_arrangement_heap_size_raw
+                UNION ALL
+                SELECT operator_id FROM mz_introspection.mz_arrangement_batcher_size_raw
+            ) AS rs ON rs.operator_id = od.operator_id
+            WHERE ce.export_id NOT LIKE 't%'
+            GROUP BY ce.export_id
+            HAVING COUNT(*) >= 10485760
         )",
     },
 ];

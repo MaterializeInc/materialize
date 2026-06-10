@@ -40,6 +40,7 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE s1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-materialized-views-${testdrive.seed}')
@@ -47,6 +48,7 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-materialized-views-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "234"}
@@ -71,6 +73,7 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 
 $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true
 
+> BEGIN
 > CREATE SOURCE sink1_check
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
@@ -80,6 +83,7 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true
 > CREATE TABLE sink1_check_tbl FROM SOURCE sink1_check (REFERENCE "testdrive-materialized-views-sink-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "456"}

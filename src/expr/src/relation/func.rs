@@ -12,49 +12,43 @@
 use std::cmp::{max, min};
 use std::iter::Sum;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::{fmt, iter};
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
-use mz_ore::soft_assert_or_log;
 use mz_ore::str::separated;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_ore::{soft_assert_eq_no_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::adt::regex::Regex as ReprRegex;
+use mz_repr::adt::regex::{Regex as ReprRegex, RegexCompilationError};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
-use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
+use mz_repr::{
+    ColumnName, Datum, Diff, ReprColumnType, ReprRelationType, Row, RowArena, RowPacker, SharedRow,
+    SqlColumnType, SqlRelationType, SqlScalarType, datum_size,
+};
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
-use proptest::prelude::{Arbitrary, Just};
-use proptest::strategy::{BoxedStrategy, Strategy, Union};
-use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
-use crate::explain::{HumanizedExpr, HumanizerMode};
-use crate::relation::proto_aggregate_func::{
-    self, ProtoColumnOrders, ProtoFusedValueWindowFunc, ProtoFusedWindowAggregate,
-};
-use crate::relation::proto_table_func::ProtoTabletizedScalar;
-use crate::relation::{
-    compare_columns, proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
-};
-use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
 use crate::WindowFrameBound::{
     CurrentRow, OffsetFollowing, OffsetPreceding, UnboundedFollowing, UnboundedPreceding,
 };
 use crate::WindowFrameUnits::{Groups, Range, Rows};
-
-include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.func.rs"));
+use crate::explain::{HumanizedExpr, HumanizerMode};
+use crate::relation::{
+    ColumnOrder, WindowFrame, WindowFrameBound, WindowFrameUnits, compare_columns,
+};
+use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
@@ -381,7 +375,7 @@ where
         length: datums.len(),
     };
     temp_storage.make_datum(|packer| {
-        packer.push_array(&[dims], datums).unwrap();
+        packer.try_push_array(&[dims], datums).unwrap();
     })
 }
 
@@ -430,6 +424,7 @@ where
     let datums = order_aggregate_datums(datums, order_by);
 
     callers_temp_storage.reserve(datums.size_hint().0);
+    #[allow(clippy::disallowed_methods)]
     datums
         .into_iter()
         .map(|d| d.unwrap_list().iter())
@@ -486,8 +481,11 @@ where
     datums
         .next()
         .map_or(vec![], |(first_datum, first_order_row)| {
-            // Folding with (last order_by row, last assigned rank, row number, output vec)
-            datums.fold((first_order_row, 1, 1, vec![(first_datum, 1)]), |mut acc, (next_datum, next_order_row)| {
+            // Folding with (last order_by row, last assigned rank,
+            // row number, output vec)
+            datums.fold(
+                (first_order_row, 1, 1, vec![(first_datum, 1)]),
+                |mut acc, (next_datum, next_order_row)| {
                 let (ref mut acc_row, ref mut acc_rank, ref mut acc_row_num, ref mut output) = acc;
                 *acc_row_num += 1;
                 // Identity is based on the order_by expression
@@ -554,8 +552,11 @@ where
     datums
         .next()
         .map_or(vec![], |(first_datum, first_order_row)| {
-            // Folding with (last order_by row, last assigned rank, output vec)
-            datums.fold((first_order_row, 1, vec![(first_datum, 1)]), |mut acc, (next_datum, next_order_row)| {
+            // Folding with (last order_by row, last assigned rank,
+            // output vec)
+            datums.fold(
+                (first_order_row, 1, vec![(first_datum, 1)]),
+                |mut acc, (next_datum, next_order_row)| {
                 let (ref mut acc_row, ref mut acc_rank, ref mut output) = acc;
                 // Identity is based on the order_by expression
                 if *acc_row != next_order_row {
@@ -829,11 +830,10 @@ fn lag_lead_inner_ignore_nulls<'a>(
             if !datum.is_null() {
                 datum
             } else {
-                // I can imagine returning here either `default_value` or `null`.
-                // (I'm leaning towards `default_value`.)
-                // We used to run into an infinite loop in this case, so panicking is
-                // better. Started a SQL Council thread:
-                // https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
+                // Not clear what should the semantics be here. See
+                // https://github.com/MaterializeInc/database-issues/issues/8497
+                // (We used to run into an infinite loop in this case, so panicking is
+                // better.)
                 panic!("0 offset in lag/lead IGNORE NULLS");
             }
         };
@@ -1790,14 +1790,34 @@ impl OneByOneAggr for NaiveOneByOneAggr {
 /// Identify whether the given aggregate function is Lag or Lead, since they share
 /// implementations.
 #[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub enum LagLeadType {
     Lag,
     Lead,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -1868,14 +1888,14 @@ pub enum AggregateFunc {
     /// elements are columns used by `order_by`.
     MapAgg {
         order_by: Vec<ColumnOrder>,
-        value_type: ScalarType,
+        value_type: SqlScalarType,
     },
-    /// Accumulates `Datum::Array`s of `ScalarType::Record` whose first element is a `Datum::Array`
+    /// Accumulates `Datum::Array`s of `SqlScalarType::Record` whose first element is a `Datum::Array`
     /// into a single `Datum::Array` (the remaining fields are used by `order_by`).
     ArrayConcat {
         order_by: Vec<ColumnOrder>,
     },
-    /// Accumulates `Datum::List`s of `ScalarType::Record` whose first field is a `Datum::List`
+    /// Accumulates `Datum::List`s of `SqlScalarType::Record` whose first field is a `Datum::List`
     /// into a single `Datum::List` (the remaining fields are used by `order_by`).
     ListConcat {
         order_by: Vec<ColumnOrder>,
@@ -1927,416 +1947,6 @@ pub enum AggregateFunc {
     /// Useful for removing an expensive aggregation while maintaining the shape
     /// of a reduce operator.
     Dummy,
-}
-
-/// An explicit [`Arbitrary`] implementation needed here because of a known
-/// `proptest` issue.
-///
-/// Revert to the derive-macro implementation once the issue[^1] is fixed.
-///
-/// [^1]: <https://github.com/AltSysrq/proptest/issues/152>
-impl Arbitrary for AggregateFunc {
-    type Parameters = ();
-
-    type Strategy = Union<BoxedStrategy<Self>>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        use proptest::collection::vec;
-        use proptest::prelude::any as proptest_any;
-        Union::new(vec![
-            Just(AggregateFunc::MaxNumeric).boxed(),
-            Just(AggregateFunc::MaxInt16).boxed(),
-            Just(AggregateFunc::MaxInt32).boxed(),
-            Just(AggregateFunc::MaxInt64).boxed(),
-            Just(AggregateFunc::MaxUInt16).boxed(),
-            Just(AggregateFunc::MaxUInt32).boxed(),
-            Just(AggregateFunc::MaxUInt64).boxed(),
-            Just(AggregateFunc::MaxMzTimestamp).boxed(),
-            Just(AggregateFunc::MaxFloat32).boxed(),
-            Just(AggregateFunc::MaxFloat64).boxed(),
-            Just(AggregateFunc::MaxBool).boxed(),
-            Just(AggregateFunc::MaxString).boxed(),
-            Just(AggregateFunc::MaxTimestamp).boxed(),
-            Just(AggregateFunc::MaxDate).boxed(),
-            Just(AggregateFunc::MaxTimestampTz).boxed(),
-            Just(AggregateFunc::MaxInterval).boxed(),
-            Just(AggregateFunc::MaxTime).boxed(),
-            Just(AggregateFunc::MinNumeric).boxed(),
-            Just(AggregateFunc::MinInt16).boxed(),
-            Just(AggregateFunc::MinInt32).boxed(),
-            Just(AggregateFunc::MinInt64).boxed(),
-            Just(AggregateFunc::MinUInt16).boxed(),
-            Just(AggregateFunc::MinUInt32).boxed(),
-            Just(AggregateFunc::MinUInt64).boxed(),
-            Just(AggregateFunc::MinMzTimestamp).boxed(),
-            Just(AggregateFunc::MinFloat32).boxed(),
-            Just(AggregateFunc::MinFloat64).boxed(),
-            Just(AggregateFunc::MinBool).boxed(),
-            Just(AggregateFunc::MinString).boxed(),
-            Just(AggregateFunc::MinDate).boxed(),
-            Just(AggregateFunc::MinTimestamp).boxed(),
-            Just(AggregateFunc::MinTimestampTz).boxed(),
-            Just(AggregateFunc::MinInterval).boxed(),
-            Just(AggregateFunc::MinTime).boxed(),
-            Just(AggregateFunc::SumInt16).boxed(),
-            Just(AggregateFunc::SumInt32).boxed(),
-            Just(AggregateFunc::SumInt64).boxed(),
-            Just(AggregateFunc::SumUInt16).boxed(),
-            Just(AggregateFunc::SumUInt32).boxed(),
-            Just(AggregateFunc::SumUInt64).boxed(),
-            Just(AggregateFunc::SumFloat32).boxed(),
-            Just(AggregateFunc::SumFloat64).boxed(),
-            Just(AggregateFunc::SumNumeric).boxed(),
-            Just(AggregateFunc::Count).boxed(),
-            Just(AggregateFunc::Any).boxed(),
-            Just(AggregateFunc::All).boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::JsonbAgg { order_by })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::JsonbObjectAgg { order_by })
-                .boxed(),
-            (
-                vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<ScalarType>(),
-            )
-                .prop_map(|(order_by, value_type)| AggregateFunc::MapAgg {
-                    order_by,
-                    value_type,
-                })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::ArrayConcat { order_by })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::ListConcat { order_by })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::StringAgg { order_by })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::RowNumber { order_by })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::DenseRank { order_by })
-                .boxed(),
-            (
-                vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<LagLeadType>(),
-                proptest_any::<bool>(),
-            )
-                .prop_map(
-                    |(order_by, lag_lead, ignore_nulls)| AggregateFunc::LagLead {
-                        order_by,
-                        lag_lead,
-                        ignore_nulls,
-                    },
-                )
-                .boxed(),
-            (
-                vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<WindowFrame>(),
-            )
-                .prop_map(|(order_by, window_frame)| AggregateFunc::FirstValue {
-                    order_by,
-                    window_frame,
-                })
-                .boxed(),
-            (
-                vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<WindowFrame>(),
-            )
-                .prop_map(|(order_by, window_frame)| AggregateFunc::LastValue {
-                    order_by,
-                    window_frame,
-                })
-                .boxed(),
-            Just(AggregateFunc::Dummy).boxed(),
-        ])
-    }
-}
-
-impl RustType<ProtoColumnOrders> for Vec<ColumnOrder> {
-    fn into_proto(&self) -> ProtoColumnOrders {
-        ProtoColumnOrders {
-            orders: self.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoColumnOrders) -> Result<Self, TryFromProtoError> {
-        proto.orders.into_rust()
-    }
-}
-
-impl RustType<ProtoAggregateFunc> for AggregateFunc {
-    fn into_proto(&self) -> ProtoAggregateFunc {
-        use proto_aggregate_func::Kind;
-        ProtoAggregateFunc {
-            kind: Some(match self {
-                AggregateFunc::MaxNumeric => Kind::MaxNumeric(()),
-                AggregateFunc::MaxInt16 => Kind::MaxInt16(()),
-                AggregateFunc::MaxInt32 => Kind::MaxInt32(()),
-                AggregateFunc::MaxInt64 => Kind::MaxInt64(()),
-                AggregateFunc::MaxUInt16 => Kind::MaxUint16(()),
-                AggregateFunc::MaxUInt32 => Kind::MaxUint32(()),
-                AggregateFunc::MaxUInt64 => Kind::MaxUint64(()),
-                AggregateFunc::MaxMzTimestamp => Kind::MaxMzTimestamp(()),
-                AggregateFunc::MaxFloat32 => Kind::MaxFloat32(()),
-                AggregateFunc::MaxFloat64 => Kind::MaxFloat64(()),
-                AggregateFunc::MaxBool => Kind::MaxBool(()),
-                AggregateFunc::MaxString => Kind::MaxString(()),
-                AggregateFunc::MaxDate => Kind::MaxDate(()),
-                AggregateFunc::MaxTimestamp => Kind::MaxTimestamp(()),
-                AggregateFunc::MaxTimestampTz => Kind::MaxTimestampTz(()),
-                AggregateFunc::MinNumeric => Kind::MinNumeric(()),
-                AggregateFunc::MaxInterval => Kind::MaxInterval(()),
-                AggregateFunc::MaxTime => Kind::MaxTime(()),
-                AggregateFunc::MinInt16 => Kind::MinInt16(()),
-                AggregateFunc::MinInt32 => Kind::MinInt32(()),
-                AggregateFunc::MinInt64 => Kind::MinInt64(()),
-                AggregateFunc::MinUInt16 => Kind::MinUint16(()),
-                AggregateFunc::MinUInt32 => Kind::MinUint32(()),
-                AggregateFunc::MinUInt64 => Kind::MinUint64(()),
-                AggregateFunc::MinMzTimestamp => Kind::MinMzTimestamp(()),
-                AggregateFunc::MinFloat32 => Kind::MinFloat32(()),
-                AggregateFunc::MinFloat64 => Kind::MinFloat64(()),
-                AggregateFunc::MinBool => Kind::MinBool(()),
-                AggregateFunc::MinString => Kind::MinString(()),
-                AggregateFunc::MinDate => Kind::MinDate(()),
-                AggregateFunc::MinTimestamp => Kind::MinTimestamp(()),
-                AggregateFunc::MinTimestampTz => Kind::MinTimestampTz(()),
-                AggregateFunc::MinInterval => Kind::MinInterval(()),
-                AggregateFunc::MinTime => Kind::MinTime(()),
-                AggregateFunc::SumInt16 => Kind::SumInt16(()),
-                AggregateFunc::SumInt32 => Kind::SumInt32(()),
-                AggregateFunc::SumInt64 => Kind::SumInt64(()),
-                AggregateFunc::SumUInt16 => Kind::SumUint16(()),
-                AggregateFunc::SumUInt32 => Kind::SumUint32(()),
-                AggregateFunc::SumUInt64 => Kind::SumUint64(()),
-                AggregateFunc::SumFloat32 => Kind::SumFloat32(()),
-                AggregateFunc::SumFloat64 => Kind::SumFloat64(()),
-                AggregateFunc::SumNumeric => Kind::SumNumeric(()),
-                AggregateFunc::Count => Kind::Count(()),
-                AggregateFunc::Any => Kind::Any(()),
-                AggregateFunc::All => Kind::All(()),
-                AggregateFunc::JsonbAgg { order_by } => Kind::JsonbAgg(order_by.into_proto()),
-                AggregateFunc::JsonbObjectAgg { order_by } => {
-                    Kind::JsonbObjectAgg(order_by.into_proto())
-                }
-                AggregateFunc::MapAgg {
-                    order_by,
-                    value_type,
-                } => Kind::MapAgg(proto_aggregate_func::ProtoMapAgg {
-                    order_by: Some(order_by.into_proto()),
-                    value_type: Some(value_type.into_proto()),
-                }),
-                AggregateFunc::ArrayConcat { order_by } => Kind::ArrayConcat(order_by.into_proto()),
-                AggregateFunc::ListConcat { order_by } => Kind::ListConcat(order_by.into_proto()),
-                AggregateFunc::StringAgg { order_by } => Kind::StringAgg(order_by.into_proto()),
-                AggregateFunc::RowNumber { order_by } => Kind::RowNumber(order_by.into_proto()),
-                AggregateFunc::Rank { order_by } => Kind::Rank(order_by.into_proto()),
-                AggregateFunc::DenseRank { order_by } => Kind::DenseRank(order_by.into_proto()),
-                AggregateFunc::LagLead {
-                    order_by,
-                    lag_lead,
-                    ignore_nulls,
-                } => Kind::LagLead(proto_aggregate_func::ProtoLagLead {
-                    order_by: Some(order_by.into_proto()),
-                    lag_lead: Some(match lag_lead {
-                        LagLeadType::Lag => proto_aggregate_func::proto_lag_lead::LagLead::Lag(()),
-                        LagLeadType::Lead => {
-                            proto_aggregate_func::proto_lag_lead::LagLead::Lead(())
-                        }
-                    }),
-                    ignore_nulls: *ignore_nulls,
-                }),
-                AggregateFunc::FirstValue {
-                    order_by,
-                    window_frame,
-                } => Kind::FirstValue(proto_aggregate_func::ProtoFramedWindowFunc {
-                    order_by: Some(order_by.into_proto()),
-                    window_frame: Some(window_frame.into_proto()),
-                }),
-                AggregateFunc::LastValue {
-                    order_by,
-                    window_frame,
-                } => Kind::LastValue(proto_aggregate_func::ProtoFramedWindowFunc {
-                    order_by: Some(order_by.into_proto()),
-                    window_frame: Some(window_frame.into_proto()),
-                }),
-                AggregateFunc::WindowAggregate {
-                    wrapped_aggregate,
-                    order_by,
-                    window_frame,
-                } => Kind::WindowAggregate(Box::new(proto_aggregate_func::ProtoWindowAggregate {
-                    wrapped_aggregate: Some(wrapped_aggregate.into_proto()),
-                    order_by: Some(order_by.into_proto()),
-                    window_frame: Some(window_frame.into_proto()),
-                })),
-                AggregateFunc::FusedValueWindowFunc { funcs, order_by } => {
-                    Kind::FusedValueWindowFunc(ProtoFusedValueWindowFunc {
-                        funcs: funcs.into_proto(),
-                        order_by: Some(order_by.into_proto()),
-                    })
-                }
-                AggregateFunc::FusedWindowAggregate {
-                    wrapped_aggregates,
-                    order_by,
-                    window_frame,
-                } => Kind::FusedWindowAggregate(ProtoFusedWindowAggregate {
-                    wrapped_aggregates: wrapped_aggregates.into_proto(),
-                    order_by: Some(order_by.into_proto()),
-                    window_frame: Some(window_frame.into_proto()),
-                }),
-                AggregateFunc::Dummy => Kind::Dummy(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoAggregateFunc) -> Result<Self, TryFromProtoError> {
-        use proto_aggregate_func::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoAggregateFunc::kind"))?;
-        Ok(match kind {
-            Kind::MaxNumeric(()) => AggregateFunc::MaxNumeric,
-            Kind::MaxInt16(()) => AggregateFunc::MaxInt16,
-            Kind::MaxInt32(()) => AggregateFunc::MaxInt32,
-            Kind::MaxInt64(()) => AggregateFunc::MaxInt64,
-            Kind::MaxUint16(()) => AggregateFunc::MaxUInt16,
-            Kind::MaxUint32(()) => AggregateFunc::MaxUInt32,
-            Kind::MaxUint64(()) => AggregateFunc::MaxUInt64,
-            Kind::MaxMzTimestamp(()) => AggregateFunc::MaxMzTimestamp,
-            Kind::MaxFloat32(()) => AggregateFunc::MaxFloat32,
-            Kind::MaxFloat64(()) => AggregateFunc::MaxFloat64,
-            Kind::MaxBool(()) => AggregateFunc::MaxBool,
-            Kind::MaxString(()) => AggregateFunc::MaxString,
-            Kind::MaxDate(()) => AggregateFunc::MaxDate,
-            Kind::MaxTimestamp(()) => AggregateFunc::MaxTimestamp,
-            Kind::MaxTimestampTz(()) => AggregateFunc::MaxTimestampTz,
-            Kind::MaxInterval(()) => AggregateFunc::MaxInterval,
-            Kind::MaxTime(()) => AggregateFunc::MaxTime,
-            Kind::MinNumeric(()) => AggregateFunc::MinNumeric,
-            Kind::MinInt16(()) => AggregateFunc::MinInt16,
-            Kind::MinInt32(()) => AggregateFunc::MinInt32,
-            Kind::MinInt64(()) => AggregateFunc::MinInt64,
-            Kind::MinUint16(()) => AggregateFunc::MinUInt16,
-            Kind::MinUint32(()) => AggregateFunc::MinUInt32,
-            Kind::MinUint64(()) => AggregateFunc::MinUInt64,
-            Kind::MinMzTimestamp(()) => AggregateFunc::MinMzTimestamp,
-            Kind::MinFloat32(()) => AggregateFunc::MinFloat32,
-            Kind::MinFloat64(()) => AggregateFunc::MinFloat64,
-            Kind::MinBool(()) => AggregateFunc::MinBool,
-            Kind::MinString(()) => AggregateFunc::MinString,
-            Kind::MinDate(()) => AggregateFunc::MinDate,
-            Kind::MinTimestamp(()) => AggregateFunc::MinTimestamp,
-            Kind::MinTimestampTz(()) => AggregateFunc::MinTimestampTz,
-            Kind::MinInterval(()) => AggregateFunc::MinInterval,
-            Kind::MinTime(()) => AggregateFunc::MinTime,
-            Kind::SumInt16(()) => AggregateFunc::SumInt16,
-            Kind::SumInt32(()) => AggregateFunc::SumInt32,
-            Kind::SumInt64(()) => AggregateFunc::SumInt64,
-            Kind::SumUint16(()) => AggregateFunc::SumUInt16,
-            Kind::SumUint32(()) => AggregateFunc::SumUInt32,
-            Kind::SumUint64(()) => AggregateFunc::SumUInt64,
-            Kind::SumFloat32(()) => AggregateFunc::SumFloat32,
-            Kind::SumFloat64(()) => AggregateFunc::SumFloat64,
-            Kind::SumNumeric(()) => AggregateFunc::SumNumeric,
-            Kind::Count(()) => AggregateFunc::Count,
-            Kind::Any(()) => AggregateFunc::Any,
-            Kind::All(()) => AggregateFunc::All,
-            Kind::JsonbAgg(order_by) => AggregateFunc::JsonbAgg {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::JsonbObjectAgg(order_by) => AggregateFunc::JsonbObjectAgg {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::MapAgg(pma) => AggregateFunc::MapAgg {
-                order_by: pma.order_by.into_rust_if_some("ProtoMapAgg::order_by")?,
-                value_type: pma
-                    .value_type
-                    .into_rust_if_some("ProtoMapAgg::value_type")?,
-            },
-            Kind::ArrayConcat(order_by) => AggregateFunc::ArrayConcat {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::ListConcat(order_by) => AggregateFunc::ListConcat {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::StringAgg(order_by) => AggregateFunc::StringAgg {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::RowNumber(order_by) => AggregateFunc::RowNumber {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::Rank(order_by) => AggregateFunc::Rank {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::DenseRank(order_by) => AggregateFunc::DenseRank {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::LagLead(pll) => AggregateFunc::LagLead {
-                order_by: pll.order_by.into_rust_if_some("ProtoLagLead::order_by")?,
-                lag_lead: match pll.lag_lead {
-                    Some(proto_aggregate_func::proto_lag_lead::LagLead::Lag(())) => {
-                        LagLeadType::Lag
-                    }
-                    Some(proto_aggregate_func::proto_lag_lead::LagLead::Lead(())) => {
-                        LagLeadType::Lead
-                    }
-                    None => {
-                        return Err(TryFromProtoError::MissingField(
-                            "ProtoLagLead::lag_lead".into(),
-                        ))
-                    }
-                },
-                ignore_nulls: pll.ignore_nulls,
-            },
-            Kind::FirstValue(pfv) => AggregateFunc::FirstValue {
-                order_by: pfv
-                    .order_by
-                    .into_rust_if_some("ProtoFramedWindowFunc::order_by")?,
-                window_frame: pfv
-                    .window_frame
-                    .into_rust_if_some("ProtoFramedWindowFunc::window_frame")?,
-            },
-            Kind::LastValue(pfv) => AggregateFunc::LastValue {
-                order_by: pfv
-                    .order_by
-                    .into_rust_if_some("ProtoFramedWindowFunc::order_by")?,
-                window_frame: pfv
-                    .window_frame
-                    .into_rust_if_some("ProtoFramedWindowFunc::window_frame")?,
-            },
-            Kind::WindowAggregate(paf) => AggregateFunc::WindowAggregate {
-                wrapped_aggregate: paf
-                    .wrapped_aggregate
-                    .into_rust_if_some("ProtoWindowAggregate::wrapped_aggregate")?,
-                order_by: paf
-                    .order_by
-                    .into_rust_if_some("ProtoWindowAggregate::order_by")?,
-                window_frame: paf
-                    .window_frame
-                    .into_rust_if_some("ProtoWindowAggregate::window_frame")?,
-            },
-            Kind::FusedValueWindowFunc(fvwf) => AggregateFunc::FusedValueWindowFunc {
-                funcs: fvwf.funcs.into_rust()?,
-                order_by: fvwf
-                    .order_by
-                    .into_rust_if_some("ProtoFusedValueWindowFunc::order_by")?,
-            },
-            Kind::FusedWindowAggregate(fwa) => AggregateFunc::FusedWindowAggregate {
-                wrapped_aggregates: fwa.wrapped_aggregates.into_rust()?,
-                order_by: fwa
-                    .order_by
-                    .into_rust_if_some("ProtoFusedWindowAggregate::order_by")?,
-                window_frame: fwa
-                    .window_frame
-                    .into_rust_if_some("ProtoFusedWindowAggregate::window_frame")?,
-            },
-            Kind::Dummy(()) => AggregateFunc::Dummy,
-        })
-    }
 }
 
 impl AggregateFunc {
@@ -2714,35 +2324,35 @@ impl AggregateFunc {
     /// The output column type also contains nullability information, which
     /// is (without further information) true for aggregations that are not
     /// counts.
-    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    pub fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         let scalar_type = match self {
-            AggregateFunc::Count => ScalarType::Int64,
-            AggregateFunc::Any => ScalarType::Bool,
-            AggregateFunc::All => ScalarType::Bool,
-            AggregateFunc::JsonbAgg { .. } => ScalarType::Jsonb,
-            AggregateFunc::JsonbObjectAgg { .. } => ScalarType::Jsonb,
-            AggregateFunc::SumInt16 => ScalarType::Int64,
-            AggregateFunc::SumInt32 => ScalarType::Int64,
-            AggregateFunc::SumInt64 => ScalarType::Numeric {
+            AggregateFunc::Count => SqlScalarType::Int64,
+            AggregateFunc::Any => SqlScalarType::Bool,
+            AggregateFunc::All => SqlScalarType::Bool,
+            AggregateFunc::JsonbAgg { .. } => SqlScalarType::Jsonb,
+            AggregateFunc::JsonbObjectAgg { .. } => SqlScalarType::Jsonb,
+            AggregateFunc::SumInt16 => SqlScalarType::Int64,
+            AggregateFunc::SumInt32 => SqlScalarType::Int64,
+            AggregateFunc::SumInt64 => SqlScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             },
-            AggregateFunc::SumUInt16 => ScalarType::UInt64,
-            AggregateFunc::SumUInt32 => ScalarType::UInt64,
-            AggregateFunc::SumUInt64 => ScalarType::Numeric {
+            AggregateFunc::SumUInt16 => SqlScalarType::UInt64,
+            AggregateFunc::SumUInt32 => SqlScalarType::UInt64,
+            AggregateFunc::SumUInt64 => SqlScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             },
-            AggregateFunc::MapAgg { value_type, .. } => ScalarType::Map {
+            AggregateFunc::MapAgg { value_type, .. } => SqlScalarType::Map {
                 value_type: Box::new(value_type.clone()),
                 custom_id: None,
             },
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
-                    ScalarType::Record { ref fields, .. } => fields[0].1.scalar_type.clone(),
+                    SqlScalarType::Record { ref fields, .. } => fields[0].1.scalar_type.clone(),
                     _ => unreachable!(),
                 }
             }
-            AggregateFunc::StringAgg { .. } => ScalarType::String,
+            AggregateFunc::StringAgg { .. } => SqlScalarType::String,
             AggregateFunc::RowNumber { .. } => {
                 AggregateFunc::output_type_ranking_window_funcs(&input_type, "?row_number?")
             }
@@ -2758,11 +2368,13 @@ impl AggregateFunc {
                 let original_row_type = fields[0].unwrap_record_element_type()[0]
                     .clone()
                     .nullable(false);
-                let output_type_inner = Self::lag_lead_output_type_inner_from_encoded_args(fields[0].unwrap_record_element_type()[1]);
+                let encoded_args = fields[0].unwrap_record_element_type()[1];
+                let output_type_inner =
+                    Self::lag_lead_output_type_inner_from_encoded_args(encoded_args);
                 let column_name = Self::lag_lead_result_column_name(lag_lead_type);
 
-                ScalarType::List {
-                    element_type: Box::new(ScalarType::Record {
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Record {
                         fields: [
                             (column_name, output_type_inner),
                             (ColumnName::from("?orig_row?"), original_row_type),
@@ -2782,8 +2394,8 @@ impl AggregateFunc {
                     .clone()
                     .nullable(true); // null when the partition is empty
 
-                ScalarType::List {
-                    element_type: Box::new(ScalarType::Record {
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Record {
                         fields: [
                             (ColumnName::from("?first_value?"), value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
@@ -2803,8 +2415,8 @@ impl AggregateFunc {
                     .clone()
                     .nullable(true); // null when the partition is empty
 
-                ScalarType::List {
-                    element_type: Box::new(ScalarType::Record {
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Record {
                         fields: [
                             (ColumnName::from("?last_value?"), value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
@@ -2825,10 +2437,10 @@ impl AggregateFunc {
                 let arg_type = fields[0].unwrap_record_element_type()[1]
                     .clone()
                     .nullable(true);
-                let wrapped_aggr_out_type = wrapped_aggregate.output_type(arg_type);
+                let wrapped_aggr_out_type = wrapped_aggregate.output_sql_type(arg_type);
 
-                ScalarType::List {
-                    element_type: Box::new(ScalarType::Record {
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Record {
                         fields: [
                             (ColumnName::from("?window_agg?"), wrapped_aggr_out_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
@@ -2849,17 +2461,18 @@ impl AggregateFunc {
                     .nullable(false);
                 let args_type = fields[0].unwrap_record_element_type()[1];
                 let arg_types = args_type.unwrap_record_element_type();
-                let out_fields = arg_types.iter().zip_eq(wrapped_aggregates).map(|(arg_type, wrapped_agg)| {
+                let out_fields = arg_types.iter().zip_eq(wrapped_aggregates).map(
+                    |(arg_type, wrapped_agg)| {
                     (
                         ColumnName::from(wrapped_agg.name()),
-                        wrapped_agg.output_type((**arg_type).clone().nullable(true)),
+                        wrapped_agg.output_sql_type((**arg_type).clone().nullable(true)),
                     )
                 }).collect_vec();
 
-                ScalarType::List {
-                    element_type: Box::new(ScalarType::Record {
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Record {
                         fields: [
-                            (ColumnName::from("?fused_window_agg?"), ScalarType::Record {
+                            (ColumnName::from("?fused_window_agg?"), SqlScalarType::Record {
                                 fields: out_fields.into(),
                                 custom_id: None,
                             }.nullable(false)),
@@ -2879,19 +2492,30 @@ impl AggregateFunc {
                 let original_row_type = fields[0].unwrap_record_element_type()[0]
                     .clone()
                     .nullable(false);
-                let encoded_args_type = fields[0].unwrap_record_element_type()[1].unwrap_record_element_type();
+                let encoded_args_type = fields[0]
+                    .unwrap_record_element_type()[1]
+                    .unwrap_record_element_type();
 
-                ScalarType::List {
-                    element_type: Box::new(ScalarType::Record {
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Record {
                         fields: [
-                            (ColumnName::from("?fused_value_window_func?"), ScalarType::Record {
-                                fields: encoded_args_type.into_iter().zip_eq(funcs).map(|(arg_type, func)| {
+                            (
+                                ColumnName::from("?fused_value_window_func?"),
+                                SqlScalarType::Record {
+                                fields: encoded_args_type.into_iter().zip_eq(funcs).map(
+                                    |(arg_type, func)| {
                                     match func {
-                                        AggregateFunc::LagLead { lag_lead: lag_lead_type, .. } => {
-                                            (
-                                                Self::lag_lead_result_column_name(lag_lead_type),
-                                                Self::lag_lead_output_type_inner_from_encoded_args(arg_type)
-                                            )
+                                        AggregateFunc::LagLead {
+                                            lag_lead: lag_lead_type, ..
+                                        } => {
+                                            let name = Self::lag_lead_result_column_name(
+                                                lag_lead_type,
+                                            );
+                                            let ty = Self
+                                                ::lag_lead_output_type_inner_from_encoded_args(
+                                                    arg_type,
+                                                );
+                                            (name, ty)
                                         },
                                         AggregateFunc::FirstValue { .. } => {
                                             (
@@ -2966,9 +2590,9 @@ impl AggregateFunc {
             // Use the nullability of the underlying column being aggregated, not the Records wrapping it
             AggregateFunc::StringAgg { .. } => match input_type.scalar_type {
                 // The outer Record wraps the input in the first position, and any ORDER BY expressions afterwards
-                ScalarType::Record { fields, .. } => match &fields[0].1.scalar_type {
+                SqlScalarType::Record { fields, .. } => match &fields[0].1.scalar_type {
                     // The inner Record is a (value, separator) tuple
-                    ScalarType::Record { fields, .. } => fields[0].1.nullable,
+                    SqlScalarType::Record { fields, .. } => fields[0].1.nullable,
                     _ => unreachable!(),
                 },
                 _ => unreachable!(),
@@ -2978,19 +2602,29 @@ impl AggregateFunc {
         scalar_type.nullable(nullable)
     }
 
+    /// Computes the representation type of this aggregate function.
+    ///
+    /// This is a wrapper around [`Self::output_sql_type`] that converts the result to a representation type.
+    pub fn output_type(&self, input_type: ReprColumnType) -> ReprColumnType {
+        ReprColumnType::from(&self.output_sql_type(SqlColumnType::from_repr(&input_type)))
+    }
+
     /// Compute output type for ROW_NUMBER, RANK, DENSE_RANK
-    fn output_type_ranking_window_funcs(input_type: &ColumnType, col_name: &str) -> ScalarType {
+    fn output_type_ranking_window_funcs(
+        input_type: &SqlColumnType,
+        col_name: &str,
+    ) -> SqlScalarType {
         match input_type.scalar_type {
-            ScalarType::Record { ref fields, .. } => ScalarType::List {
-                element_type: Box::new(ScalarType::Record {
+            SqlScalarType::Record { ref fields, .. } => SqlScalarType::List {
+                element_type: Box::new(SqlScalarType::Record {
                     fields: [
                         (
                             ColumnName::from(col_name),
-                            ScalarType::Int64.nullable(false),
+                            SqlScalarType::Int64.nullable(false),
                         ),
                         (ColumnName::from("?orig_row?"), {
                             let inner = match &fields[0].1.scalar_type {
-                                ScalarType::List { element_type, .. } => element_type.clone(),
+                                SqlScalarType::List { element_type, .. } => element_type.clone(),
                                 _ => unreachable!(),
                             };
                             inner.nullable(false)
@@ -3008,7 +2642,9 @@ impl AggregateFunc {
     /// Given the `EncodedArgs` part of `((OriginalRow, EncodedArgs), OrderByExprs...)`,
     /// this computes the type of the first field of the output type. (The first field is the
     /// real result, the rest is the original row.)
-    fn lag_lead_output_type_inner_from_encoded_args(encoded_args_type: &ScalarType) -> ColumnType {
+    fn lag_lead_output_type_inner_from_encoded_args(
+        encoded_args_type: &SqlScalarType,
+    ) -> SqlColumnType {
         // lag/lead have 3 arguments, and the output type is
         // the same as the first of these, but always nullable. (It's null when the
         // lag/lead computation reaches over the bounds of the window partition.)
@@ -3045,6 +2681,8 @@ impl AggregateFunc {
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxTime
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -3060,6 +2698,8 @@ impl AggregateFunc {
             | AggregateFunc::MinDate
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
+            | AggregateFunc::MinInterval
+            | AggregateFunc::MinTime
             | AggregateFunc::SumInt16
             | AggregateFunc::SumInt32
             | AggregateFunc::SumInt64
@@ -3071,16 +2711,42 @@ impl AggregateFunc {
             | AggregateFunc::SumNumeric
             | AggregateFunc::StringAgg { .. } => true,
             // Count is never null
-            AggregateFunc::Count => false,
-            _ => false,
+            AggregateFunc::Count
+            | AggregateFunc::Any
+            | AggregateFunc::All
+            | AggregateFunc::JsonbAgg { .. }
+            | AggregateFunc::JsonbObjectAgg { .. }
+            | AggregateFunc::MapAgg { .. }
+            | AggregateFunc::ArrayConcat { .. }
+            | AggregateFunc::ListConcat { .. }
+            | AggregateFunc::RowNumber { .. }
+            | AggregateFunc::Rank { .. }
+            | AggregateFunc::DenseRank { .. }
+            | AggregateFunc::LagLead { .. }
+            | AggregateFunc::FirstValue { .. }
+            | AggregateFunc::LastValue { .. }
+            | AggregateFunc::FusedValueWindowFunc { .. }
+            | AggregateFunc::WindowAggregate { .. }
+            | AggregateFunc::FusedWindowAggregate { .. }
+            | AggregateFunc::Dummy => false,
         }
     }
 }
 
-fn jsonb_each<'a>(
+fn jsonb_each<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    // First produce a map, so that a common iterator can be returned.
+    let map = match a {
+        Datum::Map(dict) => dict,
+        _ => mz_repr::DatumMap::empty(),
+    };
+
+    map.iter()
+        .map(move |(k, v)| (Row::pack_slice(&[Datum::String(k), v]), Diff::ONE))
+}
+
+fn jsonb_each_stringify<'a>(
     a: Datum<'a>,
     temp_storage: &'a RowArena,
-    stringify: bool,
 ) -> impl Iterator<Item = (Row, Diff)> + 'a {
     // First produce a map, so that a common iterator can be returned.
     let map = match a {
@@ -3089,10 +2755,10 @@ fn jsonb_each<'a>(
     };
 
     map.iter().map(move |(k, mut v)| {
-        if stringify {
-            v = jsonb_stringify(v, temp_storage);
-        }
-        (Row::pack_slice(&[Datum::String(k), v]), 1)
+        v = jsonb_stringify(v, temp_storage)
+            .map(Datum::String)
+            .unwrap_or(Datum::Null);
+        (Row::pack_slice(&[Datum::String(k), v]), Diff::ONE)
     })
 }
 
@@ -3103,23 +2769,30 @@ fn jsonb_object_keys<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a
     };
 
     map.iter()
-        .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), 1))
+        .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), Diff::ONE))
 }
 
-fn jsonb_array_elements<'a>(
+fn jsonb_array_elements<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    let list = match a {
+        Datum::List(list) => list,
+        _ => mz_repr::DatumList::empty(),
+    };
+    list.iter().map(move |e| (Row::pack_slice(&[e]), Diff::ONE))
+}
+
+fn jsonb_array_elements_stringify<'a>(
     a: Datum<'a>,
     temp_storage: &'a RowArena,
-    stringify: bool,
 ) -> impl Iterator<Item = (Row, Diff)> + 'a {
     let list = match a {
         Datum::List(list) => list,
         _ => mz_repr::DatumList::empty(),
     };
     list.iter().map(move |mut e| {
-        if stringify {
-            e = jsonb_stringify(e, temp_storage);
-        }
-        (Row::pack_slice(&[e]), 1)
+        e = jsonb_stringify(e, temp_storage)
+            .map(Datum::String)
+            .unwrap_or(Datum::Null);
+        (Row::pack_slice(&[e]), Diff::ONE)
     })
 }
 
@@ -3131,7 +2804,63 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
         .iter()
         .skip(1)
         .map(|m| Datum::from(m.map(|m| m.as_str())));
-    Some((Row::pack(datums), 1))
+    Some((Row::pack(datums), Diff::ONE))
+}
+
+fn regexp_matches<'a>(
+    exprs: &[Datum<'a>],
+) -> Result<impl Iterator<Item = (Row, Diff)> + 'a, EvalError> {
+    // There are only two acceptable ways to call this function:
+    // 1. regexp_matches(string, regex)
+    // 2. regexp_matches(string, regex, flag)
+    assert!(exprs.len() == 2 || exprs.len() == 3);
+    let a = exprs[0].unwrap_str();
+    let r = exprs[1].unwrap_str();
+
+    let (regex, opts) = if exprs.len() == 3 {
+        let flag = exprs[2].unwrap_str();
+        let opts = AnalyzedRegexOpts::from_str(flag)?;
+        (AnalyzedRegex::new(r, opts)?, opts)
+    } else {
+        let opts = AnalyzedRegexOpts::default();
+        (AnalyzedRegex::new(r, opts)?, opts)
+    };
+
+    let regex = regex.inner().clone();
+
+    let iter = regex.captures_iter(a).map(move |captures| {
+        let matches = captures
+            .iter()
+            // The first match is the *entire* match, we want the capture groups by themselves.
+            .skip(1)
+            .map(|m| Datum::from(m.map(|m| m.as_str())))
+            .collect::<Vec<_>>();
+
+        let mut binding = SharedRow::get();
+        let mut packer = binding.packer();
+
+        let dimension = ArrayDimension {
+            lower_bound: 1,
+            length: matches.len(),
+        };
+        packer
+            .try_push_array(&[dimension], matches)
+            .expect("generated dimensions above");
+
+        (binding.clone(), Diff::ONE)
+    });
+
+    // This is slightly unfortunate, but we need to collect the captures into a
+    // Vec before we can yield them, because we can't return a iter with a
+    // reference to the local `regex` variable.
+    // We attempt to minimize the cost of this by using a SmallVec.
+    let out = iter.collect::<SmallVec<[_; 3]>>();
+
+    if opts.global {
+        Ok(Either::Left(out.into_iter()))
+    } else {
+        Ok(Either::Right(out.into_iter().take(1)))
+    }
 }
 
 fn generate_series<N>(
@@ -3149,7 +2878,7 @@ where
         ));
     }
     Ok(num::range_step_inclusive(start, stop, step)
-        .map(move |i| (Row::pack_slice(&[Datum::from(i)]), 1)))
+        .map(move |i| (Row::pack_slice(&[Datum::from(i)]), Diff::ONE)))
 }
 
 /// Like
@@ -3215,7 +2944,7 @@ fn generate_series_ts<T: TimestampLike>(
         done: false,
     };
 
-    Ok(trsi.map(move |i| (Row::pack_slice(&[conv(i)]), 1)))
+    Ok(trsi.map(move |i| (Row::pack_slice(&[conv(i)]), Diff::ONE)))
 }
 
 fn generate_subscripts_array(
@@ -3231,16 +2960,25 @@ fn generate_subscripts_array(
             .try_into()
             .map_err(|_| EvalError::Int32OutOfRange((dim - 1).to_string().into()))?,
     ) {
-        Some(requested_dim) => Ok(Box::new(generate_series::<i32>(
-            requested_dim.lower_bound.try_into().map_err(|_| {
+        Some(requested_dim) => {
+            let lower_bound: i32 = requested_dim.lower_bound.try_into().map_err(|_| {
                 EvalError::Int32OutOfRange(requested_dim.lower_bound.to_string().into())
-            })?,
-            requested_dim
+            })?;
+            // The subscripts run from the lower bound to the upper bound,
+            // inclusive. The upper bound is `lower_bound + length - 1`.
+            let length: i32 = requested_dim
                 .length
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.length.to_string().into()))?,
-            1,
-        )?)),
+                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.length.to_string().into()))?;
+            let upper_bound = lower_bound.checked_add(length - 1).ok_or_else(|| {
+                EvalError::Int32OutOfRange(requested_dim.length.to_string().into())
+            })?;
+            Ok(Box::new(generate_series::<i32>(
+                lower_bound,
+                upper_bound,
+                1,
+            )?))
+        }
         None => Ok(Box::new(iter::empty())),
     }
 }
@@ -3249,19 +2987,19 @@ fn unnest_array<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_array()
         .elements()
         .iter()
-        .map(move |e| (Row::pack_slice(&[e]), 1))
+        .map(move |e| (Row::pack_slice(&[e]), Diff::ONE))
 }
 
 fn unnest_list<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_list()
         .iter()
-        .map(move |e| (Row::pack_slice(&[e]), 1))
+        .map(move |e| (Row::pack_slice(&[e]), Diff::ONE))
 }
 
 fn unnest_map<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_map()
         .iter()
-        .map(move |(k, v)| (Row::pack_slice(&[Datum::from(k), v]), 1))
+        .map(move |(k, v)| (Row::pack_slice(&[Datum::from(k), v]), Diff::ONE))
 }
 
 impl AggregateFunc {
@@ -3433,7 +3171,16 @@ where
 }
 
 #[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub struct CaptureGroupDesc {
     pub index: u32,
@@ -3441,51 +3188,58 @@ pub struct CaptureGroupDesc {
     pub nullable: bool,
 }
 
-impl RustType<ProtoCaptureGroupDesc> for CaptureGroupDesc {
-    fn into_proto(&self) -> ProtoCaptureGroupDesc {
-        ProtoCaptureGroupDesc {
-            index: self.index,
-            name: self.name.clone(),
-            nullable: self.nullable,
-        }
-    }
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Default
+)]
+pub struct AnalyzedRegexOpts {
+    pub case_insensitive: bool,
+    pub global: bool,
+}
 
-    fn from_proto(proto: ProtoCaptureGroupDesc) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            index: proto.index,
-            name: proto.name,
-            nullable: proto.nullable,
-        })
+impl FromStr for AnalyzedRegexOpts {
+    type Err = EvalError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut opts = AnalyzedRegexOpts::default();
+        for c in s.chars() {
+            match c {
+                'i' => opts.case_insensitive = true,
+                'g' => opts.global = true,
+                _ => return Err(EvalError::InvalidRegexFlag(c)),
+            }
+        }
+        Ok(opts)
     }
 }
 
 #[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
-pub struct AnalyzedRegex(
-    #[proptest(strategy = "mz_repr::adt::regex::any_regex()")] ReprRegex,
-    Vec<CaptureGroupDesc>,
-);
-
-impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
-    fn into_proto(&self) -> ProtoAnalyzedRegex {
-        ProtoAnalyzedRegex {
-            regex: Some(self.0.into_proto()),
-            groups: self.1.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAnalyzedRegex) -> Result<Self, TryFromProtoError> {
-        Ok(AnalyzedRegex(
-            proto.regex.into_rust_if_some("ProtoAnalyzedRegex::regex")?,
-            proto.groups.into_rust()?,
-        ))
-    }
-}
+pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>, AnalyzedRegexOpts);
 
 impl AnalyzedRegex {
-    pub fn new(s: &str) -> Result<Self, regex::Error> {
-        let r = ReprRegex::new(s, false)?;
+    pub fn new(s: &str, opts: AnalyzedRegexOpts) -> Result<Self, RegexCompilationError> {
+        let r = ReprRegex::new(s, opts.case_insensitive)?;
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
         let descs: Vec<_> = r
@@ -3504,7 +3258,7 @@ impl AnalyzedRegex {
                 nullable: true,
             })
             .collect();
-        Ok(Self(r, descs))
+        Ok(Self(r, descs, opts))
     }
     pub fn capture_groups_len(&self) -> usize {
         self.1.len()
@@ -3515,9 +3269,12 @@ impl AnalyzedRegex {
     pub fn inner(&self) -> &Regex {
         &(self.0).regex
     }
+    pub fn opts(&self) -> &AnalyzedRegexOpts {
+        &self.2
+    }
 }
 
-pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)> + '_ {
+pub fn csv_extract(a: Datum<'_>, n_cols: usize) -> impl Iterator<Item = (Row, Diff)> + '_ {
     let bytes = a.unwrap_str().as_bytes();
     let mut row = Row::default();
     let csv_reader = csv::ReaderBuilder::new()
@@ -3526,23 +3283,41 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)>
     csv_reader.into_records().filter_map(move |res| match res {
         Ok(sr) if sr.len() == n_cols => {
             row.packer().extend(sr.iter().map(Datum::String));
-            Some((row.clone(), 1))
+            Some((row.clone(), Diff::ONE))
         }
         _ => None,
     })
 }
 
-pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
+pub fn repeat_row(a: Datum) -> Option<(Row, Diff)> {
     let n = a.unwrap_int64();
     if n != 0 {
-        Some((Row::default(), n))
+        Some((Row::default(), n.into()))
     } else {
         None
     }
 }
 
+pub fn repeat_row_non_negative<'a>(
+    a: Datum,
+) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
+    let n = a.unwrap_int64();
+    if n < 0 {
+        Err(EvalError::InvalidParameterValue(
+            format!("repeat_row_non_negative got {}", n).into(),
+        ))
+    } else if n == 0 {
+        Ok(Box::new(iter::empty()))
+    } else {
+        // iterator with 1 element; n goes into the diff
+        Ok(Box::new(iter::once((Row::default(), n.into()))))
+    }
+}
+
 fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row, Diff)> + 'a {
-    datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
+    datums
+        .chunks(width)
+        .map(|chunk| (Row::pack(chunk), Diff::ONE))
 }
 
 fn acl_explode<'a>(
@@ -3564,7 +3339,7 @@ fn acl_explode<'a>(
                 // GRANT OPTION is not implemented, so we hardcode false.
                 Datum::False,
             ];
-            res.push((Row::pack_slice(&row), 1));
+            res.push((Row::pack_slice(&row), Diff::ONE));
         }
     }
     Ok(res.into_iter())
@@ -3589,40 +3364,81 @@ fn mz_acl_explode<'a>(
                 // GRANT OPTION is not implemented, so we hardcode false.
                 Datum::False,
             ];
-            res.push((Row::pack_slice(&row), 1));
+            res.push((Row::pack_slice(&row), Diff::ONE));
         }
     }
     Ok(res.into_iter())
 }
 
+/// When adding a new `TableFunc` variant, please consider adding it to
+/// `TableFunc::with_ordinality`!
 #[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub enum TableFunc {
     AclExplode,
     MzAclExplode,
-    JsonbEach {
-        stringify: bool,
-    },
+    JsonbEach,
+    JsonbEachStringify,
     JsonbObjectKeys,
-    JsonbArrayElements {
-        stringify: bool,
-    },
+    JsonbArrayElements,
+    JsonbArrayElementsStringify,
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
     GenerateSeriesInt32,
     GenerateSeriesInt64,
     GenerateSeriesTimestamp,
     GenerateSeriesTimestampTz,
-    Repeat,
+    /// Supplied with an input count,
+    ///   1. Adds a column as if a typed subquery result,
+    ///   2. Filters the row away if the count is only one,
+    ///   3. Errors if the count is not exactly one.
+    /// The intent is that this presents as if a subquery result with too many
+    /// records contributing. The error column has the same type as the result
+    /// should have, but we only produce it if the count exceeds one.
+    ///
+    /// This logic could nearly be achieved with map, filter, project logic,
+    /// but has been challenging to do in a way that respects the vagaries of
+    /// SQL and our semantics. If we reveal a constant value in the column we
+    /// risk the optimizer pruning the branch; if we reveal that this will not
+    /// produce rows we risk the optimizer pruning the branch; if we reveal that
+    /// the only possible value is an error we risk the optimizer propagating that
+    /// error without guards.
+    ///
+    /// Before replacing this by an `MirScalarExpr`, quadruple check that it
+    /// would not result in misoptimizations due to expression evaluation order
+    /// being utterly undefined, and predicate pushdown trimming any fragments
+    /// that might produce columns that will not be needed.
+    GuardSubquerySize {
+        column_type: SqlScalarType,
+    },
+    /// Repeats the input row the given number of times. Can even repeat a negative number of times,
+    /// which has some important consequences:
+    /// - can lead to negative accumulations downstream;
+    /// - can't be used in `WITH ORDINALITY` and other constructs that are implemented by
+    ///   `TableFunc::WithOrdinality`, e.g., `ROWS FROM`;
+    /// - output is non-monotonic.
+    RepeatRow,
+    /// Same as `RepeatRow`, but errors on a negative count, and thereby avoids the above
+    /// peculiarities.
+    RepeatRowNonNegative,
     UnnestArray {
-        el_typ: ScalarType,
+        el_typ: SqlScalarType,
     },
     UnnestList {
-        el_typ: ScalarType,
+        el_typ: SqlScalarType,
     },
     UnnestMap {
-        value_type: ScalarType,
+        value_type: SqlScalarType,
     },
     /// Given `n` input expressions, wraps them into `n / width` rows, each of
     /// `width` columns.
@@ -3630,98 +3446,88 @@ pub enum TableFunc {
     /// This function is not intended to be called directly by end users, but
     /// is useful in the planning of e.g. VALUES clauses.
     Wrap {
-        types: Vec<ColumnType>,
+        types: Vec<SqlColumnType>,
         width: usize,
     },
     GenerateSubscriptsArray,
     /// Execute some arbitrary scalar function as a table function.
     TabletizedScalar {
         name: String,
-        relation: RelationType,
+        relation: SqlRelationType,
     },
+    RegexpMatches,
+    /// Implements the WITH ORDINALITY clause.
+    ///
+    /// Don't construct `TableFunc::WithOrdinality` manually! Use the `with_ordinality` constructor
+    /// function instead, which checks whether the given table function supports `WithOrdinality`.
+    #[allow(private_interfaces)]
+    WithOrdinality(WithOrdinality),
 }
 
-impl RustType<ProtoTableFunc> for TableFunc {
-    fn into_proto(&self) -> ProtoTableFunc {
-        use proto_table_func::{Kind, ProtoWrap};
+/// Evaluates the inner table function, expands its results into unary (repeating each row as
+/// many times as the diff indicates), and appends an integer corresponding to the ordinal
+/// position (starting from 1). For example, it numbers the elements of a list when calling
+/// `unnest_list`.
+///
+/// Private enum variant of `TableFunc`. Don't construct this directly, but use
+/// `TableFunc::with_ordinality` instead.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+struct WithOrdinality {
+    inner: Box<TableFunc>,
+}
 
-        ProtoTableFunc {
-            kind: Some(match self {
-                TableFunc::AclExplode => Kind::AclExplode(()),
-                TableFunc::MzAclExplode => Kind::MzAclExplode(()),
-                TableFunc::JsonbEach { stringify } => Kind::JsonbEach(*stringify),
-                TableFunc::JsonbObjectKeys => Kind::JsonbObjectKeys(()),
-                TableFunc::JsonbArrayElements { stringify } => Kind::JsonbArrayElements(*stringify),
-                TableFunc::RegexpExtract(x) => Kind::RegexpExtract(x.into_proto()),
-                TableFunc::CsvExtract(x) => Kind::CsvExtract(x.into_proto()),
-                TableFunc::GenerateSeriesInt32 => Kind::GenerateSeriesInt32(()),
-                TableFunc::GenerateSeriesInt64 => Kind::GenerateSeriesInt64(()),
-                TableFunc::GenerateSeriesTimestamp => Kind::GenerateSeriesTimestamp(()),
-                TableFunc::GenerateSeriesTimestampTz => Kind::GenerateSeriesTimestampTz(()),
-                TableFunc::Repeat => Kind::Repeat(()),
-                TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into_proto()),
-                TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into_proto()),
-                TableFunc::UnnestMap { value_type } => Kind::UnnestMap(value_type.into_proto()),
-                TableFunc::Wrap { types, width } => Kind::Wrap(ProtoWrap {
-                    types: types.into_proto(),
-                    width: width.into_proto(),
-                }),
-                TableFunc::GenerateSubscriptsArray => Kind::GenerateSubscriptsArray(()),
-                TableFunc::TabletizedScalar { name, relation } => {
-                    Kind::TabletizedScalar(ProtoTabletizedScalar {
-                        name: name.into_proto(),
-                        relation: Some(relation.into_proto()),
-                    })
-                }
-            }),
+impl TableFunc {
+    /// Adds `WITH ORDINALITY` to a table function if it's allowed on the given table function.
+    pub fn with_ordinality(inner: TableFunc) -> Option<TableFunc> {
+        match inner {
+            TableFunc::AclExplode
+            | TableFunc::MzAclExplode
+            | TableFunc::JsonbEach
+            | TableFunc::JsonbEachStringify
+            | TableFunc::JsonbObjectKeys
+            | TableFunc::JsonbArrayElements
+            | TableFunc::JsonbArrayElementsStringify
+            | TableFunc::RegexpExtract(_)
+            | TableFunc::CsvExtract(_)
+            | TableFunc::GenerateSeriesInt32
+            | TableFunc::GenerateSeriesInt64
+            | TableFunc::GenerateSeriesTimestamp
+            | TableFunc::GenerateSeriesTimestampTz
+            | TableFunc::GuardSubquerySize { .. }
+            | TableFunc::RepeatRowNonNegative
+            | TableFunc::UnnestArray { .. }
+            | TableFunc::UnnestList { .. }
+            | TableFunc::UnnestMap { .. }
+            | TableFunc::Wrap { .. }
+            | TableFunc::GenerateSubscriptsArray
+            | TableFunc::TabletizedScalar { .. }
+            | TableFunc::RegexpMatches => Some(TableFunc::WithOrdinality(WithOrdinality {
+                inner: Box::new(inner),
+            })),
+            // IMPORTANT: Before adding a new table function above, consider negative diffs:
+            // `WithOrdinality::eval` will panic if the inner table function emits a negative diff.
+            // (Note that negative diffs in the table function's _input_ don't matter. The table
+            // function implementation doesn't see the input diffs, so the thing that matters here
+            // is whether the table function itself can emit a negative diff.)
+            TableFunc::RepeatRow // can produce negative diffs
+            | TableFunc::WithOrdinality(_) => None, // no nesting of `WITH ORDINALITY` allowed
         }
-    }
-
-    fn from_proto(proto: ProtoTableFunc) -> Result<Self, TryFromProtoError> {
-        use proto_table_func::Kind;
-
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoTableFunc::Kind"))?;
-
-        Ok(match kind {
-            Kind::AclExplode(()) => TableFunc::AclExplode,
-            Kind::MzAclExplode(()) => TableFunc::MzAclExplode,
-            Kind::JsonbEach(stringify) => TableFunc::JsonbEach { stringify },
-            Kind::JsonbObjectKeys(()) => TableFunc::JsonbObjectKeys,
-            Kind::JsonbArrayElements(stringify) => TableFunc::JsonbArrayElements { stringify },
-            Kind::RegexpExtract(x) => TableFunc::RegexpExtract(x.into_rust()?),
-            Kind::CsvExtract(x) => TableFunc::CsvExtract(x.into_rust()?),
-            Kind::GenerateSeriesInt32(()) => TableFunc::GenerateSeriesInt32,
-            Kind::GenerateSeriesInt64(()) => TableFunc::GenerateSeriesInt64,
-            Kind::GenerateSeriesTimestamp(()) => TableFunc::GenerateSeriesTimestamp,
-            Kind::GenerateSeriesTimestampTz(()) => TableFunc::GenerateSeriesTimestampTz,
-            Kind::Repeat(()) => TableFunc::Repeat,
-            Kind::UnnestArray(x) => TableFunc::UnnestArray {
-                el_typ: x.into_rust()?,
-            },
-            Kind::UnnestList(x) => TableFunc::UnnestList {
-                el_typ: x.into_rust()?,
-            },
-            Kind::UnnestMap(value_type) => TableFunc::UnnestMap {
-                value_type: value_type.into_rust()?,
-            },
-            Kind::Wrap(x) => TableFunc::Wrap {
-                width: x.width.into_rust()?,
-                types: x.types.into_rust()?,
-            },
-            Kind::GenerateSubscriptsArray(()) => TableFunc::GenerateSubscriptsArray,
-            Kind::TabletizedScalar(v) => TableFunc::TabletizedScalar {
-                name: v.name,
-                relation: v
-                    .relation
-                    .into_rust_if_some("ProtoTabletizedScalar::relation")?,
-            },
-        })
     }
 }
 
 impl TableFunc {
+    /// Executes `self` on the given input row (`datums`).
     pub fn eval<'a>(
         &'a self,
         datums: &'a [Datum<'a>],
@@ -3733,14 +3539,15 @@ impl TableFunc {
         match self {
             TableFunc::AclExplode => Ok(Box::new(acl_explode(datums[0], temp_storage)?)),
             TableFunc::MzAclExplode => Ok(Box::new(mz_acl_explode(datums[0], temp_storage)?)),
-            TableFunc::JsonbEach { stringify } => {
-                Ok(Box::new(jsonb_each(datums[0], temp_storage, *stringify)))
+            TableFunc::JsonbEach => Ok(Box::new(jsonb_each(datums[0]))),
+            TableFunc::JsonbEachStringify => {
+                Ok(Box::new(jsonb_each_stringify(datums[0], temp_storage)))
             }
             TableFunc::JsonbObjectKeys => Ok(Box::new(jsonb_object_keys(datums[0]))),
-            TableFunc::JsonbArrayElements { stringify } => Ok(Box::new(jsonb_array_elements(
+            TableFunc::JsonbArrayElements => Ok(Box::new(jsonb_array_elements(datums[0]))),
+            TableFunc::JsonbArrayElementsStringify => Ok(Box::new(jsonb_array_elements_stringify(
                 datums[0],
                 temp_storage,
-                *stringify,
             ))),
             TableFunc::RegexpExtract(a) => Ok(Box::new(regexp_extract(datums[0], a).into_iter())),
             TableFunc::CsvExtract(n_cols) => Ok(Box::new(csv_extract(datums[0], *n_cols))),
@@ -3787,113 +3594,143 @@ impl TableFunc {
             TableFunc::GenerateSubscriptsArray => {
                 generate_subscripts_array(datums[0], datums[1].unwrap_int32())
             }
-            TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
+            TableFunc::GuardSubquerySize { column_type: _ } => {
+                // We error if the count is not one,
+                // and produce no rows if equal to one.
+                let count = datums[0].unwrap_int64();
+                if count == 1 {
+                    Ok(Box::new([].into_iter()))
+                } else if count > 1 {
+                    Err(EvalError::MultipleRowsFromSubquery)
+                } else if count < 0 {
+                    Err(EvalError::NegativeRowsFromSubquery)
+                } else {
+                    // This shouldn't happen because this is not an SQL `count` but an MIR `count`,
+                    // which produces no output on 0 input rows.
+                    soft_panic_or_log!("subquery counting unexpectedly produced 0");
+                    Err(EvalError::Internal(
+                        "subquery counting unexpectedly produced 0".into(),
+                    ))
+                }
+            }
+            TableFunc::RepeatRow => Ok(Box::new(repeat_row(datums[0]).into_iter())),
+            TableFunc::RepeatRowNonNegative => repeat_row_non_negative(datums[0]),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
             TableFunc::UnnestMap { .. } => Ok(Box::new(unnest_map(datums[0]))),
             TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(datums, *width))),
             TableFunc::TabletizedScalar { .. } => {
                 let r = Row::pack_slice(datums);
-                Ok(Box::new(std::iter::once((r, 1))))
+                Ok(Box::new(std::iter::once((r, Diff::ONE))))
+            }
+            TableFunc::RegexpMatches => Ok(Box::new(regexp_matches(datums)?)),
+            TableFunc::WithOrdinality(func_with_ordinality) => {
+                func_with_ordinality.eval(datums, temp_storage)
             }
         }
     }
 
-    pub fn output_type(&self) -> RelationType {
+    pub fn output_sql_type(&self) -> SqlRelationType {
         let (column_types, keys) = match self {
             TableFunc::AclExplode => {
                 let column_types = vec![
-                    ScalarType::Oid.nullable(false),
-                    ScalarType::Oid.nullable(false),
-                    ScalarType::String.nullable(false),
-                    ScalarType::Bool.nullable(false),
+                    SqlScalarType::Oid.nullable(false),
+                    SqlScalarType::Oid.nullable(false),
+                    SqlScalarType::String.nullable(false),
+                    SqlScalarType::Bool.nullable(false),
                 ];
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::MzAclExplode => {
                 let column_types = vec![
-                    ScalarType::String.nullable(false),
-                    ScalarType::String.nullable(false),
-                    ScalarType::String.nullable(false),
-                    ScalarType::Bool.nullable(false),
+                    SqlScalarType::String.nullable(false),
+                    SqlScalarType::String.nullable(false),
+                    SqlScalarType::String.nullable(false),
+                    SqlScalarType::Bool.nullable(false),
                 ];
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::JsonbEach { stringify: true } => {
+            TableFunc::JsonbEach => {
                 let column_types = vec![
-                    ScalarType::String.nullable(false),
-                    ScalarType::String.nullable(true),
+                    SqlScalarType::String.nullable(false),
+                    SqlScalarType::Jsonb.nullable(false),
                 ];
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::JsonbEach { stringify: false } => {
+            TableFunc::JsonbEachStringify => {
                 let column_types = vec![
-                    ScalarType::String.nullable(false),
-                    ScalarType::Jsonb.nullable(false),
+                    SqlScalarType::String.nullable(false),
+                    SqlScalarType::String.nullable(true),
                 ];
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::JsonbObjectKeys => {
-                let column_types = vec![ScalarType::String.nullable(false)];
+                let column_types = vec![SqlScalarType::String.nullable(false)];
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::JsonbArrayElements { stringify: true } => {
-                let column_types = vec![ScalarType::String.nullable(true)];
+            TableFunc::JsonbArrayElements => {
+                let column_types = vec![SqlScalarType::Jsonb.nullable(false)];
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::JsonbArrayElements { stringify: false } => {
-                let column_types = vec![ScalarType::Jsonb.nullable(false)];
+            TableFunc::JsonbArrayElementsStringify => {
+                let column_types = vec![SqlScalarType::String.nullable(true)];
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::RegexpExtract(a) => {
                 let column_types = a
                     .capture_groups_iter()
-                    .map(|cg| ScalarType::String.nullable(cg.nullable))
+                    .map(|cg| SqlScalarType::String.nullable(cg.nullable))
                     .collect();
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::CsvExtract(n_cols) => {
-                let column_types = iter::repeat(ScalarType::String.nullable(false))
+                let column_types = iter::repeat(SqlScalarType::String.nullable(false))
                     .take(*n_cols)
                     .collect();
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesInt32 => {
-                let column_types = vec![ScalarType::Int32.nullable(false)];
+                let column_types = vec![SqlScalarType::Int32.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesInt64 => {
-                let column_types = vec![ScalarType::Int64.nullable(false)];
+                let column_types = vec![SqlScalarType::Int64.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesTimestamp => {
-                let column_types = vec![ScalarType::Timestamp { precision: None }.nullable(false)];
+                let column_types =
+                    vec![SqlScalarType::Timestamp { precision: None }.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesTimestampTz => {
                 let column_types =
-                    vec![ScalarType::TimestampTz { precision: None }.nullable(false)];
+                    vec![SqlScalarType::TimestampTz { precision: None }.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSubscriptsArray => {
-                let column_types = vec![ScalarType::Int32.nullable(false)];
+                let column_types = vec![SqlScalarType::Int32.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
-            TableFunc::Repeat => {
+            TableFunc::GuardSubquerySize { column_type } => {
+                let column_types = vec![column_type.clone().nullable(false)];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::RepeatRow | TableFunc::RepeatRowNonNegative => {
                 let column_types = vec![];
                 let keys = vec![];
                 (column_types, keys)
@@ -3910,7 +3747,7 @@ impl TableFunc {
             }
             TableFunc::UnnestMap { value_type } => {
                 let column_types = vec![
-                    ScalarType::String.nullable(false),
+                    SqlScalarType::String.nullable(false),
                     value_type.clone().nullable(true),
                 ];
                 let keys = vec![vec![0]];
@@ -3924,22 +3761,48 @@ impl TableFunc {
             TableFunc::TabletizedScalar { relation, .. } => {
                 return relation.clone();
             }
+            TableFunc::RegexpMatches => {
+                let column_types =
+                    vec![SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)];
+                let keys = vec![];
+
+                (column_types, keys)
+            }
+            TableFunc::WithOrdinality(WithOrdinality { inner }) => {
+                let mut typ = inner.output_sql_type();
+                // Add the ordinality column.
+                typ.column_types.push(SqlScalarType::Int64.nullable(false));
+                // The ordinality column is always a key.
+                typ.keys.push(vec![typ.column_types.len() - 1]);
+                (typ.column_types, typ.keys)
+            }
         };
 
+        soft_assert_eq_no_log!(column_types.len(), self.output_arity());
+
         if !keys.is_empty() {
-            RelationType::new(column_types).with_keys(keys)
+            SqlRelationType::new(column_types).with_keys(keys)
         } else {
-            RelationType::new(column_types)
+            SqlRelationType::new(column_types)
         }
+    }
+
+    /// Computes the representation type of this table function.
+    ///
+    /// This is a wrapper around [`Self::output_sql_type`] that converts the result to a representation type.
+    pub fn output_type(&self) -> ReprRelationType {
+        ReprRelationType::from(&self.output_sql_type())
     }
 
     pub fn output_arity(&self) -> usize {
         match self {
             TableFunc::AclExplode => 4,
             TableFunc::MzAclExplode => 4,
-            TableFunc::JsonbEach { .. } => 2,
+            TableFunc::JsonbEach => 2,
+            TableFunc::JsonbEachStringify => 2,
             TableFunc::JsonbObjectKeys => 1,
-            TableFunc::JsonbArrayElements { .. } => 1,
+            TableFunc::JsonbArrayElements => 1,
+            TableFunc::JsonbArrayElementsStringify => 1,
             TableFunc::RegexpExtract(a) => a.capture_groups_len(),
             TableFunc::CsvExtract(n_cols) => *n_cols,
             TableFunc::GenerateSeriesInt32 => 1,
@@ -3947,12 +3810,16 @@ impl TableFunc {
             TableFunc::GenerateSeriesTimestamp => 1,
             TableFunc::GenerateSeriesTimestampTz => 1,
             TableFunc::GenerateSubscriptsArray => 1,
-            TableFunc::Repeat => 0,
+            TableFunc::GuardSubquerySize { .. } => 1,
+            TableFunc::RepeatRow => 0,
+            TableFunc::RepeatRowNonNegative => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
             TableFunc::UnnestMap { .. } => 2,
             TableFunc::Wrap { width, .. } => *width,
             TableFunc::TabletizedScalar { relation, .. } => relation.column_types.len(),
+            TableFunc::RegexpMatches => 1,
+            TableFunc::WithOrdinality(WithOrdinality { inner }) => inner.output_arity() + 1,
         }
     }
 
@@ -3960,9 +3827,11 @@ impl TableFunc {
         match self {
             TableFunc::AclExplode
             | TableFunc::MzAclExplode
-            | TableFunc::JsonbEach { .. }
+            | TableFunc::JsonbEach
+            | TableFunc::JsonbEachStringify
             | TableFunc::JsonbObjectKeys
-            | TableFunc::JsonbArrayElements { .. }
+            | TableFunc::JsonbArrayElements
+            | TableFunc::JsonbArrayElementsStringify
             | TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
             | TableFunc::GenerateSeriesTimestamp
@@ -3970,12 +3839,16 @@ impl TableFunc {
             | TableFunc::GenerateSubscriptsArray
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
-            | TableFunc::Repeat
+            | TableFunc::RepeatRow
+            | TableFunc::RepeatRowNonNegative
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. }
-            | TableFunc::UnnestMap { .. } => true,
+            | TableFunc::UnnestMap { .. }
+            | TableFunc::RegexpMatches => true,
+            TableFunc::GuardSubquerySize { .. } => false,
             TableFunc::Wrap { .. } => false,
             TableFunc::TabletizedScalar { .. } => false,
+            TableFunc::WithOrdinality(WithOrdinality { inner }) => inner.empty_on_null_input(),
         }
     }
 
@@ -3986,9 +3859,11 @@ impl TableFunc {
         match self {
             TableFunc::AclExplode => false,
             TableFunc::MzAclExplode => false,
-            TableFunc::JsonbEach { .. } => true,
+            TableFunc::JsonbEach => true,
+            TableFunc::JsonbEachStringify => true,
             TableFunc::JsonbObjectKeys => true,
-            TableFunc::JsonbArrayElements { .. } => true,
+            TableFunc::JsonbArrayElements => true,
+            TableFunc::JsonbArrayElementsStringify => true,
             TableFunc::RegexpExtract(_) => true,
             TableFunc::CsvExtract(_) => true,
             TableFunc::GenerateSeriesInt32 => true,
@@ -3996,12 +3871,16 @@ impl TableFunc {
             TableFunc::GenerateSeriesTimestamp => true,
             TableFunc::GenerateSeriesTimestampTz => true,
             TableFunc::GenerateSubscriptsArray => true,
-            TableFunc::Repeat => false,
+            TableFunc::RepeatRow => false,
+            TableFunc::RepeatRowNonNegative => true,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
             TableFunc::UnnestMap { .. } => true,
             TableFunc::Wrap { .. } => true,
             TableFunc::TabletizedScalar { .. } => true,
+            TableFunc::RegexpMatches => true,
+            TableFunc::GuardSubquerySize { .. } => false,
+            TableFunc::WithOrdinality(WithOrdinality { inner }) => inner.preserves_monotonicity(),
         }
     }
 }
@@ -4011,9 +3890,11 @@ impl fmt::Display for TableFunc {
         match self {
             TableFunc::AclExplode => f.write_str("aclexplode"),
             TableFunc::MzAclExplode => f.write_str("mz_aclexplode"),
-            TableFunc::JsonbEach { .. } => f.write_str("jsonb_each"),
+            TableFunc::JsonbEach => f.write_str("jsonb_each"),
+            TableFunc::JsonbEachStringify => f.write_str("jsonb_each_text"),
             TableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
-            TableFunc::JsonbArrayElements { .. } => f.write_str("jsonb_array_elements"),
+            TableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
+            TableFunc::JsonbArrayElementsStringify => f.write_str("jsonb_array_elements_text"),
             TableFunc::RegexpExtract(a) => write!(f, "regexp_extract({:?}, _)", a.0),
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
@@ -4021,40 +3902,72 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesTimestamp => f.write_str("generate_series"),
             TableFunc::GenerateSeriesTimestampTz => f.write_str("generate_series"),
             TableFunc::GenerateSubscriptsArray => f.write_str("generate_subscripts"),
-            TableFunc::Repeat => f.write_str("repeat_row"),
+            TableFunc::GuardSubquerySize { .. } => f.write_str("guard_subquery_size"),
+            TableFunc::RepeatRow => f.write_str(REPEAT_ROW_NAME),
+            TableFunc::RepeatRowNonNegative => f.write_str("repeat_row_non_negative"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
             TableFunc::UnnestMap { .. } => f.write_str("unnest_map"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
             TableFunc::TabletizedScalar { name, .. } => f.write_str(name),
+            TableFunc::RegexpMatches => write!(f, "regexp_matches(_, _, _)"),
+            TableFunc::WithOrdinality(WithOrdinality { inner }) => {
+                write!(f, "{}[with_ordinality]", inner)
+            }
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
-
-    proptest! {
-       #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn aggregate_func_protobuf_roundtrip(expect in any::<AggregateFunc>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoAggregateFunc>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
-
-    proptest! {
-       #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn table_func_protobuf_roundtrip(expect in any::<TableFunc>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoTableFunc>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
+impl WithOrdinality {
+    /// Executes the `self.inner` table function on the given input row (`datums`), and zips
+    /// 1, 2, 3, ... to the result as a new column. We need to expand rows with non-1 diffs into the
+    /// corresponding number of rows with unit diffs, because the ordinality column will have
+    /// different values for each copy.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `inner` table function emits a negative diff.
+    fn eval<'a>(
+        &'a self,
+        datums: &'a [Datum<'a>],
+        temp_storage: &'a RowArena,
+    ) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
+        let mut next_ordinal: i64 = 1;
+        let it = self
+            .inner
+            .eval(datums, temp_storage)?
+            .flat_map(move |(mut row, diff)| {
+                let diff = diff.into_inner();
+                // WITH ORDINALITY is not well-defined for negative diffs. This is ok, and
+                // `TableFunc::with_ordinality` refuses to wrap such table functions in
+                // `WithOrdinality` that can emit negative diffs, e.g., `repeat_row`.
+                //
+                // (Note that we don't need to worry about negative diffs in FlatMap's input,
+                // because the diff of the input of the FlatMap is factored in after we return from
+                // here.)
+                assert!(diff >= 0);
+                // The ordinals that will be associated with this row.
+                let mut ordinals = next_ordinal..(next_ordinal + diff);
+                next_ordinal += diff;
+                // The maximum byte capacity we need for the original row and its ordinal.
+                let cap = row.data_len() + datum_size(&Datum::Int64(next_ordinal));
+                iter::from_fn(move || {
+                    let ordinal = ordinals.next()?;
+                    let mut row = if ordinals.is_empty() {
+                        // This is the last row, so no need to clone. (Most table functions emit
+                        // only 1 diffs, so this completely avoids cloning in most cases.)
+                        std::mem::take(&mut row)
+                    } else {
+                        let mut new_row = Row::with_capacity(cap);
+                        new_row.clone_from(&row);
+                        new_row
+                    };
+                    RowPacker::for_existing_row(&mut row).push(Datum::Int64(ordinal));
+                    Some((row, Diff::ONE))
+                })
+            });
+        Ok(Box::new(it))
     }
 }
+
+pub const REPEAT_ROW_NAME: &str = "repeat_row";

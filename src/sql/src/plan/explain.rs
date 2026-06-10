@@ -9,12 +9,13 @@
 
 //! `EXPLAIN` support for structures defined in this crate.
 
+use std::panic::AssertUnwindSafe;
+
 use mz_expr::explain::{ExplainContext, ExplainSinglePlan};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{Id, LocalId};
-use mz_ore::stack::RecursionLimitError;
+use mz_repr::SqlRelationType;
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, ScalarOps, UnsupportedFormat};
-use mz_repr::RelationType;
 
 use crate::plan::{HirRelationExpr, HirScalarExpr};
 
@@ -44,9 +45,21 @@ impl<'a> HirRelationExpr {
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainSinglePlan<'a, HirRelationExpr>, ExplainError> {
         // unless raw plans are explicitly requested
-        // ensure that all nested subqueries are wrapped in Let blocks
+        // ensure that all nested subqueries are wrapped in Let blocks by calling
+        // `normalize_subqueries`
         if !context.config.raw_plans {
-            normalize_subqueries(self)?;
+            mz_ore::panic::catch_unwind_str(AssertUnwindSafe(|| {
+                normalize_subqueries(self);
+                Ok(())
+            }))
+            .unwrap_or_else(|panic| {
+                // A panic during optimization is always a bug; log an error so we learn about it.
+                // TODO(teskje): collect and log a backtrace from the panic site
+                tracing::error!("caught a panic during `normalize_subqueries`: {panic}");
+
+                let msg = format!("unexpected panic during `normalize_subqueries`: {panic}");
+                Err(ExplainError::UnknownError(msg))
+            })?
         }
 
         // TODO: use config values to infer requested
@@ -67,7 +80,7 @@ impl<'a> HirRelationExpr {
 /// [`HirScalarExpr::Exists`] or [`HirScalarExpr::Select`] where the
 /// subquery appears, and the corresponding variant references the
 /// new binding with a [`HirRelationExpr::Get`].
-pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), RecursionLimitError> {
+pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) {
     // A helper struct to represent accumulated `$local_id = $subquery`
     // bindings that need to be installed in `let ... in $expr` nodes
     // that wrap their parent $expr.
@@ -80,18 +93,18 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
     // - a stack of bindings
     let mut bindings = Vec::<Binding>::new();
     // - a generator of fresh local ids
-    let mut id_gen = id_gen(expr)?.peekable();
+    let mut id_gen = id_gen(expr).peekable();
 
     // Grow the `bindings` stack by collecting subqueries appearing in
     // one of the HirScalarExpr children at the given HirRelationExpr.
     // As part of this, the subquery is replaced by a `Get(id)` for a
     // fresh local id.
     let mut collect_subqueries = |expr: &mut HirRelationExpr, bindings: &mut Vec<Binding>| {
-        expr.try_visit_mut_children(|expr: &mut HirScalarExpr| {
+        expr.visit_mut_children(|expr: &mut HirScalarExpr| {
             use HirRelationExpr::Get;
             use HirScalarExpr::{Exists, Select};
             expr.visit_mut_post(&mut |expr: &mut HirScalarExpr| match expr {
-                Exists(expr) | Select(expr) => match expr.as_mut() {
+                Exists(expr, _) | Select(expr, _) => match expr.as_mut() {
                     Get { .. } => (),
                     expr => {
                         // generate fresh local id
@@ -99,7 +112,7 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
                         // generate a `Get(local_id)` to be used as a subquery replacement
                         let mut subquery = Get {
                             id: Id::Local(local_id.clone()),
-                            typ: RelationType::empty(), // TODO (aalexandrov)
+                            typ: SqlRelationType::empty(), // TODO (aalexandrov)
                         };
                         // swap the current subquery with the replacement
                         std::mem::swap(expr, &mut subquery);
@@ -108,8 +121,8 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
                     }
                 },
                 _ => (),
-            })
-        })
+            });
+        });
     };
 
     // Drain the `bindings` stack by wrapping the given `HirRelationExpr` with
@@ -129,19 +142,17 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
         }
     };
 
-    expr.try_visit_mut_post(&mut |expr: &mut HirRelationExpr| {
+    expr.visit_mut_post(&mut |expr: &mut HirRelationExpr| {
         // first grow bindings stack
-        collect_subqueries(expr, &mut bindings)?;
+        collect_subqueries(expr, &mut bindings);
         // then drain bindings stack
         insert_let_bindings(expr, &mut bindings);
-        // done!
-        Ok(())
     })
 }
 
 // Create an [`Iterator`] for [`LocalId`] values that are guaranteed to be
 // fresh within the scope of the given [`HirRelationExpr`].
-fn id_gen(expr: &HirRelationExpr) -> Result<impl Iterator<Item = LocalId>, RecursionLimitError> {
+fn id_gen(expr: &HirRelationExpr) -> impl Iterator<Item = LocalId> + use<> {
     let mut max_id = 0_u64;
 
     expr.visit_pre(&mut |expr| {
@@ -149,22 +160,22 @@ fn id_gen(expr: &HirRelationExpr) -> Result<impl Iterator<Item = LocalId>, Recur
             HirRelationExpr::Let { id, .. } => max_id = std::cmp::max(max_id, id.into()),
             _ => (),
         };
-    })?;
+    });
 
-    Ok((max_id + 1..).map(LocalId::new))
+    (max_id + 1..).map(LocalId::new)
 }
 
 impl ScalarOps for HirScalarExpr {
     fn match_col_ref(&self) -> Option<usize> {
         match self {
-            HirScalarExpr::Column(c) if c.level == 0 => Some(c.column),
+            HirScalarExpr::Column(c, _name) if c.level == 0 => Some(c.column),
             _ => None,
         }
     }
 
     fn references(&self, column: usize) -> bool {
         match self {
-            HirScalarExpr::Column(c) => c.column == column && c.level == 0,
+            HirScalarExpr::Column(c, _name) => c.column == column && c.level == 0,
             _ => false,
         }
     }

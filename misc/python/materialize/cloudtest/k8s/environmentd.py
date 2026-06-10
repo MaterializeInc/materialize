@@ -7,15 +7,20 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import operator
+import os
 import urllib.parse
 from collections.abc import Callable
 
 from kubernetes.client import (
+    V1ConfigMap,
+    V1ConfigMapVolumeSource,
     V1Container,
     V1ContainerPort,
     V1EnvVar,
     V1EnvVarSource,
+    V1KeyToPath,
     V1LabelSelector,
     V1ObjectFieldSelector,
     V1ObjectMeta,
@@ -24,20 +29,54 @@ from kubernetes.client import (
     V1PodSpec,
     V1PodTemplateSpec,
     V1ResourceRequirements,
+    V1Secret,
+    V1SecretVolumeSource,
     V1Service,
     V1ServicePort,
     V1ServiceSpec,
     V1StatefulSet,
     V1StatefulSetSpec,
     V1Toleration,
+    V1Volume,
     V1VolumeMount,
 )
 
+from materialize import MZ_ROOT
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_configmap import K8sConfigMap
+from materialize.cloudtest.k8s.api.k8s_secret import K8sSecret
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 from materialize.mz_version import MzVersion
-from materialize.mzcompose import get_default_system_parameters
+from materialize.mzcompose import (
+    bootstrap_cluster_replica_size,
+    cluster_replica_size_map,
+    get_default_system_parameters,
+)
+
+
+class EnvironmentdSecret(K8sSecret):
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
+        self.secret = V1Secret(
+            metadata=V1ObjectMeta(name="license-key"),
+            string_data={
+                "license_key": os.environ["MZ_CI_LICENSE_KEY"],
+            },
+        )
+
+
+class ListenersConfigMap(K8sConfigMap):
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
+        with open(f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json") as f:
+            data = f.read()
+        self.configmap = V1ConfigMap(
+            metadata=V1ObjectMeta(name="listeners-config"),
+            data={
+                "listeners.json": data,
+            },
+        )
 
 
 class EnvironmentdService(K8sService):
@@ -106,7 +145,16 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         ports = [V1ContainerPort(container_port=5432, name="sql")]
 
-        volume_mounts = []
+        volume_mounts = [
+            V1VolumeMount(
+                name="license-key",
+                mount_path="/license_key",
+            ),
+            V1VolumeMount(
+                name="listeners-configmap",
+                mount_path="/listeners",
+            ),
+        ]
 
         if self.coverage_mode:
             volume_mounts.append(V1VolumeMount(name="coverage", mount_path="/coverage"))
@@ -135,11 +183,43 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             effect="NoSchedule",
         )
 
+        volumes = [
+            V1Volume(
+                name="license-key",
+                secret=V1SecretVolumeSource(
+                    default_mode=292,
+                    optional=False,
+                    secret_name="license-key",
+                    items=[
+                        V1KeyToPath(
+                            key="license_key",
+                            path="license_key",
+                        )
+                    ],
+                ),
+            ),
+            V1Volume(
+                name="listeners-configmap",
+                config_map=V1ConfigMapVolumeSource(
+                    name="listeners-config",
+                    default_mode=292,
+                    optional=False,
+                    items=[
+                        V1KeyToPath(
+                            key="listeners.json",
+                            path="listeners.json",
+                        )
+                    ],
+                ),
+            ),
+        ]
+
         pod_spec = V1PodSpec(
             containers=[container],
             tolerations=[taint_toleration],
             node_selector=node_selector,
             termination_grace_period_seconds=0,
+            volumes=volumes,
         )
         template_spec = V1PodTemplateSpec(metadata=metadata, spec=pod_spec)
 
@@ -182,6 +262,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--availability-zone=1",
             "--availability-zone=2",
             "--availability-zone=3",
+            "--availability-zone=quickstart",
             "--aws-account-id=123456789000",
             "--aws-external-id-prefix=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             "--environment-id=cloudtest-test-00000000-0000-0000-0000-000000000000-0",
@@ -190,8 +271,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--orchestrator-kubernetes-image-pull-policy=if-not-present",
             "--orchestrator-kubernetes-service-fs-group=999",
             f"--persist-consensus-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=consensus",
-            "--internal-sql-listen-addr=0.0.0.0:6877",
-            "--internal-http-listen-addr=0.0.0.0:6878",
             "--unsafe-mode",
             # cloudtest may be called upon to spin up older versions of
             # Materialize too! If you are adding a command-line option that is
@@ -260,6 +339,14 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--announce-egress-ip=88.77.66.55",
             ]
 
+        if self._meets_minimum_version("0.147.0-dev"):
+            args.append("--listeners-config-path=/listeners/listeners.json")
+        else:
+            args += [
+                "--internal-sql-listen-addr=0.0.0.0:6877",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+            ]
+
         return args + self.extra_args
 
     def env_vars(self) -> list[V1EnvVar]:
@@ -275,6 +362,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         )
 
         env = [
+            V1EnvVar(name="MZ_TEST_ONLY_DUMMY_SEGMENT_CLIENT", value="true"),
             V1EnvVar(name="MZ_SOFT_ASSERTIONS", value="1"),
             V1EnvVar(name="MZ_POD_NAME", value_from=value_from),
             V1EnvVar(name="AWS_REGION", value="minio"),
@@ -307,6 +395,34 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 name="MZ_ADAPTER_STASH_URL",
                 value=f"postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
             ),
+            V1EnvVar(
+                name="MZ_CLUSTER_REPLICA_SIZES",
+                value=f"{json.dumps(cluster_replica_size_map())}",
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
         ]
 
         if self._meets_minimum_version("0.118.0-dev"):
@@ -318,6 +434,14 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             ]
         else:
             env += [V1EnvVar(name="MZ_ANNOUNCE_EGRESS_IP", value="1.2.3.4,88.77.66.55")]
+
+        if self._meets_minimum_version("0.140.0-dev"):
+            env += [
+                V1EnvVar(
+                    name="MZ_LICENSE_KEY",
+                    value="/license_key/license_key",
+                )
+            ]
 
         if self.coverage_mode:
             env.extend(

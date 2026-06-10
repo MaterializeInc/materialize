@@ -7,22 +7,26 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// TODO(parkmycar): Remove this allow.
+#![allow(unsafe_op_in_unsafe_fn)]
+
 //! Shared types for the `mz-storage*` crates
 
-pub mod collections;
 pub mod configuration;
 pub mod connections;
 pub mod controller;
 pub mod dyncfgs;
 pub mod errors;
 pub mod instances;
+pub mod oneshot_sources;
 pub mod parameters;
 pub mod read_holds;
 pub mod read_policy;
-pub mod shim;
 pub mod sinks;
 pub mod sources;
 pub mod stats;
+pub mod time_dependence;
+pub mod wire_format;
 
 /// Explicitly states the contract between storage and higher levels of
 /// Materialize w/r/t which facets of objects managed by storage (e.g. sources,
@@ -45,3 +49,7 @@ pub trait AlterCompatible: std::fmt::Debug + PartialEq {
 }
 
 impl AlterCompatible for mz_repr::GlobalId {}
+impl AlterCompatible for mz_repr::CatalogItemId {}
+
+/// The diff type used by storage.
+pub type StorageDiff = i64;

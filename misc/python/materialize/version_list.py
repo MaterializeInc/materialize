@@ -10,11 +10,15 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import frontmatter
+import requests
+import yaml
 
 from materialize import build_context, buildkite, docker, git
 from materialize.docker import (
@@ -26,6 +30,99 @@ from materialize.git import get_version_tags
 from materialize.mz_version import MzVersion
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
+
+
+@dataclass
+class SelfManagedVersion:
+    helm_version: MzVersion
+    version: MzVersion
+
+
+def fetch_self_managed_versions() -> list[SelfManagedVersion]:
+    result: list[SelfManagedVersion] = []
+    for entry in yaml.safe_load(
+        requests.get("https://materializeinc.github.io/materialize/index.yaml").text
+    )["entries"]["materialize-operator"]:
+        self_managed_version = SelfManagedVersion(
+            MzVersion.parse_mz(entry["version"]),
+            MzVersion.parse_mz(entry["appVersion"]),
+        )
+        if (
+            not self_managed_version.version.prerelease
+            and self_managed_version.version not in BAD_SELF_MANAGED_VERSIONS
+        ):
+            result.append(self_managed_version)
+    return result
+
+
+def get_all_self_managed_versions() -> list[MzVersion]:
+    return sorted([version.version for version in fetch_self_managed_versions()])
+
+
+def get_self_managed_versions(
+    max_version: MzVersion | None = None,
+) -> list[MzVersion]:
+    prefixes = set()
+    result = set()
+    self_managed_versions = fetch_self_managed_versions()
+    for version_info in self_managed_versions:
+        if max_version is not None and version_info.version >= max_version:
+            continue
+        prefix = (version_info.version.major, version_info.version.minor)
+        if (
+            not version_info.version.prerelease
+            and prefix not in prefixes
+            and not version_info.helm_version.prerelease
+        ):
+            result.add(version_info.version)
+            prefixes.add(prefix)
+    return sorted(result)
+
+
+# Gets the range of versions we can "upgrade from" to the current version, sorted in ascending order.
+def get_compatible_upgrade_from_versions() -> list[MzVersion]:
+
+    # Determine the current MzVersion from the environment, or from a version constant
+    current_version = MzVersion.parse_cargo()
+
+    published_versions_within_one_major_version = {
+        v
+        for v in get_published_mz_versions_within_one_major_version()
+        if abs(v.major - current_version.major) <= 1 and v <= current_version
+    }
+
+    if current_version.major <= 26:
+        # For versions <= 26, we can only upgrade from 25.2 self-managed versions
+        self_managed_25_2_versions = {
+            v.version
+            for v in fetch_self_managed_versions()
+            if v.helm_version.major == 25 and v.helm_version.minor == 2
+        }
+
+        return sorted(
+            self_managed_25_2_versions.union(
+                published_versions_within_one_major_version
+            )
+        )
+    else:
+        # For versions > 26, get all mz versions within 1 major version of current_version
+        return sorted(published_versions_within_one_major_version)
+
+
+BAD_SELF_MANAGED_VERSIONS = {
+    MzVersion.parse_mz("v0.130.0"),
+    MzVersion.parse_mz("v0.130.1"),
+    MzVersion.parse_mz("v0.130.2"),
+    MzVersion.parse_mz("v0.130.3"),
+    MzVersion.parse_mz("v0.130.4"),
+    MzVersion.parse_mz(
+        "v0.147.7"
+    ),  # Incompatible for upgrades because it clears login attribute for roles due to catalog migration
+    MzVersion.parse_mz(
+        "v0.147.14"
+    ),  # Incompatible for upgrades because it clears login attribute for roles due to catalog migration
+    MzVersion.parse_mz("v0.157.0"),
+}
 
 # not released on Docker
 INVALID_VERSIONS = {
@@ -54,7 +151,7 @@ INVALID_VERSIONS = {
 _SKIP_IMAGE_CHECK_BELOW_THIS_VERSION = MzVersion.parse_mz("v0.77.0")
 
 
-def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str:
+def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str | None:
     """
     Resolve the ancestor image tag.
     :param ancestor_overrides: one of #ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
@@ -72,13 +169,16 @@ def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str:
         return image_tag
 
     ancestor_image_resolution = _create_ancestor_image_resolution(ancestor_overrides)
-    image_tag, context = ancestor_image_resolution.resolve_image_tag()
+    result = ancestor_image_resolution.resolve_image_tag()
+    if result is None:
+        return None
+    image_tag, context = result
     print(f"Using {image_tag} as image tag for ancestor (context: {context})")
     return image_tag
 
 
 def _create_ancestor_image_resolution(
-    ancestor_overrides: dict[str, MzVersion]
+    ancestor_overrides: dict[str, MzVersion],
 ) -> AncestorImageResolutionBase:
     if buildkite.is_in_buildkite():
         return AncestorImageResolutionInBuildkite(ancestor_overrides)
@@ -97,7 +197,7 @@ class AncestorImageResolutionBase:
     def __init__(self, ancestor_overrides: dict[str, MzVersion]):
         self.ancestor_overrides = ancestor_overrides
 
-    def resolve_image_tag(self) -> tuple[str, str]:
+    def resolve_image_tag(self) -> tuple[str, str] | None:
         raise NotImplementedError
 
     def _get_override_commit_instead_of_version(
@@ -125,7 +225,7 @@ class AncestorImageResolutionBase:
 
     def _resolve_image_tag_of_previous_release(
         self, context_prefix: str, previous_minor: bool
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str] | None:
         tagged_release_version = git.get_tagged_release_version(version_type=MzVersion)
         assert tagged_release_version is not None
         previous_release_version = get_previous_published_version(
@@ -137,11 +237,13 @@ class AncestorImageResolutionBase:
         )
 
         if override_commit is not None:
+            # TODO(def-): This currently doesn't work because we only tag the Optimized builds with tags like v0.164.0-dev.0--main.gc28d0061a6c9e63ee50a5f555c5d90373d006686, but not the Release builds we should use
             # use the commit instead of the previous release
-            return (
-                commit_to_image_tag(override_commit),
-                f"commit override instead of previous release ({previous_release_version})",
-            )
+            # return (
+            #     commit_to_image_tag(override_commit),
+            #     f"commit override instead of previous release ({previous_release_version})",
+            # )
+            return None
 
         return (
             release_version_to_image_tag(previous_release_version),
@@ -150,7 +252,7 @@ class AncestorImageResolutionBase:
 
     def _resolve_image_tag_of_previous_release_from_current(
         self, context: str
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str] | None:
         # Even though we are on main we might be in an older state, pick the
         # latest release that was before our current version.
         current_version = MzVersion.parse_cargo()
@@ -163,11 +265,13 @@ class AncestorImageResolutionBase:
         )
 
         if override_commit is not None:
+            # TODO(def-): This currently doesn't work because we only tag the Optimized builds with tags like v0.164.0-dev.0--main.gc28d0061a6c9e63ee50a5f555c5d90373d006686, but not the Release builds we should use
             # use the commit instead of the latest release
-            return (
-                commit_to_image_tag(override_commit),
-                f"commit override instead of latest release ({previous_published_version})",
-            )
+            # return (
+            #     commit_to_image_tag(override_commit),
+            #     f"commit override instead of latest release ({previous_published_version})",
+            # )
+            return None
 
         return (
             release_version_to_image_tag(previous_published_version),
@@ -177,23 +281,40 @@ class AncestorImageResolutionBase:
     def _resolve_image_tag_of_merge_base(
         self,
         context_when_image_of_commit_exists: str,
-        context_when_falling_back_to_latest: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str] | None:
+        # If the current PR has a known and accepted regression, don't compare
+        # against merge base of it
+        override_commit = self._get_override_commit_instead_of_version(
+            MzVersion.parse_cargo()
+        )
         common_ancestor_commit = buildkite.get_merge_base()
-        if image_of_commit_exists(common_ancestor_commit):
-            return (
-                commit_to_image_tag(common_ancestor_commit),
-                context_when_image_of_commit_exists,
-            )
-        else:
-            return (
-                release_version_to_image_tag(get_latest_published_version()),
-                context_when_falling_back_to_latest,
-            )
+
+        if override_commit is not None:
+            # TODO(def-): This currently doesn't work because we only tag the Optimized builds with tags like v0.164.0-dev.0--main.gc28d0061a6c9e63ee50a5f555c5d90373d006686, but not the Release builds we should use
+            # return (
+            #     commit_to_image_tag(override_commit),
+            #     f"commit override instead of merge base ({common_ancestor_commit})",
+            # )
+            return None
+
+        ancestors = git.get_first_parent_commits(common_ancestor_commit, limit=20)
+        for ancestor in ancestors:
+            if image_of_commit_exists(ancestor):
+                context = (
+                    context_when_image_of_commit_exists
+                    if ancestor == common_ancestor_commit
+                    else f"ancestor of {context_when_image_of_commit_exists} (walked back from {common_ancestor_commit[:12]})"
+                )
+                return (
+                    commit_to_image_tag(ancestor),
+                    context,
+                )
+
+        return None
 
 
 class AncestorImageResolutionLocal(AncestorImageResolutionBase):
-    def resolve_image_tag(self) -> tuple[str, str]:
+    def resolve_image_tag(self) -> tuple[str, str] | None:
         if build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
                 "previous minor release because on local release branch",
@@ -206,16 +327,14 @@ class AncestorImageResolutionLocal(AncestorImageResolutionBase):
         else:
             return self._resolve_image_tag_of_merge_base(
                 "merge base of local non-main branch",
-                "latest release because image of merge base of local non-main branch not available",
             )
 
 
 class AncestorImageResolutionInBuildkite(AncestorImageResolutionBase):
-    def resolve_image_tag(self) -> tuple[str, str]:
+    def resolve_image_tag(self) -> tuple[str, str] | None:
         if buildkite.is_in_pull_request():
             return self._resolve_image_tag_of_merge_base(
                 "merge base of pull request",
-                "latest release because image of merge base of pull request not available",
             )
         elif build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
@@ -228,12 +347,15 @@ class AncestorImageResolutionInBuildkite(AncestorImageResolutionBase):
 
 
 def get_latest_published_version() -> MzVersion:
-    """Get the latest mz version for which an image is published."""
+    """Get the latest mz version, older than current state, for which an image is published."""
     excluded_versions = set()
+    current_version = MzVersion.parse_cargo()
 
     while True:
         latest_published_version = git.get_latest_version(
-            version_type=MzVersion, excluded_versions=excluded_versions
+            version_type=MzVersion,
+            excluded_versions=excluded_versions,
+            current_version=current_version,
         )
 
         if is_valid_release_image(latest_published_version):
@@ -270,6 +392,7 @@ def get_published_minor_mz_versions(
     limit: int | None = None,
     include_filter: Callable[[MzVersion], bool] | None = None,
     exclude_current_minor_version: bool = False,
+    max_version: MzVersion | None = None,
 ) -> list[MzVersion]:
     """
     Get the latest patch version for every minor version.
@@ -290,6 +413,9 @@ def get_published_minor_mz_versions(
     for version in all_versions:
         if include_filter is not None and not include_filter(version):
             # this version shall not be included
+            continue
+
+        if max_version is not None and version >= max_version:
             continue
 
         minor_version = f"{version.major}.{version.minor}"
@@ -315,16 +441,6 @@ def get_published_minor_mz_versions(
     return sorted(minor_versions.values(), reverse=newest_first)
 
 
-def get_minor_mz_versions_listed_in_docs(respect_released_tag: bool) -> list[MzVersion]:
-    """
-    Get the latest patch version for every minor version in ascending order.
-    Use this version if it is important whether a tag was introduced before or after creating this branch.
-
-    See also: #get_published_minor_mz_versions()
-    """
-    return VersionsFromDocs(respect_released_tag).minor_versions()
-
-
 def get_all_mz_versions(
     newest_first: bool = True,
 ) -> list[MzVersion]:
@@ -339,27 +455,33 @@ def get_all_mz_versions(
             version_type=MzVersion, newest_first=newest_first
         )
         if version not in INVALID_VERSIONS
+        # Exclude release candidates
+        and not version.prerelease
     ]
-
-
-def get_all_mz_versions_listed_in_docs(
-    respect_released_tag: bool,
-) -> list[MzVersion]:
-    """
-    Get all mz versions based on docs. Versions known to be invalid are excluded.
-
-    See also: #get_all_mz_versions()
-    """
-    return VersionsFromDocs(respect_released_tag).all_versions()
 
 
 def get_all_published_mz_versions(
     newest_first: bool = True, limit: int | None = None
 ) -> list[MzVersion]:
     """Get all mz versions based on git tags. This method ensures that images of the versions exist."""
-    return limit_to_published_versions(
-        get_all_mz_versions(newest_first=newest_first), limit
-    )
+    all_versions = get_all_mz_versions(newest_first=newest_first)
+    print(f"all_versions: {all_versions}")
+    return limit_to_published_versions(all_versions, limit)
+
+
+def get_published_mz_versions_within_one_major_version(
+    newest_first: bool = True,
+) -> list[MzVersion]:
+    """Get all previous mz versions within one major version of the current version. Ensure that images of the versions exist."""
+    current_version = MzVersion.parse_cargo()
+    all_versions = get_all_mz_versions(newest_first=newest_first)
+    versions_within_one_major_version = {
+        v
+        for v in all_versions
+        if abs(v.major - current_version.major) <= 1 and v <= current_version
+    }
+
+    return limit_to_published_versions(list(versions_within_one_major_version))
 
 
 def limit_to_published_versions(
@@ -460,9 +582,6 @@ def get_commits_of_accepted_regressions_between_versions(
 class VersionsFromDocs:
     """Materialize versions as listed in doc/user/content/releases
 
-    Only versions that declare `versiond: true` in their
-    frontmatter are considered.
-
     >>> len(VersionsFromDocs(respect_released_tag=True).all_versions()) > 0
     True
 
@@ -476,7 +595,13 @@ class VersionsFromDocs:
     MzVersion(major=0, minor=27, patch=0, prerelease=None, build=None)
     """
 
-    def __init__(self, respect_released_tag: bool) -> None:
+    def __init__(
+        self,
+        respect_released_tag: bool,
+        respect_date: bool = False,
+        only_publish_helm_chart: bool = True,
+        skip_rc: bool = False,
+    ) -> None:
         files = Path(MZ_ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
         self.versions = []
         current_version = MzVersion.parse_cargo()
@@ -485,15 +610,31 @@ class VersionsFromDocs:
             metadata = frontmatter.load(f)
             if respect_released_tag and not metadata.get("released", False):
                 continue
+            if only_publish_helm_chart and not metadata.get("publish_helm_chart", True):
+                continue
+            date: datetime.date = metadata["date"]
+            if respect_date and date > datetime.date.today():
+                continue
 
             current_patch = metadata.get("patch", 0)
+            current_rc = metadata.get("rc", 0)
 
-            for patch in range(current_patch + 1):
-                version = MzVersion.parse_mz(f"{base}.{patch}")
-                if not respect_released_tag and version >= current_version:
+            if current_rc > 0:
+                if skip_rc:
                     continue
-                if version not in INVALID_VERSIONS:
-                    self.versions.append(version)
+                for rc in range(1, current_rc + 1):
+                    version = MzVersion.parse_mz(f"{base}.{current_patch}-rc.{rc}")
+                    if not respect_released_tag and version >= current_version:
+                        continue
+                    if version not in INVALID_VERSIONS:
+                        self.versions.append(version)
+            else:
+                for patch in range(current_patch + 1):
+                    version = MzVersion.parse_mz(f"{base}.{patch}")
+                    if not respect_released_tag and version >= current_version:
+                        continue
+                    if version not in INVALID_VERSIONS:
+                        self.versions.append(version)
 
         assert len(self.versions) > 0
         self.versions.sort()

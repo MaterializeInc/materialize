@@ -31,9 +31,8 @@ from launchdarkly_api.model.patch_with_comment import PatchWithComment  # type: 
 from launchdarkly_api.model.variation import Variation  # type: ignore
 
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_ORG_ID
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
@@ -53,7 +52,6 @@ LD_CONTEXT_KEY = DEFAULT_MZ_ENVIRONMENT_ID
 LD_FEATURE_FLAG_KEY = f"ci-test-{BUILDKITE_JOB_ID}"
 
 SERVICES = [
-    CockroachOrPostgresMetadata(),
     Materialized(
         environment_extra=[
             f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
@@ -86,7 +84,7 @@ def workflow_default(c: Composition) -> None:
     )
 
     try:
-        c.up("testdrive", persistent=True)
+        c.up(Service("testdrive", idle=True))
 
         # Assert that the default max_result_size is served when sync is disabled.
         with c.override(Materialized(external_metadata_store=True)):
@@ -232,15 +230,11 @@ def workflow_default(c: Composition) -> None:
         c.testdrive("\n".join(["> SHOW max_result_size", "1GB"]))
         c.stop("materialized")
     except launchdarkly_api.ApiException as e:
-        raise UIError(
-            dedent(
-                f"""
+        raise UIError(dedent(f"""
                 Error when calling the Launch Darkly API.
                 - Status: {e.status},
                 - Reason: {e.reason},
-                """
-            )
-        )
+                """))
     finally:
         try:
             ld_client.delete_flag(LD_FEATURE_FLAG_KEY)

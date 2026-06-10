@@ -18,27 +18,43 @@ import time
 from textwrap import dedent
 
 import requests
-from psycopg.errors import OperationalError
+from psycopg.errors import (
+    InternalError_,
+    OperationalError,
+)
 
-from materialize.mzcompose.composition import Composition
+from materialize import MZ_ROOT, buildkite
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import UIError
 
 testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(auto_create_topics=True),
+    Kafka(
+        auto_create_topics=True,
+        advertised_listeners=[
+            "PLAINTEXT://kafka:9092",
+            "PLAINTEXT2://kafka:9093",
+        ],
+        # Move the KRaft controller port off 9093, which the second
+        # PLAINTEXT2 listener above uses.
+        controller_port=29093,
+        environment_extra=[
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT2:PLAINTEXT",
+        ],
+    ),
     SchemaRegistry(),
+    Mz(app_password=""),
     Materialized(),
     Testdrive(
         entrypoint_extra=[
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
         ],
     ),
     testdrive_no_reset,
@@ -82,10 +98,11 @@ def workflow_retain_history(c: Composition) -> None:
     c.sql(
         "CREATE MATERIALIZED VIEW retain_mv WITH (RETAIN HISTORY = FOR '2s') AS SELECT * FROM retain_t"
     )
+    c.sql("CREATE SOURCE retain_s FROM LOAD GENERATOR COUNTER")
     c.sql(
-        "CREATE SOURCE retain_s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '5s')"
+        "CREATE TABLE retain_s_tbl FROM SOURCE retain_s WITH (RETAIN HISTORY = FOR '5s')"
     )
-    names = ["mv", "s"]
+    names = ["mv", "s_tbl"]
     check_retain_history_for(names)
 
     # Ensure that RETAIN HISTORY is respected on boot.
@@ -96,9 +113,9 @@ def workflow_retain_history(c: Composition) -> None:
     c.kill("materialized")
 
 
-def workflow_github_8021(c: Composition) -> None:
+def workflow_github_2454(c: Composition) -> None:
     c.up("materialized")
-    c.run_testdrive_files("github-8021.td")
+    c.run_testdrive_files("github-2454.td")
 
     # Ensure MZ can boot
     c.kill("materialized")
@@ -107,14 +124,12 @@ def workflow_github_8021(c: Composition) -> None:
 
 
 # Test that `mz_internal.mz_object_dependencies` re-populates.
-def workflow_github_17578(c: Composition) -> None:
-    c.up("testdrive_no_reset", persistent=True)
-    c.up("materialized")
+def workflow_github_5108(c: Composition) -> None:
+    c.up("materialized", Service("testdrive_no_reset", idle=True))
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION;
             > CREATE TABLE accounts FROM SOURCE with_subsources (REFERENCE accounts);
             > CREATE TABLE auctions FROM SOURCE with_subsources (REFERENCE auctions);
@@ -131,7 +146,6 @@ def workflow_github_17578(c: Composition) -> None:
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
-            with_subsources with_subsources_progress
 
             > SELECT DISTINCT
               s.name AS source,
@@ -147,8 +161,7 @@ def workflow_github_17578(c: Composition) -> None:
             with_subsources   accounts
             with_subsources   auctions
             with_subsources   organizations
-            """
-        ),
+            """),
     )
 
     # Restart mz
@@ -157,8 +170,7 @@ def workflow_github_17578(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT
               top_level_s.name as source,
               s.name AS subsource
@@ -168,7 +180,6 @@ def workflow_github_17578(c: Composition) -> None:
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
-            with_subsources with_subsources_progress
 
             > SELECT DISTINCT
               s.name AS source,
@@ -185,8 +196,7 @@ def workflow_github_17578(c: Composition) -> None:
             with_subsources   auctions
             with_subsources   organizations
 
-            """
-        ),
+            """),
     )
 
     c.kill("materialized")
@@ -211,20 +221,6 @@ def workflow_audit_log(c: Composition) -> None:
         print("initial audit log:", log)
         print("audit log after restart:", restart_log)
         raise Exception("audit logs emtpy or not equal after restart")
-
-
-# Test for GitHub issue database-issues#3923
-def workflow_timelines(c: Composition) -> None:
-    for _ in range(3):
-        c.up("zookeeper", "kafka", "schema-registry", "materialized")
-        c.run_testdrive_files("timelines.td")
-        c.rm(
-            "zookeeper",
-            "kafka",
-            "schema-registry",
-            "materialized",
-            destroy_volumes=True,
-        )
 
 
 def workflow_stash(c: Composition) -> None:
@@ -255,6 +251,7 @@ def workflow_stash(c: Composition) -> None:
 
 
 def workflow_storage_managed_collections(c: Composition) -> None:
+    c.down(destroy_volumes=True)
     c.up("materialized")
 
     # Create some storage shard entries.
@@ -287,34 +284,27 @@ def workflow_storage_managed_collections(c: Composition) -> None:
 
 
 def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
-    c.up("testdrive_no_reset", persistent=True)
-    c.up("materialized")
+    c.up("materialized", Service("testdrive_no_reset", idle=True))
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
-            # We can create a cluster with sizes '1' and '2'
-            > CREATE CLUSTER test REPLICAS (r1 (SIZE '1'), r2 (SIZE '2'))
+            # We can create a cluster with sizes 'scale=1,workers=1' and 'scale=1,workers=2'
+            > CREATE CLUSTER test REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=2'))
 
-            >[version>=11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
-            test r1 1 true ""
-            test r2 2 true ""
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 scale=1,workers=1 true ""
+            test r2 scale=1,workers=2 true ""
 
-            >[version<11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
-            test r1 1 true
-            test r2 2 true
-
-            # We cannot create replicas with size '2' after restricting allowed_cluster_replica_sizes to '1'
+            # We cannot create replicas with size 'scale=1,workers=2' after restricting allowed_cluster_replica_sizes to 'scale=1,workers=1'
             $ postgres-execute connection=mz_system
-            ALTER SYSTEM SET allowed_cluster_replica_sizes = '1'
+            ALTER SYSTEM SET allowed_cluster_replica_sizes = 'scale=1,workers=1'
 
-            ! CREATE CLUSTER REPLICA test.r3 SIZE '2'
-            contains:unknown cluster replica size 2
-            """
-        ),
+            ! CREATE CLUSTER REPLICA test.r3 SIZE 'scale=1,workers=2'
+            contains:unknown cluster replica size scale=1,workers=2
+            """),
     )
 
     # Assert that mz restarts successfully even in the presence of replica sizes that are not allowed
@@ -323,40 +313,29 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
             # Cluster replica of disallowed sizes still exist
-            >[version>=11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
-            test r1 1 true ""
-            test r2 2 true ""
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 scale=1,workers=1 true ""
+            test r2 scale=1,workers=2 true ""
 
-            >[version<11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
-            test r1 1 true
-            test r2 2 true
+            # We cannot create replicas with size 'scale=1,workers=2' (system parameter value persists across restarts)
+            ! CREATE CLUSTER REPLICA test.r3 SIZE 'scale=1,workers=2'
+            contains:unknown cluster replica size scale=1,workers=2
 
-            # We cannot create replicas with size '2' (system parameter value persists across restarts)
-            ! CREATE CLUSTER REPLICA test.r3 SIZE '2'
-            contains:unknown cluster replica size 2
-
-            # We can create replicas with size '2' after listing that size as allowed
+            # We can create replicas with size 'scale=1,workers=2' after listing that size as allowed
             $ postgres-execute connection=mz_system
-            ALTER SYSTEM SET allowed_cluster_replica_sizes = '1', '2'
+            ALTER SYSTEM SET allowed_cluster_replica_sizes = 'scale=1,workers=1', 'scale=1,workers=2'
 
-            > CREATE CLUSTER REPLICA test.r3 SIZE '2'
+            > CREATE CLUSTER REPLICA test.r3 SIZE 'scale=1,workers=2'
 
-            >[version>=11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
-            test r1 1 true ""
-            test r2 2 true ""
-            test r3 2 true ""
-
-            >[version<11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
-            test r1 1 true
-            test r2 2 true
-            test r3 2 true
-            """
-        ),
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 scale=1,workers=1 true ""
+            test r2 scale=1,workers=2 true ""
+            test r3 scale=1,workers=2 true ""
+            """),
     )
 
     # Assert that the persisted allowed_cluster_replica_sizes (a setting that
@@ -366,18 +345,16 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SHOW allowed_cluster_replica_sizes
-            "\\"1\\", \\"2\\""
+            "\\"scale=1,workers=1\\", \\"scale=1,workers=2\\""
 
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
             # Reset for following tests
             $ postgres-execute connection=mz_system
             ALTER SYSTEM RESET allowed_cluster_replica_sizes
-            """
-        ),
+            """),
     )
 
 
@@ -451,74 +428,193 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     assert cursor.fetchall() == [(1,)]
 
 
+def workflow_mcp_feature_flags(c: Composition) -> None:
+    """Test that enable_mcp_agent and enable_mcp_developer dyncfg flags
+    can disable MCP endpoints without a restart."""
+
+    mcp_request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0.1.0"},
+        },
+    }
+
+    with c.override(
+        Materialized(
+            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+        )
+    ):
+        c.up("materialized")
+        http_port = c.port("materialized", 6876)
+
+        agent_url = f"http://localhost:{http_port}/api/mcp/agent"
+        developer_url = f"http://localhost:{http_port}/api/mcp/developer"
+
+        # Both endpoints should be enabled by default.
+        assert requests.post(agent_url, json=mcp_request).status_code == 200
+        assert requests.post(developer_url, json=mcp_request).status_code == 200
+
+        # Disable the agent endpoint individually.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_agent = false",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(agent_url, json=mcp_request).status_code == 503
+        # Developer should still be enabled.
+        assert requests.post(developer_url, json=mcp_request).status_code == 200
+
+        # Disable developer too.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_developer = false",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(developer_url, json=mcp_request).status_code == 503
+
+        # Re-enable agent — developer should remain disabled.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_agent = true",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(agent_url, json=mcp_request).status_code == 200
+        assert requests.post(developer_url, json=mcp_request).status_code == 503
+
+        # Re-enable developer.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_developer = true",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(agent_url, json=mcp_request).status_code == 200
+        assert requests.post(developer_url, json=mcp_request).status_code == 200
+
+        c.kill("materialized")
+
+
 def workflow_network_policies(c: Composition) -> None:
     c.up("materialized")
     http_port = c.port("materialized", 6876)
 
-    # Ensure new user sessions are allowed.
+    # ensure default network policy
+    def assert_can_connect():
+        assert c.sql_query("SELECT 1") == [(1,)]
+        assert requests.post(
+            f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
+        ).json()["results"][0]["rows"] == [["1"]]
+
+    def assert_new_connection_fails():
+        # New SQL and HTTP user sessions should now fail.
+        try:
+            c.sql_query("SELECT 1")
+        except OperationalError as e:
+            # assert e.pgcode == "MZ010" # Not exposed by psycopg
+            assert "session denied" in str(e)
+            assert "DETAIL:  Access denied for address" in e.args[0], e.args
+
+        res = requests.post(
+            f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
+        )
+        assert res.status_code == 403
+        assert res.json()["message"] == "session denied"
+        assert res.json()["code"] == "MZ011"
+        assert "Access denied for address" in res.json()["detail"]
+
+    # ensure default network policy
+    assert c.sql_query("show network_policy") == [("default",)]
+    assert_can_connect()
+
+    # enable network policy management
     c.sql(
-        "ALTER SYSTEM SET allow_user_sessions = true",
-        port=6877,
-        user="mz_system",
-    )
-    c.sql(
-        "ALTER SYSTEM SET default_network_policy_allow_list = '0.0.0.0/0'",
+        "ALTER SYSTEM SET enable_network_policies = true",
         port=6877,
         user="mz_system",
     )
 
-    # SQL and HTTP user sessions should work.
-    assert c.sql_query("SELECT 1") == [(1,)]
-    assert requests.post(
-        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
-    ).json()["results"][0]["rows"] == [["1"]]
+    # assert we can't change the network policy to one that doesn't exist.
+    try:
+        c.sql_query(
+            "ALTER SYSTEM SET network_policy='apples'",
+            port=6877,
+            user="mz_system",
+        )
+    except InternalError_ as e:
+        assert (
+            e.diag.message_primary
+            and "no network policy with such name exists" in e.diag.message_primary
+        ), e
+    else:
+        raise RuntimeError(
+            "ALTER SYSTEM SET network_policy didn't return the expected error"
+        )
 
-    # Save a cursor for later.
+    # close network policies
+    c.sql(
+        "CREATE NETWORK POLICY closed (RULES ())",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        "ALTER SYSTEM SET network_policy='closed'",
+        port=6877,
+        user="mz_system",
+    )
+    assert_new_connection_fails()
+
+    # can't drop the actively set network policy.
+    try:
+        c.sql_query(
+            "DROP NETWORK POLICY closed",
+            port=6877,
+            user="mz_system",
+        )
+    except InternalError_ as e:
+        assert (
+            e.diag.message_primary
+            and "network policy is currently in use" in e.diag.message_primary
+        ), e
+    else:
+        raise RuntimeError("DROP NETWORK POLICY didn't return the expected error")
+
+    # open the closed network policy
+    c.sql(
+        "ALTER NETWORK POLICY closed SET (RULES (open (ACTION='allow', DIRECTION='ingress', ADDRESS='0.0.0.0/0')))",
+        port=6877,
+        user="mz_system",
+    )
+    assert_can_connect()
     cursor = c.sql_cursor()
 
-    # Block external user session by ip.
+    # shut down the closed network policy
     c.sql(
-        "ALTER SYSTEM SET default_network_policy_allow_list = '0.0.0.0/32'",
+        "ALTER NETWORK POLICY closed SET (RULES (closed (ACTION='allow', DIRECTION='ingress', ADDRESS='0.0.0.0/32')))",
         port=6877,
         user="mz_system",
     )
+    assert_new_connection_fails()
 
-    # New SQL and HTTP user sessions should now fail.
-    try:
-        c.sql_query("SELECT 1")
-    except OperationalError as e:
-        # assert e.pgcode == "MZ010" # Not exposed by psycopg
-        assert "session denied" in str(e)
-        assert "DETAIL:  Access denied for address" in e.args[0], e.args
+    # validate that the cursor from the beginning of the test still works.
+    assert cursor.execute("SELECT 1").fetchall() == [(1,)]
 
-    res = requests.post(
-        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
-    )
-    assert res.status_code == 403
-    assert res.json()["message"] == "session denied"
-    assert res.json()["code"] == "MZ011"
-    assert "Access denied for address" in res.json()["detail"]
-
-    # The cursor from the beginning of the test should still work.
-    cursor.execute("SELECT 1")
-    assert cursor.fetchall() == [(1,)]
-
-    # Re-allow new user sessions.
     c.sql(
-        "ALTER SYSTEM SET default_network_policy_allow_list = '0.0.0.0/0'",
+        "ALTER SYSTEM SET network_policy='default'",
         port=6877,
         user="mz_system",
     )
-
-    # SQL and HTTP user sessions should work again.
-    assert c.sql_query("SELECT 1") == [(1,)]
-    assert requests.post(
-        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
-    ).json()["results"][0]["rows"] == [["1"]]
-
-    # The cursor from the beginning of the test should still work.
-    cursor.execute("SELECT 1")
-    assert cursor.fetchall() == [(1,)]
+    c.sql(
+        "DROP NETWORK POLICY closed",
+        port=6877,
+        user="mz_system",
+    )
 
 
 def workflow_drop_materialize_database(c: Composition) -> None:
@@ -552,13 +648,16 @@ def workflow_drop_materialize_database(c: Composition) -> None:
 
 
 def workflow_bound_size_mz_status_history(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry", "materialized")
-    c.up("testdrive_no_reset", persistent=True)
+    c.up(
+        "kafka",
+        "schema-registry",
+        "materialized",
+        Service("testdrive_no_reset", idle=True),
+    )
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             $ kafka-create-topic topic=status-history
 
             > CREATE CONNECTION kafka_conn
@@ -581,34 +680,29 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
               ENVELOPE DEBEZIUM
 
             $ kafka-verify-topic sink=materialize.public.kafka_sink
-            """
-        ),
+            """),
     )
 
     # Fill mz_source_status_history and mz_sink_status_history up with enough events
     for i in range(5):
         c.testdrive(
             service="testdrive_no_reset",
-            input=dedent(
-                """
-                > ALTER CONNECTION kafka_conn SET (BROKER 'dne') WITH (VALIDATE = false);
-                > ALTER CONNECTION kafka_conn SET (BROKER '${testdrive.kafka-addr}') WITH (VALIDATE = true);
-                """
-            ),
+            input=dedent("""
+                > ALTER CONNECTION kafka_conn SET (BROKER = 'kafka:9093') WITH (VALIDATE = false);
+                > ALTER CONNECTION kafka_conn SET (BROKER = 'kafka:9092') WITH (VALIDATE = true);
+                """),
         )
 
     # Verify that we have enough events so that they can be truncated
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT COUNT(*) > 7 FROM mz_internal.mz_source_status_history
             true
 
             > SELECT COUNT(*) > 7 FROM mz_internal.mz_sink_status_history
             true
-            """
-        ),
+            """),
     )
 
     # Restart mz.
@@ -620,15 +714,13 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     # objects produce a new starting and running event.
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
             14
 
             > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
             7
-            """
-        ),
+            """),
     )
 
 
@@ -638,8 +730,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("testdrive_no_reset", persistent=True)
+    c.up("materialized", Service("testdrive_no_reset", idle=True))
 
     # The replica metrics are updated once per minute and on envd startup. We
     # can thus restart envd to generate metrics rows without having to block
@@ -648,9 +739,8 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
     # Create a replica and wait for metrics data to arrive.
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
-            > CREATE CLUSTER test SIZE '1'
+        input=dedent("""
+            > CREATE CLUSTER test SIZE 'scale=1,workers=1'
 
             > SELECT count(*) >= 1
               FROM mz_internal.mz_cluster_replica_metrics_history m
@@ -658,8 +748,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
     # The default retention interval is 30 days, so we don't expect truncation
@@ -669,16 +758,14 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT count(*) >= 2
               FROM mz_internal.mz_cluster_replica_metrics_history m
               JOIN mz_cluster_replicas r ON r.id = m.replica_id
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
     # Reduce the retention interval to force a truncation.
@@ -693,16 +780,14 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT count(*) < 2
               FROM mz_internal.mz_cluster_replica_metrics_history m
               JOIN mz_cluster_replicas r ON r.id = m.replica_id
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
     # Verify that this also works a second time.
@@ -711,16 +796,14 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT count(*) < 2
               FROM mz_internal.mz_cluster_replica_metrics_history m
               JOIN mz_cluster_replicas r ON r.id = m.replica_id
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
 
@@ -741,15 +824,13 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
     This test should codify this assumption so we can get an early signal if
     this is broken for some reason in the future.
     """
-    c.up("testdrive_no_reset", persistent=True)
-    c.up("materialized")
+    c.up("materialized", Service("testdrive_no_reset", idle=True))
 
     def depends_on(c: Composition, obj_name: str, dep_name: str, expected: bool):
         """Check whether `(obj_name, dep_name)` is a compute dependency or not."""
         c.testdrive(
             service="testdrive_no_reset",
-            input=dedent(
-                f"""
+            input=dedent(f"""
                 > (
                     SELECT
                       true
@@ -784,14 +865,12 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
                       )
                   );
                 {str(expected).lower()}
-                """
-            ),
+                """),
         )
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > DROP TABLE IF EXISTS t1 CASCADE;
             > DROP TABLE IF EXISTS t2 CASCADE;
 
@@ -809,8 +888,7 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
             > CREATE VIEW v2 AS SELECT * FROM t2 JOIN t1 USING (y);
             > CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM v2;
             > CREATE INDEX ix2 ON v2(x);
-            """
-        ),
+            """),
     )
 
     # Verify that mv1 and ix1 depend on t1_y_idx but not on t2_y_idx.
@@ -841,9 +919,79 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
     depends_on(c, "ix2", "t2_y_idx", True)
 
 
+def workflow_user_id_no_reuse_after_restart(c: Composition) -> None:
+    """Verify that batch-allocated user IDs are never reused across restarts.
+
+    Uses a small batch size so unused IDs in the pool are discarded on
+    shutdown. After restart a fresh batch is allocated, so all new IDs
+    must be strictly greater than every pre-restart ID.
+    """
+
+    def user_id_nums(c: Composition, name_prefix: str) -> list[int]:
+        """Return the numeric part of user IDs for objects matching the prefix."""
+        rows = c.sql_query(
+            f"SELECT id FROM mz_objects WHERE name LIKE '{name_prefix}%'"
+        )
+        # IDs look like 'u123'; extract the numeric suffix.
+        return sorted(int(row[0].lstrip("u")) for row in rows)
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # Set a small batch size so most of the pool is unused at restart.
+    c.sql(
+        "ALTER SYSTEM SET user_id_pool_batch_size = 5",
+        port=6877,
+        user="mz_system",
+    )
+
+    # --- Phase 1: create objects before restart ---
+    c.sql("CREATE TABLE idreuse_t1 (a INT)")
+    c.sql("CREATE TABLE idreuse_t2 (b INT)")
+    c.sql("CREATE VIEW idreuse_v1 AS SELECT * FROM idreuse_t1")
+
+    ids_before = user_id_nums(c, "idreuse_")
+    assert len(ids_before) == 3, f"expected 3 objects, got {ids_before}"
+    max_id_before = max(ids_before)
+
+    # --- Restart ---
+    c.kill("materialized")
+    c.up("materialized")
+
+    # --- Phase 2: create objects after restart ---
+    c.sql("CREATE TABLE idreuse_t3 (c INT)")
+    c.sql("CREATE VIEW idreuse_v2 AS SELECT * FROM idreuse_t1")
+    c.sql("CREATE MATERIALIZED VIEW idreuse_mv1 AS SELECT count(*) FROM idreuse_t1")
+
+    ids_after = user_id_nums(c, "idreuse_")
+    # The 3 pre-restart objects should still exist, plus 3 new ones.
+    assert len(ids_after) == 6, f"expected 6 objects, got {ids_after}"
+
+    new_ids = [i for i in ids_after if i not in ids_before]
+    assert len(new_ids) == 3, f"expected 3 new IDs, got {new_ids}"
+
+    min_new_id = min(new_ids)
+    assert min_new_id > max_id_before, (
+        f"ID reuse detected! max pre-restart ID = {max_id_before}, "
+        f"but post-restart IDs include {min_new_id}"
+    )
+
+    # --- Cleanup ---
+    c.sql("DROP MATERIALIZED VIEW idreuse_mv1")
+    c.sql("DROP VIEW idreuse_v2")
+    c.sql("DROP VIEW idreuse_v1")
+    c.sql("DROP TABLE idreuse_t3")
+    c.sql("DROP TABLE idreuse_t2")
+    c.sql("DROP TABLE idreuse_t1")
+
+
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
+
         with c.test_case(name):
             c.workflow(name)
+
+    files = buildkite.shard_list(list(c.workflows.keys()), lambda workflow: workflow)
+    c.test_parts(files, process)
