@@ -25,6 +25,11 @@
 //! 2. A [`ColumnPager`] that drains a `Column<C>` into a [`PagedColumn`] and
 //!    rehydrates it on demand.
 //! 3. Lz4 frame-format compression as an optional codec.
+//! 4. A pooled path ([`PageDecision::Pool`]) that hands the body to an
+//!    [`mz_ore::pool::Pool`] instead of a pager backend. Residency becomes a
+//!    state of the pool's chunk handle rather than a property baked in at
+//!    pageout time — the prototype seam for
+//!    `doc/developer/design/20260610_buffer_managed_state.md`.
 //!
 //! The serialization uses the existing [`ContainerBytes`] protocol on
 //! `Column<C>`, so we get a single byte layout that both raw and compressed
@@ -63,7 +68,7 @@ pub struct PageHint {
 }
 
 /// Outcome of a policy decision.
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum PageDecision {
     /// Keep the column resident; no I/O, no compression.
     Skip,
@@ -74,6 +79,11 @@ pub enum PageDecision {
         /// Compression codec, or `None` for raw bytes.
         codec: Option<Codec>,
     },
+    /// Hand the body to the given buffer pool. The pool owns residency from
+    /// here on: it enforces its own resident-bytes budget and compresses
+    /// into swap-backed extents at eviction time, so neither a backend nor a
+    /// codec choice applies.
+    Pool(mz_ore::pool::Pool),
 }
 
 /// Notifications the column-pager sends back to the policy. Implementations
@@ -172,6 +182,16 @@ pub enum PagedColumn<C: Columnar> {
         /// Sizing metadata.
         meta: Meta,
     },
+    /// Body held as a buffer-pool chunk. Residency is a state of the handle,
+    /// not of this variant: the pool keeps the chunk resident or evicts it
+    /// to a swap-backed extent under its own budget, and
+    /// [`ColumnPager::take`] reads it back from wherever it currently lives.
+    Pooled {
+        /// Pool handle owning the chunk.
+        handle: mz_ore::pool::ChunkHandle,
+        /// Sizing metadata.
+        meta: Meta,
+    },
 }
 
 /// Drop guard that returns budget to a [`PagingPolicy`] when a
@@ -226,6 +246,16 @@ impl ColumnPager {
     /// [`page`]: ColumnPager::page
     pub fn disabled() -> Self {
         Self::new(Arc::new(AlwaysResidentPolicy))
+    }
+
+    /// Constructs a pager backed by `pool`: every non-empty [`page`] routes
+    /// the body into the pool, which enforces its own resident-bytes budget
+    /// (see [`policy::PoolPolicy`]). A prototype seam, opt-in via callers'
+    /// pager injection points rather than the global pager plumbing.
+    ///
+    /// [`page`]: ColumnPager::page
+    pub fn pooled(pool: mz_ore::pool::Pool) -> Self {
+        Self::new(Arc::new(policy::PoolPolicy::new(pool)))
     }
 }
 
@@ -411,6 +441,25 @@ impl ColumnPager {
                 };
                 return PagedColumn::Resident(resident, ticket);
             }
+            PageDecision::Pool(pool) => {
+                debug_assert_eq!(len_bytes % 8, 0);
+                let mut body = drain_to_aligned(col, len_bytes);
+                let handle = pool.insert(&mut body);
+                // The pool compresses internally at eviction time, so the
+                // policy-visible size is the uncompressed body on both sides.
+                // The pool's extent store is swap-backed.
+                metrics::observe_pageout(len_bytes, len_bytes);
+                self.policy.record(PageEvent::PagedOut {
+                    bytes_in: len_bytes,
+                    bytes_out: len_bytes,
+                    backend: Backend::Swap,
+                    codec: None,
+                });
+                return PagedColumn::Pooled {
+                    handle,
+                    meta: Meta { len_bytes },
+                };
+            }
             PageDecision::Page { backend, codec } => (backend, codec),
         };
         let meta = Meta { len_bytes };
@@ -421,23 +470,7 @@ impl ColumnPager {
                 // pager. `Column::Align` already is; other variants are
                 // serialized and copied.
                 debug_assert_eq!(len_bytes % 8, 0);
-                let body: Vec<u64> = match std::mem::take(col) {
-                    // Move the aligned buffer straight into the pager: the
-                    // allocation transfers with no copy. `take` already left
-                    // `col` as a refill-ready `Typed` default.
-                    Column::Align(v) => v,
-                    mut other => {
-                        let mut buf = Vec::with_capacity(len_bytes);
-                        other.into_bytes(&mut buf);
-                        debug_assert_eq!(buf.len() % 8, 0);
-                        // `into_bytes` only borrowed `other`; clear it in place
-                        // and hand it back so the caller keeps the `Typed`
-                        // allocation instead of us dropping a reusable buffer.
-                        other.clear();
-                        *col = other;
-                        bytemuck::allocation::pod_collect_to_vec::<u8, u64>(&buf)
-                    }
-                };
+                let body = drain_to_aligned(col, len_bytes);
                 let handle = pager::pageout_with(backend, &mut [body]);
                 let bytes_out = handle.len_bytes();
                 metrics::observe_pageout(len_bytes, bytes_out);
@@ -545,6 +578,38 @@ impl ColumnPager {
                 // produces the refcounted `Bytes` that `ContainerBytes` expects.
                 Column::from_bytes(BytesMut::from(decoded).freeze())
             }
+            PagedColumn::Pooled { handle, meta } => {
+                let mut body: Vec<u64> = Vec::with_capacity(handle.len());
+                handle.take(&mut body);
+                debug_assert_eq!(body.len() * 8, meta.len_bytes);
+                metrics::observe_pagein(meta.len_bytes);
+                self.policy.record(PageEvent::PagedIn {
+                    bytes: meta.len_bytes,
+                });
+                Column::Align(body)
+            }
+        }
+    }
+}
+
+/// Drains `col` into the u64-aligned raw body shared by the uncompressed
+/// pageout paths: a [`Column::Align`] moves its buffer out with no copy
+/// (leaving `col` a refill-ready `Typed` default), while other variants
+/// serialize via [`ContainerBytes::into_bytes`] and widen the bytes, handing
+/// the cleared `Typed` allocation back to `col` for reuse.
+fn drain_to_aligned<C: Columnar>(col: &mut Column<C>, len_bytes: usize) -> Vec<u64> {
+    match std::mem::take(col) {
+        Column::Align(v) => v,
+        mut other => {
+            let mut buf = Vec::with_capacity(len_bytes);
+            other.into_bytes(&mut buf);
+            debug_assert_eq!(buf.len() % 8, 0);
+            // `into_bytes` only borrowed `other`; clear it in place and hand
+            // it back so the caller keeps the `Typed` allocation instead of
+            // us dropping a reusable buffer.
+            other.clear();
+            *col = other;
+            bytemuck::allocation::pod_collect_to_vec::<u8, u64>(&buf)
         }
     }
 }
@@ -615,7 +680,7 @@ mod tests {
 
     impl PagingPolicy for TestPolicy {
         fn decide(&self, _hint: PageHint) -> PageDecision {
-            self.decision
+            self.decision.clone()
         }
         fn record(&self, event: PageEvent) {
             match event {
@@ -755,6 +820,57 @@ mod tests {
         ));
         let rt = cp.take(paged);
         assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
+    }
+
+    /// Builds a small pool with a modest virtual reservation per size class.
+    fn test_pool(budget_bytes: usize) -> mz_ore::pool::Pool {
+        mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig {
+            budget_bytes,
+            class_capacity_bytes: 64 << 20,
+        })
+        .expect("pool creation")
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn round_trip_pooled() {
+        let pool = test_pool(256 << 20);
+        let cp = ColumnPager::pooled(pool.clone());
+        let mut col = sample_typed();
+        let paged = cp.page(&mut col);
+        let PagedColumn::Pooled { handle, meta } = &paged else {
+            panic!("expected Pooled");
+        };
+        assert_eq!(handle.len_bytes(), meta.len_bytes);
+        // Push the chunk out to its extent and poison the pool slot, so a
+        // `take` that read stale slot memory (the macOS `MADV_DONTNEED`
+        // hazard) would fail the content check below.
+        pool.evict(handle);
+        pool.poison_resident(handle);
+        let rt = cp.take(paged);
+        assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
+        let stats = pool.stats();
+        assert_eq!(stats.inserts, 1);
+        assert_eq!(stats.faults, 1);
+        assert_eq!(stats.frees, 1);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn pooled_align_fast_path() {
+        let pool = test_pool(256 << 20);
+        let cp = ColumnPager::pooled(pool);
+        let body: Vec<u64> = (1u64..=512).collect();
+        let mut col: Column<i64> = Column::Align(body.clone());
+        let paged = cp.page(&mut col);
+        assert!(matches!(paged, PagedColumn::Pooled { .. }));
+        // After paging an Align variant, `col` is reset to the typed default.
+        assert!(matches!(col, Column::Typed(_)));
+        let rt = cp.take(paged);
+        match rt {
+            Column::Align(v) => assert_eq!(v, body),
+            other => panic!("expected Align, got {:?}", std::mem::discriminant(&other)),
+        }
     }
 
     #[mz_ore::test]

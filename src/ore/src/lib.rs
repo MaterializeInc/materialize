@@ -70,6 +70,9 @@ pub mod pager;
 pub mod panic;
 pub mod path;
 pub mod permutations;
+#[cfg_attr(nightly_doc_features, doc(cfg(all(feature = "pager", unix))))]
+#[cfg(all(feature = "pager", unix))]
+pub mod pool;
 #[cfg(feature = "process")]
 pub mod process;
 #[cfg(feature = "region")]
