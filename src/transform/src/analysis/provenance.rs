@@ -14,10 +14,10 @@
 //! another, and enable the removal of semijoins that do not restrict the
 //! terms they are joined against.
 
-use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+use mz_expr::{Columns, Id, MirRelationExpr, MirScalarExpr};
 
 use crate::analysis::Analysis;
-use crate::analysis::{Arity, RelationType};
+use crate::analysis::{Arity, ReprRelationType};
 use crate::analysis::{Derived, DerivedBuilder};
 
 /// An analysis that relates a collection to other named collections.
@@ -30,7 +30,7 @@ impl Analysis for Provenance {
 
     fn announce_dependencies(builder: &mut DerivedBuilder) {
         builder.require(Arity);
-        builder.require(RelationType); // needed for expression reduction.
+        builder.require(ReprRelationType); // needed for expression reduction.
     }
 
     fn derive(
@@ -53,7 +53,7 @@ impl Analysis for Provenance {
                         }
                     }
                 }
-                let arity = depends.results::<Arity>().unwrap()[index];
+                let arity = depends.results::<Arity>()[index];
                 provenance.push(ProvenanceInfo::new(*id, arity));
                 provenance
             }
@@ -79,7 +79,7 @@ impl Analysis for Provenance {
                         {
                             for expr in predicates.iter_mut() {
                                 expr.visit_pre_mut(|e| {
-                                    if let MirScalarExpr::Column(c) = e {
+                                    if let MirScalarExpr::Column(c, _) = e {
                                         *c = outputs.iter().position(|k| k == c).unwrap();
                                     }
                                 })
@@ -93,7 +93,7 @@ impl Analysis for Provenance {
             }
 
             MirRelationExpr::Map { scalars, .. } => {
-                let input_arity = depends.results::<Arity>().unwrap()[index - 1];
+                let input_arity = depends.results::<Arity>()[index - 1];
                 let mut input_provenance = results.get(index - 1).unwrap().clone();
                 for provenance in input_provenance.iter_mut() {
                     assert_eq!(provenance.columns.len(), input_arity);
@@ -109,7 +109,7 @@ impl Analysis for Provenance {
                             let mut expr = scalar.clone();
                             let mut todo = vec![&mut expr];
                             while let Some(expr) = todo.pop() {
-                                if let MirScalarExpr::Column(c) = expr {
+                                if let MirScalarExpr::Column(c, _) = expr {
                                     *expr = provenance.columns[*c].clone().unwrap();
                                 } else {
                                     todo.extend(expr.children_mut());
@@ -162,7 +162,7 @@ impl Analysis for Provenance {
 
                 let mut input_arities = depends
                     .children_of_rev(index, expr.children().count())
-                    .map(|c| depends.results::<Arity>().unwrap()[c].clone())
+                    .map(|c| depends.results::<Arity>()[c].clone())
                     .collect::<Vec<_>>();
                 input_arities.reverse();
 
@@ -213,7 +213,7 @@ impl Analysis for Provenance {
                                 let mut expr = key.clone();
                                 let mut todo = vec![&mut expr];
                                 while let Some(expr) = todo.pop() {
-                                    if let MirScalarExpr::Column(c) = expr {
+                                    if let MirScalarExpr::Column(c, _) = expr {
                                         *expr = input_prov.columns[*c].clone().unwrap();
                                     } else {
                                         todo.extend(expr.children_mut());
@@ -231,7 +231,7 @@ impl Analysis for Provenance {
                         if predicates.iter().all(|expr| {
                             expr.support()
                                 .iter()
-                                .all(|c| group_key.contains(&MirScalarExpr::Column(*c)))
+                                .all(|c| group_key.contains(&MirScalarExpr::column(*c)))
                         }) {
                             // Rewrite all predicates to refer to the columns of the output.
                             Some(
@@ -240,10 +240,10 @@ impl Analysis for Provenance {
                                     .cloned()
                                     .map(|mut expr| {
                                         expr.visit_pre_mut(|e| {
-                                            if let MirScalarExpr::Column(c) = e {
+                                            if let MirScalarExpr::Column(c, _) = e {
                                                 *c = group_key
                                                     .iter()
-                                                    .position(|k| k == &MirScalarExpr::Column(*c))
+                                                    .position(|k| k == &MirScalarExpr::column(*c))
                                                     .unwrap();
                                             }
                                         });
@@ -300,7 +300,7 @@ impl Analysis for Provenance {
         for prov in result.iter() {
             assert_eq!(
                 prov.columns.len(),
-                depends.results::<Arity>().unwrap()[index],
+                depends.results::<Arity>()[index],
                 "{:?}",
                 expr
             );
@@ -344,7 +344,7 @@ impl ProvenanceInfo {
     fn new(id: Id, arity: usize) -> Self {
         ProvenanceInfo {
             id,
-            columns: (0..arity).map(|c| Some(MirScalarExpr::Column(c))).collect(),
+            columns: (0..arity).map(|c| Some(MirScalarExpr::column(c))).collect(),
             filters: Some(Vec::new()),
         }
     }

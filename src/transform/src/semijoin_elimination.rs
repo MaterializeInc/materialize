@@ -26,12 +26,16 @@ use crate::{TransformCtx, TransformError};
 pub struct SemijoinElimination;
 
 impl crate::Transform for SemijoinElimination {
+    fn name(&self) -> &'static str {
+        "SemijoinElimination"
+    }
+
     #[mz_ore::instrument(
-        target = "optimizer"
+        target = "optimizer",
         level = "trace",
-        fields(path.segment = "equivalence_propagation")
+        fields(path.segment = "semijoin_elimination")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -113,9 +117,9 @@ impl SemijoinElimination {
                                         .filter(|c2| {
                                             prov1.columns[c1] == prov2.columns[*c2]
                                                 && equivalences.iter().any(|class| {
-                                                    class.contains(&MirScalarExpr::Column(
+                                                    class.contains(&MirScalarExpr::column(
                                                         c1 + prior_arity1,
-                                                    )) && class.contains(&MirScalarExpr::Column(
+                                                    )) && class.contains(&MirScalarExpr::column(
                                                         *c2 + prior_arity2,
                                                     ))
                                                 })
@@ -156,7 +160,7 @@ impl SemijoinElimination {
                     for predicate in filters.iter_mut() {
                         // Rewrite the predicate to refer to the other input.
                         predicate.visit_pre_mut(|e| {
-                            if let MirScalarExpr::Column(c) = e {
+                            if let MirScalarExpr::Column(c, _) = e {
                                 *c = equated[*c].unwrap() + prior_arity2;
                             }
                         });
@@ -169,7 +173,7 @@ impl SemijoinElimination {
                     for class in equivalences.iter_mut() {
                         for expr in class.iter_mut() {
                             expr.visit_pre_mut(|e| {
-                                if let MirScalarExpr::Column(c) = e {
+                                if let MirScalarExpr::Column(c, _) = e {
                                     // First, replace references to `input` with references to `other`.
                                     if *c >= prior_arity1 && *c < prior_arity1 + arities[input] {
                                         *c = prior_arity2 + equated[*c - prior_arity1].unwrap();
