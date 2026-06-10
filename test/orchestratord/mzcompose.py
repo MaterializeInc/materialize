@@ -1842,15 +1842,20 @@ class MaterializeCRDVersion(Modification):
         return "materialize.cloud/v1"
 
     def modify(self, definition: dict[str, Any]) -> None:
-        if operator_supports_v1(definition):
+        if self.value == "materialize.cloud/v1" and operator_supports_v1(definition):
+            # The operator only installs and serves the v1 CRD version when
+            # explicitly asked to.
+            enable_v1_crd(definition)
             definition["materialize"]["apiVersion"] = self.value
         else:
-            # Older versions do not support v1
+            # Older versions do not support v1, and without installV1CRD the
+            # operator does not serve it.
             definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
-        # This should be OK without additional validation,
-        # as we check we deployed in post_run_check.
+        # This should be OK without additional validation, as we check we
+        # deployed in post_run_check and check the installed CRD versions in
+        # check_crd_versions.
         return
 
 
@@ -1866,6 +1871,10 @@ class CertificateSource(Modification):
         return "cert-manager"
 
     def modify(self, definition: dict[str, Any]) -> None:
+        # The certificate is only used to serve the conversion webhook, which
+        # is only installed together with the v1 CRD.
+        if operator_supports_v1(definition):
+            enable_v1_crd(definition)
         definition["operator"]["operator"]["certificate"]["source"] = self.value
         if self.value == "secret":
             definition["operator"]["operator"]["certificate"][
@@ -1995,7 +2004,12 @@ class CertificateSource(Modification):
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         def check() -> None:
             orchestratord = get_orchestratord_data()
-            volumes = orchestratord["items"][0]["spec"]["volumes"]
+            container = orchestratord["items"][0]["spec"]["containers"][0]
+            if "--install-v1-crd" not in container["args"]:
+                # The operator does not serve the conversion webhook (e.g. it
+                # is too old to know the flag), so no certificate is mounted.
+                return
+            volumes = orchestratord["items"][0]["spec"].get("volumes") or []
             cert_volume = next(
                 (v for v in volumes if v.get("name") == "certificate"),
                 None,
@@ -2022,6 +2036,24 @@ def operator_supports_v1(definition: dict[str, Any]):
     # the v1 CRD, so anything older must use v1alpha1. Keep this in sync
     # with the release that actually introduces the v1 CRD.
     return operator_version >= MzVersion.parse("v26.29.0-dev.0")
+
+
+def operator_serves_v1(definition: dict[str, Any]) -> bool:
+    """Whether the operator in this definition installs and serves the v1 CRD.
+
+    Even operators that support v1 only install it when the installV1CRD helm
+    value is set."""
+    return operator_supports_v1(definition) and bool(
+        definition["operator"]["operator"]["args"].get("installV1CRD")
+    )
+
+
+def enable_v1_crd(definition: dict[str, Any]) -> None:
+    """Make the operator install the v1 CRD and its conversion webhook."""
+    assert operator_supports_v1(
+        definition
+    ), "the operator version is too old to install the v1 CRD"
+    definition["operator"]["operator"]["args"]["installV1CRD"] = True
 
 
 class Properties(Enum):
@@ -2572,6 +2604,7 @@ def workflow_v1_opt_in(
     args = parser.parse_args()
 
     definition = setup(c, args)
+    enable_v1_crd(definition)
 
     # Step 1: Deploy with v1, complete initial rollout.
     definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
@@ -2760,6 +2793,7 @@ def workflow_webhook_cert_rotation(
     args = parser.parse_args()
 
     definition = setup(c, args)
+    enable_v1_crd(definition)
 
     # Use cert-manager (the default) so we exercise the real rotation path,
     # and reload the certificate aggressively so a rotation is picked up in
@@ -2895,6 +2929,7 @@ def workflow_manually_promote(
     args = parser.parse_args()
 
     definition = setup(c, args)
+    enable_v1_crd(definition)
 
     # Deploy with v1 and ManuallyPromote strategy.
     definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
@@ -3146,6 +3181,7 @@ def workflow_orchestratord_upgrade(
 
     def set_latest_supported_crd_version(definition: dict[str, Any]):
         if operator_supports_v1(definition):
+            enable_v1_crd(definition)
             definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
         else:
             definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
@@ -3175,8 +3211,13 @@ def workflow_orchestratord_upgrade(
     for version in versions[-2:]:
         print(f"running orchestratord {version}")
         definition["operator"]["operator"]["image"]["tag"] = str(version)
+        # Set before the helm upgrade so that operators which support the v1
+        # CRD are deployed with --install-v1-crd and can serve the v1
+        # apiVersion used below.
+        set_latest_supported_crd_version(definition)
         helm_install_operator(definition["operator"], upgrade=True)
         wait_for_crd_established()
+        check_crd_versions(definition)
         check_orchestratord_version(version)
 
         print(f"running environmentd {version}")
@@ -3224,7 +3265,13 @@ def workflow_orchestratord_upgrade(
 
     print(f"running orchestratord {versions[-1]}")
     definition["operator"]["operator"]["image"]["tag"] = str(versions[-1])
+    # Set before the helm upgrade so that operators which support the v1 CRD
+    # are deployed with --install-v1-crd and can serve the v1 apiVersion used
+    # below.
+    set_latest_supported_crd_version(definition)
     helm_install_operator(definition["operator"], upgrade=True)
+    wait_for_crd_established()
+    check_crd_versions(definition)
     check_orchestratord_version(versions[-1])
 
     print(f"running environmentd {versions[-1]}")
@@ -3837,6 +3884,11 @@ def run_scenario(
                 values=definition["operator"],
                 upgrade=True,
             )
+            # The set of served CRD versions may change between steps (e.g.
+            # when installV1CRD flips), so wait until the operator has
+            # re-registered the CRD before applying resources against it.
+            wait_for_crd_established()
+            check_crd_versions(definition)
             if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
                 definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
             run(definition, expect_fail)
@@ -3988,6 +4040,42 @@ def init(definition: dict[str, Any]) -> None:
     )
 
     wait_for_crd_established()
+    check_crd_versions(definition)
+
+
+def check_crd_versions(definition: dict[str, Any]) -> None:
+    """Check that the v1 CRD version and the conversion webhook are installed
+    if and only if the operator was asked to install them."""
+
+    def check() -> None:
+        crd = json.loads(
+            spawn.capture(
+                ["kubectl", "get", "crd", MATERIALIZE_CRD, "-o", "json"],
+                stderr=subprocess.DEVNULL,
+            )
+        )
+        versions = sorted(version["name"] for version in crd["spec"]["versions"])
+        conversion_strategy = (crd["spec"].get("conversion") or {}).get("strategy")
+        if operator_serves_v1(definition):
+            assert versions == [
+                "v1",
+                "v1alpha1",
+            ], f"expected v1 and v1alpha1 to be served, got {versions}"
+            assert (
+                conversion_strategy == "Webhook"
+            ), f"expected Webhook conversion, got {conversion_strategy}"
+        else:
+            assert versions == [
+                "v1alpha1"
+            ], f"expected only v1alpha1 to be served, got {versions}"
+            # The API server defaults spec.conversion to {"strategy": "None"}
+            # (the string "None") when no conversion is configured.
+            assert conversion_strategy in (
+                None,
+                "None",
+            ), f"expected no conversion, got {conversion_strategy}"
+
+    retry(check, 240)
 
 
 def wait_for_crd_established():

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-{{- if eq .Values.operator.certificate.source "cert-manager" -}}
+{{- if and .Values.operator.args.installV1CRD (eq .Values.operator.certificate.source "cert-manager") -}}
 # We provision the webhook serving certificate from a stable root CA rather
 # than as a bare self-signed certificate. The serving certificate rotates
 # frequently, but it is always signed by the same long-lived CA, so the
