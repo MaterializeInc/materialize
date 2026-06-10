@@ -180,7 +180,7 @@ pub(super) async fn handle_query_event(
                 .collect();
             is_complete_event = true;
             for (table_name, outputs) in sources_to_drop {
-                tracing::info!(%id, "timely-{worker_id} DDL change dropped outputs: {outputs:?}");
+                tracing::info!(%id, "timely-{worker_id} DDL change drop table {table_name} dropped outputs: {outputs:?}");
                 for output in outputs {
                     let err = DefiniteError::TableDropped(table_name.to_string());
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
@@ -294,7 +294,7 @@ fn drop_table_identifiers(
     }
     let table_identifiers: Vec<MySqlTableName> = names
         .iter()
-        .map(|name| table_ident_from_object_name(&name, current_schema))
+        .map(|name| table_ident_from_object_name(name, current_schema))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(table_identifiers)
 }
