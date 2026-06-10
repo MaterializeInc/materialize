@@ -680,10 +680,19 @@ impl MirRelationExpr {
                 }
                 result
             }
-            FlatMap { .. } => {
-                // FlatMap can add duplicate rows, so input keys are no longer
-                // valid
-                vec![]
+            FlatMap { func, .. } => {
+                if func.at_most_one_row_per_input() {
+                    // The table function emits at most one row per input row,
+                    // so it never duplicates input rows. It may drop rows, but
+                    // that cannot break uniqueness (same argument as Filter).
+                    // Input columns keep their positions, so input keys remain
+                    // valid as is.
+                    input_keys.next().unwrap().clone()
+                } else {
+                    // FlatMap can add duplicate rows, so input keys are no
+                    // longer valid.
+                    vec![]
+                }
             }
             Negate { .. } => {
                 // Although negate may have distinct records for each key,

@@ -608,6 +608,79 @@ true
 """)
 
 
+class JsonbUnpacking(Dataflow):
+    """Common setup for the jsonb unpacking scenarios below: a view with a
+    jsonb object of FIELDS keys per row. Not a leaf, doesn't run itself."""
+
+    FIELDS = 100
+    # Extracting FIELDS fields sequentially does work quadratic in FIELDS per
+    # row, so 100k rows are plenty for a measurable query.
+    SCALE = 5
+
+    def init(self) -> list[Action]:
+        # Build the object from chunked jsonb_build_object calls to stay
+        # clear of argument count limits.
+        chunks = []
+        for start in range(0, self.FIELDS, 25):
+            pairs = ", ".join(
+                f"'key{i:02}', f1 + {i}"
+                for i in range(start, min(start + 25, self.FIELDS))
+            )
+            chunks.append(f"jsonb_build_object({pairs})")
+        obj = " || ".join(chunks)
+        return [
+            self.view_ten(),
+            TdAction(f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {obj} AS data FROM (SELECT {self.unique_values()} AS f1 FROM {self.join()});
+
+> SELECT COUNT(*) = {self.n()} FROM v1;
+true
+"""),
+        ]
+
+    def count_fields(self, fields: range) -> str:
+        return " + ".join(f"count(data->>'key{i:02}')" for i in fields)
+
+
+class JsonbUnpack(JsonbUnpacking):
+    """Benchmark extracting many fields from a single jsonb column. With
+    enable_jsonb_unpack_transform on, the optimizer replaces the per-field
+    accessors (which each re-scan the value) with one single-pass unpacking
+    table function. (The accessors sit in aggregate arguments, so this also
+    exercises the transform's Reduce-site handling.)"""
+
+    def benchmark(self) -> MeasurementSource:
+        counts = self.count_fields(range(self.FIELDS))
+        return Td(f"""
+> SELECT 1
+  /* A */
+1
+
+> SELECT {counts} FROM v1
+  /* B */
+{self.FIELDS * self.n()}
+""")
+
+
+class JsonbUnpackFiltered(JsonbUnpacking):
+    """Like JsonbUnpack, but with a predicate over one of the json fields.
+    The predicate's accessor is pinned below the unpacking in sequential
+    scalar form (so that filter-fusion mechanisms are unaffected); this
+    watches the cost of that trade-off."""
+
+    def benchmark(self) -> MeasurementSource:
+        counts = self.count_fields(range(1, self.FIELDS))
+        return Td(f"""
+> SELECT 1
+  /* A */
+1
+
+> SELECT {counts} FROM v1 WHERE data->>'key00' IS NOT NULL
+  /* B */
+{(self.FIELDS - 1) * self.n()}
+""")
+
+
 class MinMaxMaintained(Dataflow):
     """Benchmark MinMax as an indexed view, which renders a dataflow for incremental
     maintenance, in contrast with one-shot SELECT processing"""

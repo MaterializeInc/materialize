@@ -1645,17 +1645,29 @@ fn to_char_timestamp_tz_format(
     fmt.render(&*ts)
 }
 
+/// Resolves a (possibly negative) json array index to the element position to
+/// fetch. Negative indices count backwards from the end, with the array length
+/// supplied on demand by `len` (and `wrapping_sub` semantics for extreme
+/// values).
+///
+/// Shared between the jsonb accessor functions (`jsonb_get_int64`,
+/// `jsonb_get_path`, and their stringifying variants) and
+/// `TableFunc::JsonbUnpack`, so that their semantics cannot drift apart.
+pub(crate) fn jsonb_list_index_position(i: i64, len: impl FnOnce() -> usize) -> usize {
+    if i >= 0 {
+        usize::cast_from(i.unsigned_abs())
+    } else {
+        // index backwards from the end
+        let i = usize::cast_from(i.unsigned_abs());
+        len().wrapping_sub(i)
+    }
+}
+
 #[sqlfunc(sqlname = "->", is_infix_op = true)]
 fn jsonb_get_int64<'a>(a: JsonbRef<'a>, i: i64) -> Option<JsonbRef<'a>> {
     match a.into_datum() {
         Datum::List(list) => {
-            let i = if i >= 0 {
-                usize::cast_from(i.unsigned_abs())
-            } else {
-                // index backwards from the end
-                let i = usize::cast_from(i.unsigned_abs());
-                (list.iter().count()).wrapping_sub(i)
-            };
+            let i = jsonb_list_index_position(i, || list.iter().count());
             let v = list.iter().nth(i)?;
             // `v` should be valid jsonb because it came from a jsonb list, but we don't
             // panic on mismatch to avoid bringing down the whole system on corrupt data.
@@ -1697,6 +1709,26 @@ fn jsonb_get_string_stringify<'a>(
     jsonb_stringify(v.into_datum(), temp_storage)
 }
 
+/// One step of a `#>`/`#>>` path walk: descends from `json` along `key`.
+///
+/// Shared between `jsonb_get_path[_stringify]` and `TableFunc::JsonbUnpack`,
+/// so that their semantics cannot drift apart.
+pub(crate) fn jsonb_path_step<'a>(json: JsonbRef<'a>, key: &str) -> Option<JsonbRef<'a>> {
+    let v = match json.into_datum() {
+        Datum::Map(map) => map.iter().find(|(k, _)| key == *k).map(|(_k, v)| v),
+        Datum::List(list) => {
+            let i = strconv::parse_int64(key).ok()?;
+            let i = jsonb_list_index_position(i, || list.iter().count());
+            list.iter().nth(i)
+        }
+        _ => return None,
+    }?;
+    // `v` should be valid jsonb because it came from a jsonb container, but we
+    // don't panic on mismatch to avoid bringing down the whole system on
+    // corrupt data. Instead, we'll return None.
+    JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()
+}
+
 #[sqlfunc(sqlname = "#>", is_infix_op = true)]
 fn jsonb_get_path<'a>(mut json: JsonbRef<'a>, b: Array<'a>) -> Option<JsonbRef<'a>> {
     let path = b.elements();
@@ -1706,22 +1738,7 @@ fn jsonb_get_path<'a>(mut json: JsonbRef<'a>, b: Array<'a>) -> Option<JsonbRef<'
             Datum::Null => return None,
             _ => unreachable!("keys in jsonb_get_path known to be strings"),
         };
-        let v = match json.into_datum() {
-            Datum::Map(map) => map.iter().find(|(k, _)| key == *k).map(|(_k, v)| v),
-            Datum::List(list) => {
-                let i = strconv::parse_int64(key).ok()?;
-                let i = if i >= 0 {
-                    usize::cast_from(i.unsigned_abs())
-                } else {
-                    // index backwards from the end
-                    let i = usize::cast_from(i.unsigned_abs());
-                    (list.iter().count()).wrapping_sub(i)
-                };
-                list.iter().nth(i)
-            }
-            _ => return None,
-        }?;
-        json = JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()?;
+        json = jsonb_path_step(json, key)?;
     }
     Some(json)
 }
