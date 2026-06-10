@@ -554,7 +554,7 @@ impl HirRelationExpr {
                         .applied_to(id_gen, get_outer, col_map, cte_map, context)?;
                     let old_arity = input.arity();
                     let mut result = input
-                        .filter((old_arity - pred_len..old_arity).map(MirScalarExpr::Column))
+                        .filter((old_arity - pred_len..old_arity).map(MirScalarExpr::column))
                         .project((0..old_arity - pred_len).collect());
 
                     // Tidy up the result
