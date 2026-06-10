@@ -431,7 +431,8 @@ Treat it as qualitatively-swap rather than independently measured.
    Size-class regions, state words, write-behind, lifecycle eviction; integrated behind `ColumnPager` so the merge batcher is unchanged above the seam.
    Validates: RSS bounded by budget under the pager design doc's merge benches; dead-chunk write elision rate; worker threads never in reclaim (`pgscan_direct` flat); throughput at least matching the better of today's two backends at 1, 16, and 64 threads.
    Also decides the I/O execution model: run the same benches under the on-worker and off-worker executors, measuring operator-step time inflation from on-worker stalls and cold-merge throughput with and without read overlap.
-   At this milestone the swap and file backends are deletable.
+   At this milestone the pager's swap and file backends are deletable — its only two consumers route through this seam.
+   Node-level swap is unaffected; it remains the backstop for everything outside the pool (see "Incremental migration: coexisting with swap").
 3. **Borrow-safety prototype for Layer 3.**
    A paged `BatchContainer` for one container type plus an audit (and assertion machinery) that no consumer holds a container borrow across a yield.
    If differential's `Chunk` abstraction lands first, this milestone re-targets to a paged `Chunk` implementor and the audit narrows to the inner-cursor fault points (see "Integration with differential's `Chunk` abstraction").
@@ -441,6 +442,39 @@ Treat it as qualitatively-swap rather than independently measured.
    Validates: bounded-RSS hydration end to end; merge throughput with readahead; cold-seek latency.
 5. **General arrangements and peek-aware policy.**
    Eager-backing thresholds, per-dataflow priorities, rollout to compute indexes.
+
+## Incremental migration: coexisting with swap
+
+"Swap" names two different things, and the migration story differs for each.
+
+The *pager's swap backend* is an implementation detail with exactly two consumers (the compute batchers and the storage upsert stash), both already behind the `ColumnPager` seam and per-consumer flags.
+The pool replaces it consumer by consumer, each flip independent, dyncfg-driven, and reversible; the backend is deletable when the last consumer flips.
+
+*Node-level swap* is the process-wide backstop under every anonymous allocation: lgalloc-backed columnation arrangements, persist's arrow buffers, operator heap state, allocator headroom.
+It must remain provisioned until every source of large allocations has a different mechanism — a long tail that includes projects outside this design's scope, and one this design must coexist with rather than wait for.
+Nothing here assumes swap is absent; nothing here breaks when it is present.
+
+### Coexistence semantics
+
+Pool-resident pages are ordinary anonymous memory, so under global pressure the kernel may swap them — engine-managed and kernel-managed reclaim overlap, with two consequences.
+
+The first is wasted swap write-out: the kernel may page out pool-resident chunks the engine would have dropped (dead soon) or written more cheaply (compressed, to an extent).
+This is bounded by keeping the pool budget comfortably under the container limit, so kswapd rarely finds pool pages in its reclaim scans; pressure signals (PSI, `pgscan` rates) feed the existing dyncfg machinery to shrink the budget when the rest of the process grows.
+
+The second would be double I/O on fault-in — a `pread` into pages the kernel swapped out triggers swap-in of data about to be overwritten — but fault-in is overwrite-by-construction, so the engine issues `MADV_DONTNEED` on the destination range first: any swap copy is discarded, the range refills as zero pages, and no swap-in occurs.
+The lifecycle-knowledge advantage survives coexistence intact.
+
+`mlock`ing the pool would partition cleanly — pool memory engine-managed only, everything else kernel-managed — at the cost of a `RLIMIT_MEMLOCK`/capability dependency in the container environment.
+It is a hardening option, not a requirement; budget headroom plus pre-fault `MADV_DONTNEED` covers the common case without it.
+
+Swap also keeps a role this design is glad to have: defense in depth.
+A misconfigured budget degrades into kernel paging rather than an OOM kill, and operators retain the existing knob while confidence in the pool's accounting builds.
+
+### What shrinks, and when
+
+Each consumer the pool absorbs leaves the swap working set: first the batcher chunks (milestone 2), then sealed columnar batches (milestones 3–5).
+Columnation-era arrangements stay on lgalloc until the columnar path subsumes them — a separate project — and persist's buffers and operator heap state have their own timelines.
+Swap provisioning shrinks correspondingly, from working-set-sized toward insurance-sized; turning it off is a per-cluster operational decision for when monitoring shows negligible swap traffic, not a milestone of this design.
 
 ## Prior art
 
