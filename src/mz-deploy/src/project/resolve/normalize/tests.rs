@@ -216,7 +216,13 @@ fn test_cte_with_joins() {
 
 #[mz_ore::test]
 fn test_cte_shadowing_external_table() {
-    // Test that a CTE with the same name as an external table shadows it
+    // Regression test for the simple-CTE scoping rule (QA Finding 1).
+    //
+    // A simple CTE whose name shadows a catalog object can still reference that
+    // object inside its own body — the inner reference resolves to the catalog
+    // table, the outer reference resolves to the CTE. This mirrors Materialize's
+    // own resolver (`fold_query` in `src/sql/src/names.rs`), which resolves each
+    // simple CTE body *before* inserting that CTE's name into scope.
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
@@ -235,24 +241,30 @@ fn test_cte_shadowing_external_table() {
 
         let normalized_sql = query.to_ast_string(FormatMode::Simple);
 
-        // The CTE reference in the main SELECT should NOT be qualified
-        // (it references the CTE, not the external table)
-        let main_select_part = normalized_sql
-            .split("AS (")
-            .nth(1)
-            .expect("Should have main SELECT after CTE");
-
+        // The reference INSIDE the CTE body resolves to the catalog table and
+        // must be fully qualified.
         assert!(
-            main_select_part.contains("FROM products")
-                && !main_select_part.contains("materialize.public.products"),
-            "CTE reference in main query should remain unqualified (shadowing), got: {}",
+            normalized_sql.contains("FROM materialize.public.products"),
+            "reference inside the CTE body should resolve to the catalog table \
+             and be qualified, got: {}",
             normalized_sql
         );
 
-        // Note: The external table reference INSIDE the CTE definition should be qualified
-        // The CTE definition contains "FROM products WHERE active = true"
-        // and that products reference should be qualified to materialize.public.products
-        // This is validated by the CTE normalization that happened during visitor.normalize_query()
+        // Only the inner reference is qualified; the outer reference resolves to
+        // the CTE and must remain unqualified.
+        assert_eq!(
+            normalized_sql
+                .matches("materialize.public.products")
+                .count(),
+            1,
+            "exactly one (the inner) `products` reference should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains(") SELECT * FROM products"),
+            "outer reference should resolve to the CTE and stay unqualified, got: {}",
+            normalized_sql
+        );
     } else {
         panic!("Expected CreateView statement");
     }
@@ -1367,6 +1379,62 @@ fn test_staging_objects_to_deploy_filter() {
         assert!(
             !normalized_sql.contains("public_staging.inventory"),
             "Object not in deploy set should not have staging suffix, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[mz_ore::test]
+fn test_staging_keyword_named_object_is_deployed() {
+    // Regression test for QA Finding 2: a deployed object whose name requires
+    // quoting (a reserved keyword such as `order`) must still be recognized as a
+    // member of objects_to_deploy and have its references suffixed for staging.
+    //
+    // The deploy set keys its object component the same way the dependency
+    // analyzer does — `ObjectId::new(db, schema, stmt.ident().object)`, where
+    // `ident().object` flows through `Ident`'s `AstDisplay` (the quoted form for
+    // keywords). References resolve through `ObjectId::from_item_name`, which uses
+    // the *same* `AstDisplay`. Both sides therefore agree, so the reference is
+    // correctly classified as internal and suffixed.
+    let fqn = staging_test_fqn();
+
+    // Mirror how the deploy set stores a keyword-named object's id: the object
+    // component is `Ident::to_string()`, i.e. the quoted form.
+    let order_object = Ident::new("order").expect("valid ident").to_string();
+
+    let external_deps = BTreeSet::new();
+    let mut objects_to_deploy = BTreeSet::new();
+    objects_to_deploy.insert(ObjectId::new(
+        "materialize".to_string(),
+        "public".to_string(),
+        order_object,
+    ));
+
+    let replacement_objects = BTreeSet::new();
+    let mut visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_staging".to_string(),
+        &external_deps,
+        Some(&objects_to_deploy),
+        &replacement_objects,
+    );
+
+    let sql = r#"CREATE VIEW my_view AS SELECT * FROM "order""#;
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // The reference to the deployed keyword-named object must be suffixed to
+        // the staging schema (not left pointing at production).
+        assert!(
+            normalized_sql.contains("public_staging.\"order\""),
+            "reference to deployed keyword-named object should be suffixed for \
+             staging, got: {}",
             normalized_sql
         );
     } else {

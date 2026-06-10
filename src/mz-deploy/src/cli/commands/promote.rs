@@ -25,6 +25,23 @@ use owo_colors::{OwoColorize, Stream, Style};
 use std::collections::BTreeSet;
 use std::fmt;
 
+/// Recover a production name from a staging name by removing the staging suffix.
+///
+/// Staging appends the suffix (`_<deploy_id>`) exactly once, so it must be
+/// removed exactly once. `str::trim_end_matches` strips *every* trailing
+/// occurrence, which mangles production names that legitimately end in the
+/// suffix: with `--deploy-id prod`, production schema `analytics_prod` is staged
+/// as `analytics_prod_prod`, and trimming all occurrences would yield
+/// `analytics` instead of `analytics_prod` — pointing the cutover swap and the
+/// subsequent `DROP ... CASCADE` at the wrong production schema.
+///
+/// If the name does not end with the suffix it is returned unchanged.
+fn strip_staging_suffix<'a>(staging_name: &'a str, staging_suffix: &str) -> &'a str {
+    staging_name
+        .strip_suffix(staging_suffix)
+        .unwrap_or(staging_name)
+}
+
 /// Central data structure holding everything needed to display and execute a deployment.
 ///
 /// Computed once by `generate_deployment_plan()` and consumed for display (human + JSON)
@@ -97,7 +114,8 @@ impl DeploymentPlan {
         self.staging_schemas
             .iter()
             .map(|sq| {
-                let prod_schema = sq.schema.trim_end_matches(&self.staging_suffix).to_string();
+                let prod_schema =
+                    strip_staging_suffix(&sq.schema, &self.staging_suffix).to_string();
                 SchemaSwapView {
                     database: &sq.database,
                     production_schema: prod_schema,
@@ -164,7 +182,7 @@ impl DeploymentPlan {
     fn resources_to_drop(&self) -> Vec<ResourceToDropView> {
         let mut drops = Vec::new();
         for sq in &self.staging_schemas {
-            let prod_schema = sq.schema.trim_end_matches(&self.staging_suffix);
+            let prod_schema = strip_staging_suffix(&sq.schema, &self.staging_suffix);
             let old_schema = format!("{}{}", prod_schema, self.staging_suffix);
             drops.push(ResourceToDropView {
                 kind: "schema".to_string(),
@@ -398,7 +416,7 @@ async fn generate_deployment_plan(
         let prod_schemas: Vec<SchemaQualifier> = staging_schemas
             .iter()
             .map(|sq| {
-                let prod_schema = sq.schema.trim_end_matches(&staging_suffix);
+                let prod_schema = strip_staging_suffix(&sq.schema, &staging_suffix);
                 SchemaQualifier::new(sq.database.clone(), prod_schema.to_string())
             })
             .collect();
@@ -694,7 +712,7 @@ async fn gather_resources_and_check_conflicts(
 
     verbose!("\nSchemas to swap:");
     for sq in &staging_schemas {
-        let prod_schema = sq.schema.trim_end_matches(&staging_suffix);
+        let prod_schema = strip_staging_suffix(&sq.schema, &staging_suffix);
         verbose!("  - {}.{} <-> {}", sq.database, sq.schema, prod_schema);
     }
 
@@ -729,7 +747,7 @@ async fn execute_atomic_swap(
 
     // Swap schemas
     for sq in staging_schemas {
-        let prod_schema = sq.schema.trim_end_matches(&staging_suffix);
+        let prod_schema = strip_staging_suffix(&sq.schema, &staging_suffix);
         // Note: second schema name is NOT fully qualified (same database)
         let swap_sql = format!(
             "ALTER SCHEMA \"{}\".\"{}\" SWAP WITH \"{}\";",
@@ -954,7 +972,7 @@ async fn repoint_dependent_sinks(client: &Client, plan: &DeploymentPlan) -> Resu
         .staging_schemas
         .iter()
         .map(|sq| {
-            let prod_schema = sq.schema.trim_end_matches(staging_suffix);
+            let prod_schema = strip_staging_suffix(&sq.schema, staging_suffix);
             let old_schema = format!("{}{}", prod_schema, staging_suffix);
             SchemaQualifier::new(sq.database.clone(), old_schema)
         })
@@ -976,10 +994,8 @@ async fn repoint_dependent_sinks(client: &Client, plan: &DeploymentPlan) -> Resu
     let replacement_ids: BTreeSet<ObjectId> = dependent_sinks
         .iter()
         .map(|sink| {
-            let new_schema = sink
-                .dependency_schema
-                .trim_end_matches(staging_suffix)
-                .to_string();
+            let new_schema =
+                strip_staging_suffix(&sink.dependency_schema, staging_suffix).to_string();
             ObjectId::new(
                 sink.dependency_database.clone(),
                 new_schema,
@@ -996,7 +1012,7 @@ async fn repoint_dependent_sinks(client: &Client, plan: &DeploymentPlan) -> Resu
 
     for sink in dependent_sinks {
         // Compute new schema name (strip suffix to get production schema name)
-        let new_schema = sink.dependency_schema.trim_end_matches(staging_suffix);
+        let new_schema = strip_staging_suffix(&sink.dependency_schema, staging_suffix);
 
         let replacement_id = ObjectId::new(
             sink.dependency_database.clone(),
@@ -1056,7 +1072,7 @@ async fn drop_old_resources(client: &Client, plan: &DeploymentPlan) {
 
     // Drop schemas
     for sq in &plan.staging_schemas {
-        let prod_schema = sq.schema.trim_end_matches(staging_suffix);
+        let prod_schema = strip_staging_suffix(&sq.schema, staging_suffix);
         let old_schema = format!("{}{}", prod_schema, staging_suffix);
         let drop_sql = format!(
             "DROP SCHEMA IF EXISTS \"{}\".\"{}\" CASCADE;",
@@ -1081,5 +1097,42 @@ async fn drop_old_resources(client: &Client, plan: &DeploymentPlan) {
         if let Err(e) = client.execute(&drop_sql, &[]).await {
             info!("warning: failed to drop old cluster {}: {}", old_cluster, e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_staging_suffix;
+
+    #[mz_ore::test]
+    fn test_strip_staging_suffix_removes_suffix_once() {
+        // Ordinary case: a single suffix is removed.
+        assert_eq!(
+            strip_staging_suffix("analytics_deploy123", "_deploy123"),
+            "analytics"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_strip_staging_suffix_strips_exactly_once() {
+        // Regression test for QA Finding 4.
+        //
+        // With `--deploy-id prod`, the staging suffix is `_prod`. A production
+        // schema that legitimately ends in `_prod` (e.g. `analytics_prod`) stages
+        // as `analytics_prod_prod`. Recovering the production name must strip the
+        // suffix exactly once, yielding `analytics_prod` — NOT `analytics`, which
+        // would aim the cutover swap and the follow-up `DROP ... CASCADE` at the
+        // wrong production schema. `str::trim_end_matches` strips every trailing
+        // occurrence and would regress this.
+        assert_eq!(
+            strip_staging_suffix("analytics_prod_prod", "_prod"),
+            "analytics_prod"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_strip_staging_suffix_no_match_returns_input() {
+        // A name that does not end with the suffix is returned unchanged.
+        assert_eq!(strip_staging_suffix("analytics", "_prod"), "analytics");
     }
 }

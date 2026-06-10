@@ -23,8 +23,12 @@
 //! objects. The visitor uses [`CteScope`]
 //! to track which names are currently in scope:
 //!
-//! - When entering a `WITH` clause, all CTE names from that clause are pushed
-//!   as a new scope level.
+//! - Simple CTE names are introduced incrementally: each CTE body is visited
+//!   with only its *earlier* siblings in scope, then its own name is added.
+//!   Mutually-recursive blocks push all names up front. This mirrors
+//!   Materialize's resolver (`fold_query` in `src/sql/src/names.rs`), so a
+//!   simple CTE whose name shadows a catalog object can still reference that
+//!   object inside its own body.
 //! - Unqualified single-identifier references are checked against the scope
 //!   stack — if a match is found, the reference is **not transformed** (it
 //!   refers to a CTE, not a database object).
@@ -311,10 +315,39 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
 
 impl<T: NameTransformer> VisitMut<'_, Raw> for NormalizingVisitor<T> {
     fn visit_query_mut(&mut self, node: &mut Query<Raw>) {
-        let names = CteScope::collect_cte_names(&node.ctes);
-        self.cte_scope.push(names);
-        visit_mut::visit_query_mut(self, node);
-        self.cte_scope.pop();
+        // Mirror Materialize's name resolver (`fold_query` in
+        // `src/sql/src/names.rs`): a simple CTE's body is resolved with only its
+        // *earlier* siblings in scope, so a simple CTE whose name shadows a
+        // catalog object can still reference that object inside its own body.
+        // Mutually-recursive blocks make every name visible up front.
+        if matches!(node.ctes, CteBlock::Simple(_)) {
+            self.cte_scope.push(std::collections::BTreeSet::new());
+            if let CteBlock::Simple(ctes) = &mut node.ctes {
+                for cte in ctes.iter_mut() {
+                    // Visit this body before its own name is in scope.
+                    self.visit_query_mut(&mut cte.query);
+                    self.cte_scope.insert_current(cte.alias.name.to_string());
+                }
+            }
+            // The main query body sees all simple CTE names. Replicate the rest
+            // of the default `Query` traversal (body, order_by, limit, offset).
+            self.visit_set_expr_mut(&mut node.body);
+            for order_by in &mut node.order_by {
+                self.visit_order_by_expr_mut(order_by);
+            }
+            if let Some(limit) = &mut node.limit {
+                self.visit_limit_mut(limit);
+            }
+            if let Some(offset) = &mut node.offset {
+                self.visit_expr_mut(offset);
+            }
+            self.cte_scope.pop();
+        } else {
+            let names = CteScope::collect_cte_names(&node.ctes);
+            self.cte_scope.push(names);
+            visit_mut::visit_query_mut(self, node);
+            self.cte_scope.pop();
+        }
     }
 
     fn visit_table_factor_mut(&mut self, node: &mut TableFactor<Raw>) {

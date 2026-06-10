@@ -21,11 +21,12 @@
 //!
 //! CTE references must be excluded from the dependency set because they
 //! are query-local names, not database objects. The visitor uses
-//! [`CteScope`] to track CTE names
-//! across nested queries. All CTE names in a `WITH` block are pushed at
-//! once — this is correct for both simple and mutually recursive CTEs
-//! because self-references in simple CTEs are SQL errors that Materialize
-//! rejects.
+//! [`CteScope`] to track CTE names across nested queries. Simple CTE names are
+//! introduced incrementally (each body sees only earlier siblings), while
+//! mutually-recursive blocks push all names up front — mirroring Materialize's
+//! own resolver. A simple CTE that shadows a catalog object therefore still
+//! records a dependency on that object when it references it inside its own
+//! body (e.g. `WITH products AS (SELECT * FROM products) ...`).
 //!
 //! # Statement-Level Dispatch
 //!
@@ -342,10 +343,39 @@ impl<'a> DependencyVisitor<'a> {
 
 impl<'ast> Visit<'ast, Raw> for DependencyVisitor<'_> {
     fn visit_query(&mut self, node: &'ast Query<Raw>) {
-        let names = CteScope::collect_cte_names(&node.ctes);
-        self.cte_scope.push(names);
-        visit::visit_query(self, node);
-        self.cte_scope.pop();
+        // Mirror Materialize's name resolver (`fold_query` in
+        // `src/sql/src/names.rs`): a simple CTE's body is resolved with only its
+        // *earlier* siblings in scope, so a simple CTE whose name shadows a
+        // catalog object still depends on that object via references in its own
+        // body. Mutually-recursive blocks make every name visible up front.
+        if matches!(node.ctes, CteBlock::Simple(_)) {
+            self.cte_scope.push(BTreeSet::new());
+            if let CteBlock::Simple(ctes) = &node.ctes {
+                for cte in ctes {
+                    // Visit this body before its own name is in scope.
+                    self.visit_query(&cte.query);
+                    self.cte_scope.insert_current(cte.alias.name.to_string());
+                }
+            }
+            // The main query body sees all simple CTE names. Replicate the rest
+            // of the default `Query` traversal (body, order_by, limit, offset).
+            self.visit_set_expr(&node.body);
+            for order_by in &node.order_by {
+                self.visit_order_by_expr(order_by);
+            }
+            if let Some(limit) = &node.limit {
+                self.visit_limit(limit);
+            }
+            if let Some(offset) = &node.offset {
+                self.visit_expr(offset);
+            }
+            self.cte_scope.pop();
+        } else {
+            let names = CteScope::collect_cte_names(&node.ctes);
+            self.cte_scope.push(names);
+            visit::visit_query(self, node);
+            self.cte_scope.pop();
+        }
     }
 
     fn visit_table_factor(&mut self, node: &'ast TableFactor<Raw>) {
@@ -619,5 +649,39 @@ mod dependency_validation_tests {
         let result = validate_dependencies(&declared, &discovered);
         assert_eq!(result.undeclared.len(), 1);
         assert_eq!(result.unused.len(), 1);
+    }
+
+    #[mz_ore::test]
+    fn test_simple_cte_shadowing_records_catalog_dependency() {
+        // QA Finding 1: a simple CTE that shadows a catalog object and references
+        // that object inside its own body must record a dependency on the catalog
+        // object. The inner `products` resolves to the catalog table (only earlier
+        // siblings are in scope while a simple CTE body is visited); the outer
+        // `products` resolves to the CTE.
+        use crate::project::syntax::parser::parse_statements;
+
+        let stmts = parse_statements(vec![
+            "CREATE VIEW v AS \
+             WITH products AS (SELECT id FROM products WHERE active) \
+             SELECT * FROM products",
+        ])
+        .unwrap();
+
+        let query = match &stmts[0] {
+            mz_sql_parser::ast::Statement::CreateView(c) => c.definition.query.clone(),
+            _ => panic!("expected CREATE VIEW"),
+        };
+
+        let mut visitor = DependencyVisitor::new("materialize", "public");
+        visitor.visit_query(&query);
+
+        assert!(
+            visitor
+                .deps
+                .contains(&oid("materialize", "public", "products")),
+            "dependency on the catalog table shadowed by the simple CTE should be \
+             collected, got: {:?}",
+            visitor.deps
+        );
     }
 }

@@ -17,15 +17,24 @@
 //!
 //! ## Scoping Rules
 //!
-//! - **Simple CTEs** (`WITH a AS (...), b AS (...) SELECT ...`): All CTE names
-//!   are visible to the main query body and to each other's definitions. While
-//!   SQL semantics allow each simple CTE to reference only earlier siblings (not
-//!   itself), pushing all names at once is safe because self-references in simple
-//!   CTEs are SQL errors that Materialize rejects.
+//! - **Simple CTEs** (`WITH a AS (...), b AS (...) SELECT ...`): names are
+//!   introduced incrementally, left to right. Each simple CTE's body sees only
+//!   the CTEs declared *before* it; the name of CTE `i` is not in scope while
+//!   visiting CTE `i`'s own body. All names are visible to the main query body.
+//!   This mirrors Materialize's name resolver (`fold_query` in
+//!   `src/sql/src/names.rs`, `plan_ctes` in `src/sql/src/plan/query.rs`), which
+//!   resolves each `CteBlock::Simple` body before inserting that CTE's name. As
+//!   a result a simple CTE whose name shadows a catalog object can still
+//!   reference that object inside its own definition, e.g.
+//!   `WITH products AS (SELECT * FROM products WHERE active) SELECT * FROM products`
+//!   — the inner `products` is the catalog table, the outer is the CTE. Callers
+//!   drive this by pushing an empty scope, then visiting each body and calling
+//!   [`insert_current`](CteScope::insert_current) after each.
 //!
 //! - **Mutually Recursive CTEs** (`WITH MUTUALLY RECURSIVE a AS (...), b AS (...)
 //!   SELECT ...`): All CTE names are visible to all CTE definitions and the main
-//!   query body. Self-references and forward references are valid.
+//!   query body. Self-references and forward references are valid, so all names
+//!   are pushed up front.
 //!
 //! - **Nested queries**: Each subquery can introduce its own CTEs. The scope
 //!   stack ensures inner CTE names shadow outer ones, and are properly removed
@@ -82,6 +91,19 @@ impl CteScope {
         self.stack.pop();
     }
 
+    /// Add a single CTE name to the most-recently-pushed scope level.
+    ///
+    /// Used to introduce simple-CTE names incrementally: push an empty scope on
+    /// entering the `WITH` clause, visit each CTE body, then call this after each
+    /// so that subsequent siblings (and the main query body) see the name, while
+    /// the CTE's own body resolved against the catalog. Has no effect if the
+    /// stack is empty.
+    pub(crate) fn insert_current(&mut self, name: String) {
+        if let Some(top) = self.stack.last_mut() {
+            top.insert(name);
+        }
+    }
+
     /// Check whether `name` is a CTE in any active scope level.
     ///
     /// Returns `true` if the name matches a CTE at any depth in the stack.
@@ -92,11 +114,12 @@ impl CteScope {
         self.stack.iter().any(|scope| scope.contains(name))
     }
 
-    /// Extract CTE names from a [`CteBlock`].
+    /// Extract all CTE names from a [`CteBlock`] into a single set.
     ///
-    /// For both `Simple` and `MutuallyRecursive` blocks, collects all CTE
-    /// names into a single set. See the module docs for why pushing all names
-    /// at once is correct for both block types.
+    /// Appropriate for `MutuallyRecursive` blocks, where every name is visible
+    /// to every definition up front. Simple blocks must instead introduce names
+    /// incrementally via [`insert_current`](Self::insert_current); see the module
+    /// docs.
     pub(crate) fn collect_cte_names(ctes: &CteBlock<Raw>) -> BTreeSet<String> {
         match ctes {
             CteBlock::Simple(ctes) => ctes.iter().map(|cte| cte.alias.name.to_string()).collect(),

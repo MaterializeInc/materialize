@@ -655,19 +655,40 @@ pub(super) async fn object_exists(
     Ok(row.get("exists"))
 }
 
+/// Build a `LIKE` pattern (used with `ESCAPE '\'`) matching any name that ends
+/// in the staging suffix `_<deploy_id>`.
+///
+/// The suffix is matched *literally*: `_`, `%`, and the escape character `\` are
+/// LIKE metacharacters, so they are escaped. Only the leading `%` stays a
+/// wildcard. Without escaping, the `_` separating the suffix would act as a
+/// single-character wildcard — pattern `%_prod` would match any name ending in
+/// `<any char>prod` (e.g. a production schema `fooprod`), and a `deploy_id`
+/// containing `%` would match nearly everything. Both over-matches feed
+/// destructive `DROP ... CASCADE` paths (abort and stage-failure rollback).
+fn staging_suffix_like_pattern(deploy_id: &str) -> String {
+    let mut pattern = String::from("%");
+    // The literal suffix is the separating underscore followed by the deploy id.
+    for ch in std::iter::once('_').chain(deploy_id.chars()) {
+        if matches!(ch, '\\' | '_' | '%') {
+            pattern.push('\\');
+        }
+        pattern.push(ch);
+    }
+    pattern
+}
+
 /// Get staging schema names for a specific deployment.
 pub(super) async fn get_staging_schemas(
     client: &Client,
     deploy_id: &str,
 ) -> Result<Vec<SchemaQualifier>, ConnectionError> {
-    let suffix = format!("_{}", deploy_id);
-    let pattern = format!("%{}", suffix);
+    let pattern = staging_suffix_like_pattern(deploy_id);
 
     let query = r#"
         SELECT d.name as database, s.name as schema
         FROM mz_schemas s
         JOIN mz_databases d ON s.database_id = d.id
-        WHERE s.name LIKE $1
+        WHERE s.name LIKE $1 ESCAPE '\'
     "#;
 
     let rows = client.query(query, &[&pattern]).await?;
@@ -687,13 +708,12 @@ pub(super) async fn get_staging_clusters(
     client: &Client,
     deploy_id: &str,
 ) -> Result<Vec<String>, ConnectionError> {
-    let suffix = format!("_{}", deploy_id);
-    let pattern = format!("%{}", suffix);
+    let pattern = staging_suffix_like_pattern(deploy_id);
 
     let query = r#"
         SELECT name
         FROM mz_clusters
-        WHERE name LIKE $1
+        WHERE name LIKE $1 ESCAPE '\'
     "#;
 
     let rows = client.query(query, &[&pattern]).await?;
@@ -1375,5 +1395,39 @@ impl IntrospectionClient<'_> {
             object_type,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::staging_suffix_like_pattern;
+
+    #[mz_ore::test]
+    fn test_staging_suffix_like_pattern_escapes_separator() {
+        // Regression test for QA Finding 3.
+        //
+        // The `_` separating the staging suffix must be escaped so it matches a
+        // literal underscore, not a single-character wildcard. With deploy id
+        // `prod` the pattern must be `%\_prod` (used with `ESCAPE '\'`), which
+        // matches only names ending in the literal `_prod` — NOT `fooprod` or any
+        // other `<char>prod`, which the unescaped `%_prod` would have matched and
+        // then `DROP ... CASCADE`d during abort/rollback.
+        assert_eq!(staging_suffix_like_pattern("prod"), r"%\_prod");
+    }
+
+    #[mz_ore::test]
+    fn test_staging_suffix_like_pattern_escapes_metacharacters() {
+        // A deploy id containing LIKE metacharacters must not inject wildcards.
+        // `%` and `_` inside the id are escaped to literals; the only wildcard is
+        // the leading `%`.
+        assert_eq!(staging_suffix_like_pattern("a%b_c"), r"%\_a\%b\_c");
+        // Backslashes (the escape char itself) are also escaped.
+        assert_eq!(staging_suffix_like_pattern(r"a\b"), r"%\_a\\b");
+    }
+
+    #[mz_ore::test]
+    fn test_staging_suffix_like_pattern_plain_id() {
+        // A plain alphanumeric id only escapes the separating underscore.
+        assert_eq!(staging_suffix_like_pattern("deploy123"), r"%\_deploy123");
     }
 }
