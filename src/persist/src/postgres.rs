@@ -453,6 +453,93 @@ impl Consensus for PostgresConsensus {
         }
     }
 
+    async fn compare_and_set_multi(
+        &self,
+        batch: Vec<(String, VersionedData)>,
+    ) -> Result<Vec<CaSResult>, ExternalError> {
+        // First writes (seqno 0, no expected predecessor) cannot be expressed
+        // in the batched query below; they only happen on shard creation, so
+        // take the slow path for the whole batch in that rare case.
+        if batch.iter().any(|(_, new)| new.seqno.previous().is_none()) {
+            let mut results = Vec::with_capacity(batch.len());
+            for (key, new) in batch {
+                results.push(self.compare_and_set(&key, new).await?);
+            }
+            return Ok(results);
+        }
+
+        /// Batched form of `CRDB_CAS_QUERY`: one CaS per UNNEST element, all
+        /// in a single statement (and thus a single implicit transaction).
+        /// Distinct shards per batch are a caller invariant: each per-element
+        /// check sees the statement-start snapshot, so two writes to the
+        /// same shard could not both observe their expected predecessor.
+        /// `RETURNING shard` identifies the committed elements.
+        ///
+        /// "`expected` is the current head" is expressed as "the row
+        /// `(shard, expected)` exists and no row above it exists" rather
+        /// than as a per-shard `ORDER BY ... LIMIT 1` subselect: both CRDB
+        /// and the UNNEST shape defeat the correlated-LIMIT optimization and
+        /// decorrelate the subselect into a lookup join + sort over each
+        /// shard's *entire* retained history, which under load (truncation
+        /// lagging) grows with the very backlog it causes. The EXISTS pair
+        /// plans as one semi and one anti lookup join, reads O(1) rows per
+        /// element regardless of history length, and keeps CRDB's
+        /// single-statement `auto commit` fast path (verified via EXPLAIN
+        /// ANALYZE on CRDB).
+        static MULTI_CAS_QUERY: &str = "
+            INSERT INTO consensus (shard, sequence_number, data)
+            SELECT u.shard, u.sequence_number, u.data
+            FROM UNNEST($1::text[], $2::bigint[], $3::bytea[], $4::bigint[])
+                 AS u(shard, sequence_number, data, expected)
+            WHERE EXISTS (SELECT 1 FROM consensus c
+                          WHERE c.shard = u.shard
+                            AND c.sequence_number = u.expected)
+              AND NOT EXISTS (SELECT 1 FROM consensus c
+                              WHERE c.shard = u.shard
+                                AND c.sequence_number > u.expected)
+            RETURNING shard;
+        ";
+
+        let mut shards = Vec::with_capacity(batch.len());
+        let mut seqnos = Vec::with_capacity(batch.len());
+        let mut datas = Vec::with_capacity(batch.len());
+        let mut expecteds = Vec::with_capacity(batch.len());
+        for (key, new) in &batch {
+            let expected = new
+                .seqno
+                .previous()
+                .expect("first-write elements handled above");
+            shards.push(key.as_str());
+            seqnos.push(new.seqno);
+            datas.push(new.data.as_ref());
+            expecteds.push(expected);
+        }
+
+        let rows = {
+            let client = self.get_connection().await?;
+            let statement = client.prepare_cached(MULTI_CAS_QUERY).await?;
+            client
+                .query(&statement, &[&shards, &seqnos, &datas, &expecteds])
+                .await?
+        };
+
+        let mut committed = std::collections::BTreeSet::new();
+        for row in rows {
+            let shard: String = row.try_get("shard")?;
+            committed.insert(shard);
+        }
+        Ok(batch
+            .iter()
+            .map(|(key, _)| {
+                if committed.contains(key) {
+                    CaSResult::Committed
+                } else {
+                    CaSResult::ExpectationMismatch
+                }
+            })
+            .collect())
+    }
+
     async fn scan(
         &self,
         key: &str,
@@ -609,6 +696,26 @@ mod tests {
         consensus.drop_and_recreate().await?;
 
         assert_eq!(consensus.head(&key).await, Ok(None));
+
+        // A missing consensus relation must surface as `is_undefined_table()`,
+        // which `persistd` keys on to terminate-and-restart so its schema is
+        // recreated. Drop the table out from under a live handle and confirm
+        // the next op reports it, then reopen to restore the shared schema.
+        {
+            let conn = consensus.get_connection().await?;
+            conn.batch_execute("DROP TABLE consensus").await?;
+            drop(conn);
+            let err = consensus
+                .head(&key)
+                .await
+                .expect_err("head against a dropped table must error");
+            assert!(
+                err.is_undefined_table(),
+                "expected undefined_table, got: {err:?}",
+            );
+            // `open` runs `CREATE TABLE IF NOT EXISTS`, restoring the schema.
+            PostgresConsensus::open(config.clone()).await?;
+        }
 
         // This should be a separate postgres_consensus_blocking test, but nextest makes it
         // difficult since we can't specify that both tests touch the consensus table and thus

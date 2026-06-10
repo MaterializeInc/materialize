@@ -115,6 +115,12 @@ pub struct Config {
     pub environmentd_internal_sql_port: u16,
     pub environmentd_internal_http_port: u16,
     pub environmentd_internal_persist_pubsub_port: u16,
+    /// Port the in-envd persist committer listens on, and the port of the
+    /// headless committer Service. The committer is wired only for envd images
+    /// new enough to understand the flags (see `meets_minimum_version` in
+    /// `generation.rs`); images that predate the flags are skipped, so this
+    /// always carries a value.
+    pub environmentd_internal_persist_committer_port: u16,
 
     pub default_certificate_specs: DefaultCertificateSpecs,
 

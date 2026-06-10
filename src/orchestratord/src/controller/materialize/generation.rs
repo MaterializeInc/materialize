@@ -73,6 +73,18 @@ static V154_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
 });
 pub const V161: Version = Version::new(0, 161, 0);
 
+/// Version that introduced the in-`environmentd` persist committer flags
+/// (`--persist-committer-url`, `--internal-persist-committer-listen-addr`).
+/// Older envd images reject these and exit on startup, so committer wiring is
+/// gated on this.
+static V26_28_0_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 28,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
 static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 1,
@@ -143,6 +155,10 @@ pub struct Resources {
     pub public_service: Box<Service>,
     pub generation_service: Box<Service>,
     pub persist_pubsub_service: Box<Service>,
+    /// Only populated when committer wiring is enabled in the orchestratord
+    /// config; absent for older envd images that do not understand the
+    /// committer flags.
+    pub persist_committer_service: Option<Box<Service>>,
     pub environmentd_statefulset: Box<StatefulSet>,
     pub connection_info: Box<ConnectionInfo>,
 }
@@ -153,6 +169,13 @@ impl Resources {
         let generation_service = Box::new(create_generation_service_object(config, mz, generation));
         let persist_pubsub_service =
             Box::new(create_persist_pubsub_service(config, mz, generation));
+        let persist_committer_service = mz.meets_minimum_version(&V26_28_0_DEV0).then(|| {
+            Box::new(create_persist_committer_service(
+                mz,
+                generation,
+                config.environmentd_internal_persist_committer_port,
+            ))
+        });
         let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
             config, mz, generation,
         ));
@@ -163,6 +186,7 @@ impl Resources {
             public_service,
             generation_service,
             persist_pubsub_service,
+            persist_committer_service,
             environmentd_statefulset,
             connection_info,
         }
@@ -184,6 +208,10 @@ impl Resources {
 
         trace!("creating persist pubsub service");
         apply_resource(&service_api, &*self.persist_pubsub_service).await?;
+        if let Some(svc) = self.persist_committer_service.as_deref() {
+            trace!("creating persist committer service");
+            apply_resource(&service_api, svc).await?;
+        }
 
         trace!("applying listeners configmap");
         apply_resource(&configmap_api, &self.connection_info.listeners_configmap).await?;
@@ -417,6 +445,9 @@ impl Resources {
         trace!("deleting persist pubsub service for generation {generation}");
         delete_resource(&service_api, &mz.persist_pubsub_service_name(generation)).await?;
 
+        trace!("deleting persist committer service for generation {generation}");
+        delete_resource(&service_api, &mz.persist_committer_service_name(generation)).await?;
+
         trace!("deleting environmentd per-generation service for generation {generation}");
         delete_resource(
             &service_api,
@@ -539,6 +570,27 @@ fn create_persist_pubsub_service(
                 name: Some("grpc".to_string()),
                 protocol: Some("TCP".to_string()),
                 port: config.environmentd_internal_persist_pubsub_port.into(),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }),
+        status: None,
+    }
+}
+
+fn create_persist_committer_service(mz: &Materialize, generation: u64, port: u16) -> Service {
+    Service {
+        metadata: mz.managed_resource_meta(mz.persist_committer_service_name(generation)),
+        spec: Some(ServiceSpec {
+            type_: Some("ClusterIP".to_string()),
+            cluster_ip: Some("None".to_string()),
+            selector: Some(btreemap! {
+                "materialize.cloud/name".to_string() => mz.environmentd_statefulset_name(generation),
+            }),
+            ports: Some(vec![ServicePort {
+                name: Some("grpc".to_string()),
+                protocol: Some("TCP".to_string()),
+                port: port.into(),
                 ..Default::default()
             }]),
             ..Default::default()
@@ -925,6 +977,23 @@ fn create_environmentd_statefulset_object(
         "--internal-persist-pubsub-listen-addr=0.0.0.0:{}",
         config.environmentd_internal_persist_pubsub_port
     ));
+
+    // Persist committer arguments, mirroring the pubsub block above. Gated on
+    // the envd version that introduced the flags: older images do not
+    // understand them and would exit with status 2 on startup, which would
+    // break an upgrade from such an image.
+    if mz.meets_minimum_version(&V26_28_0_DEV0) {
+        let port = config.environmentd_internal_persist_committer_port;
+        args.push(format!(
+            "--persist-committer-url=http://{}:{}",
+            mz.persist_committer_service_name(generation),
+            port,
+        ));
+        args.push(format!(
+            "--internal-persist-committer-listen-addr=0.0.0.0:{}",
+            port,
+        ));
+    }
 
     args.push(format!("--deploy-generation={}", generation));
 

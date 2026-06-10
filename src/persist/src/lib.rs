@@ -19,6 +19,7 @@
 
 pub mod azure;
 pub mod cfg;
+pub mod coalesce;
 pub mod error;
 pub mod file;
 #[cfg(feature = "foundationdb")]

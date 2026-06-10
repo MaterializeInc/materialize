@@ -303,6 +303,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
+        .add(&crate::cfg::PERSIST_CONSENSUS_USE_COMMITTER)
+        .add(&crate::cfg::PERSIST_COMMITTER_CACHE_ENABLED)
+        .add(&crate::cfg::PERSIST_COMMITTER_MAX_CACHED_SHARDS)
+        .add(&crate::cfg::PERSIST_COMMITTER_STATS_HEARTBEAT_INTERVAL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
         .add(&crate::cfg::CRDB_TCP_USER_TIMEOUT)
         .add(&crate::cfg::CRDB_KEEPALIVES_IDLE)
@@ -390,6 +394,39 @@ pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
     "persist_consensus_connection_pool_max_size",
     50,
     "The maximum size the connection pool to Postgres/CRDB will grow to.",
+);
+
+/// If true, route consensus traffic through the in-envd persist committer
+/// over gRPC instead of opening a direct CockroachDB connection pool per
+/// process. Requires a restart of the process to take effect.
+pub const PERSIST_CONSENSUS_USE_COMMITTER: Config<bool> = Config::new(
+    "persist_consensus_use_committer",
+    true,
+    "If true, route consensus traffic through the in-envd persist committer.",
+);
+
+/// If false, the committer forwards every Head to CRDB without using its
+/// in-memory shard cache. A safety valve while the cache code is bedded in.
+pub const PERSIST_COMMITTER_CACHE_ENABLED: Config<bool> = Config::new(
+    "persist_committer_cache_enabled",
+    true,
+    "If false, disable the persist committer's in-memory shard cache.",
+);
+
+/// Hard cap on the number of shards held in the committer's in-memory cache.
+pub const PERSIST_COMMITTER_MAX_CACHED_SHARDS: Config<usize> = Config::new(
+    "persist_committer_max_cached_shards",
+    10_000,
+    "Maximum number of shards held in the persist committer's cache.",
+);
+
+/// Interval between INFO-level stats heartbeat lines emitted by the
+/// committer. `0s` disables the heartbeat. Useful when metrics scraping is
+/// unavailable (CI logs, incident response).
+pub const PERSIST_COMMITTER_STATS_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
+    "persist_committer_stats_heartbeat_interval",
+    Duration::from_secs(30),
+    "Interval between persist committer stats heartbeat lines. 0 disables.",
 );
 
 /// Sets the maximum amount of time we'll wait to acquire a connection from

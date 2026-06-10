@@ -1,0 +1,28 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Centralized persist consensus committer service.
+//!
+//! See `doc/developer/design/20260527_persist_committer.md`.
+
+#[allow(clippy::clone_on_ref_ptr, clippy::as_conversions)]
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/mz_persist_committer.rs"));
+}
+
+pub mod cache;
+pub mod heartbeat;
+pub mod in_process;
+pub mod metrics;
+pub mod server;
+pub mod startup;
+
+pub use in_process::InProcessConsensus;
+pub use server::PersistCommitter;
+pub use startup::{CommitterConfig, CommitterHandle, start_committer};

@@ -198,6 +198,14 @@ pub struct Args {
     environmentd_internal_http_port: u16,
     #[clap(long, default_value = "6879")]
     environmentd_internal_persist_pubsub_port: u16,
+    /// Port the persist committer listens on inside `environmentd`, and the
+    /// port of the headless committer Service orchestratord creates. Mirrors
+    /// `--environmentd-internal-persist-pubsub-port`. The committer is wired
+    /// only for envd images new enough to understand the flags (gated on
+    /// `meets_minimum_version`); older images are left untouched, so this can
+    /// carry a default safely.
+    #[clap(long, default_value = "6882")]
+    environmentd_internal_persist_committer_port: u16,
 
     #[clap(long, default_value = "6875")]
     balancerd_sql_port: u16,
@@ -382,6 +390,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     environmentd_internal_http_port: args.environmentd_internal_http_port,
                     environmentd_internal_persist_pubsub_port: args
                         .environmentd_internal_persist_pubsub_port,
+                    environmentd_internal_persist_committer_port: args
+                        .environmentd_internal_persist_committer_port,
                     default_certificate_specs: args.default_certificate_specs.clone(),
                     disable_license_key_checks: args.disable_license_key_checks,
                     tracing: args.tracing,

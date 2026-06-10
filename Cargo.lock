@@ -6050,6 +6050,7 @@ dependencies = [
  "num_cpus",
  "serde",
  "tokio",
+ "tonic",
  "tower",
  "tracing",
 ]
@@ -6378,7 +6379,9 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-orchestratord",
  "mz-ore",
+ "mz-persist",
  "mz-persist-client",
+ "mz-persist-committer",
  "mz-pgrepr",
  "mz-pgtest",
  "mz-pgwire",
@@ -6430,6 +6433,7 @@ dependencies = [
  "tokio-metrics",
  "tokio-postgres",
  "tokio-stream",
+ "tonic",
  "tower",
  "tower-http",
  "tower-sessions",
@@ -7182,6 +7186,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-ore",
  "mz-persist",
+ "mz-persist-committer",
  "mz-persist-proc",
  "mz-persist-types",
  "mz-postgres-client",
@@ -7202,6 +7207,31 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "mz-persist-committer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "mz-build-tools",
+ "mz-ore",
+ "mz-persist",
+ "mz-proto",
+ "prometheus",
+ "prost",
+ "prost-build",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
@@ -7241,6 +7271,29 @@ dependencies = [
  "timely",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "mz-persistd"
+version = "26.28.0-dev.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "futures",
+ "humantime",
+ "mz-alloc",
+ "mz-alloc-default",
+ "mz-build-info",
+ "mz-orchestrator-tracing",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-client",
+ "mz-persist-committer",
+ "num_cpus",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

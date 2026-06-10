@@ -408,6 +408,10 @@ pub mod v1alpha1 {
             self.name_prefixed(&format!("persist-pubsub-{generation}"))
         }
 
+        pub fn persist_committer_service_name(&self, generation: u64) -> String {
+            self.name_prefixed(&format!("persist-committer-{generation}"))
+        }
+
         pub fn listeners_configmap_name(&self, generation: u64) -> String {
             self.name_prefixed(&format!("listeners-{generation}"))
         }

@@ -38,6 +38,7 @@ from materialize.mzcompose.services.metadata_store import (
     metadata_store_companions,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
+from materialize.mzcompose.services.persistd import Persistd
 
 
 class MaterializeEmulator(Service):
@@ -107,6 +108,11 @@ class Materialized(Service):
         listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json",
         config_sync_file_path: str | None = None,
         support_external_clusterd: bool = False,
+        external_persist_committer: bool = True,
+        persistd_coalesce_max_batch: int = 0,
+        persistd_coalesce_concurrency: int = 8,
+        profile_envd: bool = False,
+        profile_samply_path: str = "/home/moritz/samply-static/samply",
         networks: (
             dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | None
         ) = None,
@@ -145,6 +151,8 @@ class Materialized(Service):
             # TODO move this to the listener config?
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
             "MZ_PERSIST_PUBSUB_URL=http://127.0.0.1:6879",
+            "MZ_INTERNAL_PERSIST_COMMITTER_LISTEN_ADDR=0.0.0.0:6882",
+            "MZ_PERSIST_COMMITTER_URL=http://127.0.0.1:6882",
             "MZ_AWS_CONNECTION_ROLE_ARN=arn:aws:iam::123456789000:role/MaterializeConnection",
             "MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM=password",
             "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
@@ -257,6 +265,23 @@ class Materialized(Service):
 
         volumes = []
 
+        # Decide whether to auto-attach a paired Persistd companion that
+        # owns the persist consensus traffic for this Materialized instance.
+        # Only meaningful when there is an external metadata store;
+        # in-process metadata stores have nothing for persistd to talk to.
+        use_persistd = (
+            external_persist_committer
+            and bool(external_metadata_store)
+            and metadata_store
+            in ("postgres-metadata", "cockroach", "alloydb", "foundationdb")
+        )
+        persistd_name = f"{name}-persistd"
+        # Set when use_persistd is True; captured so the companion Persistd
+        # can dial the same consensus backend envd would otherwise own.
+        persistd_consensus_url: str | None = None
+        # Extra volumes for the companion (e.g. the fdb.cluster file).
+        persistd_volumes: list[str] = []
+
         if external_metadata_store:
             depends_graph[metadata_store] = {"condition": "service_healthy"}
             address = (
@@ -277,6 +302,8 @@ class Materialized(Service):
                     # v0.92.0).
                     f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
                 ]
+                if use_persistd:
+                    persistd_consensus_url = f"postgres://root@{address}:26257?options=--search_path=consensus"
             elif metadata_store == "foundationdb":
                 command += [
                     "--persist-consensus-url=foundationdb:?prefix=consensus",
@@ -287,6 +314,13 @@ class Materialized(Service):
                 min_version = MzVersion.parse_mz("v26.9.0")
                 if image_version is None or image_version >= min_version:
                     volumes += foundationdb.fdb_cluster_file(external_metadata_store)
+                if use_persistd:
+                    persistd_consensus_url = "foundationdb:?prefix=consensus"
+                    # The companion discovers the cluster via the default
+                    # /etc/foundationdb/fdb.cluster path, same as envd.
+                    persistd_volumes += foundationdb.fdb_cluster_file(
+                        external_metadata_store
+                    )
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
@@ -381,8 +415,53 @@ class Materialized(Service):
             volumes += DEFAULT_MZ_VOLUMES
         volumes += volumes_extra
 
+        if use_persistd and persistd_consensus_url is not None:
+            # Replace the default loopback committer URL and tell envd not
+            # to start its own in-process committer. The paired Persistd
+            # container owns the committer for this Materialized.
+            environment = [
+                e
+                for e in environment
+                if not e.startswith("MZ_PERSIST_COMMITTER_URL=")
+                and not e.startswith("MZ_INTERNAL_PERSIST_COMMITTER_LISTEN_ADDR=")
+            ]
+            environment += [
+                f"MZ_PERSIST_COMMITTER_URL=http://{persistd_name}:6882",
+                "MZ_EXTERNAL_PERSIST_COMMITTER=true",
+            ]
+            depends_graph[persistd_name] = {"condition": "service_started"}
+
         if networks:
             config["networks"] = networks
+
+        # Make the container profileable with samply in ATTACH mode. We do NOT
+        # wrap the entrypoint to launch envd under `samply record`: launch mode
+        # profiles the whole descendant tree and only writes the profile once
+        # every sampled process exits. envd spawns the cluster replicas
+        # (clusterd) as children; when envd is stopped they reparent to tini and
+        # keep running, so samply waits forever and never serializes. Attach
+        # mode (`samply record -p <envd-pid>`) profiles envd alone and writes on
+        # SIGINT to samply, independent of the cluster processes.
+        #
+        # All that's needed at the container level is to lift the Docker
+        # blockers on perf_event_open and provide an exec-capable samply:
+        #   * Docker's default seccomp profile blocks perf_event_open; allow it.
+        #   * CAP_PERFMON (CAP_SYS_ADMIN on older kernels) lets samply call it.
+        #   * a statically linked (musl) samply is bind-mounted at an
+        #     exec-capable path, independent of the container's glibc.
+        # Then, against the running container:
+        #   pid=$(docker exec NAME sh -c \
+        #     "ps -eo pid,comm | awk '\$2==\"environmentd\"{print \$1}'")
+        #   docker exec -d NAME samply record --save-only -o OUT -p "$pid"
+        #   # ... let it record ...
+        #   docker exec NAME pkill -INT samply   # finalize + write OUT
+        #   docker cp NAME:OUT .
+        if profile_envd:
+            config["security_opt"] = (config.get("security_opt") or []) + [
+                "seccomp=unconfined"
+            ]
+            config["cap_add"] = ["PERFMON", "SYS_ADMIN"]
+            volumes += [f"{profile_samply_path}:/usr/local/bin/samply:ro"]
 
         config.update(
             {
@@ -414,9 +493,25 @@ class Materialized(Service):
 
         # Pull the external metadata store container(s) into the composition
         # automatically, so compositions don't have to spell them out.
-        self.companions = metadata_store_companions(
-            metadata_store, external_metadata_store
+        self.companions = list(
+            metadata_store_companions(metadata_store, external_metadata_store)
         )
+        # Plus a paired Persistd committer when one is in use, alongside the
+        # metadata store rather than replacing it.
+        if use_persistd and persistd_consensus_url is not None:
+            metadata_depends = [metadata_store] if external_metadata_store else []
+            self.companions.append(
+                Persistd(
+                    name=persistd_name,
+                    consensus_url=persistd_consensus_url,
+                    depends_on=metadata_depends,
+                    environment_extra=[
+                        f"MZ_COALESCE_MAX_BATCH={persistd_coalesce_max_batch}",
+                        f"MZ_COALESCE_CONCURRENCY={persistd_coalesce_concurrency}",
+                    ],
+                    volumes=persistd_volumes,
+                )
+            )
 
 
 class DeploymentStatus(Enum):

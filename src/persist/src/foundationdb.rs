@@ -393,6 +393,53 @@ impl Consensus for FdbConsensus {
         Ok(ok)
     }
 
+    /// Performs the whole batch in a single FoundationDB transaction, so the
+    /// batch commits or fails atomically: an `Err` here means none of the
+    /// elements were applied, unlike the looping default implementation.
+    /// Mismatches are per-element and do not abort the rest of the batch.
+    ///
+    /// Per the trait contract the batched shards must be distinct. A single
+    /// transaction widens the conflict footprint — a concurrent write to any
+    /// batched shard restarts the whole transaction — which is the same trade
+    /// the SQL implementations make.
+    async fn compare_and_set_multi(
+        &self,
+        batch: Vec<(String, VersionedData)>,
+    ) -> Result<Vec<CaSResult>, ExternalError> {
+        for (_key, new) in &batch {
+            if new.seqno.0 > i64::MAX.try_into().expect("i64::MAX known to fit in u64") {
+                return Err(ExternalError::from(anyhow!(
+                    "sequence numbers must fit within [0, i64::MAX], received: {:?}",
+                    new.seqno
+                )));
+            }
+        }
+
+        let results = self
+            .db
+            .transact_boxed(
+                &batch,
+                |trx, batch| {
+                    async move {
+                        let mut results = Vec::with_capacity(batch.len());
+                        for (key, new) in batch.iter() {
+                            let expected = new.seqno.previous();
+                            let data_key = self.data.subspace(key);
+                            let result = self
+                                .compare_and_set_trx(trx, &data_key, &expected, new, key)
+                                .await?;
+                            results.push(result);
+                        }
+                        Ok::<_, FdbTransactError>(results)
+                    }
+                    .boxed()
+                },
+                TransactOption::default(),
+            )
+            .await?;
+        Ok(results)
+    }
+
     async fn scan(
         &self,
         key: &str,

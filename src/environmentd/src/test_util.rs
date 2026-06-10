@@ -863,6 +863,7 @@ impl Listeners {
                     now: config.now.clone(),
                     metrics_registry: metrics_registry.clone(),
                     persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
+                    persist_committer_url: None,
                     secrets_args: mz_service::secrets::SecretsReaderCliArgs {
                         secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
                         secrets_reader_local_file_dir: Some(data_directory.join("secrets")),

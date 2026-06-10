@@ -643,6 +643,7 @@ impl Controller {
         let aws_external_id_prefix = self.connection_context().aws_external_id_prefix.clone();
         let aws_connection_role_arn = self.connection_context().aws_connection_role_arn.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
+        let persist_committer_url = self.persist_committer_url.clone();
         let secrets_args = self.secrets_args.to_flags();
 
         // TODO(teskje): use the same values as for compute?
@@ -746,6 +747,9 @@ impl Controller {
                     }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
+                    }
+                    if let Some(url) = &persist_committer_url {
+                        args.push(format!("--persist-committer-url={}", url));
                     }
 
                     // If swap is enabled, make the replica limit its own heap usage based on the

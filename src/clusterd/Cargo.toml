@@ -42,6 +42,7 @@ nix.workspace = true
 num_cpus.workspace = true
 serde.workspace = true
 tokio.workspace = true
+tonic.workspace = true
 tower.workspace = true
 tracing.workspace = true
 

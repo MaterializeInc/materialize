@@ -135,6 +135,36 @@ pub struct Args {
         action = ArgAction::Set,
     )]
     internal_persist_pubsub_listen_addr: SocketAddr,
+    /// The listen address for the in-envd persist committer gRPC service.
+    /// Clusterds connect here when `persist_consensus_use_committer` is on.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "INTERNAL_PERSIST_COMMITTER_LISTEN_ADDR",
+        default_value = "127.0.0.1:6882",
+        action = ArgAction::Set,
+    )]
+    internal_persist_committer_listen_addr: SocketAddr,
+    /// When > 0, the in-envd persist committer coalesces concurrent CaS
+    /// requests into batched backing statements of at most this many
+    /// elements. 0 disables coalescing.
+    #[clap(
+        long,
+        env = "INTERNAL_PERSIST_COMMITTER_COALESCE_MAX_BATCH",
+        default_value = "0",
+        action = ArgAction::Set,
+    )]
+    internal_persist_committer_coalesce_max_batch: usize,
+    /// Maximum number of coalesced CaS batches in flight against the backing
+    /// store at once. Only meaningful with a nonzero
+    /// `--internal-persist-committer-coalesce-max-batch`.
+    #[clap(
+        long,
+        env = "INTERNAL_PERSIST_COMMITTER_COALESCE_CONCURRENCY",
+        default_value = "8",
+        action = ArgAction::Set,
+    )]
+    internal_persist_committer_coalesce_concurrency: usize,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     ///
@@ -379,6 +409,21 @@ pub struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
+    /// The URL clusterds should use to reach the in-envd persist committer.
+    /// The default is suitable for the process orchestrator; in Kubernetes
+    /// the operator must set this to the envd service name.
+    #[clap(
+        long,
+        env = "PERSIST_COMMITTER_URL",
+        default_value = "http://localhost:6882"
+    )]
+    persist_committer_url: String,
+    /// When true, environmentd does not start its own in-process persist
+    /// committer; instead it dials `--persist-committer-url` as a client.
+    /// Useful when running a standalone `persistd` process so all consensus
+    /// traffic (envd + clusterds) funnels through the same committer.
+    #[clap(long, env = "EXTERNAL_PERSIST_COMMITTER", default_value = "false")]
+    external_persist_committer: bool,
     /// The number of worker threads created for the IsolatedRuntime used for
     /// storage related tasks. A negative value will subtract from the number
     /// of threads returned by [`num_cpus::get`].
@@ -1021,6 +1066,77 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     });
 
     let persist_clients = Arc::new(persist_clients);
+
+    // Wire up the persist committer. Two mutually exclusive modes:
+    //
+    // * In-process: environmentd hosts the committer itself, exposes it on
+    //   `--internal-persist-committer-listen-addr` for clusterds, and routes
+    //   its own persist traffic through the `InProcessConsensus` adapter to
+    //   avoid loopback gRPC stalling its own runtime.
+    //
+    // * External: a separate `persistd` process owns the committer.
+    //   environmentd dials `--persist-committer-url` as a client over gRPC,
+    //   the same path clusterds use, and does NOT start its own committer.
+    //
+    // The `--external-persist-committer` flag selects between them. The
+    // `persist_consensus_use_committer` LD flag still gates whether any
+    // particular consensus open routes through the committer at all.
+    let _committer_handle = if args.external_persist_committer {
+        tracing::info!(
+            url = %args.persist_committer_url,
+            "Connecting to Persist Committer",
+        );
+        let endpoint = tonic::transport::Endpoint::from_shared(args.persist_committer_url.clone())
+            .context("invalid --persist-committer-url")?;
+        // `connect_lazy` constructs the hyper client, which immediately calls
+        // `tokio::spawn` to drive its internal connection pool. That requires
+        // an active Tokio runtime; outside of `block_on` it panics with
+        // "there is no reactor running". Enter the runtime context so the
+        // spawn lands on `runtime` rather than thread-local nothing.
+        let channel = runtime.block_on(async { endpoint.connect_lazy() });
+        persist_clients.set_committer_channel(channel, args.persist_committer_url.clone());
+        None
+    } else {
+        let metrics = mz_persist_committer::metrics::CommitterMetrics::register(&metrics_registry);
+        let consensus_cfg = mz_persist::cfg::ConsensusConfig::try_from(
+            &consensus_uri,
+            Box::new(persist_clients.cfg().clone()),
+            persist_clients.metrics().postgres_consensus.clone(),
+            Arc::clone(&persist_clients.cfg().configs),
+        )?;
+        // Retry the initial consensus connection so envd boots through
+        // transient races where the metadata backend (CRDB / postgres)
+        // accepts TCP slightly after envd starts. Without this, a pre-PR
+        // envd image happened to absorb the race inside persist's own
+        // retry logic; the committer's eager open did not.
+        let consensus = runtime.block_on(async {
+            mz_ore::retry::Retry::default()
+                .clamp_backoff(Duration::from_secs(2))
+                .max_duration(Duration::from_secs(60))
+                .retry_async(|_| async {
+                    consensus_cfg
+                        .clone()
+                        .open()
+                        .await
+                        .inspect_err(|e| warn!("waiting for consensus backend: {e}"))
+                })
+                .await
+        })?;
+        let config = mz_persist_committer::CommitterConfig {
+            listen_addr: args.internal_persist_committer_listen_addr,
+            max_cached_shards: mz_persist_client::cfg::PERSIST_COMMITTER_MAX_CACHED_SHARDS
+                .get(&persist_clients.cfg().configs),
+            heartbeat_interval: mz_persist_client::cfg::PERSIST_COMMITTER_STATS_HEARTBEAT_INTERVAL
+                .get(&persist_clients.cfg().configs),
+            coalesce_max_batch: args.internal_persist_committer_coalesce_max_batch,
+            coalesce_concurrency: args.internal_persist_committer_coalesce_concurrency,
+        };
+        let _tokio_guard = runtime.enter();
+        let handle = mz_persist_committer::start_committer(consensus, metrics, config)?;
+        persist_clients.set_committer_in_process(Arc::clone(&handle.in_process_consensus));
+        Some(handle)
+    };
+
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id.to_string(),
         &args.tracing.startup_log_filter,
@@ -1045,6 +1161,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         metrics_registry: metrics_registry.clone(),
         persist_pubsub_url: args.persist_pubsub_url,
+        persist_committer_url: Some(args.persist_committer_url),
         connection_context,
         // When serialized to args in the controller, only the relevant flags will be passed
         // through, so we just set all of them
