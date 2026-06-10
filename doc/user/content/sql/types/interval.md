@@ -16,7 +16,7 @@ greater than `100 days`. See ['justify_days'](../../functions/justify-days), ['j
 Detail | Info
 -------|-----
 **Quick Syntax** | `INTERVAL '1' MINUTE` <br/> `INTERVAL '1-2 3 4:5:6.7'` <br/>`INTERVAL '1 year 2.3 days 4.5 seconds'`
-**Size** | 20 bytes
+**Size** | 16 bytes
 **Catalog name** | `pg_catalog.interval`
 **OID** | 1186
 **Min value** | -178956970 years -8 months -2147483648 days -2562047788:00:54.775808
