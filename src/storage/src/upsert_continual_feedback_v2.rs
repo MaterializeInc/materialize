@@ -168,8 +168,10 @@ where
 // Derive ordering on the generated `UpsertDiffReference` too: the paged merge
 // batcher requires `Ref: Ord` to sort the `(key, time, diff)` columns it
 // consolidates. The derived order (by `from_time`, then `value`) is fine —
-// "max FromTime wins" is commutative and associative, so the consolidated
-// result doesn't depend on the fold order of equal `(key, time)` runs.
+// "max FromTime wins" can tie only between equal `from_time`s, and a source
+// never emits two distinct values for the same `(key, time, from_time)`, so
+// the consolidated result doesn't depend on the fold order of equal
+// `(key, time)` runs.
 #[derive(Clone, Debug, Default, columnar::Columnar)]
 #[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 struct UpsertDiff<O> {
@@ -820,6 +822,10 @@ where
                             assert!(
                                 count == 1.into(),
                                 "unexpected multiple entries for the same key in persist trace"
+                            );
+                            assert!(
+                                result.is_none(),
+                                "unexpected multiple values for the same key in persist trace"
                             );
                             result = Some(decode_upsert_value(val));
                         }
