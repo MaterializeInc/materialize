@@ -342,7 +342,20 @@ impl ComputeState {
             let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
             let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
 
+            let backend = if self.context.scratch_directory.is_some() {
+                Backend::File
+            } else {
+                Backend::Swap
+            };
+
             if use_pool && apply_pool_config(enabled, total) {
+                // Keep the tiered singleton configured even though the pool
+                // is the installed mechanism: consumers that captured a
+                // tiered pager (boot-time config ordering between the
+                // compute and storage protocols is unconstrained) must see
+                // the operator's budget and codec, not the singleton's
+                // zero-budget, codec-less boot state.
+                mz_timely_util::column_pager::tiered_policy().reconfigure(total, backend, codec);
                 info!(
                     enabled,
                     fraction,
@@ -357,12 +370,6 @@ impl ComputeState {
                          falling back to tiered config",
                     );
                 }
-                let backend = if self.context.scratch_directory.is_some() {
-                    Backend::File
-                } else {
-                    Backend::Swap
-                };
-
                 info!(
                     enabled,
                     ?backend,
