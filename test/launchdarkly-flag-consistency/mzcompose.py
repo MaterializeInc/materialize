@@ -51,7 +51,9 @@ that today, but if one is ever added it would be silently omitted here and
 should be enabled before running this check (or added to a small allowlist).
 """
 
+import math
 import os
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -183,6 +185,10 @@ def collect_synced_parameters(
     synchronized parameters. Returns `None` if the service could not be booted,
     which is treated as best-effort for older releases."""
     try:
+        # Start from a clean slate: the previous-release binary cannot read
+        # persist/catalog state written by the newer current build (and vice
+        # versa), so destroy any volumes left over from an earlier collection.
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         with c.override(
             Materialized(
                 image=image,
@@ -273,6 +279,63 @@ def launchdarkly_served_defaults(
     return defaults, env_keys_seen
 
 
+# Time units accepted in duration values, expressed in seconds. Covers both the
+# spaced form printed by Materialize's SHOW (e.g. "1 min", "30 d") and the
+# humantime form stored in LaunchDarkly (e.g. "60s", "525600min", "1200ms").
+_DURATION_UNITS_SECONDS = {
+    "ns": 1e-9,
+    "us": 1e-6,
+    "µs": 1e-6,
+    "ms": 1e-3,
+    "s": 1.0,
+    "sec": 1.0,
+    "secs": 1.0,
+    "second": 1.0,
+    "seconds": 1.0,
+    "m": 60.0,
+    "min": 60.0,
+    "mins": 60.0,
+    "minute": 60.0,
+    "minutes": 60.0,
+    "h": 3600.0,
+    "hr": 3600.0,
+    "hour": 3600.0,
+    "hours": 3600.0,
+    "d": 86400.0,
+    "day": 86400.0,
+    "days": 86400.0,
+}
+
+_DURATION_TOKEN = re.compile(r"(\d+(?:\.\d+)?)\s*([a-zµ]+)")
+
+
+def parse_duration_seconds(
+    value: str, assume_bare_millis: bool = False
+) -> float | None:
+    """Parse a duration string into seconds, or return `None` if it is not a
+    duration. Handles Materialize's spaced form ("1 min"), humantime's compact
+    form ("525600min", "1h30m"), and -- when `assume_bare_millis` is set -- a
+    bare number, which Materialize interprets as milliseconds for duration
+    parameters (this is how some durations are stored in LaunchDarkly, e.g.
+    "600000" for 10 minutes)."""
+    v = value.strip().lower()
+    if not v:
+        return None
+    if re.fullmatch(r"\d+(?:\.\d+)?", v):
+        return float(v) / 1000.0 if assume_bare_millis else None
+    tokens = _DURATION_TOKEN.findall(v)
+    # Require the whole string to be made of duration tokens, so that e.g. a
+    # cluster size like "M.1-8xlarge" is not mistaken for a duration.
+    if not tokens or "".join(f"{n}{u}" for n, u in tokens) != v.replace(" ", ""):
+        return None
+    total = 0.0
+    for number, unit in tokens:
+        if unit not in _DURATION_UNITS_SECONDS:
+            return None
+        total += float(number) * _DURATION_UNITS_SECONDS[unit]
+    return total
+
+
 def values_diverge(mz_value: str, ld_value: Any) -> bool | None:
     """Return whether the Materialize default `mz_value` (a string, as printed
     by `SHOW`) diverges from the LaunchDarkly value `ld_value` (typed). Returns
@@ -289,6 +352,15 @@ def values_diverge(mz_value: str, ld_value: Any) -> bool | None:
         if mz in falsy:
             return ld_value is not False
         return None
+    # Durations: Materialize prints them with a unit (e.g. "1 min"); compare by
+    # value so that representation differences ("1 min" vs "60s", "10 s" vs the
+    # raw-milliseconds "10000") are not reported as divergences.
+    mz_seconds = parse_duration_seconds(mz_value)
+    if mz_seconds is not None:
+        ld_seconds = parse_duration_seconds(str(ld_value), assume_bare_millis=True)
+        if ld_seconds is None:
+            return None
+        return not math.isclose(mz_seconds, ld_seconds, rel_tol=1e-9, abs_tol=1e-12)
     if isinstance(ld_value, int | float):
         try:
             return float(mz_value) != float(ld_value)
