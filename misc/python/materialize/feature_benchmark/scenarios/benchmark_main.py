@@ -1060,12 +1060,19 @@ class DifferentialJoinHydrationBaseline(DifferentialJoinHydration):
     the all-in-memory path.
     """
 
-    def shared(self) -> Action:
-        return TdAction("""
+    def init(self) -> list[Action]:
+        # The ALTER SYSTEMs must be in init(), not shared(): shared() only
+        # runs against the first Mz instance (THIS), so flags set there are
+        # silently absent on OTHER and the two sides measure different
+        # batcher paths.
+        return [
+            TdAction("""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_column_paged_batcher = false;
-""")
+"""),
+            *super().init(),
+        ]
 
 
 class DifferentialJoinHydrationFile(DifferentialJoinHydration):
@@ -1080,14 +1087,19 @@ class DifferentialJoinHydrationFile(DifferentialJoinHydration):
     transient, so the bulk of the input spills.
     """
 
-    def shared(self) -> Action:
-        return TdAction("""
+    def init(self) -> list[Action]:
+        # See DifferentialJoinHydrationBaseline.init for why these are not
+        # in shared().
+        return [
+            TdAction("""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_column_paged_batcher = true;
 ALTER SYSTEM SET enable_column_paged_batcher_spill = true;
 ALTER SYSTEM SET column_paged_batcher_budget_fraction = 0.01;
-""")
+"""),
+            *super().init(),
+        ]
 
 
 class FullOuterJoin(Dataflow):
