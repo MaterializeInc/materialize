@@ -305,7 +305,12 @@ Four mechanisms bound it, in escalating order:
 * The residency policy is per-arrangement, and the safety valve is total: an arrangement whose probe traffic makes paging a net loss is simply kept resident — exactly today's behavior.
   The design degrades to the status quo, not below it.
 
-If sparse cold probes remain on the hot path after all four, page granularity itself is the wrong caching unit for that traffic, and the remaining option is record-granular caching above the page layer (the Bf-Tree mini-page idea) — an open question, not a committed mechanism.
+Batched seeks convert most sparse probes into anticipated reads.
+Probe traffic arrives in batches — upsert feedback reads back the keys of an input batch, a join processes a batch of updates against the arrangement — and a cursor that receives the whole batch can see its future: plan against the resident fence keys and filters (zero I/O; a linear merge of two sorted sequences) the exact page set the probes touch, prefetch that set in one pass (pages in flight concurrently rather than faulted serially per key), then drain key by key against resident pages.
+Differential's pending `Chunk` work plans exactly such a batched-key cursor variant, and the probe input being itself a sorted chunk makes the planning phase a chunk-against-fences merge.
+This moves batched probe traffic out of the demand-miss bucket entirely and narrows the residency-policy burden to genuinely interactive single-key peeks.
+
+If sparse cold probes remain on the hot path after all of the above, page granularity itself is the wrong caching unit for that traffic, and the remaining option is record-granular caching above the page layer (the Bf-Tree mini-page idea) — an open question, not a committed mechanism.
 Arrangements serving interactive peeks additionally keep recent batches and headers resident under a priority-aware budget (see Open questions).
 
 #### Hydration
@@ -336,6 +341,8 @@ If it lands, it is the natural differential-side landing zone for Layer 3, and s
 * **The fueled batch merger is the bounded-window consumer.**
   It reads sources by cloning chunks (refcount bumps, never consuming), holds at most two heads plus graded output, and its source indices announce exactly which chunks fault next — the readahead driver comes for free.
   Its implementor contract (output bounded by input consumed; recycle drained-input storage as output buffers) is the write-behind and pool-slot-recycling discipline of Layer 2, stated independently.
+* **Batched-seek cursors are the probe prefetch story.**
+  A planned cursor variant accepting a whole chunk of probe keys lines up exactly with the paged read path's plan/prefetch/drain shape: the resident fence containers answer which chunks the entire probe set touches without I/O, prefetch covers that set in one pass, and the drain proceeds against resident data (see "Access patterns, read amplification, and policy" above).
 * **One representation across the lifecycle.**
   The same chunk transits the collection, sits in batcher chains, and lands in the sealed batch as an `Rc` move — eliminating the re-serialization at seal that today's pipeline pays between batcher and spine containers, and making Layer 2's zero-copy end state (builders filling pool memory directly) reachable across the whole path.
 * **The trait formalizes "what is free to vary."**
