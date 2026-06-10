@@ -1,0 +1,221 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Identity folds in MirScalarExpr::reduce: calls that are the identity
+# function on one operand reduce to that operand.
+#
+# Folds (all preserve null and error behavior exactly):
+#   - integer/unsigned a+0, 0+a, a-0, a*1, 1*a, a/1
+#   - bitwise a|0, a#0, a&-1, a<<0, a>>0
+#   - btrim/ltrim/rtrim(s, ''), substr(s, 1) (two-argument form)
+#   - timestamp/time/interval ± INTERVAL '0'
+#   - involutions: NOT(NOT(b)), ~(~a), reverse(reverse(s))
+#   - greatest/least: literal NULL operands drop; single operand unwraps
+#
+# Deliberate non-folds (would change error or value behavior):
+#   - -(-a) on integers (inner negation errors on the minimum value)
+#   - s || '' (text_concat re-validates length of an oversized operand)
+#   - float a+0.0 (-0.0 + 0.0 is +0.0)
+#   - 0 - a, a & 0, power-like constant results needing null guards
+
+mode cockroach
+
+statement ok
+CREATE TABLE ident (a int, b bigint, s text, ts timestamp)
+
+statement ok
+INSERT INTO ident VALUES
+    (3, 10, 'abc', TIMESTAMP '2020-01-01 00:00:00'),
+    (NULL, NULL, NULL, NULL)
+
+# The motivating case: a division by one synthesized by another transform
+# (e.g. the unused-generate_series collapse) disappears from the plan.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT ((b - a) / 1) + 1 FROM ident
+----
+Explained Query:
+  Project (#4)
+    Map (((#1{b} - integer_to_bigint(#0{a})) + 1))
+      ReadStorage materialize.public.ident
+
+Source materialize.public.ident
+
+Target cluster: quickstart
+
+EOF
+
+query I rowsort
+SELECT ((b - a) / 1) + 1 FROM ident
+----
+8
+NULL
+
+# Arithmetic and bitwise identity operands fold away entirely: every column
+# below is the bare column `a`.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT a + 0, 0 + a, a - 0, a * 1, 1 * a, a / 1, a | 0, a # 0, a & -1, a << 0, a >> 0 FROM ident
+----
+Explained Query:
+  Project (#0, #0, #0, #0, #0, #0, #0, #0, #0, #0, #0)
+    ReadStorage materialize.public.ident
+
+Source materialize.public.ident
+
+Target cluster: quickstart
+
+EOF
+
+query IIIIIIIIIII rowsort
+SELECT a + 0, 0 + a, a - 0, a * 1, 1 * a, a / 1, a | 0, a # 0, a & -1, a << 0, a >> 0 FROM ident
+----
+3  3  3  3  3  3  3  3  3  3  3
+NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# String identities and involutions.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT btrim(s, ''), ltrim(s, ''), rtrim(s, ''), substr(s, 1), reverse(reverse(s)) FROM ident
+----
+Explained Query:
+  Project (#2, #2, #2, #2, #2)
+    ReadStorage materialize.public.ident
+
+Source materialize.public.ident
+
+Target cluster: quickstart
+
+EOF
+
+query TTTTT rowsort
+SELECT btrim(s, ''), ltrim(s, ''), rtrim(s, ''), substr(s, 1), reverse(reverse(s)) FROM ident
+----
+abc  abc  abc  abc  abc
+NULL  NULL  NULL  NULL  NULL
+
+# Boolean and bitwise involutions.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT NOT (NOT (a > 0)), ~(~a) FROM ident
+----
+Explained Query:
+  Project (#4, #0)
+    Map ((#0{a} > 0))
+      ReadStorage materialize.public.ident
+
+Source materialize.public.ident
+
+Target cluster: quickstart
+
+EOF
+
+# Temporal: adding or subtracting a zero interval.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT ts + INTERVAL '0', ts - INTERVAL '0' FROM ident
+----
+Explained Query:
+  Project (#3, #3)
+    ReadStorage materialize.public.ident
+
+Source materialize.public.ident
+
+Target cluster: quickstart
+
+EOF
+
+# greatest/least: literal NULL operands contribute nothing and drop; a single
+# surviving operand is the result.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT greatest(a, NULL), least(a, NULL, b::int) FROM ident
+----
+Explained Query:
+  Project (#0, #4)
+    Map (least(#0{a}, bigint_to_integer(#1{b})))
+      ReadStorage materialize.public.ident
+
+Source materialize.public.ident
+
+Target cluster: quickstart
+
+EOF
+
+query II rowsort
+SELECT greatest(a, NULL), least(a, NULL, b::int) FROM ident
+----
+3  3
+NULL  NULL
+
+# Deliberate non-folds. Double integer negation stays: the inner negation
+# errors on the minimum value, which eliding it would suppress.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT -(-b) FROM ident
+----
+Explained Query:
+  Project (#4)
+    Map (-(-(#1{b})))
+      ReadStorage materialize.public.ident
+
+Source materialize.public.ident
+
+Target cluster: quickstart
+
+EOF
+
+# Text concatenation with '' stays: text_concat re-validates the length of an
+# oversized operand, which eliding it would suppress.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT s || '' FROM ident
+----
+Explained Query:
+  Project (#4)
+    Map ((#2{s} || ""))
+      ReadStorage materialize.public.ident
+
+Source materialize.public.ident
+
+Target cluster: quickstart
+
+EOF
+
+# Subtraction from zero is not an identity, and the three-argument substr
+# genuinely truncates: both stay.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT 0 - a, substr(s, 1, 2) FROM ident
+----
+Explained Query:
+  Project (#4, #5)
+    Map ((0 - #0{a}), substr(#2{s}, 1, 2))
+      ReadStorage materialize.public.ident
+
+Source materialize.public.ident
+
+Target cluster: quickstart
+
+EOF
+
+query IT rowsort
+SELECT 0 - a, substr(s, 1, 2) FROM ident
+----
+-3  ab
+NULL  NULL
