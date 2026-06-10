@@ -11,7 +11,7 @@ menu:
 Detail | Info
 -------|------
 **Quick Syntax** | `DATE '2007-02-01'`
-**Size** | 1 byte
+**Size** | 4 bytes
 **Catalog name** | `pg_catalog.date`
 **OID** | 1082
 **Min value** | 4714-11-24 BC
