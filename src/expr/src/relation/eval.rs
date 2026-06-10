@@ -251,21 +251,39 @@ fn eval_join(
         old_rows = next_rows;
     }
 
-    // Discard anything that does not satisfy the join constraints.
+    // Discard anything that does not satisfy the join constraints. Errors
+    // propagate rather than filter: comparing `Result`s directly would treat
+    // two equal errors as a satisfied constraint and an error against a value
+    // as a dissatisfied one, silently swallowing the error either way, where
+    // the dataflow would surface it.
     let mut datum_vec = mz_repr::DatumVec::new();
-    old_rows.retain(|(row, _count)| {
-        let datums = datum_vec.borrow_with(row);
+    let mut result = Vec::with_capacity(old_rows.len());
+    for (row, count) in old_rows {
         let temp_storage = RowArena::new();
-        equivalences.iter().all(|equivalence| {
-            let mut values = equivalence.iter().map(|e| e.eval(&datums, &temp_storage));
-            if let Some(value) = values.next() {
-                values.all(|v| v == value)
-            } else {
-                true
+        let mut keep = true;
+        {
+            let datums = datum_vec.borrow_with(&row);
+            for equivalence in equivalences {
+                let mut values = equivalence.iter().map(|e| e.eval(&datums, &temp_storage));
+                if let Some(value) = values.next() {
+                    let value = value?;
+                    for v in values {
+                        if v? != value {
+                            keep = false;
+                            break;
+                        }
+                    }
+                }
+                if !keep {
+                    break;
+                }
             }
-        })
-    });
-    Ok(old_rows)
+        }
+        if keep {
+            result.push((row, count));
+        }
+    }
+    Ok(result)
 }
 
 fn over_limit() -> EvalError {
@@ -305,8 +323,7 @@ pub fn fold_reduce_constant(
 
         if *diff <= Diff::ZERO {
             return Some(Err(EvalError::InvalidParameterValue(
-                "constant folding encountered reduce on collection with non-positive multiplicities"
-                    .into(),
+                "reduce on a collection with non-positive multiplicities".into(),
             )));
         }
 
