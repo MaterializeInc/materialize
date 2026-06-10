@@ -267,13 +267,17 @@ fn test_expr_chain_recursion_limit() {
     // receiver (`(a).f`) are parsed in a loop, so a long *flat* chain builds AST
     // depth one node per step. Unbounded, the resulting AST overflows the stack
     // when it is later displayed/dropped/visited recursively. The chain is
-    // capped at the recursion limit. Regression for the parse_expr_roundtrip
-    // stack overflow (`a.ff.cX.*.G…`). (`a.f.f…` on a bare identifier is a flat
-    // qualified name, not nesting, so it is intentionally unaffected.)
+    // capped at `EXPR_CHAIN_LIMIT` (1024) — NOT the much smaller nesting
+    // recursion limit: wide-but-flat chains are legitimate SQL (test/limits
+    // runs 500-term sums and OR chains end-to-end), so the bound must sit
+    // above them while still rejecting the unbounded fuzz inputs. Regression
+    // for the parse_expr_roundtrip stack overflow (`a.ff.cX.*.G…`). (`a.f.f…`
+    // on a bare identifier is a flat qualified name, not nesting, so it is
+    // intentionally unaffected.)
     for chain in [
-        format!("a{}", " + a".repeat(500)),
-        format!("a{}", " * a".repeat(500)),
-        format!("(a){}", ".f".repeat(500)),
+        format!("a{}", " + a".repeat(2000)),
+        format!("a{}", " * a".repeat(2000)),
+        format!("(a){}", ".f".repeat(2000)),
     ] {
         let err = parser::parse_expr(&chain).expect_err("deep expression chain should error");
         assert!(
@@ -281,6 +285,14 @@ fn test_expr_chain_recursion_limit() {
             "unexpected error for {:.20}…: {err}",
             chain
         );
+    }
+    // Widths real workloads use must keep parsing (cf. test/limits).
+    for chain in [
+        format!("a{}", " + a".repeat(500)),
+        format!("a{}", " OR a".repeat(500)),
+        format!("(a){}", ".f".repeat(500)),
+    ] {
+        parser::parse_expr(&chain).expect("500-link flat chain should parse");
     }
 }
 
