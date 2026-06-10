@@ -32,7 +32,6 @@ Key dependencies include `mz-adapter` and `mz-catalog` for direct catalog access
 | `action::persist` | Persist shard compaction |
 | `action::protobuf` | `protoc` descriptor compilation |
 | `action::psql` | `psql` CLI execution |
-| `action::fivetran` | Fivetran Destination gRPC calls |
 | `action::set` | Session variable and retry configuration |
 | `action::sleep` | Fixed and random sleeps |
 | `action::skip_if` / `skip_end` | Conditional block skipping |

@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/fixed_length.rs
-revision: 098c29b9e8
+revision: cbff1da032
 ---
 
 # mz-repr::fixed_length
