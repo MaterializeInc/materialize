@@ -370,6 +370,35 @@ def parse_duration_seconds(
     return total
 
 
+# Byte units used by Materialize's ByteSize (1024-based, units B/kB/MB/GB/TB;
+# see src/repr/src/bytes.rs). LaunchDarkly stores byte sizes as the raw integer.
+_BYTE_UNITS = {
+    "b": 1,
+    "kb": 1024,
+    "mb": 1024**2,
+    "gb": 1024**3,
+    "tb": 1024**4,
+}
+
+_BYTE_TOKEN = re.compile(r"(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb)", re.IGNORECASE)
+
+
+def parse_bytes(value: str, assume_bare_bytes: bool = False) -> int | None:
+    """Parse a byte size into a number of bytes, or return `None` if it is not a
+    byte size. Handles Materialize's `ByteSize` form ("1GB", "4294967295B";
+    1024-based) and -- when `assume_bare_bytes` is set -- a bare number, which is
+    how LaunchDarkly stores byte sizes (e.g. 1073741824 for "1GB")."""
+    v = value.strip()
+    if not v:
+        return None
+    if re.fullmatch(r"\d+(?:\.\d+)?", v):
+        return round(float(v)) if assume_bare_bytes else None
+    m = _BYTE_TOKEN.fullmatch(v)
+    if not m:
+        return None
+    return round(float(m.group(1)) * _BYTE_UNITS[m.group(2).lower()])
+
+
 def _as_bool(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -382,18 +411,15 @@ def _as_bool(value: Any) -> bool | None:
 
 
 def values_equivalent(a: Any, b: Any) -> bool | None:
-    """Whether two values represent the same setting. Durations are compared by
-    value so representation differences ("1 min" vs "60s", "10 s" vs the
-    raw-milliseconds "10000") are not treated as differences. `a` and `b` may be
-    Materialize's `SHOW` strings or LaunchDarkly's typed values.
+    """Whether two values represent the same setting. Durations ("1 min" vs
+    "60s", "10 s" vs the raw-milliseconds "10000") and byte sizes ("1GB" vs the
+    raw byte count 1073741824) are compared by value, so representation
+    differences are not treated as differences. `a` and `b` may be Materialize's
+    `SHOW` strings or LaunchDarkly's typed values.
 
     Returns `None` when the two cannot be compared confidently: when one side is
-    missing, or one side is a bool/duration the other cannot be parsed as.
-
-    Byte sizes are *not* normalized: a unit-bearing value like "1GB" is compared
-    textually against the equivalent raw byte count (1073741824) and so is
-    reported as differing even though the two are equal. Suppress such flags via
-    INTENTIONAL_LD_OVERRIDES if the noise is undesirable."""
+    missing, or one side is a bool/duration/byte-size the other cannot be parsed
+    as."""
     if a is None or b is None:
         return None
     if isinstance(a, bool) or isinstance(b, bool):
@@ -416,6 +442,17 @@ def values_equivalent(a: Any, b: Any) -> bool | None:
         if da is None or db is None:
             return None
         return math.isclose(da, db, rel_tol=1e-9, abs_tol=1e-12)
+    ya, yb = parse_bytes(sa), parse_bytes(sb)
+    if ya is not None or yb is not None:
+        # At least one side is a byte size with a unit; parse a bare number on
+        # the other side as raw bytes (how LaunchDarkly stores it).
+        if ya is None:
+            ya = parse_bytes(sa, assume_bare_bytes=True)
+        if yb is None:
+            yb = parse_bytes(sb, assume_bare_bytes=True)
+        if ya is None or yb is None:
+            return None
+        return ya == yb
     try:
         return float(sa) == float(sb)
     except ValueError:
