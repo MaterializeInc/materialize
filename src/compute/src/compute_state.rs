@@ -329,15 +329,18 @@ impl ComputeState {
             let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
 
-            // Budget derivation: fraction × announced memory limit, with a
-            // 128 MiB floor so the no-pressure case doesn't page per chunk.
-            // Falls back to a 4 GiB assumption if no limit was announced
-            // (e.g. dev environments).
+            // Budget derivation: fraction × announced memory limit, floored
+            // at `column_paged_batcher_budget_floor_bytes` (default 128 MiB)
+            // so the no-pressure case doesn't page per chunk. Setting both
+            // the fraction and the floor to 0 yields a zero-byte budget
+            // (true "always page"). Falls back to a 4 GiB assumption if no
+            // limit was announced (e.g. dev environments).
             const MIB: usize = 1024 * 1024;
             const DEFAULT_MEM_LIMIT: usize = 4 * 1024 * MIB;
             let mem_limit = crate::memory_limiter::get_memory_limit().unwrap_or(DEFAULT_MEM_LIMIT);
             let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
-            let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
+            let floor = COLUMN_PAGED_BATCHER_BUDGET_FLOOR_BYTES.get(config);
+            let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(floor);
 
             let backend = if self.context.scratch_directory.is_some() {
                 Backend::File
@@ -350,6 +353,7 @@ impl ComputeState {
                 ?backend,
                 ?codec,
                 fraction,
+                floor,
                 mem_limit,
                 budget_bytes = total,
                 "column-paged batcher: applying tiered config",

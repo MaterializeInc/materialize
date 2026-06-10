@@ -69,14 +69,34 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
 /// per-call ColumnBuilder ship-threshold (~2 MiB) fits multiple chunks
 /// per worker, small enough that the merge-batcher's transient state
 /// doesn't crowd out the spine. Set lower to spill more aggressively
-/// under pressure. The computed budget is floored at 128 MiB so the
-/// no-pressure case doesn't page per chunk. Ignored when
+/// under pressure. The computed budget is floored at
+/// [`COLUMN_PAGED_BATCHER_BUDGET_FLOOR_BYTES`] so the no-pressure case
+/// doesn't page per chunk. Ignored when
 /// `enable_column_paged_batcher_spill` is `false`.
 pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
     "column_paged_batcher_budget_fraction",
     0.05,
     "Fraction of replica memory the column-paged batcher's tiered policy may hold resident \
-     before spilling to the backend. Total budget = max(mem_limit * fraction, 128 MiB).",
+     before spilling to the backend. Total budget = \
+     max(mem_limit * fraction, column_paged_batcher_budget_floor_bytes).",
+);
+
+/// Floor, in bytes, applied to the column-paged batcher's resident budget
+/// after the [`COLUMN_PAGED_BATCHER_BUDGET_FRACTION`] computation. Keeps a
+/// minimum amount of headroom resident so the no-pressure case doesn't page
+/// per chunk, regardless of how small `fraction × mem_limit` works out.
+///
+/// Defaults to 128 MiB. Set to `0` to remove the floor entirely: combined
+/// with `column_paged_batcher_budget_fraction = 0`, this yields a
+/// zero-byte budget so the policy pages every chunk (true "always page"),
+/// which is otherwise unreachable while the floor is in force. Ignored when
+/// `enable_column_paged_batcher_spill` is `false`.
+pub const COLUMN_PAGED_BATCHER_BUDGET_FLOOR_BYTES: Config<usize> = Config::new(
+    "column_paged_batcher_budget_floor_bytes",
+    128 * 1024 * 1024,
+    "Minimum resident byte budget for the column-paged batcher's tiered policy, applied as a \
+     floor after the budget-fraction computation. Set to 0 to allow a zero-byte budget \
+     (always page).",
 );
 
 /// Compress chunks the column-paged batcher spills, using lz4. Only
@@ -512,5 +532,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
+        .add(&COLUMN_PAGED_BATCHER_BUDGET_FLOOR_BYTES)
         .add(&COLUMN_PAGED_BATCHER_LZ4)
 }

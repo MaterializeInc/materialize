@@ -1620,6 +1620,13 @@ class FlipFlagsAction(Action):
             "0.05",
             "0.25",
         ]
+        self.flags_with_values["column_paged_batcher_budget_floor_bytes"] = [
+            # 0 makes a zero-byte budget reachable (combined with a 0
+            # fraction), exercising the always-page path.
+            "0",
+            str(16 * 1024 * 1024),
+            str(128 * 1024 * 1024),
+        ]
         self.flags_with_values["column_paged_batcher_lz4"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
 
