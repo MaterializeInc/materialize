@@ -2092,8 +2092,7 @@ fn canonicalize_rowwise_ids(body: &mut MirRelationExpr, input_id: &mut mz_expr::
             id: Id::Local(id), ..
         } => *id = next_id(&mut remap, &mut next, *id),
         _ => {}
-    })
-    .expect("housed relation already traversed by is_rowwise_closed within the recursion limit");
+    });
 }
 
 /// Authoritative check that `body` (a decorrelated subquery rooted at the

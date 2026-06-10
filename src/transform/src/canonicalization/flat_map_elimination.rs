@@ -187,8 +187,7 @@ impl FlatMapElimination {
         // Substitute placeholder/expression column references inside a housed
         // scalar expression so it reads from the rewritten column space.
         let substitute = |mut e: MirScalarExpr| -> MirScalarExpr {
-            #[allow(deprecated)]
-            e.visit_mut_post_nolimit(&mut |node| {
+            e.visit_mut_post(&mut |node: &mut MirScalarExpr| {
                 if let MirScalarExpr::Column(c, _name) = node {
                     *node = translate(*c);
                 }
