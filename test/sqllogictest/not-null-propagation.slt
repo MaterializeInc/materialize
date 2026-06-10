@@ -176,8 +176,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT GREATEST(col_not_null), GREATEST(col_not_null, col_not_null), GREATEST(col_not_null, col_null), GREATEST(col_null, col_null) FROM int_table;
 ----
 Explained Query:
-  Project (#1{col_not_null}..=#4) // { types: "(r_int32, r_int32, r_int32?, r_int32?)" }
-    Map (greatest(#1{col_not_null}, #1{col_not_null}), greatest(#1{col_not_null}, #0{col_null}), greatest(#0{col_null}, #0{col_null})) // { types: "(r_int32?, r_int32, r_int32, r_int32?, r_int32?)" }
+  Project (#1{col_not_null}, #1{col_not_null}, #2, #0{col_null}) // { types: "(r_int32, r_int32, r_int32?, r_int32?)" }
+    Map (greatest(#1{col_not_null}, #0{col_null})) // { types: "(r_int32?, r_int32, r_int32?)" }
       ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
 
 Source materialize.public.int_table
@@ -190,8 +190,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT LEAST(col_not_null), LEAST(col_not_null, col_not_null), LEAST(col_not_null, col_null), LEAST(col_null, col_null) FROM int_table;
 ----
 Explained Query:
-  Project (#1{col_not_null}..=#4) // { types: "(r_int32, r_int32, r_int32?, r_int32?)" }
-    Map (least(#1{col_not_null}, #1{col_not_null}), least(#1{col_not_null}, #0{col_null}), least(#0{col_null}, #0{col_null})) // { types: "(r_int32?, r_int32, r_int32, r_int32?, r_int32?)" }
+  Project (#1{col_not_null}, #1{col_not_null}, #2, #0{col_null}) // { types: "(r_int32, r_int32, r_int32?, r_int32?)" }
+    Map (least(#1{col_not_null}, #0{col_null})) // { types: "(r_int32?, r_int32, r_int32?)" }
       ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
 
 Source materialize.public.int_table

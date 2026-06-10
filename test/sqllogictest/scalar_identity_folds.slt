@@ -160,6 +160,30 @@ SELECT greatest(a, NULL), least(a, NULL, b::int) FROM ident
 3  3
 NULL  NULL
 
+# Structurally equal operands deduplicate: scalar evaluation is deterministic
+# and greatest/least are idempotent, so greatest(a, a) is a.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT greatest(a, a), least(a, NULL, a), greatest(a, b::int, a) FROM ident
+----
+Explained Query:
+  Project (#0, #0, #4)
+    Map (greatest(#0{a}, bigint_to_integer(#1{b})))
+      ReadStorage materialize.public.ident
+
+Source materialize.public.ident
+
+Target cluster: quickstart
+
+EOF
+
+query III rowsort
+SELECT greatest(a, a), least(a, NULL, a), greatest(a, b::int, a) FROM ident
+----
+3  3  10
+NULL  NULL  NULL
+
 # Deliberate non-folds. Double integer negation stays: the inner negation
 # errors on the minimum value, which eliding it would suppress.
 
