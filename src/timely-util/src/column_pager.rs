@@ -446,14 +446,18 @@ pub fn global_pager() -> ColumnPager {
 /// [`apply_tiered_config`]), so a consumer that captured a pager before a
 /// mechanism flip keeps its old one until it next calls here.
 pub fn shared_pager(enabled: bool) -> ColumnPager {
+    let pool_mode = POOL_MODE.load(std::sync::atomic::Ordering::Relaxed);
     if !enabled {
+        tracing::info!(enabled, pool_mode, "shared column pager resolved: disabled");
         return ColumnPager::disabled();
     }
-    if POOL_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+    if pool_mode {
         if let Some(pool) = global_pool() {
+            tracing::info!(enabled, pool_mode, "shared column pager resolved: pool");
             return ColumnPager::pooled(pool);
         }
     }
+    tracing::info!(enabled, pool_mode, "shared column pager resolved: tiered");
     #[allow(clippy::clone_on_ref_ptr)]
     let dyn_policy: Arc<dyn PagingPolicy> = TIERED_POLICY.clone();
     ColumnPager::new(dyn_policy)
