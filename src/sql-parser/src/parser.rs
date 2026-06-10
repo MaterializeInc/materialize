@@ -46,6 +46,17 @@ use crate::ident;
 // a healthy factor to be conservative.
 const RECURSION_LIMIT: usize = 128;
 
+// An iteratively-parsed expression chain (`a + b + c …`, `(a).f.g…`) adds one
+// level of AST depth per link, but — unlike parenthesized nesting — flat chains
+// are how wide predicates and sums are legitimately written (500-term chains
+// appear in test/limits and production workloads), so they get a much larger
+// budget than `RECURSION_LIMIT`. The limit matches the planner's recursion
+// guard (`RecursionGuard::with_limit(1024)` in mz-sql), which is what bounds
+// such chains during planning; a depth-1024 AST is also still shallow enough
+// for the plain-recursive display/drop/visit paths that unbounded chains
+// overflowed (the parse_expr_roundtrip fuzz finding).
+const EXPR_CHAIN_LIMIT: usize = 1024;
+
 /// Maximum allowed size for a batch of statements in bytes: 1MB.
 pub const MAX_STATEMENT_BATCH_SIZE: usize = 1_000_000;
 
@@ -562,11 +573,13 @@ impl<'a> Parser<'a> {
             // access `a.b`, `IS`, etc.), so a long *flat* operator/field-access
             // chain (`a.f.f.f…`, `a+a+a…`) builds AST depth iteratively — the
             // per-call recursion guard above only counts as one level for the
-            // whole loop. Bound the chain length at the same limit so the
-            // resulting AST can't grow deep enough to overflow the stack when
-            // it is later displayed, dropped, cloned, or visited recursively.
-            // Regression for the parse_expr_roundtrip field-access-chain
-            // stack overflow (`a.ff.cX.*.G…`).
+            // whole loop. Bound the chain length (at `EXPR_CHAIN_LIMIT`, not
+            // the much smaller `RECURSION_LIMIT` — flat chains are legitimate
+            // at widths deep nesting never reaches) so the resulting AST can't
+            // grow deep enough to overflow the stack when it is later
+            // displayed, dropped, cloned, or visited recursively. Regression
+            // for the parse_expr_roundtrip field-access-chain stack overflow
+            // (`a.ff.cX.*.G…`).
             let mut chain = 0usize;
             loop {
                 let next_precedence = parser.get_next_precedence();
@@ -574,12 +587,12 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 chain += 1;
-                if chain > RECURSION_LIMIT {
+                if chain > EXPR_CHAIN_LIMIT {
                     return Err(ParserError::new(
                         parser.peek_pos(),
                         format!(
                             "statement exceeds nested expression limit of {}",
-                            RECURSION_LIMIT
+                            EXPR_CHAIN_LIMIT
                         ),
                     ));
                 }
