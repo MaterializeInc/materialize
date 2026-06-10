@@ -274,20 +274,6 @@ struct Args {
     )]
     aws_secret_access_key: String,
 
-    // === Fivetran options. ===
-    /// Address of the Fivetran Destination that testdrive will interact with.
-    #[clap(
-        long,
-        value_name = "FIVETRAN_DESTINATION_URL",
-        default_value = "http://localhost:6874"
-    )]
-    fivetran_destination_url: String,
-    #[clap(
-        long,
-        value_name = "FIVETRAN_DESTINATION_FILES_PATH",
-        default_value = "/tmp"
-    )]
-    fivetran_destination_files_path: String,
     /// A map from size name to resource allocations for cluster replicas.
     #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: String,
@@ -460,10 +446,6 @@ async fn main() {
         // === AWS options. ===
         aws_config,
         aws_account,
-
-        // === Fivetran options. ===
-        fivetran_destination_url: args.fivetran_destination_url,
-        fivetran_destination_files_path: args.fivetran_destination_files_path,
     };
 
     if args.junit_report.is_some() && args.rewrite_results {

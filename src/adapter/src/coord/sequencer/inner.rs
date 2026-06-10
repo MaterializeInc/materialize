@@ -43,6 +43,7 @@ use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, RelationVersion, RelationVersionSelector, Row, RowArena,
     RowIterator, Timestamp,
 };
+use mz_secrets::SecretsReader;
 use mz_sql::ast::{
     AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName, CreateSourceOptionName,
     CreateSubsourceOption, CreateSubsourceOptionName, SqlServerConfigOption,
@@ -63,6 +64,7 @@ use mz_sql::plan::{
     StatementContext,
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
+use mz_storage_types::connections::gcp::GcpServiceAccountKeyTokenUri;
 use mz_storage_types::sinks::StorageSinkDesc;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
@@ -661,6 +663,19 @@ impl Coordinator {
                     return ctx.retire(Err(err.into()));
                 }
                 self.caching_secrets_reader.invalidate(connection_id);
+            }
+            ConnectionDetails::Gcp(gcp) => {
+                // A service account key defines its own OAuth2 token URI.
+                // We only want to send requests to the actual Google OAuth2 token API,
+                // so we inspect the key as early as we can.
+                if let Err(err) = self
+                    .caching_secrets_reader
+                    .read_string(gcp.credentials_json)
+                    .await
+                    .and_then(|json| GcpServiceAccountKeyTokenUri::validate_json(&json))
+                {
+                    return ctx.retire(Err(err.into()));
+                }
             }
             _ => (),
         };
@@ -1905,14 +1920,14 @@ impl Coordinator {
                     session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
                 } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
                     let v = values.into_first().to_lowercase();
-                    if v == IsolationLevel::ReadUncommitted.as_str()
-                        || v == IsolationLevel::ReadCommitted.as_str()
-                        || v == IsolationLevel::RepeatableRead.as_str()
+                    if v == IsolationLevel::ReadUncommitted.as_variant_str()
+                        || v == IsolationLevel::ReadCommitted.as_variant_str()
+                        || v == IsolationLevel::RepeatableRead.as_variant_str()
                     {
                         session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
                             isolation_level: v,
                         });
-                    } else if v == IsolationLevel::StrongSessionSerializable.as_str() {
+                    } else if v == IsolationLevel::StrongSessionSerializable.as_variant_str() {
                         session.add_notice(AdapterNotice::StrongSessionSerializable);
                     }
                 }
@@ -2183,6 +2198,15 @@ impl Coordinator {
     ) {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let Some(connection_id) = connection_id else {
+                    // The argument was `NULL`, so, like in PostgreSQL, the
+                    // function returns `NULL`.
+                    ctx.retire(Ok(Self::send_immediate_rows(Row::pack_slice(&[
+                        Datum::Null,
+                    ]))));
+                    return;
+                };
+
                 if ctx.session().conn_id().unhandled() == connection_id {
                     // As a special case, if we're canceling ourselves, we send
                     // back a canceled resposne to the client issuing the query,
@@ -2221,6 +2245,12 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let Some(connection_id) = connection_id else {
+                    // The argument was `NULL`, so, like in PostgreSQL, the
+                    // function returns `NULL`.
+                    return Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::Null])));
+                };
+
                 if conn_id.unhandled() == connection_id {
                     // As a special case, if we're canceling ourselves, we return
                     // a canceled response to the client issuing the query,
@@ -2681,7 +2711,7 @@ impl Coordinator {
         };
 
         // Disallow mz_now in any position because read time and write time differ.
-        let contains_temporal = return_if_err!(selection.contains_temporal(), ctx)
+        let contains_temporal = selection.contains_temporal()
             || assignments.values().any(|e| e.contains_temporal())
             || returning.iter().any(|e| e.contains_temporal());
         if contains_temporal {

@@ -1963,7 +1963,8 @@ def workflow_documentation_defaults(
             ["kubectl", "apply", "-f", os.path.join(dir, "sample-materialize.yaml")]
         )
 
-        for i in range(180):
+        # This should finish quickly, see https://github.com/MaterializeInc/database-issues/issues/10099
+        for i in range(120):
             try:
                 data = json.loads(
                     spawn.capture(
@@ -2643,6 +2644,167 @@ def workflow_revert_rollout(c: Composition, parser: WorkflowArgumentParser) -> N
         f"the last completed rollout image: "
         f"{initial_console_image_ref!r} -> {final_console_image_ref!r}"
     )
+
+
+def workflow_rollout_timeout(c: Composition, parser: WorkflowArgumentParser) -> None:
+    # Tests CLO-81: orchestratord automatically cancels an in-progress rollout
+    # once it has been running longer than `spec.rolloutRequestTimeout`. A new
+    # generation left un-promoted holds back compaction via read holds, and
+    # promoting it after a long delay can cause incident-inducing load, so
+    # instead of parking it indefinitely orchestratord tears it down and keeps
+    # serving the previously-active generation. The user must request a fresh
+    # rollout to retry.
+    #
+    # We deploy on a prior released version, then start a default
+    # (WaitUntilReady) upgrade to the current build with a deliberately tiny
+    # `rolloutRequestTimeout`. The new generation cannot boot and catch up
+    # within the timeout, so orchestratord must cancel the rollout: the active
+    # environmentd stays on the initial image, the un-promoted generation is
+    # torn down, `status.conditions` reports reason `RolloutTimeout`, and
+    # `lastCompletedRolloutRequest` advances to the cancelled request (so it is
+    # not immediately retried) while `lastCompletedRolloutEnvironmentdImageRef`
+    # never moves to the upgrade image.
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    def get_mz() -> dict[str, Any]:
+        return json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "materializes",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "json",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+        )["items"][0]
+
+    definition = setup(c, args)
+
+    # Initial deploy on a prior released version so the upgrade target (current
+    # build) is a real, pullable, different image. orchestratord stays on the
+    # current build — that's the binary whose timeout logic is under test.
+    initial_version = get_all_self_managed_versions()[-1]
+    initial_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(initial_version),
+    )
+    upgrade_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        args.tag,
+    )
+    assert upgrade_image != initial_image, (
+        "test setup invariant: initial and upgrade env images must differ "
+        f"(both are {initial_image!r})"
+    )
+
+    definition["materialize"]["spec"]["environmentdImageRef"] = initial_image
+    init(definition)
+    run(definition, False)
+
+    initial_mz = get_mz()
+    assert (
+        initial_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"]
+        == initial_image
+    )
+
+    # Start a default (WaitUntilReady) upgrade with a tiny timeout. The new
+    # generation cannot become ready within the timeout, so the rollout will be
+    # cancelled. We apply the manifest directly (rather than via `run`, which
+    # would wait for a successful rollout) and poll for the cancellation.
+    upgrade_request = str(uuid.uuid4())
+    definition["materialize"]["spec"]["environmentdImageRef"] = upgrade_image
+    definition["materialize"]["spec"]["rolloutRequestTimeout"] = "1s"
+    definition["materialize"]["spec"]["requestRollout"] = upgrade_request
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [
+                definition["namespace"],
+                definition["secret"],
+                definition["materialize"],
+            ]
+        ).encode(),
+    )
+
+    # Wait for orchestratord to observe the timeout and cancel the rollout.
+    def check_cancelled() -> None:
+        status = get_mz().get("status") or {}
+        conditions = status.get("conditions") or []
+        assert conditions, "no status conditions yet"
+        condition = conditions[0]
+        assert (
+            condition["type"] == "UpToDate"
+            and condition["status"] == "False"
+            and condition["reason"] == "RolloutTimeout"
+        ), f"expected a RolloutTimeout condition, but got {condition}"
+        # The cancelled request is marked completed so it isn't retried...
+        assert (
+            status["lastCompletedRolloutRequest"] == upgrade_request
+        ), f"lastCompletedRolloutRequest did not advance to the cancelled request: {status}"
+        # ...but the rollout never actually became active.
+        assert (
+            status["lastCompletedRolloutEnvironmentdImageRef"] == initial_image
+        ), f"lastCompletedRolloutEnvironmentdImageRef advanced despite cancellation: {status}"
+
+    retry(check_cancelled, 300)
+
+    # The previously-active generation keeps serving on the initial image, and
+    # the un-promoted generation has been torn down (releasing its read holds).
+    def check_active_generation_intact() -> None:
+        live_images = [
+            item["spec"]["containers"][0]["image"]
+            for item in get_environmentd_data()["items"]
+            if not item.get("metadata", {}).get("deletionTimestamp")
+        ]
+        assert live_images, "no environmentd pods running"
+        assert all(
+            image != upgrade_image for image in live_images
+        ), f"cancelled upgrade generation is still running: {live_images}"
+        assert any(
+            image == initial_image for image in live_images
+        ), f"active generation is not on the initial image: {live_images}"
+
+    retry(check_active_generation_intact, 120)
+
+    def check_single_generation() -> None:
+        statefulsets = (
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "statefulset",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            .strip()
+            .split("\n")
+        )
+        environmentd_statefulsets = [s for s in statefulsets if "-environmentd-" in s]
+        assert (
+            len(environmentd_statefulsets) == 1
+        ), f"expected exactly one environmentd statefulset after cancellation, but found {environmentd_statefulsets}"
+
+    retry(check_single_generation, 120)
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:

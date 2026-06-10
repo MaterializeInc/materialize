@@ -119,6 +119,7 @@ use mz_storage_types::sources::{
     SourceExportDetails, SourceExportStatementDetails, SqlServerSourceConnection,
     SqlServerSourceExtras, Timeline,
 };
+use mz_storage_types::wire_format::WireFormat;
 use prost::Message;
 
 use crate::ast::display::AstDisplay;
@@ -2372,27 +2373,41 @@ fn get_encoding_inner(
                 }
             };
 
+            // Map the legacy (csr_connection, confluent_wire_format) pair to
+            // the unified `WireFormat`. `(Some, false)` is unreachable in
+            // practice (the planner only sets `confluent_wire_format = false`
+            // on inline schemas, which never carry a CSR connection) but is
+            // rejected explicitly here to keep the invariant local.
+            let wire_format = match (csr_connection.clone(), confluent_wire_format) {
+                (None, false) => WireFormat::None,
+                (None, true) => WireFormat::Confluent { registry: None },
+                (Some(c), true) => WireFormat::Confluent { registry: Some(c) },
+                (Some(_), false) => {
+                    sql_bail!(
+                        "internal error: AVRO source has CSR connection but \
+                         CONFLUENT WIRE FORMAT = false"
+                    )
+                }
+            };
+
             if let Some(key_schema) = key_schema {
                 return Ok(SourceDataEncoding {
                     key: Some(DataEncoding::Avro(AvroEncoding {
                         schema: key_schema,
                         reference_schemas: key_reference_schemas,
-                        csr_connection: csr_connection.clone(),
-                        confluent_wire_format,
+                        wire_format: wire_format.clone(),
                     })),
                     value: DataEncoding::Avro(AvroEncoding {
                         schema: value_schema,
                         reference_schemas: value_reference_schemas,
-                        csr_connection,
-                        confluent_wire_format,
+                        wire_format,
                     }),
                 });
             } else {
                 DataEncoding::Avro(AvroEncoding {
                     schema: value_schema,
                     reference_schemas: value_reference_schemas,
-                    csr_connection,
-                    confluent_wire_format,
+                    wire_format,
                 })
             }
         }
@@ -3316,8 +3331,6 @@ fn plan_sink(
                             | SqlScalarType::MzAclItem
                             | SqlScalarType::AclItem
                             | SqlScalarType::Int2Vector
-                            // ranges
-                            | SqlScalarType::Range { .. }
                     );
                     if !is_valid {
                         return Err(PlanError::IcebergSinkUnsupportedKeyType {
@@ -3469,13 +3482,13 @@ fn plan_sink(
             commit_interval,
         )?,
         CreateSinkConnection::Iceberg {
-            connection,
+            catalog_connection,
             aws_connection,
             options,
             ..
         } => iceberg_sink_builder(
             scx,
-            connection,
+            catalog_connection,
             aws_connection,
             options,
             relation_key_indices,
@@ -3647,7 +3660,7 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
 fn iceberg_sink_builder(
     scx: &StatementContext,
     catalog_connection: ResolvedItemName,
-    aws_connection: ResolvedItemName,
+    storage_connection: Option<ResolvedItemName>,
     options: Vec<IcebergSinkConfigOption<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
@@ -3659,10 +3672,9 @@ fn iceberg_sink_builder(
     // (e.g. interval -> string) don't trip the check.
     ArrowBuilder::validate_desc_for_parquet(desc, iceberg_type_overrides)
         .map_err(|e| sql_err!("{}", e))?;
+
     let catalog_connection_item = scx.get_item_by_resolved_name(&catalog_connection)?;
     let catalog_connection_id = catalog_connection_item.id();
-    let aws_connection_item = scx.get_item_by_resolved_name(&aws_connection)?;
-    let aws_connection_id = aws_connection_item.id();
     if !matches!(
         catalog_connection_item.connection()?,
         Connection::IcebergCatalog(_)
@@ -3676,13 +3688,16 @@ fn iceberg_sink_builder(
         );
     };
 
-    if !matches!(aws_connection_item.connection()?, Connection::Aws(_)) {
+    let storage_connection_item = storage_connection
+        .map(|c| scx.get_item_by_resolved_name(&c))
+        .transpose()?;
+    let storage_connection_id = storage_connection_item.as_ref().map(|c| c.id());
+    if let Some(c) = &storage_connection_item
+        && !matches!(c.connection()?, Connection::Aws(_))
+    {
         sql_bail!(
             "{} is not an AWS connection",
-            scx.catalog
-                .resolve_full_name(aws_connection_item.name())
-                .to_string()
-                .quoted()
+            scx.catalog.resolve_full_name(c.name()).to_string().quoted()
         );
     }
 
@@ -3705,8 +3720,8 @@ fn iceberg_sink_builder(
     Ok(StorageSinkConnection::Iceberg(IcebergSinkConnection {
         catalog_connection_id,
         catalog_connection: catalog_connection_id,
-        aws_connection_id,
-        aws_connection: aws_connection_id,
+        storage_connection_id,
+        storage_connection: storage_connection_id,
         table,
         namespace,
         relation_key_indices,
@@ -3900,7 +3915,9 @@ fn kafka_sink_builder(
                 } else {
                     options.value_compatibility_level
                 },
-                csr_connection,
+                wire_format: WireFormat::Confluent {
+                    registry: Some(csr_connection),
+                },
             })
         }
         format => bail_unsupported!(format!("sink format {:?}", format)),
@@ -4859,7 +4876,6 @@ pub fn unplan_create_cluster(
         }) => {
             let schedule = unplan_cluster_schedule(schedule);
             let OptimizerFeatureOverrides {
-                enable_consolidate_after_union_negate: _,
                 enable_reduce_mfp_fusion: _,
                 enable_cardinality_estimates: _,
                 persist_fast_path_limit: _,
@@ -4878,6 +4894,7 @@ pub fn unplan_create_cluster(
                 enable_case_literal_transform: _,
                 enable_simplify_quantified_comparisons: _,
                 enable_coalesce_case_transform: _,
+                enable_will_distinct_propagation: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
@@ -5359,8 +5376,10 @@ pub fn plan_drop_objects(
                 plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role)
             }
             UnresolvedObjectName::Item(name) => {
-                plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
-                    .map(ObjectId::Item)
+                // Defer the dependency check until all names are resolved, so a
+                // dependent that is itself being dropped in this same statement
+                // does not block a non-cascade drop.
+                plan_drop_item_name(scx, object_type, if_exists, name.clone())?.map(ObjectId::Item)
             }
             UnresolvedObjectName::NetworkPolicy(name) => {
                 plan_drop_network_policy(scx, if_exists, name)?.map(ObjectId::NetworkPolicy)
@@ -5374,6 +5393,24 @@ pub fn plan_drop_objects(
             }),
         }
     }
+
+    // Now that the full set of explicitly-named items is known, run the
+    // non-cascade dependency check. A dependent that is itself being dropped in
+    // this statement does not block the drop, matching PostgreSQL.
+    if !cascade {
+        let dropped_items: BTreeSet<CatalogItemId> = referenced_ids
+            .iter()
+            .filter_map(|id| match id {
+                ObjectId::Item(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for id in &dropped_items {
+            let catalog_item = scx.catalog.get_item(id);
+            ensure_no_blocking_dependents(scx, object_type, catalog_item, &dropped_items)?;
+        }
+    }
+
     let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
     Ok(Plan::DropObjects(DropObjectsPlan {
@@ -5510,6 +5547,25 @@ fn plan_drop_item(
     name: UnresolvedItemName,
     cascade: bool,
 ) -> Result<Option<CatalogItemId>, PlanError> {
+    let Some(id) = plan_drop_item_name(scx, object_type, if_exists, name)? else {
+        return Ok(None);
+    };
+    if !cascade {
+        let catalog_item = scx.catalog.get_item(&id);
+        ensure_no_blocking_dependents(scx, object_type, catalog_item, &BTreeSet::new())?;
+    }
+    Ok(Some(id))
+}
+
+/// Resolves `name` to the [`CatalogItemId`] of the item to drop, performing the
+/// system-object check but *not* the dependency check. Returns `None` if the
+/// item does not exist and `if_exists` is set.
+fn plan_drop_item_name(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: UnresolvedItemName,
+) -> Result<Option<CatalogItemId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
         // Return a more helpful error on `DROP VIEW <materialized-view>`.
@@ -5532,31 +5588,44 @@ fn plan_drop_item(
                     scx.catalog.minimal_qualification(catalog_item.name()),
                 );
             }
-
-            if !cascade {
-                for id in catalog_item.used_by() {
-                    let dep = scx.catalog.get_item(id);
-                    if dependency_prevents_drop(object_type, dep) {
-                        return Err(PlanError::DependentObjectsStillExist {
-                            object_type: catalog_item.item_type().to_string(),
-                            object_name: scx
-                                .catalog
-                                .minimal_qualification(catalog_item.name())
-                                .to_string(),
-                            dependents: vec![(
-                                dep.item_type().to_string(),
-                                scx.catalog.minimal_qualification(dep.name()).to_string(),
-                            )],
-                        });
-                    }
-                }
-                // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
-                //  relies on entry. Unfortunately, we don't have that information readily available.
-            }
             Some(catalog_item.id())
         }
         None => None,
     })
+}
+
+/// Errors if dropping `catalog_item` would leave a dangling dependent, i.e. an
+/// object that depends on it and is not itself being dropped. Dependents whose
+/// ids are in `also_dropped` are ignored, since they are being dropped as part
+/// of the same statement.
+fn ensure_no_blocking_dependents(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    catalog_item: &dyn CatalogItem,
+    also_dropped: &BTreeSet<CatalogItemId>,
+) -> Result<(), PlanError> {
+    for id in catalog_item.used_by() {
+        if also_dropped.contains(id) {
+            continue;
+        }
+        let dep = scx.catalog.get_item(id);
+        if dependency_prevents_drop(object_type, dep) {
+            return Err(PlanError::DependentObjectsStillExist {
+                object_type: catalog_item.item_type().to_string(),
+                object_name: scx
+                    .catalog
+                    .minimal_qualification(catalog_item.name())
+                    .to_string(),
+                dependents: vec![(
+                    dep.item_type().to_string(),
+                    scx.catalog.minimal_qualification(dep.name()).to_string(),
+                )],
+            });
+        }
+    }
+    // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
+    //  relies on entry. Unfortunately, we don't have that information readily available.
+    Ok(())
 }
 
 /// Does the dependency `dep` prevent a drop of a non-cascade query?
@@ -7015,8 +7084,10 @@ pub fn plan_alter_connection(
     let connection_type = match connection {
         Connection::Aws(_) => CreateConnectionType::Aws,
         Connection::AwsPrivatelink(_) => CreateConnectionType::AwsPrivatelink,
+        Connection::Gcp(_) => CreateConnectionType::Gcp,
         Connection::Kafka(_) => CreateConnectionType::Kafka,
         Connection::Csr(_) => CreateConnectionType::Csr,
+        Connection::GlueSchemaRegistry(_) => CreateConnectionType::GlueSchemaRegistry,
         Connection::Postgres(_) => CreateConnectionType::Postgres,
         Connection::Ssh(_) => CreateConnectionType::Ssh,
         Connection::MySql(_) => CreateConnectionType::MySql,

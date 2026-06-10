@@ -2315,6 +2315,63 @@ fn test_peek_on_dropped_cluster() {
 }
 
 #[mz_ore::test]
+fn test_parse_error_codes() {
+    // Parse/cast and overflow failures should report data-exception (class 22)
+    // SQLSTATEs rather than the catch-all XX000 (INTERNAL_ERROR). Regression
+    // test for the fix tracked in SQL-326.
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    let cases: &[(&str, &SqlState)] = &[
+        // Out-of-range datetime value -> datetime_field_overflow (22008).
+        (
+            "SELECT '14714-12-31 18:01:00+00 BC'::date",
+            &SqlState::DATETIME_FIELD_OVERFLOW,
+        ),
+        // Malformed datetime string -> invalid_datetime_format (22007).
+        (
+            "SELECT 'not a date'::date",
+            &SqlState::INVALID_DATETIME_FORMAT,
+        ),
+        // Out-of-range float value -> numeric_value_out_of_range (22003).
+        (
+            "SELECT '1e400'::float8",
+            &SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+        ),
+        // Malformed integer string -> invalid_text_representation (22P02).
+        (
+            "SELECT 'abc'::integer",
+            &SqlState::INVALID_TEXT_REPRESENTATION,
+        ),
+        // Division by zero -> division_by_zero (22012). Previously XX000.
+        ("SELECT 1 / 0", &SqlState::DIVISION_BY_ZERO),
+        // Square root of a negative -> invalid_argument_for_power_function
+        // (2201F). Previously XX000.
+        (
+            "SELECT sqrt(-1.0)",
+            &SqlState::INVALID_ARGUMENT_FOR_POWER_FUNCTION,
+        ),
+        // More than one row from a scalar subquery -> cardinality_violation
+        // (21000). Previously XX000.
+        (
+            "SELECT (SELECT generate_series(1, 2))",
+            &SqlState::CARDINALITY_VIOLATION,
+        ),
+    ];
+
+    for (query, expected) in cases {
+        let err = client.query_one(*query, &[]).unwrap_err().unwrap_db_error();
+        assert_eq!(
+            err.code(),
+            *expected,
+            "unexpected SQLSTATE {} for query `{query}`: {}",
+            err.code().code(),
+            err.message(),
+        );
+    }
+}
+
+#[mz_ore::test]
 fn test_emit_timestamp_notice() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -3096,6 +3153,40 @@ fn test_pg_cancel_backend() {
             .to_string_with_causes(),
         "current transaction is aborted"
     );
+}
+
+/// Regression test for SQL-295: `pg_cancel_backend(NULL)` used to panic while
+/// planning the call (`Datum::unwrap_int32 called on Null`). Like in
+/// PostgreSQL, a `NULL` argument must return `NULL` instead.
+#[mz_ore::test]
+fn test_pg_cancel_backend_null() {
+    mz_ore::test::init_logging();
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // A `NULL` argument returns `NULL`, matching PostgreSQL, rather than
+    // panicking. Cover the literal `NULL`, an explicitly-typed `NULL`, a `NULL`
+    // bound parameter, and an expression that evaluates to `NULL`.
+    for query in [
+        "SELECT pg_cancel_backend(NULL)",
+        "SELECT pg_cancel_backend(NULL::int4)",
+    ] {
+        let found_conn: Option<bool> = client.query_one(query, &[]).unwrap().get(0);
+        assert_eq!(found_conn, None, "query: {query}");
+    }
+
+    let found_conn: Option<bool> = client
+        .query_one("SELECT pg_cancel_backend($1)", &[&None::<i32>])
+        .unwrap()
+        .get(0);
+    assert_eq!(found_conn, None);
+
+    let found_conn: Option<bool> = client
+        .query_one("SELECT pg_cancel_backend($1 + 42)", &[&None::<i32>])
+        .unwrap()
+        .get(0);
+    assert_eq!(found_conn, None);
 }
 
 // Test params in interesting places.

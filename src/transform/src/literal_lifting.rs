@@ -404,7 +404,7 @@ impl LiteralLifting {
                                                 *old_id = new_id;
                                             }
                                         }
-                                    })?;
+                                    });
                                     projection.push(input_arity + new_scalars.len());
                                     new_scalars.push(cloned_scalar);
                                 }
@@ -427,7 +427,7 @@ impl LiteralLifting {
                                         *e = literals[*c - input_arity].clone();
                                     }
                                 }
-                            })?;
+                            });
                         }
                         // Permute the literals around the columns added by FlatMap
                         let mut projection = (0..input_arity).collect::<Vec<usize>>();
@@ -453,7 +453,7 @@ impl LiteralLifting {
                                         *e = literals[*c - input_arity].clone();
                                     }
                                 }
-                            })?;
+                            });
                         }
                     }
                     Ok(literals)
@@ -517,7 +517,7 @@ impl LiteralLifting {
                                                     .map_column_to_global(col, input);
                                             }
                                         }
-                                    })?;
+                                    });
                                 }
                             }
 
@@ -578,7 +578,7 @@ impl LiteralLifting {
                                         *e = literals[*c - input_arity].clone();
                                     }
                                 }
-                            })?;
+                            });
                         }
                         // Inline literals into aggregate value selector expressions.
                         for aggr in aggregates.iter_mut() {
@@ -588,7 +588,7 @@ impl LiteralLifting {
                                         *e = literals[*c - input_arity].clone();
                                     }
                                 }
-                            })?;
+                            });
                         }
                     }
 
@@ -690,7 +690,7 @@ impl LiteralLifting {
                                         *e = literals[*c - input_arity].clone();
                                     }
                                 }
-                            })?;
+                            });
                         }
                     }
                     Ok(literals)
@@ -758,7 +758,7 @@ impl LiteralLifting {
                                             *e = literals[*c - input_arity].clone();
                                         }
                                     }
-                                })?;
+                                });
                             }
                         }
                     }

@@ -14,11 +14,11 @@
 use differential_dataflow::Data;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace, TraceReader};
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
 use mz_repr::Diff;
+use mz_timely_util::columnation::ColumnationChunker;
 use timely::Container;
 use timely::container::PushInto;
 
@@ -26,8 +26,8 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
-use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
+use mz_row_spine::RowRowBuilder;
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<'scope, Ts, T1, Bu2, T2, L>(
@@ -47,7 +47,6 @@ where
     Bu2: Builder<
             Time = Ts,
             Input: Container
-                       + InternalMerge
                        + ClearContainer
                        + PushInto<(
                 (<T1::KeyContainer as BatchContainer>::Owned, T1::ValOwn),
@@ -104,7 +103,9 @@ pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
             );
             let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
             let errs = errs
-                .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange threshold basic err");
+                .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                    "Arrange threshold basic err",
+                );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
     }

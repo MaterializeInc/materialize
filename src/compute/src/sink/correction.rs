@@ -43,8 +43,10 @@ use crate::sink::correction_v2::{CorrectionV2, Data};
 /// implementation that stores updates in non-spillable memory. `V2` improves on `V1` by supporting
 /// spill-to-disk but is less battle-tested so for now we want to keep the option of reverting to
 /// `V1` in a pinch. The plan is to remove `V1` eventually.
-pub(super) enum Correction<D: Data> {
+pub enum Correction<D: Data> {
+    /// Correction buffer based on a [`CorrectionV1`].
     V1(CorrectionV1<D>),
+    /// Correction buffer based on a [`CorrectionV2`].
     V2(CorrectionV2<D>),
 }
 
@@ -131,7 +133,7 @@ impl<D: Data> Correction<D> {
 ///    are removed by inserting them again, with negated diffs. Stored updates are continuously
 ///    consolidated to give them opportunity to cancel each other out.
 ///  * It provides an interface for advancing all contained updates to a given frontier.
-pub(super) struct CorrectionV1<D> {
+pub struct CorrectionV1<D> {
     /// Stashed updates by time.
     updates: BTreeMap<Timestamp, ConsolidatingVec<D>>,
     /// Frontier to which all update times are advanced.
@@ -537,11 +539,16 @@ impl AddAssign<Self> for SizeMetrics {
 
 /// A logging event sent from the Tokio task back to the Timely thread.
 #[derive(Debug)]
-pub(super) enum LoggingEvent {
+pub enum LoggingEvent {
+    /// A chain with the given number of updates was created.
     ChainCreated(usize),
+    /// A chain with the given number of updates was dropped.
     ChainDropped(usize),
+    /// The heap size of the correction buffer changed by the given amount.
     SizeDiff(NonZeroIsize),
+    /// The heap capacity of the correction buffer changed by the given amount.
     CapacityDiff(NonZeroIsize),
+    /// The number of allocations of the correction buffer changed by the given amount.
     AllocationsDiff(NonZeroIsize),
 }
 
@@ -551,33 +558,39 @@ pub(super) enum LoggingEvent {
 /// instance. This allows corrections on the Tokio task to participate in introspection logging
 /// without holding `Rc<RefCell<..>>`.
 #[derive(Clone, Debug)]
-pub(super) struct ChannelLogging(mpsc::UnboundedSender<LoggingEvent>);
+pub struct ChannelLogging(mpsc::UnboundedSender<LoggingEvent>);
 
 impl ChannelLogging {
+    /// Construct a new `ChannelLogging` sending events on the given channel.
     pub fn new(tx: mpsc::UnboundedSender<LoggingEvent>) -> Self {
         Self(tx)
     }
 
+    /// Report the creation of a chain with the given number of updates.
     pub fn chain_created(&self, updates: usize) {
         let _ = self.0.send(LoggingEvent::ChainCreated(updates));
     }
 
+    /// Report the dropping of a chain with the given number of updates.
     pub fn chain_dropped(&self, updates: usize) {
         let _ = self.0.send(LoggingEvent::ChainDropped(updates));
     }
 
+    /// Report a change in heap size by the given amount.
     pub fn report_size_diff(&self, diff: isize) {
         if let Some(diff) = NonZeroIsize::new(diff) {
             let _ = self.0.send(LoggingEvent::SizeDiff(diff));
         }
     }
 
+    /// Report a change in heap capacity by the given amount.
     pub fn report_capacity_diff(&self, diff: isize) {
         if let Some(diff) = NonZeroIsize::new(diff) {
             let _ = self.0.send(LoggingEvent::CapacityDiff(diff));
         }
     }
 
+    /// Report a change in the number of allocations by the given amount.
     pub fn report_allocations_diff(&self, diff: isize) {
         if let Some(diff) = NonZeroIsize::new(diff) {
             let _ = self.0.send(LoggingEvent::AllocationsDiff(diff));

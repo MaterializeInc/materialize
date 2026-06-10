@@ -19,13 +19,28 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
+
+QUORUM_VOTERS = "1@kafka1:9093,2@kafka2:9093,3@kafka3:9093"
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(name="kafka1", broker_id=1, offsets_topic_replication_factor=2),
-    Kafka(name="kafka2", broker_id=2, offsets_topic_replication_factor=2),
-    Kafka(name="kafka3", broker_id=3, offsets_topic_replication_factor=2),
+    Kafka(
+        name="kafka1",
+        broker_id=1,
+        offsets_topic_replication_factor=2,
+        controller_quorum_voters=QUORUM_VOTERS,
+    ),
+    Kafka(
+        name="kafka2",
+        broker_id=2,
+        offsets_topic_replication_factor=2,
+        controller_quorum_voters=QUORUM_VOTERS,
+    ),
+    Kafka(
+        name="kafka3",
+        broker_id=3,
+        offsets_topic_replication_factor=2,
+        controller_quorum_voters=QUORUM_VOTERS,
+    ),
     SchemaRegistry(
         kafka_servers=[("kafka1", "9092"), ("kafka2", "9092"), ("kafka3", "9092")]
     ),
@@ -40,7 +55,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.up("zookeeper", "kafka1", "kafka2", "kafka3", "schema-registry", "materialized")
+    c.up("kafka1", "kafka2", "kafka3", "schema-registry", "materialized")
     c.run_testdrive_files("--kafka-addr=kafka2", "01-init.td")
     time.sleep(10)
     c.kill("kafka1")

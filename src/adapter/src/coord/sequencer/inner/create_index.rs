@@ -20,6 +20,7 @@ use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
+use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
 use crate::catalog::CatalogState;
@@ -84,7 +85,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         let stage = return_if_err!(
-            self.create_index_validate(plan, resolved_ids, ExplainContext::None),
+            self.create_index_validate(ctx.session(), plan, resolved_ids, ExplainContext::None),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -129,7 +130,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_index_validate(plan, resolved_ids, explain_ctx),
+            self.create_index_validate(ctx.session(), plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -182,7 +183,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_index_validate(plan, resolved_ids, explain_ctx),
+            self.create_index_validate(ctx.session(), plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -280,12 +281,21 @@ impl Coordinator {
     #[instrument]
     fn create_index_validate(
         &self,
+        session: &Session,
         plan: plan::CreateIndexPlan,
         resolved_ids: ResolvedIds,
         explain_ctx: ExplainContext,
     ) -> Result<CreateIndexStage, AdapterError> {
-        let validity =
-            PlanValidity::require_transient_revision(self.catalog().transient_revision());
+        // Track the target cluster and resolved dependencies so concurrent
+        // drops are caught between stages instead of panicking later when the
+        // persisted SQL is re-parsed during catalog application.
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            resolved_ids.items().copied().collect(),
+            Some(plan.index.cluster_id),
+            None,
+            session.role_metadata().clone(),
+        );
         Ok(CreateIndexStage::Optimize(CreateIndexOptimize {
             validity,
             plan,

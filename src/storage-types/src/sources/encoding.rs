@@ -20,6 +20,7 @@ use crate::connections::inline::{
     ReferencedConnection,
 };
 use crate::controller::AlterError;
+use crate::wire_format::WireFormat;
 
 /// A description of how to interpret data from various sources
 ///
@@ -256,8 +257,9 @@ pub struct AvroEncoding<C: ConnectionAccess = InlinedConnection> {
     /// These are fetched from the schema registry when the source is created.
     #[serde(default)]
     pub reference_schemas: Vec<String>,
-    pub csr_connection: Option<C::Csr>,
-    pub confluent_wire_format: bool,
+    /// How schema identifiers are framed in the Kafka payload, and the
+    /// registry (if any) used to resolve writer schemas.
+    pub wire_format: WireFormat<C>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<AvroEncoding, R>
@@ -267,14 +269,12 @@ impl<R: ConnectionResolver> IntoInlineConnection<AvroEncoding, R>
         let AvroEncoding {
             schema,
             reference_schemas,
-            csr_connection,
-            confluent_wire_format,
+            wire_format,
         } = self;
         AvroEncoding {
             schema,
             reference_schemas,
-            csr_connection: csr_connection.map(|csr| r.resolve_connection(csr).unwrap_csr()),
-            confluent_wire_format,
+            wire_format: wire_format.into_inline_connection(r),
         }
     }
 }
@@ -288,8 +288,7 @@ impl<C: ConnectionAccess> AlterCompatible for AvroEncoding<C> {
         let AvroEncoding {
             schema,
             reference_schemas,
-            csr_connection,
-            confluent_wire_format,
+            wire_format,
         } = self;
 
         let compatibility_checks = [
@@ -299,15 +298,8 @@ impl<C: ConnectionAccess> AlterCompatible for AvroEncoding<C> {
                 "reference_schemas",
             ),
             (
-                match (csr_connection, &other.csr_connection) {
-                    (Some(s), Some(o)) => s.alter_compatible(id, o).is_ok(),
-                    (s, o) => s == o,
-                },
-                "csr_connection",
-            ),
-            (
-                confluent_wire_format == &other.confluent_wire_format,
-                "confluent_wire_format",
+                wire_format.alter_compatible(id, &other.wire_format).is_ok(),
+                "wire_format",
             ),
         ];
 

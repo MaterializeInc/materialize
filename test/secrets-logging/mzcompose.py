@@ -16,7 +16,6 @@ import glob
 from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
-from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
@@ -26,10 +25,8 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
@@ -39,7 +36,6 @@ SERVICES = [
     Mz(app_password=""),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Materialized(),
-    FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(),
 ]
 
@@ -55,12 +51,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args, passthrough_args = parser.parse_known_args()
 
     dependencies = [
-        "fivetran-destination",
         "materialized",
         "postgres",
         "mysql",
         "minio",
-        "zookeeper",
         "kafka",
         "schema-registry",
     ]

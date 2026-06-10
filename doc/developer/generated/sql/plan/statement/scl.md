@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/scl.rs
-revision: db271c31b1
+revision: 47b3fad674
 ---
 
 # mz-sql::plan::statement::scl

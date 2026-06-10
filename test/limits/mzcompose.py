@@ -45,7 +45,6 @@ from materialize.mzcompose.services.sql_server import (
 )
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
@@ -1821,7 +1820,6 @@ MAX_REPLICAS = 4
 MAX_NODES = 4
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     Postgres(
         max_wal_senders=Generator.COUNT,
@@ -1909,7 +1907,6 @@ for cluster_id in range(1, MAX_CLUSTERS + 1):
 
 
 service_names = [
-    "zookeeper",
     "kafka",
     "schema-registry",
     "postgres",
@@ -2292,7 +2289,6 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     assert args.nodes <= MAX_NODES, "SERVICES have to be static"
 
     c.up(
-        "zookeeper",
         "kafka",
         "schema-registry",
         "materialized",

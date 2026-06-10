@@ -35,9 +35,8 @@ use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowAre
 use mz_sql::catalog::{CatalogError, SessionCatalog};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    self, AbortTransactionPlan, CommitTransactionPlan, CopyFromSource, CreateRolePlan,
-    CreateSourcePlanBundle, FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind,
-    RaisePlan,
+    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
+    FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -171,10 +170,12 @@ impl Coordinator {
                 Err(_) => (None, None),
             };
 
-            if let (Some(cluster_id), Some(statement_id)) =
-                (target_cluster_id, ctx.extra().contents())
-            {
-                self.set_statement_execution_cluster(statement_id, cluster_id);
+            if let (Some(cluster_id), Some(cluster_name), Some(statement_id)) = (
+                target_cluster_id,
+                target_cluster_name.clone(),
+                ctx.extra().contents(),
+            ) {
+                self.set_statement_execution_cluster(statement_id, cluster_id, cluster_name);
             }
 
             let session_catalog = self.catalog.for_session(ctx.session());
@@ -424,24 +425,9 @@ impl Coordinator {
                     self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
                         .await;
                 }
-                Plan::CopyFrom(plan) => match plan.source {
-                    CopyFromSource::Stdin => {
-                        let (tx, _, session, ctx_extra) = ctx.into_parts();
-                        tx.send(
-                            Ok(ExecuteResponse::CopyFrom {
-                                target_id: plan.target_id,
-                                target_name: plan.target_name,
-                                columns: plan.columns,
-                                params: plan.params,
-                                ctx_extra,
-                            }),
-                            session,
-                        );
-                    }
-                    CopyFromSource::Url(_) | CopyFromSource::AwsS3 { .. } => {
-                        self.sequence_copy_from(ctx, plan, target_cluster).await;
-                    }
-                },
+                Plan::CopyFrom(plan) => {
+                    self.sequence_copy_from(ctx, plan, target_cluster).await;
+                }
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
                 }

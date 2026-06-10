@@ -27,7 +27,6 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.version_list import (
     VersionsFromDocs,
     get_all_published_mz_versions,
@@ -38,7 +37,6 @@ mz_options: dict[MzVersion, str] = {}
 
 SERVICES = [
     TestCerts(),
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Postgres(volumes=["secrets:/certs:ro"]),
@@ -190,7 +188,7 @@ def test_upgrade_from_version(
     print(">>> Version glob pattern: " + version_glob)
 
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql")
+    c.up("kafka", "schema-registry", "postgres", "mysql")
 
     mz_service = "materialized"
 

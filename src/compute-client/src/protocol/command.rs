@@ -275,6 +275,12 @@ pub struct InstanceConfig {
     pub expiration_offset: Option<Duration>,
     /// The persist location where we can stash large peek results.
     pub peek_stash_persist_location: PersistLocation,
+    /// Whether arrangements created by this replica use dictionary compression.
+    ///
+    /// Captured from `enable_arrangement_dictionary_compression_alpha` when the replica is created and
+    /// held fixed for the replica's lifetime, so flipping the flag only affects replicas created
+    /// afterwards rather than retroactively changing arrangements across the environment.
+    pub arrangement_dictionary_compression: bool,
 }
 
 impl InstanceConfig {
@@ -285,17 +291,24 @@ impl InstanceConfig {
     /// We consider a stricter offset compatible, which allows us to strengthen the value without
     /// forcing replica restarts. However, it also means that replicas will only pick up the new
     /// value after a restart.
+    ///
+    /// Dictionary compression is intentionally excluded from this check: it is captured at replica
+    /// creation, so a change is always compatible and a running replica keeps the value it was
+    /// created with (a new value is only picked up by replicas created afterwards).
     pub fn compatible_with(&self, other: &InstanceConfig) -> bool {
         // Destructure to protect against adding fields in the future.
         let InstanceConfig {
             logging: self_logging,
             expiration_offset: self_offset,
             peek_stash_persist_location: self_peek_stash_persist_location,
+            // Captured at replica creation; intentionally not part of compatibility (see above).
+            arrangement_dictionary_compression: _,
         } = self;
         let InstanceConfig {
             logging: other_logging,
             expiration_offset: other_offset,
             peek_stash_persist_location: other_peek_stash_persist_location,
+            arrangement_dictionary_compression: _,
         } = other;
 
         // Logging is compatible if exactly the same.

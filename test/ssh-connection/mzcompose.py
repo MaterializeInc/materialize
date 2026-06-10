@@ -29,12 +29,10 @@ from materialize.mzcompose.services.sql_server import (
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SQL_SERVER_TLS_CONF_PATH = MZ_ROOT / "test" / "sql-server-cdc" / "tls-mssconfig.conf"
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Materialized(),
@@ -73,7 +71,7 @@ def workflow_basic_ssh_features(c: Composition, redpanda: bool = False) -> None:
     if redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
     c.up(*dependencies)
 
     c.run_testdrive_files("ssh-connections.td")
@@ -264,7 +262,7 @@ def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
         if redpanda:
             dependencies += ["redpanda"]
         else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+            dependencies += ["kafka", "schema-registry"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
@@ -304,7 +302,7 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
         if redpanda:
             dependencies += ["redpanda"]
         else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+            dependencies += ["kafka", "schema-registry"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
@@ -347,7 +345,7 @@ def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
         if redpanda:
             dependencies += ["redpanda"]
         else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+            dependencies += ["kafka", "schema-registry"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
@@ -379,7 +377,7 @@ def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
     if redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
     c.up(*dependencies)
 
     c.run_testdrive_files("setup.td")

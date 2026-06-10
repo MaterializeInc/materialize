@@ -29,7 +29,6 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
@@ -543,13 +542,13 @@ async fn purify_create_sink(
             }
         }
         CreateSinkConnection::Iceberg {
-            connection,
+            catalog_connection,
             aws_connection,
             ..
         } => {
             let scx = StatementContext::new(None, &catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(connection)?;
+                let item = scx.get_item_by_resolved_name(catalog_connection)?;
                 // Get Iceberg connection
                 match item.connection()? {
                     Connection::IcebergCatalog(connection) => {
@@ -557,20 +556,6 @@ async fn purify_create_sink(
                     }
                     _ => sql_bail!(
                         "{} is not an iceberg connection",
-                        scx.catalog.resolve_full_name(item.name())
-                    ),
-                }
-            };
-
-            let aws_conn_id = aws_connection.item_id();
-
-            let aws_connection = {
-                let item = scx.get_item_by_resolved_name(aws_connection)?;
-                // Get AWS connection
-                match item.connection()? {
-                    Connection::Aws(aws_connection) => aws_connection.clone(),
-                    _ => sql_bail!(
-                        "{} is not an aws connection",
                         scx.catalog.resolve_full_name(item.name())
                     ),
                 }
@@ -604,21 +589,44 @@ async fn purify_create_sink(
                 }
             }
 
+            // Validate the sink's (optional) AWS connection even though we never use it.
+            // TODO(kynan): If we do start using the sink's creds, check again that this validation
+            //   accurately reflects what we need.
+            //   Consider rolling the storage creds validation into the catalog connection's "connect" fn,
+            //   which already validates the catalog creds (currently also used for the storage layer).
+            if let Some(aws_connection) = aws_connection {
+                let aws_conn_id = aws_connection.item_id();
+                let aws_connection = {
+                    let item = scx.get_item_by_resolved_name(aws_connection)?;
+                    // Get AWS connection
+                    match item.connection()? {
+                        Connection::Aws(aws_connection) => aws_connection.clone(),
+                        _ => sql_bail!(
+                            "{} is not an aws connection",
+                            scx.catalog.resolve_full_name(item.name())
+                        ),
+                    }
+                };
+
+                let _sdk_config = aws_connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws_conn_id.clone(),
+                        InTask::No,
+                        mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                            .get(storage_configuration.config_set()),
+                    )
+                    .await
+                    .map_err(|e| IcebergSinkPurificationError::AwsSdkContextError(Arc::new(e)))?;
+            }
+
+            // Now that we've validated the sink's storage creds (if they exist)
+            // we _could_ use them to build a complete Iceberg client (both catalog and storage).
+            // TODO(kynan): Actually use those sink-specific creds here instead of ignoring them.
             let _catalog = connection
                 .connect(storage_configuration, InTask::No)
                 .await
                 .map_err(|e| IcebergSinkPurificationError::CatalogError(Arc::new(e)))?;
-
-            let _sdk_config = aws_connection
-                .load_sdk_config(
-                    &storage_configuration.connection_context,
-                    aws_conn_id.clone(),
-                    InTask::No,
-                    mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
-                        .get(storage_configuration.config_set()),
-                )
-                .await
-                .map_err(|e| IcebergSinkPurificationError::AwsSdkContextError(Arc::new(e)))?;
         }
     }
 
@@ -2051,27 +2059,17 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::TextColumns)
             {
-                match gen_text_columns {
-                    Some(gen_text_columns) => {
-                        text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns))
-                    }
-                    None => soft_panic_or_log!(
-                        "text_columns should be Some if text_cols_option is present"
-                    ),
+                if let Some(gen_text_columns) = gen_text_columns {
+                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
                 }
             }
             if let Some(exclude_cols_option) = with_options
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::ExcludeColumns)
             {
-                match gen_exclude_columns {
-                    Some(gen_exclude_columns) => {
-                        exclude_cols_option.value =
-                            Some(WithOptionValue::Sequence(gen_exclude_columns))
-                    }
-                    None => soft_panic_or_log!(
-                        "exclude_columns should be Some if exclude_cols_option is present"
-                    ),
+                if let Some(gen_exclude_columns) = gen_exclude_columns {
+                    exclude_cols_option.value =
+                        Some(WithOptionValue::Sequence(gen_exclude_columns));
                 }
             }
             match columns {
@@ -2111,27 +2109,17 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::TextColumns)
             {
-                match gen_text_columns {
-                    Some(gen_text_columns) => {
-                        text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns))
-                    }
-                    None => soft_panic_or_log!(
-                        "text_columns should be Some if text_cols_option is present"
-                    ),
+                if let Some(gen_text_columns) = gen_text_columns {
+                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
                 }
             }
             if let Some(exclude_cols_option) = with_options
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::ExcludeColumns)
             {
-                match gen_exclude_columns {
-                    Some(gen_exclude_columns) => {
-                        exclude_cols_option.value =
-                            Some(WithOptionValue::Sequence(gen_exclude_columns))
-                    }
-                    None => soft_panic_or_log!(
-                        "exclude_columns should be Some if exclude_cols_option is present"
-                    ),
+                if let Some(gen_exclude_columns) = gen_exclude_columns {
+                    exclude_cols_option.value =
+                        Some(WithOptionValue::Sequence(gen_exclude_columns));
                 }
             }
             match columns {
@@ -2171,27 +2159,16 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|opt| opt.name == TableFromSourceOptionName::TextColumns)
             {
-                match gen_text_columns {
-                    Some(gen_text_columns) => {
-                        text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns))
-                    }
-                    None => soft_panic_or_log!(
-                        "text_columns should be Some if text_cols_option is present"
-                    ),
+                if let Some(gen_text_columns) = gen_text_columns {
+                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
                 }
             }
             if let Some(exclude_cols_option) = with_options
                 .iter_mut()
                 .find(|opt| opt.name == TableFromSourceOptionName::ExcludeColumns)
             {
-                match gen_excl_columns {
-                    Some(gen_excl_columns) => {
-                        exclude_cols_option.value =
-                            Some(WithOptionValue::Sequence(gen_excl_columns))
-                    }
-                    None => soft_panic_or_log!(
-                        "excl_columns should be Some if excl_cols_option is present"
-                    ),
+                if let Some(gen_excl_columns) = gen_excl_columns {
+                    exclude_cols_option.value = Some(WithOptionValue::Sequence(gen_excl_columns));
                 }
             }
 

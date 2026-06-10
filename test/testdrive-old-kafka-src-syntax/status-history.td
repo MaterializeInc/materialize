@@ -40,6 +40,10 @@ $ kafka-create-topic topic=status-history
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+# mz_sources is a materialized view; wait for it to reflect the newly created source.
+> SELECT count(*) FROM mz_sources WHERE name = 'kafka_source'
+1
+
 $ set-from-sql var=source_id
 SELECT id FROM mz_sources WHERE name = 'kafka_source'
 
@@ -112,6 +116,10 @@ $ kafka-verify-data format=avro sink=materialize.public.kafka_sink sort-messages
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+
+# mz_sources is a materialized view; wait for it to reflect the newly created source.
+> SELECT count(*) FROM mz_sources WHERE name = 'kafka_source_2'
+1
 
 $ set-from-sql var=source_id_2
 SELECT id FROM mz_sources WHERE name = 'kafka_source_2'

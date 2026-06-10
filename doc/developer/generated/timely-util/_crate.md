@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/lib.rs
-revision: f498b6e141
+revision: 68b35c5959
 ---
 
 # timely-util
@@ -13,7 +13,8 @@ Key modules:
 * `operator` — extension traits `StreamExt` and `CollectionExt` for fallible maps, consolidation, and stream expiry; `ConcatenateFlatten` and `consolidate_pact`.
 * `reclock` — timestamp translation operator for remapping source times to query times.
 * `order` — `Partitioned<P, T>` timestamp, `Interval<P>`, `Reverse<T>`, and `refine_antichain`.
-* `columnar` — `Column<C>` columnar container with submodules `batcher` (`Chunker`) and `builder` (`ColumnBuilder`) for batched aligned allocations; `Col2ValBatcher` and `Col2KeyBatcher` type aliases.
+* `column_pager` — `ColumnPager` and policy types for spilling columnar chunks to a backing store under memory pressure; used by `Col2ValPagedBatcher`.
+* `columnar` — `Column<C>` columnar container with submodules `batcher` (`Chunker`, `ColumnChunker`, `ColumnMerger`), `builder` (`ColumnBuilder`), `consolidate`, and `merge_batcher` (`ColumnMergeBatcher`) for batched aligned allocations; `Col2ValBatcher`, `Col2KeyBatcher`, and `Col2ValPagedBatcher` type aliases.
 * `columnation` — columnation-based region storage including `ColumnationStack` and `ColInternalMerger`.
 * `containers` — lgalloc-aware `alloc_aligned_zeroed` and `AccountedStackBuilder`.
 * `probe` — frontier observation via `Handle<T>` with async and activator notifications.

@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/explain.rs
-revision: db271c31b1
+revision: fc2aaf02e7
 ---
 
 # mz-sql::plan::explain

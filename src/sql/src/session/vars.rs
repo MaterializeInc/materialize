@@ -904,7 +904,7 @@ impl SessionVars {
             .vars
             .get_mut(UncasedStr::new(TRANSACTION_ISOLATION.name()))
             .expect("transaction_isolation variable must exist");
-        var.set(VarInput::Flat(transaction_isolation.as_str()), true)
+        var.set(VarInput::Flat(&transaction_isolation.to_string()), true)
             .expect("setting transaction isolation must succeed");
     }
 
@@ -1196,7 +1196,6 @@ impl SystemVars {
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
             &REPLICA_STATUS_HISTORY_RETENTION_WINDOW,
             &ENABLE_STORAGE_SHARD_FINALIZATION,
-            &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
             &ENABLE_DEFAULT_CONNECTION_VALIDATION,
             &DEFAULT_TIMESTAMP_INTERVAL,
             &MIN_TIMESTAMP_INTERVAL,
@@ -2033,10 +2032,6 @@ impl SystemVars {
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
     pub fn enable_storage_shard_finalization(&self) -> bool {
         *self.expect_value(&ENABLE_STORAGE_SHARD_FINALIZATION)
-    }
-
-    pub fn enable_consolidate_after_union_negate(&self) -> bool {
-        *self.expect_value(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
     }
 
     /// Returns the `enable_default_connection_validation` configuration parameter.

@@ -11,18 +11,17 @@ menu:
 
 {{< public-preview />}}
 
-Starting in v26.24, Materialize provides a built-in `materialize-agent` Model Context Protocol (MCP)
-server (`/api/mcp/agent`, port 6876) for discovering and querying data
+Starting in v26.24, Materialize provides a built-in `materialize-agent` Model
+Context Protocol (MCP) server (`/api/mcp/agent`, port 6876) for querying data
 products. The server is provided directly by Materialize; no sidecar process or
 external server is required.
 
 ## Overview
 
-The `materialize-agent` MCP server lets AI agents discover and query curated
-business-facing data products over HTTP. You can connect an MCP-compatible
-client (such as Claude Code, Claude Desktop, or Cursor) to the MCP server and
-ask the agent to discover and query your curated data products using either
-natural language or SQL:
+The `materialize-agent` MCP server lets AI agents query business-facing data
+products over HTTP. You can connect an MCP-compatible client (such as Claude
+Code, Claude Desktop, or Cursor) to the MCP server and ask the agent to discover
+and query your data products using either natural language or SQL:
 
 - *Via `materialize-agent`: What data products can I query?*
 - *SELECT * FROM mcp_product_performance LIMIT 5;*
@@ -30,6 +29,20 @@ natural language or SQL:
 - *Perform a Pareto analysis on my products.*
 
 ## Set up the agent query environment and data products
+
+{{< note >}}
+
+Starting in v26.27, the [`query`
+tool](/integrations/mcp-server/mcp-agent-tools/#query) is **enabled by default**
+and can execute arbitrary `SELECT` queries (including joins) on **all** objects
+the agent can access (including system catalog objects), not just those
+discoverable by the [`get_data_products`
+tool](/integrations/mcp-server/mcp-agent-tools/#get_data_products).
+
+To prevent agents from reading system catalog objects, set
+`restrict_to_user_objects` on each agent role.
+
+{{< /note >}}
 
 In Materialize, querying data products (i.e., running [`SELECT`](/sql/select/))
 requires:
@@ -43,7 +56,9 @@ To use the `materialize-agent` MCP server, we recommend:
 1. Creating a dedicated query environment for agents.
 1. Defining curated data products within that environment.
 
+{{< note >}}
 The examples below use the default `materialize` database.
+{{< /note >}}
 
 ### Create an agent query environment
 
@@ -88,25 +103,39 @@ isolated to:
    roles since role configurations are **not** inherited; only privileges are
    inherited.
 
+1. Recommended. Restrict the role to user objects only so that the [`query`
+   tool](/integrations/mcp-server/mcp-agent-tools/#query) cannot read system
+   catalog objects. You must run the following as a **superuser**:
+
+   ```mzsql
+   ALTER ROLE mcp_agent SET restrict_to_user_objects = true;
+   ```
+
+   As mentioned before, role configurations are **not** inherited; you must also
+   set it on each specific agent role. Setting the parameter on the functional
+   role is recommended as a precaution in case the role is ever used directly to
+   run queries.
+
+   See also [Restrict `query` tool access to user objects
+   only](/integrations/mcp-server/mcp-agent-tools/#restrict-to-user-objects).
+
 ### Define data products and grant access
-
-The `materialize-agent` MCP server exposes two kinds of objects as discoverable
-data products:
-
-- **Materialized views**.
-- **Indexed regular views**. Regular views must have an index to be
-  discoverable.
 
 Once a dedicated agent environment is set up, create the curated data products
 in the dedicated cluster and schema rather than granting access to existing
-objects in other schemas; this lets you project, mask, or filter their contents
-before exposing them to the agent.
+objects in other schemas; this allows you to:
+
+- Project, mask, or filter their contents before exposing them to the agent.
+
+- Restrict the agent's `USAGE` to the dedicated schema.
 
 {{< tip >}}
-- To expose an existing materialized view's results to the agent, create a
-  materialized view or an indexed view in the `mcp_schema` that reads from the
-  existing materialized view. Because the new object is reading from an existing
-  materialized view, it reuses the existing maintained result.
+
+- To expose an existing object (such as a table, view, or materialized view) to
+  the agent, create a view in `mcp_schema` that selects from it, then add an
+  index on that view `IN CLUSTER mcp_cluster`. If the existing object is a
+  materialized view, the index reuses the already-maintained result instead of
+  recomputing it.
 
 - When a view (regular view or materialized view) is indexed, the indexed
   columns are surfaced in the tool input schema as preferred lookup keys,
@@ -126,32 +155,33 @@ before exposing them to the agent.
 
 {{< /tip >}}
 
+
 #### Define data products
 
 The following example assumes a materialized view `sales.product_performance`
 exists.
 
-1. Switch to the dedicated cluster:
+1. Create a view in the dedicated schema that selects from the existing
+   materialized view:
 
    ```mzsql
-   SET CLUSTER = mcp_cluster;
-   ```
-
-1. Create a materialized view in the dedicated schema. It becomes a discoverable
-   data product automatically:
-
-   ```mzsql
-   CREATE MATERIALIZED VIEW materialize.mcp_schema.mcp_product_performance
-   IN CLUSTER mcp_cluster
-   AS
+   CREATE VIEW materialize.mcp_schema.mcp_product_performance AS
    SELECT * FROM sales.product_performance;
    ```
 
-1. Optional but recommended. Add comments to the materialized view and
-   column(s):
+1. Index the view `IN CLUSTER mcp_cluster`. The indexed columns are surfaced to
+   the agent as preferred lookup keys:
 
    ```mzsql
-   COMMENT ON MATERIALIZED VIEW materialize.mcp_schema.mcp_product_performance IS
+   CREATE INDEX mcp_product_performance_idx
+   IN CLUSTER mcp_cluster
+   ON materialize.mcp_schema.mcp_product_performance (product_id);
+   ```
+
+1. Optional but recommended. Add comments to the view and column(s):
+
+   ```mzsql
+   COMMENT ON VIEW materialize.mcp_schema.mcp_product_performance IS
    'Per-product performance metrics including stock status. Use this to answer
    questions about a specific product''s sales performance or inventory.';
 
@@ -267,6 +297,15 @@ For your specific agent, create the role with which the agent will connect.
 
    You set these role configurations on the individual roles as configurations are not inherited.
 
+1. Recommended. Restrict the role to user objects only so that the [`query`
+   tool](/integrations/mcp-server/mcp-agent-tools/#query) cannot read system
+   catalog objects. You must run the following as a **superuser** (an
+   Organization Admin):
+
+   ```mzsql
+   ALTER ROLE my_agent SET restrict_to_user_objects = true;
+   ```
+
 [^1]: Avoid using a personal app account instead of a service account as a
     personal app account would include all your roles and privileges as well.
 
@@ -297,6 +336,13 @@ For your specific agent, create the role with which the agent will connect.
    You set these role configurations on the individual roles as configurations
    are not inherited.
 
+1. Recommended. Restrict the role to user objects only so that the [`query`
+   tool](/integrations/mcp-server/mcp-agent-tools/#query) cannot read system
+   catalog objects. You must run the following as a **superuser**:
+
+   ```mzsql
+   ALTER ROLE my_agent SET restrict_to_user_objects = true;
+   ```
 {{< /tab >}}
 
 {{< tab "Emulator" >}}
@@ -324,6 +370,14 @@ For your specific agent, create the role with which the agent will connect.
 
    You set these role configurations on the individual roles as configurations
    are not inherited.
+
+1. Recommended. Restrict the role to user objects only so that the [`query`
+   tool](/integrations/mcp-server/mcp-agent-tools/#query) cannot read system
+   catalog objects. You must run the following as a **superuser**:
+
+   ```mzsql
+   ALTER ROLE my_agent SET restrict_to_user_objects = true;
+   ```
 
 {{< /tab >}}
 
@@ -549,13 +603,20 @@ either natural language or SQL:
 - *What's the `total_revenue` for product 42?*
 - *Perform a Pareto analysis on my products.*
 
-{{< note >}}
+{{< warning >}}
 
-By default, queries with joins are disabled. To enable, see
-[`enable_mcp_agent_query_tool`
-configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool).
+By default, the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query)
+is **enabled**. This tool allows arbitrary `SELECT` queries (including joins) on
+**all** objects for which the agent has the appropriate privileges (`SELECT` on
+the object, `USAGE` on the object's schema).
 
-{{< /note >}}
+To disable it, set
+[`enable_mcp_agent_query_tool`](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool)
+to `false`. See [Agent endpoint
+configuration](/integrations/mcp-server/mcp-agent-config/).
+
+{{< /warning >}}
+
 
 ## Related pages
 

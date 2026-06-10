@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/sink/copy_to_s3_oneshot.rs
-revision: 122dfd0789
+revision: 225aeaa79f
 ---
 
 # mz-compute::sink::copy_to_s3_oneshot

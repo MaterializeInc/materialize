@@ -21,9 +21,10 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
+use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
@@ -32,6 +33,7 @@ use mz_expr::{BinaryFunc, Columns, Eval, EvalError, MirScalarExpr, UnaryFunc, fu
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
+use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -44,19 +46,69 @@ use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
-use crate::row_spine::{
+use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
+use mz_row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };
-use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
+impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTime>
+    Context<'scope, T>
+{
     pub(crate) fn render_topk(
         &self,
         input: CollectionBundle<'scope, T>,
         top_k_plan: TopKPlan,
+        temporal_bucketing_strategy: ArrangementStrategy,
     ) -> CollectionBundle<'scope, T> {
         let (ok_input, err_input) = input.as_specific_collection(None, &self.config_set);
+
+        // Bucket the per-row input stream when lowering chose `TemporalBucketing`.
+        // `TopK` builds its own arrangement(s) inside the variants below, bypassing
+        // `ensure_collections`, so the strategy is plumbed through `PlanNode::TopK`
+        // rather than inferred at the arrangement site. `apply_bucketing_strategy`
+        // is a no-op for `Direct`.
+        //
+        // Note: a `MonotonicTop1Plan`/`MonotonicTopKPlan` with `must_consolidate =
+        // false` together with `TemporalBucketing` here would mean we install a
+        // bucket operator with no downstream consolidator -- pure overhead. That
+        // combination cannot actually occur: `RelaxMustConsolidate` (which is the
+        // only writer of `must_consolidate = false`) runs only on single-time
+        // dataflows (one-shot peeks / `COPY TO`), and in single-time dataflows
+        // `ExprPrepOneShot` constant-folds `mz_now()` to the dataflow `as_of`
+        // before lowering, so no temporal predicates survive into LIR and
+        // `has_future_updates` is `false` everywhere -- meaning no operator (TopK
+        // included) is ever lowered with `TemporalBucketing`. The assertion below
+        // pins down this invariant.
+        if matches!(
+            temporal_bucketing_strategy,
+            ArrangementStrategy::TemporalBucketing
+        ) {
+            let must_consolidate = match &top_k_plan {
+                TopKPlan::MonotonicTop1(p) => p.must_consolidate,
+                TopKPlan::MonotonicTopK(p) => p.must_consolidate,
+                TopKPlan::Basic(_) => true,
+            };
+            soft_assert_or_log!(
+                must_consolidate,
+                "TopK with `TemporalBucketing` should not have `must_consolidate = false`; \
+                 `RelaxMustConsolidate` only runs on single-time dataflows where \
+                 `mz_now()` has been const-folded and no temporal bucketing is set",
+            );
+        }
+        let ok_input = if matches!(
+            temporal_bucketing_strategy,
+            ArrangementStrategy::TemporalBucketing
+        ) && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
+        {
+            let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                .get(&self.config_set)
+                .try_into()
+                .expect("must fit");
+            T::maybe_apply_temporal_bucketing(ok_input.inner, self.as_of_frontier.clone(), summary)
+        } else {
+            ok_input
+        };
 
         // We create a new region to compartmentalize the topk logic.
         let outer_scope = ok_input.scope();
@@ -496,7 +548,12 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
             })
             .into();
         let result = partial
-            .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
+            .mz_arrange::<
+                ColumnationChunker<_>,
+                RowBatcher<_, _>,
+                RowBuilder<_, _>,
+                RowSpine<_, _>,
+            >(
                 "Arranged MonotonicTop1 partial [val: empty]",
             )
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
@@ -532,10 +589,7 @@ where
     T: MzTimestamp,
     Bu: Builder<
             Time = T,
-            Input: Container
-                       + InternalMerge
-                       + ClearContainer
-                       + PushInto<((Row, Tr::ValOwn), T, Diff)>,
+            Input: Container + ClearContainer + PushInto<((Row, Tr::ValOwn), T, Diff)>,
             Output = Tr::Batch,
         >,
     Tr: for<'a> Trace<
@@ -555,7 +609,12 @@ where
     // built-in view mz_introspection.mz_expected_group_size_advice.
     let arranged = input
         .clone()
-        .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+        .mz_arrange::<
+            ColumnationChunker<_>,
+            RowRowBatcher<_, _>,
+            RowRowBuilder<_, _>,
+            RowRowSpine<_, _>,
+        >(
             "Arranged TopK input",
         );
 

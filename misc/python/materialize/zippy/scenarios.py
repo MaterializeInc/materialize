@@ -294,7 +294,14 @@ class ClusterReplicas(Scenario):
             ValidateView: 20,
             Ingest: 50,
             DML: 50,
-            PeekCancellation: 5,
+            # PeekCancellation is intentionally omitted here: this scenario drops
+            # the default replica and constantly creates/drops/resizes replicas on
+            # the quickstart cluster, so it can be left without a hydrated replica.
+            # statement_timeout only bounds the row-streaming phase of a peek, not
+            # the wait for the cluster to be able to serve it, so the timeout INSERT
+            # can stall until testdrive's deadline ("deadline has elapsed") instead
+            # of returning the expected timeout error. PeekCancellation still runs in
+            # the KafkaSources* scenarios, which keep the default replica.
         }
 
 

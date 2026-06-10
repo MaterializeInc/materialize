@@ -15,6 +15,126 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.27.0
+*Released to Materialize Cloud: 2026-06-04* <br>
+*Released to Materialize Self-Managed: 2026-06-05* <br>
+
+This release includes improvements to the MCP Server for Agents, general
+improvements, and bug fixes.
+
+### MCP Server for Agents
+We've made several improvements to our MCP Server for Agents, which can be used to give agents in production fresh context from Materialize.
+
+- **`query` tool enabled by default**: The MCP Server for Agents now
+  enables the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query)
+  by default, allowing agents to join across data products.
+- **Data product routing**: The `read_data_product` tool now
+  automatically routes queries to the data product's catalog cluster,
+  eliminating the need to specify the cluster manually.
+- **Data product hydration status**: The MCP Server for Agents now
+  surfaces hydration readiness state for data products, enabling agents
+  to check whether a data product is fully hydrated before querying.
+
+For more information, refer to:
+- [MCP Server for Agents](/integrations/mcp-server/mcp-agent/)
+
+### Improvements {#v26.27-improvements}
+
+- **Improved `EXPLAIN` output**: Default `EXPLAIN` output now uses
+  cleaner formatting for joins and explicitly identifies cross joins.
+
+### Bug Fixes {#v26.27-bug-fixes}
+
+- Fixed the Console in self-managed deployments not displaying the
+  balancerd hostname in the connection dialog.
+- Fixed incorrect query results from filter pushdown when using
+  timestamp or date arithmetic with interval values.
+- Fixed incorrect query results from filter pushdown when using `CASE`
+  expressions over JSON columns with keys present in only one branch.
+- Fixed `LATERAL` subqueries with table functions returning wrong
+  results when the input table has an index on a non-leading column.
+- Fixed `COPY FROM` CSV decoding silently treating quoted `NULL` markers
+  as SQL `NULL` and dropping rows after a quoted end-of-copy marker.
+- Fixed a panic when applying a timezone offset to a near-maximum
+  timestamp value.
+- Fixed a panic when applying a timezone offset to a leap-second
+  timestamp value.
+- Fixed a panic when a replica targeted by `CREATE MATERIALIZED VIEW ...
+  IN CLUSTER ... REPLICA <name>` was concurrently dropped.
+- Fixed a panic when specifying a `REFRESH` interval shorter than
+  1 millisecond; now returns a clear error instead.
+- Fixed SSH tunnel connections to HTTPS schema registries failing with
+  TLS handshake errors when the URL omitted the default port.
+- Fixed Iceberg sink errors when writing tables with `smallint` columns,
+  map-typed columns, or `range`-typed equality delete keys.
+- Fixed `SHOW CREATE` incorrectly displaying passwords and `AS OF`
+  clauses.
+
+## v26.26.0
+*Released to Materialize Cloud: 2026-05-28* <br>
+*Released to Materialize Self-Managed: 2026-05-29* <br>
+
+This release includes Single Sign-On (SSO) for Self-Managed, a new Objects page
+in the Console, performance improvements, and bug fixes.
+
+### Single Sign-On (SSO) for Self-Managed
+
+{{< public-preview />}}
+
+Self-managed deployments can now configure single sign-on via any OIDC-compliant identity provider (Okta, Microsoft Entra ID, Auth0, Keycloak). Users authenticate via their IdP and receive a JWT token that Materialize validates; new users are auto-provisioned as database roles on first login, and existing users with matching emails map automatically to their current accounts. Enabling SSO is backward compatible: password-based auth continues to work for applications and service accounts.
+
+For more information, refer to:
+- [Single sign-on (SSO)](https://materialize.com/docs/security/self-managed/sso/)
+
+### Objects page
+
+The Console includes a new Objects page, which provides a unified view of all
+sources, materialized views, indexes and sinks. You can track real-time freshness
+metrics, hydration status, and cluster assignments. If an object is stale, you can diagnose why.
+If lag is inherited from upstream, you can visualize the critical path. And if an object itself
+is the cause of lag, you can diagnose the root cause.
+
+### Improvements {#v26.26-improvements}
+
+- **More performant temporal filters**: We've significantly improved the performance of
+  temporal filters. While specific results will vary by workload, in our tests we saw CPU utilization drop from 75% to
+  4% on workloads dominated by temporal filter evaluation.
+- **Faster DDL at scale**: DDL operations (`CREATE TABLE`, `DROP TABLE`,
+  etc.) are now up to 65% faster in environments with many objects by
+  eliminating a per-table loop that previously ran on every group commit.
+- **Faster storage usage collection**: Periodic storage usage collection is
+  now up to 17x faster at 10,000 shards, reducing coordinator stalls from
+  ~500ms to ~30ms per cycle.
+- **`dbt-materialize`: `PARTITION BY` support**: Added a `partition_by`
+  config option for materialized views, generating the `PARTITION BY (...)`
+  clause in `CREATE MATERIALIZED VIEW`.
+- **`dbt-materialize`: Unmanaged cluster support for blue/green
+  deployments**: The `deploy_init` macro now supports unmanaged clusters by
+  cloning each replica's size and availability zone, enabling blue/green
+  deployments for environments not using managed clusters.
+
+### Bug Fixes {#v26.26-bug-fixes}
+
+- Fixed wrong results for `JOIN ... USING (col) AS t` with `RIGHT` or
+  `FULL` joins.
+- Fixed `round()` producing `-0` for negative fractional values that round
+  to zero, causing mismatches in `DISTINCT`, `UNION`, and `GROUP BY`.
+- Fixed `list_length_max` returning incorrect results for list-of-lists with
+  `NULL` siblings before non-`NULL` sublists.
+- Fixed incorrect query results when casting `text` to `"char"` or `bytea`
+  in index lookups and equality filters.
+- Fixed incorrect query results when casting `text` to `name` or
+  `varchar(n)` in contexts that rely on uniqueness, such as `DISTINCT` or
+  joins.
+- Fixed MySQL sources failing to decode `TIMESTAMP` and `DATETIME` columns
+  when using `TEXT COLUMNS`.
+- Fixed `COPY FROM ... (FORMAT PARQUET)` producing range values that did not
+  compare equal to logically-identical values constructed in SQL.
+- Fixed missing audit log entries for `ALTER TABLE ADD COLUMN` and
+  `ALTER SOURCE ... SET (TIMESTAMP INTERVAL)`.
+- Fixed the Console Data Explorer page intermittently failing to load due to
+  a WebSocket connection race condition.
+
 ## v26.25.0
 *Released to Materialize Cloud: 2026-05-21* <br>
 *Released to Materialize Self-Managed: 2026-05-22* <br>

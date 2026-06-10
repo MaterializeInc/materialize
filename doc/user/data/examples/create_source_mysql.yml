@@ -6,6 +6,7 @@
     CREATE SOURCE [IF NOT EXISTS] <source_name>
     [IN CLUSTER <cluster_name>]
     FROM MYSQL CONNECTION <connection_name>
+    [WITH ( <with_option> [, ...] )]
     ;
   syntax_elements:
     - name: "**IF NOT EXISTS**"
@@ -39,6 +40,14 @@
         To start ingesting data, create a [`CREATE TABLE FROM
         SOURCE`](/sql/create-table/) statement for each upstream table to
         replicate.
+
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        *Optional.* The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `TIMESTAMP INTERVAL [=] <interval>` | The interval at which timestamps are assigned to data read from this source. Accepts positive [interval](/sql/types/interval/) values (e.g. `'500ms'`, `'1s'`). The value must be between the system parameters `min_timestamp_interval` and `max_timestamp_interval`. Default: the value of the `default_timestamp_interval` system parameter (`1s`). The interval can also be changed after creation with [`ALTER SOURCE`](/sql/alter-source/). |
 
 - name: "create-source"
   description: |

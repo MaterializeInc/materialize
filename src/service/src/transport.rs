@@ -42,7 +42,7 @@ use tracing::{Instrument, debug, info, trace, warn};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 
-pub use metrics::{Metrics, NoopMetrics};
+pub use metrics::{ClusterServerMetrics, Metrics, NoopMetrics, PerClusterServerMetrics};
 
 /// Trait for messages that can be sent over CTP.
 pub trait Message: Debug + Send + Sync + Serialize + DeserializeOwned + 'static {}

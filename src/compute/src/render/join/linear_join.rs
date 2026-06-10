@@ -18,15 +18,18 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Data, VecCollection};
-use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
+use mz_compute_types::dyncfgs::{
+    ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING,
+};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
 use mz_expr::Eval;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -37,8 +40,8 @@ use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
+use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowRowSpine};
 
 /// Available linear join implementations.
 ///
@@ -381,18 +384,26 @@ where
 
             errors.push(errs.as_collection());
 
-            let arranged = keyed
-                .mz_arrange_core::<
+            let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                columnar_exchange::<Row, Row, T, Diff>,
+            );
+            let arranged = if ENABLE_COLUMN_PAGED_BATCHER.get(&self.config_set) {
+                keyed.mz_arrange_core::<
                     _,
+                    batcher::ColumnChunker<_>,
+                    Col2ValPagedBatcher<_, _, _, _>,
+                    RowRowColPagedBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >(exchange, "JoinStage")
+            } else {
+                keyed.mz_arrange_core::<
+                    _,
+                    batcher::Chunker<_>,
                     Col2ValBatcher<_, _, _, _>,
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
-                >(
-                    ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                        columnar_exchange::<Row, Row, T, Diff>,
-                    ),
-                    "JoinStage"
-                );
+                >(exchange, "JoinStage")
+            };
             joined = JoinedFlavor::Local(arranged);
         }
 
@@ -485,9 +496,9 @@ where
                     let temp_storage = RowArena::new();
 
                     let mut datums_local = datums.borrow();
-                    datums_local.extend(key.to_datum_iter());
-                    datums_local.extend(old.to_datum_iter());
-                    datums_local.extend(new.to_datum_iter());
+                    key.extend_datums(&mut datums_local, None);
+                    old.extend_datums(&mut datums_local, None);
+                    new.extend_datums(&mut datums_local, None);
 
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -513,9 +524,9 @@ where
                     let temp_storage = RowArena::new();
 
                     let mut datums_local = datums.borrow();
-                    datums_local.extend(key.to_datum_iter());
-                    datums_local.extend(old.to_datum_iter());
-                    datums_local.extend(new.to_datum_iter());
+                    key.extend_datums(&mut datums_local, None);
+                    old.extend_datums(&mut datums_local, None);
+                    new.extend_datums(&mut datums_local, None);
 
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)

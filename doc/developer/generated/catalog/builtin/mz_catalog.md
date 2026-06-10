@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/mz_catalog.rs
-revision: 36df04b4d9
+revision: d777d0f6da
 ---
 
 # catalog::builtin::mz_catalog
@@ -13,7 +13,7 @@ This module exports 78 public items: types, tables, materialized views, views, s
 
 **Tables** — `BuiltinTable` statics covering connector-specific metadata: `MZ_ICEBERG_SINKS`, `MZ_KAFKA_SINKS`, `MZ_KAFKA_CONNECTIONS`, `MZ_KAFKA_SOURCES`, and more.
 
-**Materialized views** — Core catalog entities backed by queries over `mz_internal.mz_catalog_raw`: `MZ_DATABASES`, `MZ_SCHEMAS`, `MZ_CONNECTIONS`, `MZ_SECRETS`, `MZ_TABLES`, `MZ_COLUMNS`, `MZ_INDEXES`, `MZ_VIEWS`, `MZ_SOURCES`, `MZ_SINKS`, `MZ_CLUSTER_REPLICAS`, `MZ_ROLES`, `MZ_OBJECTS`, `MZ_ALL_OBJECTS`, and others. These carry `Ontology` annotations with entity names, descriptions, and `OntologyLink` relationships for the catalog graph.
+**Materialized views** — Core catalog entities backed by queries over `mz_internal.mz_catalog_raw`: `MZ_DATABASES`, `MZ_SCHEMAS`, `MZ_CONNECTIONS`, `MZ_SECRETS`, `MZ_TABLES`, `MZ_COLUMNS`, `MZ_VIEWS`, `MZ_SOURCES`, `MZ_SINKS`, `MZ_CLUSTER_REPLICAS`, `MZ_ROLES`, `MZ_OBJECTS`, `MZ_ALL_OBJECTS`, and others. These carry `Ontology` annotations with entity names, descriptions, and `OntologyLink` relationships for the catalog graph. `MZ_INDEXES` is also a `BuiltinMaterializedView` but is generated dynamically via the `pub(super) make_mz_indexes` function rather than declared as a static, so it is not counted among the module's exported statics.
 
 **Views** — Additional SQL views for derived catalog information such as `MZ_TIMEZONE_ABBREVIATIONS` and `MZ_TIMEZONE_NAMES`.
 

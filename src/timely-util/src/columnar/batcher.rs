@@ -314,18 +314,11 @@ impl<D, T, R> Default for ColumnMerger<D, T, R> {
 /// so the merger can call them without going through any wrapper indirection.
 impl<D, T, R> Column<(D, T, R)>
 where
-    D: Columnar + Default,
+    D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
     T: Columnar + Default + Clone + PartialOrder,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
-    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
-    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
-    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
-    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
-    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
-    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
-    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
 {
     /// Merge items from sorted inputs into `self`, advancing positions.
     ///
@@ -572,7 +565,6 @@ where
         let self_view = self.borrow();
         let len = self_view.len();
 
-        let mut owned_t = T::default();
         // Yield to the framework when either output buffer reaches the
         // ship threshold, so it can ship a full chunk and hand back a
         // fresh one. Required by the merger's extract contract: the
@@ -580,6 +572,7 @@ where
         // an inner-loop yield a single call can fill an output well past
         // threshold.
         use columnar::Borrow as _;
+        let mut owned_t = T::default();
         while *position < len
             && !crate::columnar::at_serialized_capacity(&keep_c.borrow())
             && !crate::columnar::at_serialized_capacity(&ship_c.borrow())
@@ -616,18 +609,11 @@ where
 /// [`MergeBatcher`]: differential_dataflow::trace::implementations::merge_batcher::MergeBatcher
 impl<D, T, R> Merger for ColumnMerger<D, T, R>
 where
-    D: Columnar + Default + 'static,
+    D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Default + Clone + Ord + PartialOrder + 'static,
+    T: Columnar + Default + Clone + Ord + PartialOrder,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>> + 'static,
-    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
-    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
-    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
-    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
-    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
-    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
-    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
     type Time = T;
     type Chunk = Column<(D, T, R)>;
@@ -804,7 +790,7 @@ where
 /// Pop a chunk from `stash` or allocate a fresh one. Stashed chunks are
 /// already cleared via `recycle_chunk`, so they're ready for push.
 #[inline]
-fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> {
+pub(crate) fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> {
     stash.pop().unwrap_or_default()
 }
 
@@ -817,7 +803,7 @@ fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> {
 /// cheaply, and pushing them onto `stash` would only displace useful
 /// recycled allocations.
 #[inline]
-fn recycle_chunk<C: Columnar>(mut chunk: Column<C>, stash: &mut Vec<Column<C>>) {
+pub(crate) fn recycle_chunk<C: Columnar>(mut chunk: Column<C>, stash: &mut Vec<Column<C>>) {
     if let Column::Typed(c) = &mut chunk {
         c.clear();
         stash.push(chunk);
@@ -837,18 +823,11 @@ fn drain_side<D, T, R>(
     output: &mut Vec<Column<(D, T, R)>>,
     stash: &mut Vec<Column<(D, T, R)>>,
 ) where
-    D: Columnar + Default,
+    D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
     T: Columnar + Default + Clone + PartialOrder,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
-    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
-    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
-    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
-    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
-    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
-    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
-    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
 {
     if *pos < head.borrow().len() {
         // 1-input dispatch — bulk copy that runs to completion; the yield

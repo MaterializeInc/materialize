@@ -737,7 +737,9 @@ impl From<UnhandledError> for PublishError {
         match err {
             UnhandledError::Transport(err) => PublishError::Transport(err),
             UnhandledError::Api { code, message } => match code {
-                409 => PublishError::IncompatibleSchema,
+                // Confluent Schema Registry 8.0+ returns the more specific
+                // 40901 subcode in addition to the legacy 409.
+                409 | 40901 => PublishError::IncompatibleSchema,
                 42201 => PublishError::InvalidSchema { message },
                 _ => PublishError::Server { code, message },
             },

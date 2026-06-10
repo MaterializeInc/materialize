@@ -421,12 +421,14 @@ impl PeekClient {
     /// Set up statement logging for a frontend-sequenced operation.
     ///
     /// If `outer_ctx_extra` is `None`, begins a new statement execution log
-    /// entry. If `outer_ctx_extra` is `Some` (e.g. EXECUTE/FETCH), reuses the
-    /// existing logging id and retires the outer context.
+    /// entry. If `outer_ctx_extra` is `Some` (e.g. EXECUTE/FETCH), reuses and
+    /// retires the existing logging context.
     ///
-    /// The end of execution must be logged separately by the caller (via
-    /// [`Self::log_ended_execution`]) once the terminal outcome is known, or
-    /// handed off to the coordinator for streaming responses.
+    /// Returns a [`StatementLoggingGuard`]. Callers must
+    /// [`defuse`](StatementLoggingGuard::defuse) the guard when handing off
+    /// logging responsibility (or, in future, retire it explicitly on a
+    /// terminal outcome). Dropping the guard without retiring it emits an
+    /// `Aborted` end-execution event.
     pub(crate) fn begin_statement_logging(
         &self,
         session: &mut Session,
@@ -435,8 +437,8 @@ impl PeekClient {
         catalog: &Catalog,
         lifecycle_timestamps: Option<LifecycleTimestamps>,
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
-    ) -> Option<StatementLoggingId> {
-        if outer_ctx_extra.is_none() {
+    ) -> StatementLoggingGuard {
+        let id = if outer_ctx_extra.is_none() {
             // This is a new statement, so begin statement logging.
             let result = self.statement_logging_frontend.begin_statement_execution(
                 session,
@@ -459,6 +461,12 @@ impl PeekClient {
             outer_ctx_extra
                 .take()
                 .and_then(|guard| guard.defuse().retire())
+        };
+
+        StatementLoggingGuard {
+            id,
+            coordinator_client: self.coordinator_client.clone(),
+            now: self.statement_logging_frontend.now.clone(),
         }
     }
 
@@ -484,10 +492,15 @@ impl PeekClient {
         &self,
         id: StatementLoggingId,
         cluster_id: mz_controller_types::ClusterId,
+        cluster_name: String,
     ) {
         self.coordinator_client
             .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::SetCluster { id, cluster_id },
+                FrontendStatementLoggingEvent::SetCluster {
+                    id,
+                    cluster_id,
+                    cluster_name,
+                },
             ));
     }
 
@@ -527,7 +540,10 @@ impl PeekClient {
             ));
     }
 
-    /// Log the end of statement execution.
+    /// Emit a `FrontendStatementLoggingEvent::EndedExecution` for the given
+    /// logging id. Used by callers that manage the statement-logging
+    /// lifecycle explicitly (see `try_frontend_peek`), rather than via the
+    /// RAII [`StatementLoggingGuard`].
     pub(crate) fn log_ended_execution(
         &self,
         id: StatementLoggingId,
@@ -543,6 +559,68 @@ impl PeekClient {
             .send(Command::FrontendStatementLogging(
                 FrontendStatementLoggingEvent::EndedExecution(record),
             ));
+    }
+}
+
+/// RAII guard owning a frontend statement-logging lifecycle.
+///
+/// Created by [`PeekClient::begin_statement_logging`]. Unless logging
+/// responsibility is handed off via [`defuse`](StatementLoggingGuard::defuse),
+/// the guard ensures that every statement for which `BeganExecution` was logged
+/// also receives a corresponding `EndedExecution`, even on early-return, panic,
+/// or mid-flight drop of the enclosing future: if the guard is dropped without
+/// being defused, it emits `StatementEndedExecutionReason::Aborted`.
+///
+/// When the guard is `defuse`d, some other component (e.g. the coordinator, for
+/// streaming peek / subscribe responses) takes over and logs `EndedExecution`
+/// itself.
+///
+/// For non-sampled statements the guard still exists but carries no id, and
+/// retirement / drop are no-ops.
+#[must_use = "StatementLoggingGuard must be explicitly retired or handed off; \
+              otherwise `Drop` will log the statement as Aborted"]
+pub(crate) struct StatementLoggingGuard {
+    /// `None` if the statement was not sampled for logging.
+    id: Option<StatementLoggingId>,
+    coordinator_client: Client,
+    now: mz_ore::now::NowFn,
+}
+
+impl StatementLoggingGuard {
+    /// Returns the logging id, if this statement is being logged.
+    pub(crate) fn id(&self) -> Option<StatementLoggingId> {
+        self.id
+    }
+
+    /// Hands off logging responsibility without emitting an end-execution
+    /// event. Use when another component (e.g. the coordinator, for streaming
+    /// peek / subscribe responses) will log the end asynchronously.
+    pub(crate) fn defuse(mut self) {
+        self.id = None;
+    }
+
+    fn emit(&mut self, reason: statement_logging::StatementEndedExecutionReason) {
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        let ended_at = (self.now)();
+        let record = statement_logging::StatementEndedExecutionRecord {
+            id: id.0,
+            reason,
+            ended_at,
+        };
+        self.coordinator_client
+            .send(Command::FrontendStatementLogging(
+                FrontendStatementLoggingEvent::EndedExecution(record),
+            ));
+    }
+}
+
+impl Drop for StatementLoggingGuard {
+    fn drop(&mut self) {
+        // `emit` is a no-op if the guard was already retired or defused (i.e.
+        // `id` is `None`).
+        self.emit(statement_logging::StatementEndedExecutionReason::Aborted);
     }
 }
 

@@ -215,6 +215,9 @@ pub enum Expr {
         /// the key for the reduction; otherwise, the results become undefined. Additionally, the
         /// MFP must be free from temporal predicates so that it can be readily evaluated.
         mfp_after: MapFilterProject,
+        /// How the renderer should form the internal input arrangement built by `Reduce`.
+        /// Mirrors [`PlanNode::Reduce::temporal_bucketing_strategy`].
+        temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
@@ -226,6 +229,9 @@ pub enum Expr {
         /// the Top-K, and the input itself. Please check out the documentation for this type for
         /// more detail.
         top_k_plan: TopKPlan,
+        /// How the renderer should bucket the input collection ahead of the Top-K operator.
+        /// Mirrors [`PlanNode::TopK::temporal_bucketing_strategy`].
+        temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Inverts the sign of each update.
     Negate {
@@ -256,6 +262,9 @@ pub enum Expr {
         inputs: Vec<LirId>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
+        /// Per-input bucketing strategies, lockstep with `inputs`. Mirrors
+        /// [`PlanNode::Union::temporal_bucketing_strategies`].
+        temporal_bucketing_strategies: Vec<ArrangementStrategy>,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -438,6 +447,7 @@ impl TryFrom<Plan> for LetFreePlan {
                     key_val_plan,
                     plan,
                     mfp_after,
+                    temporal_bucketing_strategy,
                 } => {
                     let expr = Reduce {
                         input_key,
@@ -445,15 +455,21 @@ impl TryFrom<Plan> for LetFreePlan {
                         key_val_plan,
                         plan,
                         mfp_after,
+                        temporal_bucketing_strategy,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
-                PlanNode::TopK { input, top_k_plan } => {
+                PlanNode::TopK {
+                    input,
+                    top_k_plan,
+                    temporal_bucketing_strategy,
+                } => {
                     let expr = TopK {
                         input: input.lir_id,
                         top_k_plan,
+                        temporal_bucketing_strategy,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -482,10 +498,12 @@ impl TryFrom<Plan> for LetFreePlan {
                 PlanNode::Union {
                     inputs,
                     consolidate_output,
+                    temporal_bucketing_strategies,
                 } => {
                     let expr = Union {
                         inputs: inputs.iter().map(|i| i.lir_id).collect(),
                         consolidate_output,
+                        temporal_bucketing_strategies,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -911,6 +929,7 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
                 key_val_plan: _key_val_plan,
                 plan,
                 mfp_after: _mfp_after,
+                temporal_bucketing_strategy: _,
             } => match plan {
                 ReducePlan::Distinct => write!(f, "Distinct GroupAggregate"),
                 ReducePlan::Accumulable(..) => write!(f, "Accumulable GroupAggregate"),
@@ -939,6 +958,7 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
             TopK {
                 input: _,
                 top_k_plan,
+                temporal_bucketing_strategy: _,
             } => {
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(..) => write!(f, "Monotonic Top1")?,
@@ -965,6 +985,7 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
             Union {
                 inputs: _,
                 consolidate_output,
+                temporal_bucketing_strategies: _,
             } => {
                 if *consolidate_output {
                     write!(f, "Consolidating ")?;

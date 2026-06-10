@@ -19,14 +19,14 @@ use mz_catalog::builtin::{
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
     MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_DEFAULT_PRIVILEGES,
     MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS,
-    MZ_INDEX_COLUMNS, MZ_INDEXES, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
+    MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
     MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
     MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
     MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SESSIONS,
-    MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES,
+    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -401,13 +401,7 @@ impl CatalogState {
         let privileges_row = self.pack_privilege_array_row(entry.privileges());
         let privileges = privileges_row.unpack_first();
         let mut updates = match entry.item() {
-            CatalogItem::Log(_) => self.pack_source_update(
-                id, oid, schema_id, name, "log", None, None, None, None, None, owner_id,
-                privileges, diff, None,
-            ),
-            CatalogItem::Index(index) => {
-                self.pack_index_update(id, oid, name, owner_id, index, diff)
-            }
+            CatalogItem::Index(index) => self.pack_index_update(id, index, diff),
             CatalogItem::Table(table) => {
                 let mut updates = self
                     .pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff, table);
@@ -509,45 +503,7 @@ impl CatalogState {
                 updates
             }
             CatalogItem::Source(source) => {
-                let source_type = source.source_type();
-                let connection_id = source.connection_id();
-                let envelope = source.data_source.envelope();
-                let cluster_entry = match source.data_source {
-                    // Ingestion exports don't have their own cluster, but
-                    // run on their ingestion's cluster.
-                    DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                        self.get_entry(&ingestion_id)
-                    }
-                    DataSourceDesc::Ingestion { .. }
-                    | DataSourceDesc::OldSyntaxIngestion { .. }
-                    | DataSourceDesc::Introspection(_)
-                    | DataSourceDesc::Progress
-                    | DataSourceDesc::Webhook { .. }
-                    | DataSourceDesc::Catalog => entry,
-                };
-
-                let cluster_id = cluster_entry.item().cluster_id().map(|id| id.to_string());
-
-                let (key_format, value_format) = source.data_source.formats();
-
-                let mut updates = self.pack_source_update(
-                    id,
-                    oid,
-                    schema_id,
-                    name,
-                    source_type,
-                    connection_id,
-                    envelope,
-                    key_format,
-                    value_format,
-                    cluster_id.as_deref(),
-                    owner_id,
-                    privileges,
-                    diff,
-                    source.create_sql.as_ref(),
-                );
-
-                updates.extend(match &source.data_source {
+                match &source.data_source {
                     DataSourceDesc::Ingestion { desc, .. }
                     | DataSourceDesc::OldSyntaxIngestion { desc, .. } => match &desc.connection {
                         GenericSourceConnection::Postgres(postgres) => {
@@ -628,9 +584,7 @@ impl CatalogState {
                     DataSourceDesc::Introspection(_)
                     | DataSourceDesc::Progress
                     | DataSourceDesc::Catalog => vec![],
-                });
-
-                updates
+                }
             }
             CatalogItem::View(view) => {
                 self.pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff)
@@ -647,7 +601,7 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            CatalogItem::Secret(_) => vec![],
+            CatalogItem::Log(_) | CatalogItem::Secret(_) => vec![],
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, connection, diff)
             }
@@ -831,63 +785,6 @@ impl CatalogState {
         )]
     }
 
-    fn pack_source_update(
-        &self,
-        id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        source_desc_name: &str,
-        connection_id: Option<CatalogItemId>,
-        envelope: Option<&str>,
-        key_format: Option<&str>,
-        value_format: Option<&str>,
-        cluster_id: Option<&str>,
-        owner_id: &RoleId,
-        privileges: Datum,
-        diff: Diff,
-        create_sql: Option<&String>,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let redacted = create_sql.map(|create_sql| {
-            let create_stmt = mz_sql::parse::parse(create_sql)
-                .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
-                .into_element()
-                .ast;
-            create_stmt.to_ast_string_redacted()
-        });
-        vec![BuiltinTableUpdate::row(
-            &*MZ_SOURCES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(source_desc_name),
-                Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
-                // This is the "source size", which is a remnant from linked
-                // clusters.
-                Datum::Null,
-                Datum::from(envelope),
-                Datum::from(key_format),
-                Datum::from(value_format),
-                Datum::from(cluster_id),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-                if let Some(create_sql) = create_sql {
-                    Datum::String(create_sql)
-                } else {
-                    Datum::Null
-                },
-                if let Some(redacted) = &redacted {
-                    Datum::String(redacted)
-                } else {
-                    Datum::Null
-                },
-            ]),
-            diff,
-        )]
-    }
-
     fn pack_postgres_source_update(
         &self,
         id: CatalogItemId,
@@ -1039,6 +936,8 @@ impl CatalogState {
                 updates.push(self.pack_ssh_tunnel_connection_update(id, key_1, key_2, diff));
             }
             ConnectionDetails::Csr(_)
+            | ConnectionDetails::GlueSchemaRegistry(_)
+            | ConnectionDetails::Gcp(_)
             | ConnectionDetails::Postgres(_)
             | ConnectionDetails::MySql(_)
             | ConnectionDetails::SqlServer(_)
@@ -1393,9 +1292,6 @@ impl CatalogState {
     fn pack_index_update(
         &self,
         id: CatalogItemId,
-        oid: u32,
-        name: &str,
-        owner_id: &RoleId,
         index: &Index,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
@@ -1417,22 +1313,6 @@ impl CatalogState {
                 .expect("key_parts is filled in during planning"),
             _ => unreachable!(),
         };
-        let on_item_id = self.get_entry_by_global_id(&index.on).id();
-
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_INDEXES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(name),
-                Datum::String(&on_item_id.to_string()),
-                Datum::String(&index.cluster_id.to_string()),
-                Datum::String(&owner_id.to_string()),
-                Datum::String(&index.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        ));
 
         let on_entry = self.get_entry_by_global_id(&index.on);
         let on_desc = on_entry

@@ -33,10 +33,10 @@ def main():
     metadata["patch"] = int(args.patch)
     if "rc" in metadata:
         del metadata["rc"]
-    with open(release_version_doc_file, "wb") as f:
+    with open(release_version_doc_file, "w", encoding="utf-8") as f:
         frontmatter.dump(metadata, f, sort_keys=False)
         # Always have a trailing newline
-        f.write(b"\n")
+        f.write("\n")
 
     git.add_file(str(release_version_doc_file))
     git.commit_all_changed(f"release: mark {args.release_version} as released")

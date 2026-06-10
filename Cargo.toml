@@ -40,7 +40,6 @@ members = [
     "src/expr-derive-impl",
     "src/expr-parser",
     "src/expr-test-util",
-    "src/fivetran-destination",
     "src/foundationdb",
     "src/frontegg-auth",
     "src/frontegg-client",
@@ -91,6 +90,7 @@ members = [
     "src/repr-test-util",
     "src/rocksdb",
     "src/rocksdb-types",
+    "src/row-spine",
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
@@ -215,6 +215,7 @@ default-members = [
     "src/repr-test-util",
     "src/rocksdb",
     "src/rocksdb-types",
+    "src/row-spine",
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
@@ -258,7 +259,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.95.0"
+rust-version = "1.96.0"
 
 [workspace.dependencies]
 ahash = { version = "0.8.12", default-features = false }
@@ -307,7 +308,7 @@ cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["case-insensitive", "serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
-columnar = "0.12.1"
+columnar = "0.13.0"
 columnation = "0.1.2"
 compact_bytes = "0.2.1"
 compile-time-run = "0.2.12"
@@ -326,8 +327,8 @@ datadriven = "0.9.0"
 deadpool-postgres = "0.10.3"
 dec = "0.4.9"
 derivative = "2.2.0"
-differential-dataflow = "0.23.0"
-differential-dogs3 = "0.23.0"
+differential-dataflow = "0.24.0"
+differential-dogs3 = "0.24.0"
 digest = "0.10.7"
 dirs = "6.0.0"
 domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
@@ -346,6 +347,7 @@ futures = "0.3.32"
 futures-core = "0.3.32"
 futures-task = "0.3.32"
 futures-util = "0.3.32"
+gcp_auth = "0.12.6"
 glob = "0.3.3"
 globset = "0.4.18"
 governor = "0.10.1"
@@ -366,8 +368,9 @@ hyper-0-14 = { package = "hyper", version = "0.14", features = ["client", "tcp"]
 hyper-openssl = "0.10.2"
 hyper-util = "0.1.20"
 tower-service = "0.3.3"
-iceberg = "0.7.0"
-iceberg-catalog-rest = "0.7.0"
+iceberg = "0.9.0"
+iceberg-catalog-rest = "0.9.0"
+iceberg-storage-opendal = { version = "0.9.0", default-features = false, features = ["opendal-s3"] }
 imbl = { version = "7.0.0", features = ["serde"] }
 include_dir = "0.7.4"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
@@ -385,6 +388,7 @@ launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
 lgalloc = "0.6.0"
 libc = "0.2.186"
 lru = "0.16.3"
+lz4_flex = { version = "0.12.1", default-features = false, features = ["frame", "std"] }
 maplit = "1.0.2"
 mappings = "0.7.2"
 md-5 = "0.10.6"
@@ -463,9 +467,9 @@ scopeguard = "1.2.0"
 seahash = "4.1.0"
 segment = { version = "0.2.6", default-features = false, features = ["native-tls-vendored"] }
 semver = "1.0.28"
-sentry = { version = "0.46.1", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
-sentry-panic = "0.46.1"
-sentry-tracing = "0.46.1"
+sentry = { version = "0.48.2", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
+sentry-panic = "0.48.2"
+sentry-tracing = "0.48.2"
 serde = { version = "1.0.219", features = ["derive"] }
 serde-aux = "4.7.0"
 serde_bytes = "0.11.19"
@@ -499,7 +503,7 @@ tiberius = { version = "0.12", default-features = false, features = ["chrono", "
 tikv-jemalloc-ctl = { version = "0.6", features = ["stats", "use_std"] }
 tikv-jemallocator = { version = "0.6", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 time = "0.3.17"
-timely = "0.29.0"
+timely = "0.30.0"
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
 tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"
@@ -624,9 +628,10 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
-# All changes should go to the `mz_changes` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
+# All changes should go to the `mz_v0.9.0` branch.
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.

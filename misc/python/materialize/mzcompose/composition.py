@@ -201,11 +201,32 @@ class Composition:
                     name = name[len("workflow_") :].replace("_", "-")
                     self.workflows[name] = fn
 
-            for python_service in getattr(module, "SERVICES", []):
-                name = python_service.name
-                if name in self.compose["services"]:
-                    raise UIError(f"service {name!r} specified more than once")
-                self.compose["services"][name] = python_service.config
+            def _register_companion(python_service: Any) -> None:
+                # Companions never override an explicit declaration (or an
+                # already-registered companion). A customized service listed
+                # in SERVICES therefore wins over the default companion of the
+                # same name, and identical companions of sibling services
+                # (e.g. the metadata store of both Materialized and Testdrive)
+                # collapse to a single registration.
+                if python_service.name in self.compose["services"]:
+                    return
+                self.compose["services"][python_service.name] = python_service.config
+                for companion in getattr(python_service, "companions", []):
+                    _register_companion(companion)
+
+            services = list(getattr(module, "SERVICES", []))
+            # First register all explicit services, keeping the guard against
+            # the same name being spelled out twice. Companions are registered
+            # afterwards so that explicit declarations always take precedence.
+            for python_service in services:
+                if python_service.name in self.compose["services"]:
+                    raise UIError(
+                        f"service {python_service.name!r} specified more than once"
+                    )
+                self.compose["services"][python_service.name] = python_service.config
+            for python_service in services:
+                for companion in getattr(python_service, "companions", []):
+                    _register_companion(companion)
 
             for volume_name, volume_def in getattr(module, "VOLUMES", {}).items():
                 if volume_name in self.compose["volumes"]:
@@ -531,7 +552,15 @@ class Composition:
                             ), f"Unknown build status {build_status}"
                             time.sleep(1)
                     else:
-                        time.sleep(3)
+                        # Back off exponentially rather than sleeping a flat
+                        # 3s each time. The only `invoke` callers that retry
+                        # (max_tries > 1) are image pulls (`up`, `pull`), and a
+                        # freshly-built mzbuild image can briefly fail to
+                        # resolve in the registry ("failed to resolve reference
+                        # ... not found") before it has propagated. With a flat
+                        # 3s sleep, `up`'s 5 tries exhausted in ~12s, which was
+                        # too short to ride out the propagation delay.
+                        time.sleep(min(3 * 2 ** (retry - 1), 30))
                     continue
                 else:
                     raise CommandFailureCausedUIError(
@@ -1197,6 +1226,7 @@ class Composition:
                 if isinstance(service, Service) and service.idle
             ]
         )
+        old_compose = None
         if idle:
             old_compose = copy.deepcopy(self.compose)
             for service_name, service in self.compose["services"].items():
@@ -1212,20 +1242,23 @@ class Composition:
             for service in services
         ]
 
-        self.capture_logs()
-        self.invoke(
-            "up",
-            *(["--detach"] if detach else []),
-            *(["--wait"] if wait else []),
-            *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
-            *service_names,
-            max_tries=300 if os.getenv("CI_WAITING_FOR_BUILD") else max_tries,
-            build=os.getenv("CI_WAITING_FOR_BUILD"),
-        )
-
-        if idle:
-            self.compose = old_compose  # type: ignore
-            self._invalidate_compose_files()
+        try:
+            self.capture_logs()
+            self.invoke(
+                "up",
+                *(["--detach"] if detach else []),
+                *(["--wait"] if wait else []),
+                *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
+                *service_names,
+                max_tries=300 if os.getenv("CI_WAITING_FOR_BUILD") else max_tries,
+                build=os.getenv("CI_WAITING_FOR_BUILD"),
+            )
+        finally:
+            # Restore even on failure: otherwise the next test in the same
+            # composition would inherit the sleep-infinity entrypoint.
+            if old_compose is not None:
+                self.compose = old_compose  # type: ignore
+                self._invalidate_compose_files()
 
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""

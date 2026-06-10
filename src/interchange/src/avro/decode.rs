@@ -26,12 +26,12 @@ use serde::{Deserialize, Serialize};
 use tracing::trace;
 use uuid::Uuid;
 
-use crate::avro::ConfluentAvroResolver;
+use crate::avro::AvroSchemaResolver;
 
 /// Manages decoding of Avro-encoded bytes.
 #[derive(Debug)]
 pub struct Decoder {
-    csr_avro: ConfluentAvroResolver,
+    csr_avro: AvroSchemaResolver,
     debug_name: String,
     buf1: Vec<u8>,
     row_buf: Row,
@@ -82,7 +82,7 @@ impl Decoder {
         debug_name: String,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {
-        let csr_avro = ConfluentAvroResolver::new(
+        let csr_avro = AvroSchemaResolver::new(
             reader_schema,
             reader_reference_schemas,
             ccsr_client,

@@ -13,16 +13,20 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::iter;
+#[cfg(any(test, feature = "proptest"))]
 use std::ops::Add;
 use std::sync::LazyLock;
 
 use anyhow::bail;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+#[cfg(any(test, feature = "proptest"))]
+use chrono::TimeZone;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::Overflowing;
+#[cfg(any(test, feature = "proptest"))]
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -42,11 +46,13 @@ use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::pg_legacy_name::PgLegacyName;
-use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
+use crate::adt::range::Range;
+#[cfg(any(test, feature = "proptest"))]
+use crate::adt::range::{RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
-use crate::adt::timestamp::{
-    CheckedTimestamp, HIGH_DATE, LOW_DATE, TimestampError, TimestampPrecision,
-};
+use crate::adt::timestamp::{CheckedTimestamp, TimestampError, TimestampPrecision};
+#[cfg(any(test, feature = "proptest"))]
+use crate::adt::timestamp::{HIGH_DATE, LOW_DATE};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
 use crate::relation::ReprColumnType;
 pub use crate::relation_and_scalar::ProtoScalarType;
@@ -5399,9 +5405,27 @@ pub fn arb_datum_for_scalar(scalar_type: SqlScalarType) -> impl Strategy<Value =
         SqlScalarType::Array(element_type) => arb_array(arb_datum_for_scalar(*element_type))
             .prop_map(PropDatum::Array)
             .boxed(),
-        SqlScalarType::Int2Vector => arb_array(any::<i16>().prop_map(PropDatum::Int16).boxed())
-            .prop_map(PropDatum::Array)
-            .boxed(),
+        SqlScalarType::Int2Vector => {
+            // `int2vector` is, by definition, a 1-dimensional array of `int2`
+            // values (matching PostgreSQL's `int2vector` and Materialize's
+            // `Value::from_datum`, which asserts on multi-dimensional arrays).
+            // The generic `arb_array` strategy can produce multi-dimensional
+            // arrays, so we hand-roll a 1-D variant here.
+            let element_strategy = any::<i16>().prop_map(PropDatum::Int16).boxed();
+            prop::collection::vec(element_strategy, 0..16)
+                .prop_map(|elements| {
+                    let dims = [ArrayDimension {
+                        lower_bound: 1,
+                        length: elements.len(),
+                    }];
+                    let element_datums: Vec<Datum<'_>> =
+                        elements.iter().map(|pd| pd.into()).collect();
+                    let mut row = Row::default();
+                    row.packer().try_push_array(&dims, element_datums).unwrap();
+                    PropDatum::Array(PropArray(row, elements))
+                })
+                .boxed()
+        }
         SqlScalarType::Map { value_type, .. } => arb_dict(arb_datum_for_scalar(*value_type))
             .prop_map(PropDatum::Map)
             .boxed(),

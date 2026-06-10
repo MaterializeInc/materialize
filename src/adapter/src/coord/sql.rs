@@ -263,20 +263,28 @@ impl Coordinator {
             .drop_sinks
             .insert(id);
 
-        let ret_fut = match &active_sink {
+        let ret_fut: BuiltinTableAppendNotify = match &active_sink {
             ActiveComputeSink::Subscribe(active_subscribe) => {
-                let update =
-                    self.catalog()
-                        .state()
-                        .pack_subscribe_update(id, active_subscribe, Diff::ONE);
-                let update = self.catalog().state().resolve_builtin_table_update(update);
+                let table_update_fut = if !active_subscribe.internal {
+                    let update = self.catalog().state().pack_subscribe_update(
+                        id,
+                        active_subscribe,
+                        Diff::ONE,
+                    );
+                    let update = self.catalog().state().resolve_builtin_table_update(update);
+
+                    self.builtin_table_update().execute(vec![update]).await.0
+                } else {
+                    // Internal subscribes skip the builtin table update.
+                    Box::pin(std::future::ready(()))
+                };
 
                 self.metrics
                     .active_subscribes
                     .with_label_values(&[session_type])
                     .inc();
 
-                self.builtin_table_update().execute(vec![update]).await.0
+                table_update_fut
             }
             ActiveComputeSink::CopyTo(_) => {
                 self.metrics
@@ -312,13 +320,16 @@ impl Coordinator {
 
             match &sink {
                 ActiveComputeSink::Subscribe(active_subscribe) => {
-                    let update = self.catalog().state().pack_subscribe_update(
-                        id,
-                        active_subscribe,
-                        Diff::MINUS_ONE,
-                    );
-                    let update = self.catalog().state().resolve_builtin_table_update(update);
-                    self.builtin_table_update().blocking(vec![update]).await;
+                    // Skip builtin table update for internal subscribes
+                    if !active_subscribe.internal {
+                        let update = self.catalog().state().pack_subscribe_update(
+                            id,
+                            active_subscribe,
+                            Diff::MINUS_ONE,
+                        );
+                        let update = self.catalog().state().resolve_builtin_table_update(update);
+                        self.builtin_table_update().blocking(vec![update]).await;
+                    }
 
                     self.metrics
                         .active_subscribes

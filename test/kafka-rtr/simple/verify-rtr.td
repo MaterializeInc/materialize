@@ -13,6 +13,12 @@ ALTER SYSTEM SET allow_real_time_recency = true
 > SET TRANSACTION_ISOLATION = 'STRICT SERIALIZABLE';
 > SET REAL_TIME_RECENCY TO TRUE
 
+# Give the source ample time to ingest the ~1M throttled records up to the
+# real-time recency point. The default of 10s is too tight on loaded CI
+# machines (decode + persist of ~1M rows), causing spurious RtrTimeout errors.
+# This test asserts the correctness of the RTR result, not the timeout value.
+> SET real_time_recency_timeout TO '120s'
+
 $ kafka-ingest topic=input_1 format=bytes repeat=500000
 A,B,0
 

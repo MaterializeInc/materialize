@@ -108,7 +108,6 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
 
 #
@@ -143,7 +142,6 @@ def make_aggregation_class() -> type[Aggregation]:
 default_timeout = "1800s"
 
 SERVICES = [
-    Zookeeper(),
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
@@ -189,9 +187,15 @@ def run_one_scenario(
 
     early_abort = False
 
-    for mz_id, instance in enumerate(["this", "other"]):
+    instances = ["this"] if args.skip_other else ["this", "other"]
+    for mz_id, instance in enumerate(instances):
         balancerd, tag, size, params = (
-            (args.this_balancerd, args.this_tag, args.this_size, args.this_params)
+            (
+                args.this_balancerd,
+                args.this_tag,
+                args.this_size,
+                args.this_params,
+            )
             if instance == "this"
             else (
                 args.other_balancerd,
@@ -231,7 +235,9 @@ def run_one_scenario(
         )
         clusterd_image = f"materialize/clusterd:{tag}" if tag else None
         clusterd = create_clusterd_service(
-            clusterd_image, size, additional_system_parameter_defaults
+            clusterd_image,
+            size,
+            additional_system_parameter_defaults,
         )
 
         if tag is not None and not c.try_pull_service_image(mz):
@@ -248,7 +254,9 @@ def run_one_scenario(
             )
             clusterd_image = f"materialize/clusterd:{tag}" if tag else None
             clusterd = create_clusterd_service(
-                clusterd_image, size, additional_system_parameter_defaults
+                clusterd_image,
+                size,
+                additional_system_parameter_defaults,
             )
 
         start_overridden_mz_clusterd_and_cockroach(
@@ -520,6 +528,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--skip-other",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run only the 'THIS' side; skip the comparison against 'OTHER'. "
+        "Useful for iterating on a new scenario without re-running the "
+        "baseline tag every time.",
+    )
+
+    parser.add_argument(
         "--ignore-other-tag-missing",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -567,7 +584,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
 
     iceberg_scenarios = [s for s in selected_scenarios if "Iceberg" in s.__name__]
     global iceberg_credentials
@@ -639,7 +656,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenario_classes_remaining = [
             scenario_class
             for scenario_class in scenario_classes_remaining
-            if report.has_scenario_regression(scenario_class.__name__)
+            if report.has_scenario_result(scenario_class.__name__)
+            and report.has_scenario_regression(scenario_class.__name__)
         ]
         if not scenario_classes_remaining:
             if run_number < args.runs_per_scenario:

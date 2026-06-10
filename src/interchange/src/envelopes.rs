@@ -139,8 +139,10 @@ pub fn dbz_format(rp: &mut RowPacker, dp: DiffPair<Row>) {
 
 #[cfg(test)]
 mod tests {
-    use differential_dataflow::trace::Batcher;
+    use differential_dataflow::trace::implementations::chunker::ContainerChunker;
     use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder};
+    use differential_dataflow::trace::{Batcher, Builder};
+    use timely::container::{ContainerBuilder, PushInto};
     use timely::progress::Antichain;
 
     use super::*;
@@ -150,11 +152,20 @@ mod tests {
     fn batch_from_tuples(
         mut tuples: Vec<((String, String), u64, Diff)>,
         upper: u64,
-    ) -> <ValBuilder<String, String, u64, Diff> as differential_dataflow::trace::Builder>::Output
-    {
+    ) -> <ValBuilder<String, String, u64, Diff> as Builder>::Output {
+        // The batcher consumes already-chunked input via `PushInto`; chunking
+        // is the caller's responsibility.
         let mut batcher = ValBatcher::<String, String, u64, Diff>::new(None, 0);
-        batcher.push_container(&mut tuples);
-        batcher.seal::<ValBuilder<String, String, u64, Diff>>(Antichain::from_elem(upper))
+        let mut chunker = ContainerChunker::<Vec<((String, String), u64, Diff)>>::default();
+        chunker.push_into(&mut tuples);
+        while let Some(chunk) = chunker.extract() {
+            batcher.push_into(std::mem::take(chunk));
+        }
+        while let Some(chunk) = chunker.finish() {
+            batcher.push_into(std::mem::take(chunk));
+        }
+        let (mut chain, description) = batcher.seal(Antichain::from_elem(upper));
+        ValBuilder::<String, String, u64, Diff>::seal(&mut chain, description)
     }
 
     /// Collects `for_each_diff_pair` invocations into a flat, deterministically

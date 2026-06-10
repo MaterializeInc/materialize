@@ -15,10 +15,8 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
     Kafka(environment_extra=["KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS=1000"]),
     SchemaRegistry(),
     Materialized(),
@@ -52,7 +50,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def workflow_low_watermark(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.up("kafka", "schema-registry", "materialized")
 
     c.exec(
         "kafka",
@@ -61,7 +59,8 @@ def workflow_low_watermark(c: Composition) -> None:
         f"kafka-topics --bootstrap-server={BS} --create --topic={TOPIC}"
         " --partitions=1 --replication-factor=1"
         " --config=cleanup.policy=delete --config=retention.ms=5000"
-        " --config=segment.ms=500 --config=segment.bytes=65536",
+        # Kafka 4.x requires segment.bytes >= 1048576 (1 MiB).
+        " --config=segment.ms=500 --config=segment.bytes=1048576",
     )
 
     c.exec(
@@ -96,12 +95,20 @@ def workflow_low_watermark(c: Composition) -> None:
 > COMMIT
 {select_cmd} SELECT count(*) FROM lwm_{suffix}_tbl
 {expected}
+$ skip-if
+SELECT {"true" if not start_offset_clause else "false"}
+# Sleep for 20s to make sure that the source has not restarted (would happen after 5s)
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=20s
+{select_cmd} SELECT count(*) FROM lwm_{suffix}_tbl
+{expected}
+> SELECT count(*) FROM mz_internal.mz_source_status_history hx JOIN mz_catalog.mz_sources s ON hx.source_id = s.id WHERE s.name = 'lwm_{suffix}' AND hx.status = 'starting'
+1
 """)
         print(f"PASSED: {suffix} START OFFSET with low watermark > 0")
 
 
 def workflow_responsible_partition_filter(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.up("kafka", "schema-registry", "materialized")
 
     topic = "responsible-partition-test"
     n = 4

@@ -641,6 +641,7 @@ where
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 for (_idx, part) in data {
+                    let reader_id = part.reader_id().clone();
                     let fetched = fetcher
                         .fetch_leased_part(part)
                         .await
@@ -655,11 +656,14 @@ where
                             //
                             // However, it is possible for a lease to expire given a sustained period of
                             // downtime, which could allow parts we expect to exist to be deleted...
-                            // at which point our best option is to request a restart.
+                            // at which point our best option is to request a restart. Check the state
+                            // of the minting reader's lease to tell the two cases apart.
+                            let diagnostics = fetcher.missing_blob_diagnostics(&reader_id).await;
                             error_handler
                                 .report_and_stop(anyhow!(
-                                    "batch fetcher could not fetch batch part {}; lost lease?",
-                                    blob_key
+                                    "batch fetcher could not fetch batch part {}: {}",
+                                    blob_key,
+                                    diagnostics
                                 ))
                                 .await
                         }

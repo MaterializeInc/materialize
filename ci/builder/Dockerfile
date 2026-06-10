@@ -238,13 +238,13 @@ RUN mkdir rust \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
     && rm -rf rust.asc rust.tar.gz rust \
-    && cargo install --root /usr/local --version "=0.8.2" --locked cargo-about \
-    && cargo install --root /usr/local --version "=3.6.2" --locked cargo-deb \
-    && cargo install --root /usr/local --version "=0.18.9" --locked cargo-deny \
+    && cargo install --root /usr/local --version "=0.9.0" --locked --features=cli cargo-about \
+    && cargo install --root /usr/local --version "=3.7.0" --locked cargo-deb \
+    && cargo install --root /usr/local --version "=0.19.8" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
-    && cargo install --root /usr/local --version "=0.9.114" --locked cargo-nextest \
-    && cargo install --root /usr/local --version "=0.6.21" --locked cargo-llvm-cov \
-    && cargo install --root /usr/local --version "=0.1.60" --locked --features=vendored-openssl cargo-udeps \
+    && cargo install --root /usr/local --version "=0.9.137" --locked cargo-nextest \
+    && cargo install --root /usr/local --version "=0.8.7" --locked cargo-llvm-cov \
+    && cargo install --root /usr/local --version "=0.1.61" --locked --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.4.0" --locked cargo-binutils \
     && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack \
     && rm -rf /cargo/registry /cargo/git

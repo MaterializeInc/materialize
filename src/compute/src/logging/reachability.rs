@@ -18,6 +18,7 @@ use columnar::Index;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
@@ -29,8 +30,8 @@ use timely::dataflow::operators::generic::operator::empty;
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog, consolidate_and_pack};
-use crate::row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
+use mz_row_spine::RowRowBuilder;
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -95,26 +96,32 @@ pub(super) fn construct(
         let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
         let worker_id = scope.index();
 
-        let updates =
-            consolidate_and_pack::<Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
-                logs,
-                TimelyLog::Reachability,
-                move |data, packer, session| {
-                    for ((datum, ()), time, diff) in data.iter() {
-                        let (update_type, operator_id, source, port, ts) = datum;
-                        let update_type = if *update_type { "source" } else { "target" };
-                        let data = packer.pack_slice(&[
-                            Datum::UInt64(u64::cast_from(*operator_id)),
-                            Datum::UInt64(u64::cast_from(worker_id)),
-                            Datum::UInt64(u64::cast_from(*source)),
-                            Datum::UInt64(u64::cast_from(*port)),
-                            Datum::String(update_type),
-                            Datum::from(*ts),
-                        ]);
-                        session.give((data, time, diff));
-                    }
-                },
-            );
+        let updates = consolidate_and_pack::<
+            batcher::Chunker<_>,
+            Col2ValBatcher<UpdatesKey, _, _, _>,
+            ColumnBuilder<_>,
+            _,
+            _,
+            _,
+        >(
+            logs,
+            TimelyLog::Reachability,
+            move |data, packer, session| {
+                for ((datum, ()), time, diff) in data.iter() {
+                    let (update_type, operator_id, source, port, ts) = datum;
+                    let update_type = if *update_type { "source" } else { "target" };
+                    let data = packer.pack_slice(&[
+                        Datum::UInt64(u64::cast_from(*operator_id)),
+                        Datum::UInt64(u64::cast_from(worker_id)),
+                        Datum::UInt64(u64::cast_from(*source)),
+                        Datum::UInt64(u64::cast_from(*port)),
+                        Datum::String(update_type),
+                        Datum::from(*ts),
+                    ]);
+                    session.give((data, time, diff));
+                }
+            },
+        );
 
         let mut result = BTreeMap::new();
         for variant in logs_active {
@@ -126,6 +133,7 @@ pub(super) fn construct(
                     .clone()
                     .mz_arrange_core::<
                         _,
+                        batcher::Chunker<_>,
                         Col2ValBatcher<_, _, _, _>,
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,

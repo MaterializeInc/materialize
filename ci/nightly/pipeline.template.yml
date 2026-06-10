@@ -115,10 +115,10 @@ steps:
         sanitizer: skip
 
       - id: check-package-isolation
-        label: "Per-package isolated cargo check --all-targets"
+        label: Package-isolated cargo check
         command: bin/ci-builder run stable bin/check-package-isolation
         depends_on: []
-        timeout_in_minutes: 45
+        timeout_in_minutes: 60
         parallelism: 8
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -294,18 +294,6 @@ steps:
   - group: Kafka
     key: kafka
     steps:
-      - id: kafka-matrix
-        label: Previous Kafka versions
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        parallelism: 2
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: kafka-matrix
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9510"
-
       - id: kafka-multi-broker
         label: Kafka multi-broker
         depends_on: build-aarch64
@@ -2393,6 +2381,19 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
               run: revert-rollout
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-rollout-timeout
+        label: Orchestratord cancel rollout after timeout
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: rollout-timeout
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

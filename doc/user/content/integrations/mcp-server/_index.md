@@ -1,27 +1,33 @@
 ---
-title: "MCP Server"
-description: "Learn how to integrate with Materialize's built-in MCP endpoints."
+title: "MCP Servers and agent skills"
+description: "This section contains guides for installing Materialize Agent skills and integrating with Materialize's built-in MCP servers."
 disable_list: true
 menu:
   main:
     parent: integrations
-    name: "MCP Server"
+    name: "MCP Server and skills"
     identifier: mcp-server
-    weight: 20
+    weight: 6
 ---
 
-Materialize provides built-in Model Context Protocol (MCP) endpoints that AI
+
+## Agent skills
+
+Materialize provides the following open-source [agent
+skills](https://github.com/MaterializeInc/agent-skills) to help developers build
+with Materialize.
+
+{{% include-headless "/headless/agent-skills-table" %}}
+
+## MCP servers
+
+Materialize provides built-in Model Context Protocol (MCP) servers that AI
 agents can use. The MCP interface is served directly by the database; no sidecar
 process or external server is required. These endpoints use [JSON-RPC
  2.0](https://www.jsonrpc.org/specification) over HTTP POST (default port 6876)
 and support the MCP `initialize`, `tools/list`, and `tools/call` methods.
 
-## MCP endpoints overview
-
-| Endpoint | Path | Description |
-|----------|------|-------------|
-| **Agent** | `/api/mcp/agent` | Discover and query your real-time data products over HTTP. <br>For details, see [MCP Server for agents](/integrations/mcp-server/mcp-agent/).<br>*Available starting in v26.24*|
-| **Developer** | `/api/mcp/developer` | Read `mz_*` system catalog tables for troubleshooting and observability. <br>For details, see [MCP Server for developer](/integrations/mcp-server/mcp-developer/).|
+{{% include-headless "/headless/mcp-servers-table" %}}
 
 ## See also
 

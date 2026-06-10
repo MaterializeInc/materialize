@@ -660,7 +660,11 @@ impl Coordinator {
         for sink_id in sink_ids {
             let sink = match self.remove_active_compute_sink(sink_id).await {
                 None => {
-                    tracing::error!(%sink_id, "drop_compute_sinks called on nonexistent sink");
+                    // This can happen due to a race condition: an internal
+                    // subscribe may be cleaned up via its own message while
+                    // session disconnect cleanup is in progress. This is
+                    // benign.
+                    tracing::debug!(%sink_id, "drop_compute_sinks: sink already removed");
                     continue;
                 }
                 Some(sink) => sink,
@@ -1133,8 +1137,10 @@ impl Coordinator {
                                 new_aws_privatelink_connections += 1
                             }
                             ConnectionDetails::Csr(_)
+                            | ConnectionDetails::GlueSchemaRegistry(_)
                             | ConnectionDetails::Ssh { .. }
                             | ConnectionDetails::Aws(_)
+                            | ConnectionDetails::Gcp(_)
                             | ConnectionDetails::IcebergCatalog(_) => {}
                         },
                         CatalogItem::Table(_) => {
@@ -1308,8 +1314,10 @@ impl Coordinator {
                 ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
                 ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
                 ConnectionDetails::Csr(_)
+                | ConnectionDetails::GlueSchemaRegistry(_)
                 | ConnectionDetails::Ssh { .. }
                 | ConnectionDetails::Aws(_)
+                | ConnectionDetails::Gcp(_)
                 | ConnectionDetails::IcebergCatalog(_) => {}
             }
         }

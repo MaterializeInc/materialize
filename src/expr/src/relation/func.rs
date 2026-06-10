@@ -3121,16 +3121,25 @@ fn generate_subscripts_array(
             .try_into()
             .map_err(|_| EvalError::Int32OutOfRange((dim - 1).to_string().into()))?,
     ) {
-        Some(requested_dim) => Ok(Box::new(generate_series::<i32>(
-            requested_dim.lower_bound.try_into().map_err(|_| {
+        Some(requested_dim) => {
+            let lower_bound: i32 = requested_dim.lower_bound.try_into().map_err(|_| {
                 EvalError::Int32OutOfRange(requested_dim.lower_bound.to_string().into())
-            })?,
-            requested_dim
+            })?;
+            // The subscripts run from the lower bound to the upper bound,
+            // inclusive. The upper bound is `lower_bound + length - 1`.
+            let length: i32 = requested_dim
                 .length
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.length.to_string().into()))?,
-            1,
-        )?)),
+                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.length.to_string().into()))?;
+            let upper_bound = lower_bound.checked_add(length - 1).ok_or_else(|| {
+                EvalError::Int32OutOfRange(requested_dim.length.to_string().into())
+            })?;
+            Ok(Box::new(generate_series::<i32>(
+                lower_bound,
+                upper_bound,
+                1,
+            )?))
+        }
         None => Ok(Box::new(iter::empty())),
     }
 }

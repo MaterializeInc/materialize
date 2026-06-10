@@ -93,6 +93,23 @@ class PostgresMetadata(Postgres):
             setup_materialize=True,
             ports=["26257"],
             restart=restart,
+            # Persist's compare-and-append runs the consensus connection at
+            # SERIALIZABLE isolation, so all metadata-store traffic goes through
+            # Postgres SSI. Under a concurrent compare-and-append burst (e.g.
+            # many clusterds cold-starting at once) the default predicate-lock
+            # pool exhausts and Postgres throws "not enough elements in
+            # RWConflictPool", triggering a retry storm. Raise the limits well
+            # above defaults. These GUCs only matter for the SSI consensus path,
+            # which is why they live on PostgresMetadata, not the base Postgres
+            # used for CDC/source instances.
+            extra_command=[
+                "-c",
+                "max_pred_locks_per_transaction=1024",
+                "-c",
+                "max_pred_locks_per_relation=10000",
+                "-c",
+                "max_pred_locks_per_page=512",
+            ],
         )
 
     @staticmethod

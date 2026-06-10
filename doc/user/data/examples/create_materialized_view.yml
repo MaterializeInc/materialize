@@ -31,7 +31,6 @@
         | `ASSERT NOT NULL` *col_ident* | `text` | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, use the option multiple times. |
         | `PARTITION BY` *columns* | `(ident [, ident]*)` | The key by which Materialize should internally partition this durable collection. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details. |
         | `RETAIN HISTORY FOR` *retention_period* | `interval` | ***Private preview.*** Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
-        | `REFRESH` *refresh_strategy* | | ***Private preview.*** The refresh strategy for the materialized view. See [Refresh strategies](#refresh-strategies) for syntax options. Default: `ON COMMIT`. |
     - name: "`<select_stmt>`"
       description: |
         The [`SELECT` statement](/sql/select) whose results you want to
@@ -70,7 +69,6 @@
         | `ASSERT NOT NULL` *col_ident* | `text` | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, use the option multiple times. |
         | `PARTITION BY` *columns* | `(ident [, ident]*)` | The key by which Materialize should internally partition this durable collection. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details. |
         | `RETAIN HISTORY FOR` *retention_period* | `interval` | ***Private preview.*** Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
-        | `REFRESH` *refresh_strategy* | | ***Private preview.*** The refresh strategy for the materialized view. See [Refresh strategies](#refresh-strategies) for syntax options. Default: `ON COMMIT`. |
     - name: "`<select_stmt>`"
       description: |
         The [`SELECT` statement](/sql/select) whose results you want to

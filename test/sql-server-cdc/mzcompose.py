@@ -55,11 +55,33 @@ VOLUMES = {"ms_scratch": {}}
 # Test that SQL Server ingestion works
 #
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--sql-server-version",
+        type=str,
+        default=SqlServer.DEFAULT_VERSION,
+        help="SQL Server image tag from mcr.microsoft.com/mssql/server, e.g. "
+        "'2019-CU32-ubuntu-20.04'. Defaults to the locally-seeded mzbuild image.",
+    )
+    args, remaining_args = parser.parse_known_args()
+    if args.sql_server_version is not None:
+        print(f"Running with SQL Server version {args.sql_server_version}")
+
     def process(name: str) -> None:
         if name in ("default", "large-scale"):
             return
         with c.test_case(name):
-            c.workflow(name, *parser.args)
+            with c.override(
+                SqlServer(
+                    version=args.sql_server_version,
+                    volumes_extra=[
+                        "secrets:/var/opt/mssql/certs",
+                        f"{TLS_CONF_PATH}:/var/opt/mssql/mssql.conf",
+                    ],
+                )
+            ):
+                # Pass through only the args the child workflow understands,
+                # i.e. strip the `--sql-server-version` we just consumed.
+                c.workflow(name, *remaining_args)
 
     workflows_with_internal_sharding = ["cdc"]
     sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(

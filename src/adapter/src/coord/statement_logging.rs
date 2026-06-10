@@ -172,8 +172,12 @@ impl Coordinator {
                     ended_record.reason,
                 );
             }
-            FrontendStatementLoggingEvent::SetCluster { id, cluster_id } => {
-                self.set_statement_execution_cluster(id, cluster_id);
+            FrontendStatementLoggingEvent::SetCluster {
+                id,
+                cluster_id,
+                cluster_name,
+            } => {
+                self.set_statement_execution_cluster(id, cluster_id, cluster_name);
             }
             FrontendStatementLoggingEvent::SetTimestamp { id, timestamp } => {
                 self.set_statement_execution_timestamp(id, timestamp);
@@ -524,16 +528,19 @@ impl Coordinator {
             .push((update, Diff::ONE));
     }
 
-    /// Set the `cluster_id` for a statement, once it's known.
+    /// Set the `cluster_id` and `cluster_name` for a statement, once they're known.
     ///
-    /// TODO(peek-seq): We could do cluster resolution and packing in the frontend task, and just
-    /// send over the rows.
+    /// The name is resolved by the caller (from the same catalog snapshot that selected the
+    /// cluster), rather than re-resolved here from `cluster_id`. This avoids a panic when the
+    /// cluster was concurrently dropped, and logs the name as it was at selection time.
+    ///
+    /// TODO(peek-seq): We could do the packing in the frontend task, and just send over the rows.
     pub(crate) fn set_statement_execution_cluster(
         &mut self,
         id: StatementLoggingId,
         cluster_id: ClusterId,
+        cluster_name: String,
     ) {
-        let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
         self.mutate_record(id, |record| {
             record.cluster_name = Some(cluster_name);
             record.cluster_id = Some(cluster_id);

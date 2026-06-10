@@ -183,7 +183,12 @@ mod tests {
         args: &HashMap<String, Vec<String>>,
         test_type: TestType,
     ) -> Result<String, Error> {
-        let features = OptimizerFeatures::default();
+        let mut features = OptimizerFeatures::default();
+        // Allow tests to opt into flag-gated transform behavior, e.g.
+        // `build apply=WillDistinct enable_will_distinct_propagation=true`.
+        if args.contains_key("enable_will_distinct_propagation") {
+            features.enable_will_distinct_propagation = true;
+        }
         let typecheck_ctx = typecheck::empty_typechecking_context();
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
@@ -325,6 +330,7 @@ mod tests {
             )),
             "UnionNegateFusion" => Ok(Box::new(mz_transform::compound::UnionNegateFusion)),
             "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::Union)),
+            "WillDistinct" => Ok(Box::new(mz_transform::will_distinct::WillDistinct)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name

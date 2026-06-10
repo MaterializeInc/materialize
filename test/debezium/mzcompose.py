@@ -21,12 +21,10 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
-prerequisites = ["zookeeper", "kafka", "schema-registry", "debezium", "materialized"]
+prerequisites = ["kafka", "schema-registry", "debezium", "materialized"]
 
 SERVICES = [
-    Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Debezium(),

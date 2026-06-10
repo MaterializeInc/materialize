@@ -28,9 +28,22 @@
 //! Stored updates are of the form `(data, time, diff)`, where `time` and `diff` are fixed to
 //! [`mz_repr::Timestamp`] and [`mz_repr::Diff`], respectively.
 //!
-//! [`CorrectionV2`] holds onto a list of [`Chain`]s containing [`Chunk`]s of stashed updates. Each
-//! [`Chunk`] is a columnation region containing a fixed maximum number of updates. All updates in
+//! [`CorrectionV2`] holds onto a list of `Chain`s containing `Chunk`s of stashed updates. Each
+//! `Chunk` is a columnation region containing a fixed maximum number of updates. All updates in
 //! a chunk, and all updates in a chain, are ordered by (time, data) and consolidated.
+//!
+//! Chains live in three places:
+//!
+//!  * A [`BucketChain`] partitions times at or beyond the `boundary` (the largest read `upper`
+//!    seen so far) into buckets of exponentially growing time ranges, each holding a list of
+//!    chains. Reads only touch the buckets below their `upper`, so the bulk of the buffered
+//!    updates — in particular far-future retractions produced by temporal filters — is left
+//!    alone.
+//!  * `pending_low` holds chains at times below the `boundary`, mostly insertions arriving
+//!    through the persist feedback.
+//!  * `emitted` is a single chain holding the updates returned by the last read. Updates must
+//!    stay in the buffer until their feedback retractions arrive, and keeping them separate from
+//!    the bucket chain means reads never have to re-merge future updates.
 //!
 //! ```text
 //!       chain[0]   |   chain[1]   |   chain[2]
@@ -49,10 +62,16 @@
 //!       (c, 3, +1) |              |
 //! ```
 //!
-//! The "chain invariant" states that each chain has at least `chain_proportionality` times as
-//! many chunks as the next one. This means that chain sizes will often be powers of
+//! The "chain invariant" states that each chain in a bucket has at least `chain_proportionality` times as
+//! many updates as the next one. This means that chain sizes will often be powers of
 //! `chain_proportionality`, but they don't have to be. For example, for a proportionality of 2,
 //! the chain sizes `[11, 5, 2, 1]` would satisfy the chain invariant.
+//!
+//! Note that the invariant is maintained on update counts, not chunk counts. Chunks are
+//! byte-bounded (see `ChunkBuilder`), so chunk count is not proportional to update count and
+//! would be a poor proxy: any chain below the chunk byte boundary is a single chunk regardless
+//! of how many updates it holds, which would let the geometric invariant collapse and break the
+//! O(log N) amortization of inserts.
 //!
 //! Choosing the `chain_proportionality` value allows tuning the trade-off between memory and CPU
 //! resources required to maintain corrections. A higher proportionality forces more frequent chain
@@ -60,39 +79,32 @@
 //!
 //! ## Inserting Updates
 //!
-//! A batch of updates is appended as a new chain. Then chains are merged at the end of the chain
-//! list until the chain invariant is restored.
+//! A batch of updates is routed by time: updates below the `boundary` become a `pending_low`
+//! chain, the rest is appended as new chains to their respective buckets. Appending to a bucket
+//! merges chains until the chain invariant is restored.
 //!
 //! Inserting an update into the correction buffer can be expensive: It involves allocating a new
 //! chunk, copying the update in, and then likely merging with an existing chain to restore the
 //! chain invariant. If updates trickle in in small batches, this can cause a considerable
-//! overhead. The amortize this overhead, new updates aren't immediately inserted into the sorted
-//! chains but instead stored in a [`Stage`] buffer. Once enough updates have been staged to fill a
-//! [`Chunk`], they are sorted an inserted into the chains.
+//! overhead. To amortize this overhead, new updates aren't immediately inserted into the sorted
+//! chains but instead stored in a `Stage` buffer. Once enough updates have been staged to fill a
+//! `Chunk`, they are sorted and routed.
 //!
 //! The insert operation has an amortized complexity of O(log N), with N being the current number
 //! of updates stored.
 //!
 //! ## Retrieving Consolidated Updates
 //!
-//! Retrieving consolidated updates before a given `upper` works by first consolidating all updates
-//! at times before the `upper`, merging them all into one chain, then returning an iterator over
-//! that chain.
+//! Retrieving consolidated updates before a given `upper` works by peeling all buckets below the
+//! `upper` off the bucket chain, splitting their chains, the pending low chains, and the previous
+//! `emitted` chain at the `upper`, merging the parts below the `upper` into the new `emitted`
+//! chain, and returning an iterator over that chain.
 //!
-//! Because each chain contains updates ordered by time first, consolidation of all updates before
-//! an `upper` is possible without touching updates at future times. It works by merging the chains
-//! only up to the `upper`, producing a merged chain containing consolidated times before the
-//! `upper` and leaving behind the chain parts containing later times. The complexity of this
-//! operation is O(U log K), with U being the number of updates before `upper` and K the number
-//! of chains.
-//!
-//! Unfortunately, performing consolidation as described above can break the chain invariant and we
-//! might need to restore it by merging chains, including ones containing future updates. This is
-//! something that would be great to fix! In the meantime the hope is that in steady state it
-//! doesn't matter too much because either there are no future retractions and U is approximately
-//! equal to N, or the amount of future retractions is much larger than the amount of current
-//! changes, in which case removing the current changes has a good chance of leaving the chain
-//! invariant intact.
+//! Because each chain contains updates ordered by time first, splitting a chain at the `upper`
+//! reuses whole chunks and copies at most one chunk straddling the split point. Updates at times
+//! at or beyond the `upper` are never touched, no matter how many the buffer holds. The
+//! complexity of a read is O(U log K), with U being the number of updates before `upper` and K
+//! the number of chains containing them.
 //!
 //! ## Merging Chains
 //!
@@ -113,40 +125,61 @@
 //! Merging them naively yields [(b, 2, +1), (a, 2, +1), (b, 2, -1), (a, 3, -1)], a chain that's
 //! neither sorted nor consolidated.
 //!
-//! Instead we need to merge sub-chains, one for each distinct time that's before or at the
-//! `since`. Each of these sub-chains retains the (time, data) ordering after the time advancement
-//! to `since`, so merging those yields the expected result.
+//! Times below the `since` can only exist in chains read by `consolidate_before`, and only if
+//! the `since` advanced past buffered times since the previous read. For few distinct stale
+//! times — the steady state, where the previously emitted chain was written just before the
+//! since advanced past it — we merge sub-chains, one for each distinct time that's before or at
+//! the `since`. Each of these sub-chains retains the (time, data) ordering after the time
+//! advancement to `since`, so merging those yields the expected result.
 //!
 //! For the above example, the chains we would merge are:
 //!   chain 1.a: [(c, 2, +1)]
 //!   chain 1.b: [(b, 2, -1), (a, 3, -1)]
 //!   chain 2.a: [(b, 2, +1)],
 //!   chain 2.b: [(a, 2, +1), (c, 2, -1)]
+//!
+//! For many distinct stale times — e.g. a since jump across many buffered timestamps when a sink
+//! restarts with an old as-of — the number of sub-chains grows with the number of distinct times,
+//! so we instead materialize the affected updates, advance their times, and sort and consolidate
+//! them in one O(U log U) pass.
 
-use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
-use columnation::Columnation;
-use differential_dataflow::trace::implementations::BatchContainer;
+use columnar::{Columnar, Index, Len, Ref};
 use mz_ore::cast::CastLossy;
+use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use mz_timely_util::columnation::ColumnationStack;
+use mz_timely_util::columnar::Column;
+use mz_timely_util::temporal::{Bucket, BucketChain};
 use timely::PartialOrder;
+use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Antichain;
 
 use crate::sink::correction::{ChannelLogging, SizeMetrics};
 
 /// Convenient alias for use in data trait bounds.
+///
+/// `D` is constrained to be `Columnar`, so that updates can be stored in a single columnar
+/// region per chunk, and the variable-length payload (e.g. `Row` bytes) lives in the same
+/// allocation as the rest of the chunk. The `Ref`-level `Eq + Ord` bounds let the merge/heap
+/// code compare updates directly through the columnar borrow, avoiding `into_owned` clones
+/// on the hot path.
 pub trait Data:
-    differential_dataflow::Data + Columnation<InnerRegion: Send + Sync> + Send + Sync
+    differential_dataflow::Data
+    + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
+    + Send
+    + Sync
 {
 }
-impl<D: differential_dataflow::Data + Columnation<InnerRegion: Send + Sync> + Send + Sync> Data
-    for D
+impl<D> Data for D where
+    D: differential_dataflow::Data
+        + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
+        + Send
+        + Sync
 {
 }
 
@@ -155,17 +188,32 @@ impl<D: differential_dataflow::Data + Columnation<InnerRegion: Send + Sync> + Se
 /// In contrast to `CorrectionV1`, this implementation stores updates in columnation regions,
 /// allowing their memory to be transparently spilled to disk.
 #[derive(Debug)]
-pub(super) struct CorrectionV2<D: Data> {
-    /// Chains containing sorted updates.
-    chains: Vec<Chain<D>>,
+pub struct CorrectionV2<D: Data> {
+    /// Bucketed storage for updates at times at or beyond `boundary`.
+    ///
+    /// Buckets cover exponentially growing time ranges, so reads only touch the buckets below
+    /// their `upper`, and far-future updates (e.g. retractions produced by temporal filters) are
+    /// rarely touched.
+    chain: BucketChain<ChainBucket<D>>,
+    /// Chains at times below `boundary` that were not yet emitted.
+    ///
+    /// Filled by inserts at times below the boundary (mostly persist feedback) and by the
+    /// remainders of `emitted` when a read uses a smaller `upper` than the previous one. Merged
+    /// into `emitted` by the next read.
+    pending_low: Vec<Chain<D>>,
+    /// Updates that were emitted by `updates_before` but not yet cancelled by persist feedback.
+    ///
+    /// Sorted and consolidated, with all times advanced to the `since`.
+    emitted: Chain<D>,
     /// A staging area for updates, to speed up small inserts.
     stage: Stage<D>,
+    /// The lower bound of times stored in `chain`. Only ever advances.
+    ///
+    /// Times below the boundary have been peeled off the bucket chain and can only be stored in
+    /// `pending_low` or `emitted`.
+    boundary: Antichain<Timestamp>,
     /// The frontier by which all contained times are advanced.
     since: Antichain<Timestamp>,
-    /// The size factor of subsequent chains required by the chain invariant.
-    chain_proportionality: f64,
-    /// The capacity of each [`Chunk`].
-    chunk_capacity: usize,
 
     /// Total count of updates in the correction buffer.
     ///
@@ -183,6 +231,19 @@ pub(super) struct CorrectionV2<D: Data> {
     logging: Option<ChannelLogging>,
 }
 
+/// Fuel for restoring the bucket chain invariant after peeling.
+///
+/// Bounds the restoration work per buffer operation. The bucket chain remains functional when
+/// restoration is incomplete -- peeling and finding work on ill-formed chains, at the cost of
+/// more in-line splitting -- so leftover restoration is simply picked up by the next operation.
+///
+/// `restore` spends one unit of fuel per bucket split, and a single `peel` leaves at most
+/// `BucketTimestamp::DOMAIN` (64) buckets to re-split, so this budget completes restoration in one
+/// call for any realistic buffer. It is deliberately generous: the "incomplete restoration is
+/// picked up next op" path is a correctness safety net for pathological bucket counts, not a hot
+/// path we expect to exercise. Lower it if restoration ever needs to interleave with other work.
+const RESTORE_FUEL: i64 = 1_000_000;
+
 impl<D: Data> CorrectionV2<D> {
     /// Construct a new [`CorrectionV2`] instance.
     pub fn new(
@@ -196,11 +257,12 @@ impl<D: Data> CorrectionV2<D> {
         let chunk_capacity = std::cmp::max(chunk_size / update_size, 1);
 
         Self {
-            chains: Default::default(),
+            chain: BucketChain::new(ChainBucket::new(chain_proportionality, logging.clone())),
+            pending_low: Vec::new(),
+            emitted: Chain::new(),
             stage: Stage::new(logging.clone(), chunk_capacity),
+            boundary: Antichain::from_elem(Timestamp::MIN),
             since: Antichain::from_elem(Timestamp::MIN),
-            chain_proportionality,
-            chunk_capacity,
             prev_update_count: 0,
             prev_size: Default::default(),
             metrics,
@@ -240,40 +302,53 @@ impl<D: Data> CorrectionV2<D> {
         self.insert_inner(updates);
     }
 
-    /// Insert a batch of updates.
+    /// Insert a batch of updates into the stage, flushing it when full.
     ///
     /// All times are expected to be >= the `since`.
     fn insert_inner(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         debug_assert!(updates.iter().all(|(_, t, _)| self.since.less_equal(t)));
 
-        if let Some(chain) = self.stage.insert(updates) {
-            self.log_chain_created(&chain);
-            self.chains.push(chain);
-
-            // Restore the chain invariant.
-            let prop = self.chain_proportionality;
-            let merge_needed = |chains: &[Chain<_>]| match chains {
-                [.., prev, last] => {
-                    let last_len = f64::cast_lossy(last.len());
-                    let prev_len = f64::cast_lossy(prev.len());
-                    last_len * prop > prev_len
-                }
-                _ => false,
-            };
-
-            while merge_needed(&self.chains) {
-                let a = self.chains.pop().unwrap();
-                let b = self.chains.pop().unwrap();
-                self.log_chain_dropped(&a);
-                self.log_chain_dropped(&b);
-
-                let merged = self.merge_chains([a, b]);
-                self.log_chain_created(&merged);
-                self.chains.push(merged);
-            }
-        };
+        if let Some(mut ready) = self.stage.insert(updates) {
+            self.route(&mut ready);
+        }
 
         self.update_metrics();
+    }
+
+    /// Route a batch of sorted, consolidated updates to `pending_low` or their chain buckets.
+    fn route(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
+        // Updates at times below the boundary become a pending low chain.
+        let idx = updates.partition_point(|(_, t, _)| !self.boundary.less_equal(t));
+        if idx > 0 {
+            let mut builder = ChainBuilder::default();
+            builder.extend(updates.drain(..idx));
+            let chain = builder.finish();
+            if !chain.is_empty() {
+                self.log_chain_created(&chain);
+                self.pending_low.push(chain);
+            }
+        }
+
+        // Updates at times at or beyond the boundary go into their chain buckets. Walk ranges of
+        // times that fall into the same bucket, to push batches of updates at once.
+        let mut drain = updates.drain(..).peekable();
+        while let Some(update) = drain.next() {
+            let time = update.1;
+            let range = self
+                .chain
+                .range_of(&time)
+                .expect("bucket chain covers all times at or beyond the boundary");
+            let mut builder = ChainBuilder::default();
+            builder.extend(std::iter::once(update));
+            while let Some(update) = drain.next_if(|(_, t, _)| range.contains(t)) {
+                builder.extend(std::iter::once(update));
+            }
+            let bucket = self
+                .chain
+                .find_mut(&range.start)
+                .expect("bucket chain covers all times at or beyond the boundary");
+            bucket.push_chain(builder.finish());
+        }
     }
 
     /// Return consolidated updates before the given `upper`.
@@ -281,95 +356,184 @@ impl<D: Data> CorrectionV2<D> {
         &'a mut self,
         upper: &Antichain<Timestamp>,
     ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + 'a {
-        let mut result = None;
-
+        // All contained times are advanced to at least the `since`, so a read at an `upper` that
+        // is not beyond the `since` is always empty. Short-circuit to avoid the eager peel, merge,
+        // and `boundary` advancement that `consolidate_before` would otherwise perform. Normal
+        // reads and `consolidate_at_since` always pass an `upper` beyond the `since`.
         if !PartialOrder::less_than(&self.since, upper) {
-            // All contained updates are beyond the upper.
-            return result.into_iter().flatten();
+            return None.into_iter().flatten();
         }
 
         self.consolidate_before(upper);
 
-        // There is at most one chain that contains updates before `upper` now.
-        result = self
-            .chains
-            .iter()
-            .find(|c| c.first().is_some_and(|(_, t, _)| !upper.less_equal(&t)))
-            .map(move |c| {
-                let upper = upper.clone();
-                c.iter().take_while(move |(_, t, _)| !upper.less_equal(t))
-            });
-
-        result.into_iter().flatten()
+        // After `consolidate_before`, `emitted` holds exactly the updates before `upper`: every
+        // path that populates it splits at `upper` (pushing the remainder to `pending_low`), and
+        // the guard above guarantees `upper > since`, so advancing stale times to the `since`
+        // cannot lift them to or beyond `upper`. We can therefore yield all of `emitted`. Guard
+        // the invariant: a violation would write updates beyond the batch upper to persist.
+        soft_assert_or_log!(
+            self.emitted
+                .last()
+                .is_none_or(|(_, t, _)| !upper.less_equal(&t)),
+            "emitted contains times at or beyond the upper",
+        );
+        Some(self.emitted.iter()).into_iter().flatten()
     }
 
-    /// Consolidate all updates before the given `upper`.
+    /// Consolidate all updates before the given `upper` into the `emitted` chain.
     ///
-    /// Once this method returns, all remaining updates before `upper` are contained in a single
-    /// chain. Note that this chain might also contain updates beyond `upper` though!
+    /// Once this method returns, `emitted` contains all updates at times before `upper`,
+    /// consolidated. It can also contain updates at times at or beyond `upper` if `upper` is not
+    /// beyond the `since`.
     fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
-        if self.chains.is_empty() && self.stage.is_empty() {
-            return;
+        if let Some(mut ready) = self.stage.flush() {
+            self.route(&mut ready);
         }
 
-        let mut chains = std::mem::take(&mut self.chains);
+        let Some(&since_ts) = self.since.as_option() else {
+            // If the since is the empty frontier, discard all updates.
+            let peeled = self.chain.peel(Antichain::new().borrow());
+            for bucket in peeled {
+                for chain in bucket.into_chains() {
+                    self.log_chain_dropped(&chain);
+                }
+            }
+            for chain in std::mem::take(&mut self.pending_low) {
+                self.log_chain_dropped(&chain);
+            }
+            let emitted = std::mem::replace(&mut self.emitted, Chain::new());
+            if !emitted.is_empty() {
+                self.log_chain_dropped(&emitted);
+            }
+            self.update_metrics();
+            return;
+        };
 
-        // To keep things simple, we log the dropping of all chains here and log the creation of
-        // all remaining chains at the end. This causes more event churn than necessary, but the
-        // consolidated result is correct.
-        chains.iter().for_each(|c| self.log_chain_dropped(c));
+        // Peel the buckets below the upper off the bucket chain. Bucket splits during the peel
+        // only touch chunks around the upper; chunks wholly on either side are reused.
+        let peeled = self.chain.peel(upper.borrow());
+        if PartialOrder::less_than(&self.boundary, upper) {
+            self.boundary = upper.clone();
+        }
 
-        chains.extend(self.stage.flush());
+        // Collect candidate chains: peeled bucket contents, pending low chains, and the previous
+        // emitted chain. All contain only times below the boundary.
+        let emitted = std::mem::replace(&mut self.emitted, Chain::new());
+        let mut candidates: Vec<Chain<D>> = Vec::new();
+        for bucket in peeled {
+            candidates.extend(bucket.into_chains());
+        }
+        candidates.append(&mut self.pending_low);
+        if !emitted.is_empty() {
+            candidates.push(emitted);
+        }
 
-        if chains.is_empty() {
-            // We can only get here if the stage contained updates but they all got consolidated
-            // away by `flush`, so we need to update the metrics before we return.
+        if candidates.is_empty() {
+            self.restore_chain();
             self.update_metrics();
             return;
         }
 
-        let (merged, remains) = self.merge_chains_up_to(chains, upper);
+        candidates.iter().for_each(|c| self.log_chain_dropped(c));
 
-        self.chains = remains;
-        if !merged.is_empty() {
-            // We put the merged chain at the end, assuming that its contents are likely to
-            // consolidate with retractions that will arrive soon.
-            self.chains.push(merged);
-        }
-
-        // Restore the chain invariant.
-        //
-        // This part isn't great. We've taken great care so far to only look at updates with times
-        // before `upper`, but now we might end up merging all chains anyway in the worst case.
-        // There might be something smarter we could do to avoid merging as much as possible. For
-        // example, we could consider sorting chains by length first, or inspect the contained
-        // times and prefer merging chains that have a chance at consolidating with one another.
-        let mut i = self.chains.len().saturating_sub(1);
-        while i > 0 {
-            let needs_merge = self.chains.get(i).is_some_and(|a| {
-                let b = &self.chains[i - 1];
-                let a_len = f64::cast_lossy(a.len());
-                let b_len = f64::cast_lossy(b.len());
-                a_len * self.chain_proportionality > b_len
-            });
-            if needs_merge {
-                let a = self.chains.remove(i);
-                let b = std::mem::replace(&mut self.chains[i - 1], Chain::new(0));
-                let merged = self.merge_chains([a, b]);
-                self.chains[i - 1] = merged;
-            } else {
-                // Only advance the index if we didn't merge. A merge can reduce the size of the
-                // chain at `i - 1`, causing an violation of the chain invariant with the next
-                // chain, so we might need to merge the two before proceeding to lower indexes.
-                i -= 1;
+        // Split the candidates at the upper. Parts at or beyond the upper (possible when `upper`
+        // regresses below a previous one) stay pending.
+        let mut lowers = Vec::new();
+        for chain in candidates {
+            match upper.as_option() {
+                Some(&upper_ts) => {
+                    let (lower, remainder) = chain.split_at_time(upper_ts);
+                    if !lower.is_empty() {
+                        lowers.push(lower);
+                    }
+                    if !remainder.is_empty() {
+                        self.log_chain_created(&remainder);
+                        self.pending_low.push(remainder);
+                    }
+                }
+                // The empty upper is greater than all times.
+                None => lowers.push(chain),
             }
         }
 
-        self.chains.iter().for_each(|c| self.log_chain_created(c));
+        // Merge the lower parts into the new emitted chain, advancing times below the since.
+        // Advancing times in a (time, data)-sorted chain can break its sort order, so chains
+        // containing stale times cannot be merged as they are. Stale times are expected in steady
+        // state: the previous emitted chain was written before the since advanced past it.
+        //
+        // Count the distinct stale times, up to a small cap. For few distinct stale times -- the
+        // steady state -- split cursors into runs that remain sorted under advancement and merge
+        // those. For many distinct stale times -- e.g. a since jump across many buffered
+        // timestamps when a sink restarts with an old as-of -- the number of runs and the cost of
+        // cloning cursor state per run grow with the number of distinct times, so materialize,
+        // advance, and consolidate in one O(U log U) pass instead.
+        const MAX_STALE_RUNS: usize = 32;
+        let mut stale_times = 0;
+        for chain in &lowers {
+            stale_times += chain.distinct_times_before(since_ts, MAX_STALE_RUNS - stale_times);
+            if stale_times >= MAX_STALE_RUNS {
+                break;
+            }
+        }
+
+        let merged = if stale_times == 0 {
+            let cursors: Vec<_> = lowers.into_iter().filter_map(Chain::into_cursor).collect();
+            merge_cursors(cursors)
+        } else if stale_times < MAX_STALE_RUNS {
+            let mut runs = Vec::new();
+            for chain in lowers {
+                if let Some(cursor) = chain.into_cursor() {
+                    runs.append(&mut cursor.advance_by(since_ts));
+                }
+            }
+            merge_cursors(runs)
+        } else {
+            let mut updates: Vec<_> = lowers.iter().flat_map(|c| c.iter()).collect();
+            for (_, time, _) in &mut updates {
+                *time = std::cmp::max(*time, since_ts);
+            }
+            consolidate(&mut updates);
+            let mut builder = ChainBuilder::default();
+            builder.extend(updates);
+            let chain = builder.finish();
+
+            // Advancement can move updates to or beyond the upper; such updates stay pending.
+            match upper.as_option() {
+                Some(&upper_ts) => {
+                    let (lower, remainder) = chain.split_at_time(upper_ts);
+                    if !remainder.is_empty() {
+                        self.log_chain_created(&remainder);
+                        self.pending_low.push(remainder);
+                    }
+                    lower
+                }
+                None => chain,
+            }
+        };
+
+        if !merged.is_empty() {
+            self.log_chain_created(&merged);
+        }
+        self.emitted = merged;
+
+        self.restore_chain();
         self.update_metrics();
     }
 
+    /// Perform a bounded amount of work towards restoring the bucket chain invariant.
+    ///
+    /// Restoration is allowed to remain incomplete: the bucket chain supports peeling and finding
+    /// on ill-formed chains, so any leftover work is picked up by subsequent operations. The fuel
+    /// bound keeps individual buffer operations from stalling the operator that owns the buffer.
+    fn restore_chain(&mut self) {
+        let mut fuel = RESTORE_FUEL;
+        self.chain.restore(&mut fuel);
+    }
+
     /// Advance the since frontier.
+    ///
+    /// Time advancement of updates in the bucket chain is lazy: it happens when the updates are
+    /// consolidated by a read.
     ///
     /// # Panics
     ///
@@ -405,9 +569,17 @@ impl<D: Data> CorrectionV2<D> {
     fn update_metrics(&mut self) {
         let mut new_size = self.stage.get_size();
         let mut new_length = self.stage.data.len();
-        for chain in &mut self.chains {
+        for chain in &self.pending_low {
             new_size += chain.get_size();
             new_length += chain.update_count;
+        }
+        new_size += self.emitted.get_size();
+        new_length += self.emitted.update_count;
+        for bucket in self.chain.buckets() {
+            for chain in &bucket.chains {
+                new_size += chain.get_size();
+                new_length += chain.update_count;
+            }
         }
 
         self.update_metrics_inner(new_size, new_length);
@@ -434,161 +606,217 @@ impl<D: Data> CorrectionV2<D> {
         self.prev_size = new_size;
         self.prev_update_count = new_length;
     }
+}
 
-    /// Merge the given chains, advancing times by the current `since` in the process.
-    fn merge_chains(&self, chains: impl IntoIterator<Item = Chain<D>>) -> Chain<D> {
-        let Some(&since_ts) = self.since.as_option() else {
-            return Chain::new(self.chunk_capacity);
-        };
-
-        let mut to_merge = Vec::new();
-        for chain in chains {
-            if let Some(cursor) = chain.into_cursor() {
-                let mut runs = cursor.advance_by(since_ts);
-                to_merge.append(&mut runs);
-            }
+/// Merge the given cursors into one chain.
+fn merge_cursors<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
+    match cursors.len() {
+        0 => Chain::new(),
+        1 => {
+            let [cur] = cursors.try_into().unwrap();
+            cur.into_chain()
         }
-
-        self.merge_cursors(to_merge)
+        2 => {
+            let [a, b] = cursors.try_into().unwrap();
+            merge_2(a, b)
+        }
+        _ => merge_many(cursors),
     }
+}
 
-    /// Merge the given chains, advancing times by the current `since` in the process, but only up
-    /// to the given `upper`.
-    ///
-    /// Returns the merged chain and a list of non-empty remainders of the input chains.
-    fn merge_chains_up_to(
-        &self,
-        chains: Vec<Chain<D>>,
-        upper: &Antichain<Timestamp>,
-    ) -> (Chain<D>, Vec<Chain<D>>) {
-        let Some(&since_ts) = self.since.as_option() else {
-            return (Chain::new(self.chunk_capacity), Vec::new());
-        };
-        let Some(&upper_ts) = upper.as_option() else {
-            let merged = self.merge_chains(chains);
-            return (merged, Vec::new());
-        };
+/// Merge the given two cursors using a 2-way merge.
+///
+/// This function is a specialization of `merge_many` that avoids the overhead of a binary heap.
+fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
+    let mut rest1 = Some(cursor1);
+    let mut rest2 = Some(cursor2);
+    let mut merged = ChainBuilder::default();
 
-        if since_ts >= upper_ts {
-            // After advancing by `since` there will be no updates before `upper`.
-            return (Chain::new(self.chunk_capacity), chains);
-        }
+    loop {
+        match (rest1, rest2) {
+            (Some(c1), Some(c2)) => {
+                let (d1, t1, r1) = c1.get();
+                let (d2, t2, r2) = c2.get();
 
-        let mut to_merge = Vec::new();
-        let mut to_keep = Vec::new();
-        for chain in chains {
-            if let Some(cursor) = chain.into_cursor() {
-                let mut runs = cursor.advance_by(since_ts);
-                if let Some(last) = runs.pop() {
-                    let (before, beyond) = last.split_at_time(upper_ts);
-                    before.map(|c| runs.push(c));
-                    beyond.map(|c| to_keep.push(c));
-                }
-                to_merge.append(&mut runs);
-            }
-        }
-
-        let merged = self.merge_cursors(to_merge);
-        let remains = to_keep
-            .into_iter()
-            .map(|c| c.try_unwrap(self.chunk_capacity).expect("unwrapable"))
-            .collect();
-
-        (merged, remains)
-    }
-
-    /// Merge the given cursors into one chain.
-    fn merge_cursors(&self, cursors: Vec<Cursor<D>>) -> Chain<D> {
-        match cursors.len() {
-            0 => Chain::new(self.chunk_capacity),
-            1 => {
-                let [cur] = cursors.try_into().unwrap();
-                cur.into_chain(self.chunk_capacity)
-            }
-            2 => {
-                let [a, b] = cursors.try_into().unwrap();
-                self.merge_2(a, b)
-            }
-            _ => self.merge_many(cursors),
-        }
-    }
-
-    /// Merge the given two cursors using a 2-way merge.
-    ///
-    /// This function is a specialization of `merge_many` that avoids the overhead of a binary heap.
-    fn merge_2(&self, cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
-        let mut rest1 = Some(cursor1);
-        let mut rest2 = Some(cursor2);
-        let mut merged = Chain::new(self.chunk_capacity);
-
-        loop {
-            match (rest1, rest2) {
-                (Some(c1), Some(c2)) => {
-                    let (d1, t1, r1) = c1.get();
-                    let (d2, t2, r2) = c2.get();
-
-                    match (t1, d1).cmp(&(t2, d2)) {
-                        Ordering::Less => {
-                            merged.push((d1, t1, r1));
-                            rest1 = c1.step();
-                            rest2 = Some(c2);
+                match (t1, d1).cmp(&(t2, d2)) {
+                    Ordering::Less => {
+                        merged.push_ref((d1, t1, r1));
+                        rest1 = c1.step();
+                        rest2 = Some(c2);
+                    }
+                    Ordering::Greater => {
+                        merged.push_ref((d2, t2, r2));
+                        rest1 = Some(c1);
+                        rest2 = c2.step();
+                    }
+                    Ordering::Equal => {
+                        let r = r1 + r2;
+                        if r != Diff::ZERO {
+                            merged.push_ref((d1, t1, r));
                         }
-                        Ordering::Greater => {
-                            merged.push((d2, t2, r2));
-                            rest1 = Some(c1);
-                            rest2 = c2.step();
-                        }
-                        Ordering::Equal => {
-                            let r = r1 + r2;
-                            if r != Diff::ZERO {
-                                merged.push((d1, t1, r));
-                            }
-                            rest1 = c1.step();
-                            rest2 = c2.step();
-                        }
+                        rest1 = c1.step();
+                        rest2 = c2.step();
                     }
                 }
-                (Some(c), None) | (None, Some(c)) => {
-                    merged.push_cursor(c);
-                    break;
-                }
-                (None, None) => break,
+            }
+            (Some(c), None) | (None, Some(c)) => {
+                merged.push_cursor(c);
+                break;
+            }
+            (None, None) => break,
+        }
+    }
+
+    merged.finish()
+}
+
+/// Merge the given cursors using a k-way merge with a binary heap.
+fn merge_many<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
+    let mut heap = MergeHeap::from_iter(cursors);
+    let mut merged = ChainBuilder::default();
+    while let Some(cursor1) = heap.pop() {
+        let (data, time, mut diff) = cursor1.get();
+
+        while let Some((cursor2, r)) = heap.pop_equal(data, time) {
+            diff += r;
+            if let Some(cursor2) = cursor2.step() {
+                heap.push(cursor2);
             }
         }
 
-        merged
-    }
-
-    /// Merge the given cursors using a k-way merge with a binary heap.
-    fn merge_many(&self, cursors: Vec<Cursor<D>>) -> Chain<D> {
-        let mut heap = MergeHeap::from_iter(cursors);
-        let mut merged = Chain::new(self.chunk_capacity);
-        while let Some(cursor1) = heap.pop() {
-            let (data, time, mut diff) = cursor1.get();
-
-            while let Some((cursor2, r)) = heap.pop_equal(data, time) {
-                diff += r;
-                if let Some(cursor2) = cursor2.step() {
-                    heap.push(cursor2);
-                }
-            }
-
-            if diff != Diff::ZERO {
-                merged.push((data, time, diff));
-            }
-            if let Some(cursor1) = cursor1.step() {
-                heap.push(cursor1);
-            }
+        if diff != Diff::ZERO {
+            merged.push_ref((data, time, diff));
         }
-
-        merged
+        if let Some(cursor1) = cursor1.step() {
+            heap.push(cursor1);
+        }
     }
+
+    merged.finish()
 }
 
 impl<D: Data> Drop for CorrectionV2<D> {
     fn drop(&mut self) {
-        self.chains.iter().for_each(|c| self.log_chain_dropped(c));
+        for bucket in self.chain.buckets() {
+            bucket.chains.iter().for_each(|c| self.log_chain_dropped(c));
+        }
+        self.pending_low
+            .iter()
+            .for_each(|c| self.log_chain_dropped(c));
+        if !self.emitted.is_empty() {
+            self.log_chain_dropped(&self.emitted);
+        }
         self.update_metrics_inner(Default::default(), 0);
+    }
+}
+
+/// A bucket of `Chain`s, for use in a [`BucketChain`].
+///
+/// All chains are individually sorted by (time, data) and consolidated, but updates can appear in
+/// multiple chains, so consumers must merge the chains to obtain consolidated updates.
+struct ChainBucket<D: Data> {
+    /// The contained chains.
+    ///
+    /// Maintained with the chain invariant on pushes; splits can leave it violated until the next
+    /// push restores it.
+    chains: Vec<Chain<D>>,
+    /// The size factor of subsequent chains required by the chain invariant.
+    chain_proportionality: f64,
+    /// Introspection logging.
+    logging: Option<ChannelLogging>,
+}
+
+impl<D: Data> fmt::Debug for ChainBucket<D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChainBucket")
+            .field("chains", &self.chains)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<D: Data> ChainBucket<D> {
+    /// Construct a new, empty `ChainBucket`.
+    fn new(chain_proportionality: f64, logging: Option<ChannelLogging>) -> Self {
+        Self {
+            chains: Vec::new(),
+            chain_proportionality,
+            logging,
+        }
+    }
+
+    /// Push a chain onto the bucket, restoring the chain invariant.
+    fn push_chain(&mut self, chain: Chain<D>) {
+        if chain.is_empty() {
+            return;
+        }
+        if let Some(logging) = &self.logging {
+            logging.chain_created(chain.update_count);
+        }
+        self.chains.push(chain);
+
+        // Restore the chain invariant.
+        let prop = self.chain_proportionality;
+        let merge_needed = |chains: &[Chain<_>]| match chains {
+            [.., prev, last] => {
+                let last_len = f64::cast_lossy(last.update_count);
+                let prev_len = f64::cast_lossy(prev.update_count);
+                last_len * prop > prev_len
+            }
+            _ => false,
+        };
+
+        while merge_needed(&self.chains) {
+            let a = self.chains.pop().unwrap();
+            let b = self.chains.pop().unwrap();
+            if let Some(logging) = &self.logging {
+                logging.chain_dropped(a.update_count);
+                logging.chain_dropped(b.update_count);
+            }
+
+            let cursors = [a, b].into_iter().filter_map(Chain::into_cursor).collect();
+            let merged = merge_cursors(cursors);
+            if !merged.is_empty() {
+                if let Some(logging) = &self.logging {
+                    logging.chain_created(merged.update_count);
+                }
+                self.chains.push(merged);
+            }
+        }
+    }
+
+    /// Convert the bucket into its contained chains.
+    fn into_chains(self) -> Vec<Chain<D>> {
+        self.chains
+    }
+}
+
+impl<D: Data> Bucket for ChainBucket<D> {
+    type Timestamp = Timestamp;
+
+    fn split(self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self) {
+        let mut lower = Self::new(self.chain_proportionality, self.logging.clone());
+        let mut upper = Self::new(self.chain_proportionality, self.logging.clone());
+
+        for chain in self.chains {
+            // Whole chunks are reused; at most one chunk straddling the timestamp is copied per
+            // chain. Account fuel at chunk granularity.
+            *fuel = fuel.saturating_sub(i64::try_from(chain.chunks.len()).expect("must fit"));
+
+            if let Some(logging) = &self.logging {
+                logging.chain_dropped(chain.update_count);
+            }
+            let (lo, hi) = chain.split_at_time(*timestamp);
+            for (part, target) in [(lo, &mut lower), (hi, &mut upper)] {
+                if !part.is_empty() {
+                    if let Some(logging) = &self.logging {
+                        logging.chain_created(part.update_count);
+                    }
+                    target.chains.push(part);
+                }
+            }
+        }
+
+        (lower, upper)
     }
 }
 
@@ -602,55 +830,22 @@ impl<D: Data> Drop for CorrectionV2<D> {
 struct Chain<D: Data> {
     /// The contained chunks.
     chunks: Vec<Chunk<D>>,
-    /// The number of updates contained in all chunks, for efficient updating of metrics.
+    /// The number of updates contained in all chunks.
     update_count: usize,
-    /// Cached value of the current chain size, for efficient updating of metrics.
-    cached_size: Option<SizeMetrics>,
-    /// The capacity of each contained [`Chunk`].
-    chunk_capacity: usize,
 }
 
 impl<D: Data> Chain<D> {
-    /// Construct an empty chain whose chunks have the given capacity.
-    fn new(chunk_capacity: usize) -> Self {
+    /// Construct an empty chain.
+    fn new() -> Self {
         Self {
             chunks: Default::default(),
             update_count: 0,
-            cached_size: None,
-            chunk_capacity,
         }
     }
 
     /// Return whether the chain is empty.
     fn is_empty(&self) -> bool {
         self.chunks.is_empty()
-    }
-
-    /// Return the length of the chain, in chunks.
-    fn len(&self) -> usize {
-        self.chunks.len()
-    }
-
-    /// Push an update onto the chain.
-    ///
-    /// The update must sort after all updates already in the chain, in (time, data)-order, to
-    /// ensure the chain remains sorted.
-    fn push<DT: Borrow<D>>(&mut self, update: (DT, Timestamp, Diff)) {
-        let (d, t, r) = update;
-        let update = (d.borrow(), t, r);
-
-        debug_assert!(self.can_accept(update));
-
-        match self.chunks.last_mut() {
-            Some(c) if c.len() < self.chunk_capacity => c.push(update),
-            Some(_) | None => {
-                let chunk = Chunk::from_update(update, self.chunk_capacity);
-                self.push_chunk(chunk);
-            }
-        }
-
-        self.update_count += 1;
-        self.invalidate_cached_size();
     }
 
     /// Push a chunk onto the chain.
@@ -662,39 +857,20 @@ impl<D: Data> Chain<D> {
 
         self.update_count += chunk.len();
         self.chunks.push(chunk);
-        self.invalidate_cached_size();
-    }
-
-    /// Push the updates produced by a cursor onto the chain.
-    ///
-    /// All updates produced by the cursor must sort after all updates already in the chain, in
-    /// (time, data)-order, to ensure the chain remains sorted.
-    fn push_cursor(&mut self, cursor: Cursor<D>) {
-        let mut rest = Some(cursor);
-        while let Some(cursor) = rest.take() {
-            let update = cursor.get();
-            self.push(update);
-            rest = cursor.step();
-        }
     }
 
     /// Return whether the chain can accept the given update.
     ///
     /// A chain can accept an update if pushing it at the end upholds the (time, data)-order.
-    fn can_accept(&self, update: (&D, Timestamp, Diff)) -> bool {
+    fn can_accept<'a>(&'a self, update: Ref<'a, (D, Timestamp, Diff)>) -> bool {
         self.last().is_none_or(|(dc, tc, _)| {
             let (d, t, _) = update;
             (tc, dc) < (t, d)
         })
     }
 
-    /// Return the first update in the chain, if any.
-    fn first(&self) -> Option<(&D, Timestamp, Diff)> {
-        self.chunks.first().map(|c| c.first())
-    }
-
     /// Return the last update in the chain, if any.
-    fn last(&self) -> Option<(&D, Timestamp, Diff)> {
+    fn last(&self) -> Option<Ref<'_, (D, Timestamp, Diff)>> {
         self.chunks.last().map(|c| c.last())
     }
 
@@ -706,39 +882,169 @@ impl<D: Data> Chain<D> {
 
     /// Return an iterator over the contained updates.
     fn iter(&self) -> impl Iterator<Item = (D, Timestamp, Diff)> + '_ {
-        self.chunks
-            .iter()
-            .flat_map(|c| c.data.iter().map(|(d, t, r)| (d.clone(), *t, *r)))
+        self.chunks.iter().flat_map(|c| {
+            (0..c.len()).map(move |i| {
+                let (d, t, r) = c.index(i);
+                (D::into_owned(d), t, r)
+            })
+        })
+    }
+
+    /// Count the distinct times of updates at times before `time`, up to the given cap.
+    ///
+    /// The scan uses one binary search per distinct time, so its cost is bounded by
+    /// O(cap log chunks).
+    fn distinct_times_before(&self, time: Timestamp, cap: usize) -> usize {
+        let mut count = 0;
+        let mut chunk_idx = 0;
+        let mut offset = 0;
+        while count < cap && chunk_idx < self.chunks.len() {
+            let chunk = &self.chunks[chunk_idx];
+            let current = chunk.index(offset).1;
+            if current >= time {
+                break;
+            }
+            count += 1;
+            // Skip to the first update at a time greater than `current`.
+            match chunk.find_time_greater_than(current) {
+                Some(idx) => offset = idx,
+                None => {
+                    // All later updates at `current` are in subsequent chunks.
+                    chunk_idx += 1;
+                    offset = 0;
+                    while chunk_idx < self.chunks.len() {
+                        match self.chunks[chunk_idx].find_time_greater_than(current) {
+                            Some(idx) => {
+                                offset = idx;
+                                break;
+                            }
+                            None => chunk_idx += 1,
+                        }
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    /// Split the chain at the given time.
+    ///
+    /// Returns two chains, the first containing all updates at times < `time`, the second
+    /// containing all updates at times >= `time`. Chunks fully on either side of `time` are
+    /// reused; only a chunk straddling `time` is copied.
+    fn split_at_time(mut self, time: Timestamp) -> (Self, Self) {
+        let mut lower = Self::new();
+        let mut upper = Self::new();
+
+        let Some(skip_ts) = time.step_back() else {
+            // Nothing sorts before `time`.
+            return (lower, self);
+        };
+
+        for chunk in self.chunks.drain(..) {
+            if chunk.last().1 < time {
+                lower.push_chunk(chunk);
+            } else if chunk.first().1 >= time {
+                upper.push_chunk(chunk);
+            } else {
+                // The chunk straddles `time`; copy its two halves.
+                let idx = chunk
+                    .find_time_greater_than(skip_ts)
+                    .expect("straddles time");
+                let mut builder = ChainBuilder::default();
+                for i in 0..idx {
+                    builder.push_ref(chunk.index(i));
+                }
+                for part in builder.finish().chunks {
+                    lower.push_chunk(part);
+                }
+                let mut builder = ChainBuilder::default();
+                for i in idx..chunk.len() {
+                    builder.push_ref(chunk.index(i));
+                }
+                for part in builder.finish().chunks {
+                    upper.push_chunk(part);
+                }
+            }
+        }
+
+        (lower, upper)
     }
 
     /// Return the size of the chain, for use in metrics.
-    fn get_size(&mut self) -> SizeMetrics {
-        // This operation can be expensive as it requires inspecting the individual chunks and
-        // their backing regions. We thus cache the result to hopefully avoid the cost most of the
-        // time.
-        if self.cached_size.is_none() {
-            let mut metrics = SizeMetrics::default();
-            for chunk in &mut self.chunks {
-                metrics += chunk.get_size();
-            }
-            self.cached_size = Some(metrics);
+    fn get_size(&self) -> SizeMetrics {
+        let mut metrics = SizeMetrics::default();
+        for chunk in &self.chunks {
+            metrics += chunk.get_size();
         }
-
-        self.cached_size.unwrap()
-    }
-
-    /// Invalidate the cached chain size.
-    ///
-    /// This method must be called every time the size of the chain changed.
-    fn invalidate_cached_size(&mut self) {
-        self.cached_size = None;
+        metrics
     }
 }
 
-impl<D: Data> Extend<(D, Timestamp, Diff)> for Chain<D> {
+/// A builder that constructs a [`Chain`] from a stream of updates.
+///
+/// Wraps a [`ChunkBuilder`] and drains its minted chunks into a [`Chain`]. Pushed updates must
+/// arrive in (time, data) sorted order.
+struct ChainBuilder<D: Data> {
+    builder: ChunkBuilder<D>,
+    chain: Chain<D>,
+}
+
+impl<D: Data> Default for ChainBuilder<D> {
+    fn default() -> Self {
+        Self {
+            builder: Default::default(),
+            chain: Chain::new(),
+        }
+    }
+}
+
+impl<D: Data> ChainBuilder<D> {
+    /// Push a reference-form update into the builder.
+    fn push_ref(&mut self, update: Ref<'_, (D, Timestamp, Diff)>) {
+        self.builder.push(update);
+        self.drain();
+    }
+
+    /// Push an owned-form update into the builder.
+    fn push_owned(&mut self, update: &(D, Timestamp, Diff)) {
+        self.builder.push(update);
+        self.drain();
+    }
+
+    /// Push the updates produced by a cursor into the builder.
+    fn push_cursor(&mut self, cursor: Cursor<D>) {
+        let mut rest = Some(cursor);
+        while let Some(cursor) = rest.take() {
+            let update = cursor.get();
+            self.push_ref(update);
+            rest = cursor.step();
+        }
+    }
+
+    /// Move any minted chunks from the builder into the chain.
+    fn drain(&mut self) {
+        while let Some(chunk) = self.builder.pop() {
+            self.chain.push_chunk(chunk);
+        }
+    }
+
+    /// Finish building, returning the assembled [`Chain`].
+    fn finish(self) -> Chain<D> {
+        let Self { builder, mut chain } = self;
+        for chunk in builder.finish() {
+            if chunk.len() > 0 {
+                chain.push_chunk(chunk);
+            }
+        }
+        chain
+    }
+}
+
+impl<D: Data> Extend<(D, Timestamp, Diff)> for ChainBuilder<D> {
     fn extend<I: IntoIterator<Item = (D, Timestamp, Diff)>>(&mut self, iter: I) {
         for update in iter {
-            self.push(update);
+            self.push_owned(&update);
         }
     }
 }
@@ -817,7 +1123,7 @@ impl<D: Data> Cursor<D> {
     }
 
     /// Get a reference to the current update.
-    fn get(&self) -> (&D, Timestamp, Diff) {
+    fn get(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         let chunk = self.get_chunk();
         let (d, t, r) = chunk.index(self.chunk_offset);
         let t = self.overwrite_ts.unwrap_or(t);
@@ -942,32 +1248,16 @@ impl<D: Data> Cursor<D> {
         splits
     }
 
-    /// Split the cursor at the given time.
-    ///
-    /// Returns two cursors, the first yielding all updates at times < `time`, the second yielding
-    /// all updates at times >= `time`. Both can be `None` if they would be empty.
-    fn split_at_time(self, time: Timestamp) -> (Option<Self>, Option<Self>) {
-        let Some(skip_ts) = time.step_back() else {
-            return (None, Some(self));
-        };
-
-        let before = self.clone();
-        match self.skip_time(skip_ts) {
-            Some((beyond, skipped)) => (before.set_limit(skipped), Some(beyond)),
-            None => (Some(before), None),
-        }
-    }
-
     /// Drain the cursor into a [`Chain`].
     ///
     /// This reuses the underlying chunks if possible, and writes new ones otherwise.
-    fn into_chain(self, chunk_capacity: usize) -> Chain<D> {
-        match self.try_unwrap(chunk_capacity) {
+    fn into_chain(self) -> Chain<D> {
+        match self.try_unwrap() {
             Ok(chain) => chain,
             Err((_, cursor)) => {
-                let mut chain = Chain::new(chunk_capacity);
-                chain.push_cursor(cursor);
-                chain
+                let mut builder = ChainBuilder::default();
+                builder.push_cursor(cursor);
+                builder.finish()
             }
         }
     }
@@ -981,7 +1271,7 @@ impl<D: Data> Cursor<D> {
     /// the cursor has unique references to its chunks. If the unwrap fails, this method returns an
     /// `Err` containing the cursor in an unchanged state, allowing the caller to convert it into a
     /// chain by copying chunks rather than reusing them.
-    fn try_unwrap(self, chunk_capacity: usize) -> Result<Chain<D>, (&'static str, Self)> {
+    fn try_unwrap(self) -> Result<Chain<D>, (&'static str, Self)> {
         if self.limit.is_some() {
             return Err(("cursor with limit", self));
         }
@@ -992,7 +1282,7 @@ impl<D: Data> Cursor<D> {
             return Err(("cursor on shared chunks", self));
         }
 
-        let mut chain = Chain::new(chunk_capacity);
+        let mut builder = ChainBuilder::default();
         let mut remaining = Some(self);
 
         // We might be partway through the first chunk, in which case we can't reuse it but need to
@@ -1003,10 +1293,11 @@ impl<D: Data> Cursor<D> {
                 break;
             }
             let update = cursor.get();
-            chain.push(update);
+            builder.push_ref(update);
             remaining = cursor.step();
         }
 
+        let mut chain = builder.finish();
         if let Some(cursor) = remaining {
             for chunk in cursor.chunks {
                 let chunk = Rc::into_inner(chunk).expect("checked above");
@@ -1018,19 +1309,17 @@ impl<D: Data> Cursor<D> {
     }
 }
 
-/// A non-empty chunk of updates, backed by a columnation region.
+/// A non-empty chunk of updates, backed by a columnar region.
 ///
 /// All updates in a chunk are sorted by (time, data) and consolidated.
 ///
-/// We would like all chunks to have the same fixed size, to make it easy for the allocator to
-/// re-use chunk allocations. Unfortunately, the current `ColumnationStack`/`ChunkedStack` API doesn't
-/// provide a convenient way to pre-size regions, so chunks are currently only fixed-size in
-/// spirit.
+/// Chunks are immutable once created. They are produced by [`ChunkBuilder`], which mints a
+/// new chunk whenever its in-progress columnar container reaches a fixed serialized byte
+/// boundary (~2 MiB, matching the ship granularity used elsewhere in the codebase), so each
+/// chunk corresponds to a single, predictably sized allocation.
 struct Chunk<D: Data> {
     /// The contained updates.
-    data: ColumnationStack<(D, Timestamp, Diff)>,
-    /// Cached value of the current chunk size, for efficient updating of metrics.
-    cached_size: Option<SizeMetrics>,
+    data: Column<(D, Timestamp, Diff)>,
 }
 
 impl<D: Data> fmt::Debug for Chunk<D> {
@@ -1040,22 +1329,14 @@ impl<D: Data> fmt::Debug for Chunk<D> {
 }
 
 impl<D: Data> Chunk<D> {
-    /// Create a new chunk containing a single update.
-    fn from_update<DT: Borrow<D>>(update: (DT, Timestamp, Diff), chunk_capacity: usize) -> Self {
-        let (d, t, r) = update;
-
-        let mut chunk = Self {
-            data: ColumnationStack::with_capacity(chunk_capacity),
-            cached_size: None,
-        };
-        chunk.data.copy_destructured(d.borrow(), &t, &r);
-
-        chunk
+    /// Wrap the given column into a chunk.
+    fn from_column(data: Column<(D, Timestamp, Diff)>) -> Self {
+        Self { data }
     }
 
     /// Return the number of updates in the chunk.
     fn len(&self) -> usize {
-        self.data.len()
+        self.data.borrow().len()
     }
 
     /// Return the update at the given index.
@@ -1063,27 +1344,18 @@ impl<D: Data> Chunk<D> {
     /// # Panics
     ///
     /// Panics if the given index is not populated.
-    fn index(&self, idx: usize) -> (&D, Timestamp, Diff) {
-        let (d, t, r) = self.data.index(idx);
-        (d, *t, *r)
+    fn index(&self, idx: usize) -> Ref<'_, (D, Timestamp, Diff)> {
+        self.data.borrow().get(idx)
     }
 
     /// Return the first update in the chunk.
-    fn first(&self) -> (&D, Timestamp, Diff) {
+    fn first(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         self.index(0)
     }
 
     /// Return the last update in the chunk.
-    fn last(&self) -> (&D, Timestamp, Diff) {
+    fn last(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         self.index(self.len() - 1)
-    }
-
-    /// Push an update onto the chunk.
-    fn push<DT: Borrow<D>>(&mut self, update: (DT, Timestamp, Diff)) {
-        let (d, t, r) = update;
-        self.data.copy_destructured(d.borrow(), &t, &r);
-
-        self.invalidate_cached_size();
     }
 
     /// Return the index of the first update at a time greater than `time`, or `None` if no such
@@ -1108,29 +1380,75 @@ impl<D: Data> Chunk<D> {
     }
 
     /// Return the size of the chunk, for use in metrics.
-    fn get_size(&mut self) -> SizeMetrics {
-        if self.cached_size.is_none() {
-            let mut size = 0;
-            let mut capacity = 0;
-            self.data.heap_size(|sz, cap| {
-                size += sz;
-                capacity += cap;
-            });
-            self.cached_size = Some(SizeMetrics {
-                size,
-                capacity,
-                allocations: 1,
-            });
+    fn get_size(&self) -> SizeMetrics {
+        let bytes = self.data.length_in_bytes();
+        SizeMetrics {
+            size: bytes,
+            capacity: bytes,
+            allocations: 1,
         }
+    }
+}
 
-        self.cached_size.unwrap()
+/// Builder that produces a stream of fixed-size [`Chunk`]s.
+///
+/// Wraps [`mz_timely_util::columnar::builder::ColumnBuilder`], which mints a new
+/// [`Column::Align`] chunk whenever its in-progress columnar container reaches a fixed
+/// serialized byte boundary (~2 MiB, matching the ship granularity used elsewhere in the
+/// codebase). Each minted chunk is therefore a single, predictably-sized aligned allocation.
+struct ChunkBuilder<D: Data> {
+    inner: mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>,
+}
+
+impl<D: Data> Default for ChunkBuilder<D> {
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+        }
+    }
+}
+
+impl<D: Data> ChunkBuilder<D> {
+    /// Push an update into the builder.
+    ///
+    /// Accepts whatever the inner [`ColumnBuilder`]'s [`PushInto`] impl accepts — both the
+    /// `Ref<'_, (D, T, R)>` refs produced by cursors and `&(D, T, R)` references to owned
+    /// tuples drained from the staging buffer.
+    ///
+    /// [`ColumnBuilder`]: mz_timely_util::columnar::builder::ColumnBuilder
+    /// [`PushInto`]: timely::container::PushInto
+    #[inline]
+    fn push<T>(&mut self, item: T)
+    where
+        mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>:
+            timely::container::PushInto<T>,
+    {
+        timely::container::PushInto::push_into(&mut self.inner, item);
     }
 
-    /// Invalidate the cached chunk size.
-    ///
-    /// This method must be called every time the size of the chunk changed.
-    fn invalidate_cached_size(&mut self) {
-        self.cached_size = None;
+    /// Pop a finished chunk, if one is available.
+    fn pop(&mut self) -> Option<Chunk<D>> {
+        use timely::container::ContainerBuilder;
+        // `ColumnBuilder::extract` stashes the popped chunk in its `finished` slot so the
+        // caller can read it through `&mut`; move it out with `mem::take` so we own it
+        // (leaves `Column::Typed(Default::default())` behind, which the next `extract`
+        // overwrites).
+        self.inner
+            .extract()
+            .map(|c| Chunk::from_column(std::mem::take(c)))
+    }
+
+    /// Finalize the builder: flush any in-progress updates as a typed chunk and drain pending.
+    fn finish(mut self) -> impl Iterator<Item = Chunk<D>> {
+        use timely::container::ContainerBuilder;
+        // `ColumnBuilder::finish` flushes the in-progress container into the pending queue
+        // (as `Column::Typed`) and returns the first pending entry. Subsequent calls drain
+        // the rest until `None`. Translate that into an owning iterator.
+        std::iter::from_fn(move || {
+            self.inner
+                .finish()
+                .map(|c| Chunk::from_column(std::mem::take(c)))
+        })
     }
 }
 
@@ -1162,12 +1480,12 @@ impl<D: Data> Stage<D> {
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-
-    /// Insert a batch of updates, possibly producing a ready [`Chain`].
-    fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) -> Option<Chain<D>> {
+    /// Insert a batch of updates, possibly producing a batch of sorted, consolidated updates
+    /// ready to be stored.
+    fn insert(
+        &mut self,
+        updates: &mut Vec<(D, Timestamp, Diff)>,
+    ) -> Option<Vec<(D, Timestamp, Diff)>> {
         if updates.is_empty() {
             return None;
         }
@@ -1181,8 +1499,8 @@ impl<D: Data> Stage<D> {
 
         let mut new_updates = updates.drain(..);
 
-        // If we have enough shipable updates, collect them, consolidate, and build a chain.
-        let maybe_chain = if chunk_count > 0 {
+        // If we have enough shipable updates, collect them and consolidate.
+        let maybe_ready = if chunk_count > 0 {
             let ship_count = chunk_count * chunk_capacity;
             let mut buffer = Vec::with_capacity(ship_count);
 
@@ -1194,23 +1512,21 @@ impl<D: Data> Stage<D> {
 
             consolidate(&mut buffer);
 
-            let mut chain = Chain::new(chunk_capacity);
-            chain.extend(buffer);
-            Some(chain)
+            Some(buffer)
         } else {
             None
         };
 
         // Stage the remaining updates.
-        self.data.extend(new_updates);
+        Extend::extend(&mut self.data, new_updates);
 
         self.log_length_diff(self.ilen() - prev_length);
 
-        maybe_chain
+        maybe_ready
     }
 
-    /// Flush all currently staged updates into a chain.
-    fn flush(&mut self) -> Option<Chain<D>> {
+    /// Flush all currently staged updates, returning them sorted and consolidated.
+    fn flush(&mut self) -> Option<Vec<(D, Timestamp, Diff)>> {
         self.log_length_diff(-self.ilen());
 
         consolidate(&mut self.data);
@@ -1219,10 +1535,9 @@ impl<D: Data> Stage<D> {
             return None;
         }
 
-        let chunk_capacity = self.data.capacity();
-        let mut chain = Chain::new(chunk_capacity);
-        chain.extend(self.data.drain(..));
-        Some(chain)
+        let capacity = self.data.capacity();
+        let data = std::mem::replace(&mut self.data, Vec::with_capacity(capacity));
+        Some(data)
     }
 
     /// Advance the times of staged updates by the given `since`.
@@ -1319,6 +1634,22 @@ fn consolidate<D: Data>(updates: &mut Vec<(D, Timestamp, Diff)>) {
     updates.truncate(offset);
 }
 
+/// Compare two columnar refs that have unrelated input lifetimes.
+///
+/// `<D::Container as Borrow>::Ref<'a>` is an associated-type projection through a trait, so
+/// the compiler treats it as invariant in `'a` and won't auto-shorten the inputs by variance.
+/// We instead explicitly reborrow both to a fresh, local lifetime `'x` via
+/// [`Columnar::reborrow`] before letting the inner `==` pick up the `for<'a> Ref<'a>: Eq`
+/// bound on [`Data`].
+#[inline]
+fn refs_eq<D: Data>(a: Ref<'_, D>, b: Ref<'_, D>) -> bool {
+    #[inline]
+    fn eq<'x, D: Data>(a: Ref<'x, D>, b: Ref<'x, D>) -> bool {
+        a == b
+    }
+    eq::<D>(D::reborrow(a), D::reborrow(b))
+}
+
 /// A binary heap specialized for merging [`Cursor`]s.
 struct MergeHeap<D: Data>(BinaryHeap<MergeCursor<D>>);
 
@@ -1339,15 +1670,17 @@ impl<D: Data> MergeHeap<D> {
     /// equal to the given values.
     ///
     /// Returns both the cursor and the diff corresponding to `data` and `time`.
-    fn pop_equal(&mut self, data: &D, time: Timestamp) -> Option<(Cursor<D>, Diff)> {
-        let MergeCursor(cursor) = self.0.peek()?;
-        let (d, t, r) = cursor.get();
-        if d == data && t == time {
-            let cursor = self.pop().expect("checked above");
-            Some((cursor, r))
-        } else {
-            None
-        }
+    fn pop_equal(&mut self, data: Ref<'_, D>, time: Timestamp) -> Option<(Cursor<D>, Diff)> {
+        let r = {
+            let MergeCursor(cursor) = self.0.peek()?;
+            let (d, t, r) = cursor.get();
+            if t != time || !refs_eq::<D>(d, data) {
+                return None;
+            }
+            r
+        };
+        let cursor = self.pop().expect("checked above");
+        Some((cursor, r))
     }
 
     /// Push a cursor onto the heap.
@@ -1380,5 +1713,221 @@ impl<D: Data> Ord for MergeCursor<D> {
         let (d1, t1, _) = self.0.get();
         let (d2, t2, _) = other.0.get();
         (t1, d1).cmp(&(t2, d2)).reverse()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::metrics::Metrics;
+    use mz_repr::{Diff, Timestamp};
+
+    use super::*;
+    use crate::sink::correction::CorrectionV1;
+
+    #[mz_ore::test]
+    fn chain_builder_update_count_matches_items() {
+        let mut builder = ChainBuilder::<i64>::default();
+        for i in 0..10_u64 {
+            let d = i64::try_from(i).expect("fits");
+            builder.push_owned(&(d, Timestamp::new(i), Diff::ONE));
+        }
+        let chain = builder.finish();
+        assert_eq!(chain.update_count, chain.iter().count());
+    }
+
+    /// Push enough updates to cross at least one `mint()` boundary, forcing the
+    /// `Align` encode -> `from_bytes` decode roundtrip (the spilling path this data
+    /// structure exists to support), and assert `iter()` roundtrips values, order,
+    /// and diffs across the spill boundary.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow: crossing the ~2 MiB mint boundary needs ~200k updates
+    fn chain_builder_roundtrips_across_mint_boundary() {
+        // A single `mint()` fires near the ~2 MiB (`SHIP_WORDS`) serialized boundary. With
+        // three 8-byte columns per update that's tens of thousands of updates; pushing 200k
+        // comfortably forces multiple mints.
+        let count = 200_000_u64;
+
+        let mut builder = ChainBuilder::<i64>::default();
+        for i in 0..count {
+            let d = i64::try_from(i).expect("fits");
+            builder.push_owned(&(d, Timestamp::new(i), Diff::ONE));
+        }
+        let chain = builder.finish();
+
+        // At least one chunk must have been minted into `Column::Align` form, otherwise the
+        // spill path wouldn't be exercised.
+        let align_chunks = chain
+            .chunks
+            .iter()
+            .filter(|c| matches!(c.data, mz_timely_util::columnar::Column::Align(_)))
+            .count();
+        assert!(
+            align_chunks > 0,
+            "expected at least one spilled (Align) chunk, got chunks: {:?}",
+            chain.chunks,
+        );
+
+        // `iter()` must roundtrip every update, in order, with correct diffs.
+        assert_eq!(chain.update_count, usize::try_from(count).expect("fits"));
+        let mut expected = 0_u64;
+        for (d, t, r) in chain.iter() {
+            assert_eq!(d, i64::try_from(expected).expect("fits"));
+            assert_eq!(t, Timestamp::new(expected));
+            assert_eq!(r, Diff::ONE);
+            expected += 1;
+        }
+        assert_eq!(expected, count);
+    }
+
+    fn sink_metrics() -> SinkMetrics {
+        let registry = MetricsRegistry::new();
+        let metrics = Metrics::new(&PersistConfig::new_for_tests(), &registry);
+        metrics.sink.clone()
+    }
+
+    /// Run the same stepwise-drain workload through `CorrectionV1` and `CorrectionV2` and assert
+    /// that they emit the same updates at every step.
+    ///
+    /// Models the `write_batches` operator catching up through many distinct timestamps: the
+    /// desired input runs ahead, batches are written one timestamp at a time, and written updates
+    /// come back negated through the persist feedback.
+    #[mz_ore::test]
+    // Columnation regions are not Stacked Borrows compliant: later pushes invalidate the
+    // provenance of previously stored items under Miri.
+    #[cfg_attr(miri, ignore)]
+    fn equivalence_with_v1() {
+        let sink_metrics = sink_metrics();
+
+        let mut v1 =
+            CorrectionV1::<String>::new(sink_metrics.clone(), sink_metrics.for_worker(0), 1);
+        let mut v2 = CorrectionV2::<String>::new(
+            sink_metrics.clone(),
+            sink_metrics.for_worker(0),
+            None,
+            3.0,
+            8 * 1024,
+        );
+
+        let num_ts = 50;
+        let keys = 4;
+
+        // Upsert-style input: every timestamp updates each key, retracting the previous value.
+        let batch = |t: u64| -> Vec<(String, Timestamp, Diff)> {
+            (0..keys)
+                .flat_map(|k| {
+                    let addition = (format!("{k}-{t}"), Timestamp::from(t), Diff::ONE);
+                    let retraction = t
+                        .checked_sub(1)
+                        .map(|p| (format!("{k}-{p}"), Timestamp::from(t), -Diff::ONE));
+                    std::iter::once(addition).chain(retraction)
+                })
+                .collect()
+        };
+
+        // Pre-fill both with all batches, like a catch-up where the input runs ahead.
+        for t in 0..num_ts {
+            v1.insert(&mut batch(t));
+            v2.insert(&mut batch(t));
+        }
+
+        // Drain stepwise, with persist feedback, comparing emissions.
+        for t in 0..num_ts {
+            let upper = Antichain::from_elem(Timestamp::from(t + 1));
+
+            let mut out1: Vec<_> = v1.updates_before(&upper).collect();
+            let mut out2: Vec<_> = v2.updates_before(&upper).collect();
+            out1.sort();
+            out2.sort();
+            assert_eq!(out1, out2, "diverged at t={t}");
+
+            v1.insert_negated(&mut out1.clone());
+            v2.insert_negated(&mut out2);
+            v1.advance_since(upper.clone());
+            v2.advance_since(upper);
+        }
+
+        // Compare the final state at the since.
+        let upper = Antichain::from_elem(Timestamp::from(num_ts + 1));
+        v1.consolidate_at_since();
+        v2.consolidate_at_since();
+        let mut out1: Vec<_> = v1.updates_before(&upper).collect();
+        let mut out2: Vec<_> = v2.updates_before(&upper).collect();
+        out1.sort();
+        out2.sort();
+        assert_eq!(out1, out2);
+    }
+
+    /// A since jump across many distinct buffered timestamps must collapse them onto the since.
+    #[mz_ore::test]
+    // Columnation regions are not Stacked Borrows compliant: later pushes invalidate the
+    // provenance of previously stored items under Miri.
+    #[cfg_attr(miri, ignore)]
+    fn since_jump() {
+        let sink_metrics = sink_metrics();
+        let mut v2 = CorrectionV2::<String>::new(
+            sink_metrics.clone(),
+            sink_metrics.for_worker(0),
+            None,
+            3.0,
+            8 * 1024,
+        );
+
+        let num_ts = 100;
+        for t in 0..num_ts {
+            v2.insert(&mut vec![
+                (format!("a-{t}"), Timestamp::from(t), Diff::ONE),
+                (format!("a-{t}"), Timestamp::from(t), -Diff::ONE),
+                (format!("b-{t}"), Timestamp::from(t), Diff::ONE),
+            ]);
+        }
+
+        v2.advance_since(Antichain::from_elem(Timestamp::from(num_ts)));
+        v2.consolidate_at_since();
+
+        let upper = Antichain::from_elem(Timestamp::from(num_ts + 1));
+        let out: Vec<_> = v2.updates_before(&upper).collect();
+        assert_eq!(out.len(), usize::try_from(num_ts).unwrap());
+        assert!(
+            out.iter()
+                .all(|(_, t, r)| *t == Timestamp::from(num_ts) && *r == Diff::ONE)
+        );
+    }
+
+    /// Reads must not observe updates at or beyond their `upper`, even when the `upper` is not
+    /// beyond the `since`.
+    #[mz_ore::test]
+    // Columnation regions are not Stacked Borrows compliant: later pushes invalidate the
+    // provenance of previously stored items under Miri.
+    #[cfg_attr(miri, ignore)]
+    fn upper_not_beyond_since() {
+        let sink_metrics = sink_metrics();
+        let mut v2 = CorrectionV2::<String>::new(
+            sink_metrics.clone(),
+            sink_metrics.for_worker(0),
+            None,
+            3.0,
+            8 * 1024,
+        );
+
+        v2.insert(&mut vec![(
+            "a".to_owned(),
+            Timestamp::from(5_u64),
+            Diff::ONE,
+        )]);
+        v2.advance_since(Antichain::from_elem(Timestamp::from(10_u64)));
+
+        // The update logically lives at time 10 now, so a read before 7 must be empty.
+        let upper = Antichain::from_elem(Timestamp::from(7_u64));
+        assert_eq!(v2.updates_before(&upper).count(), 0);
+
+        // A read before 11 must emit it, advanced to the since.
+        let upper = Antichain::from_elem(Timestamp::from(11_u64));
+        let out: Vec<_> = v2.updates_before(&upper).collect();
+        assert_eq!(
+            out,
+            vec![("a".to_owned(), Timestamp::from(10_u64), Diff::ONE)]
+        );
     }
 }

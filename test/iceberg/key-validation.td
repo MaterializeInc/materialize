@@ -12,13 +12,6 @@
 
 > CREATE SECRET IF NOT EXISTS access_key_secret AS '${arg.s3-access-key}'
 
-> CREATE CONNECTION IF NOT EXISTS aws_conn TO AWS (
-    ACCESS KEY ID = 'tduser',
-    SECRET ACCESS KEY = SECRET access_key_secret,
-    ENDPOINT = '${arg.aws-endpoint}',
-    REGION = 'us-east-1'
-  );
-
 > CREATE CONNECTION IF NOT EXISTS polaris TO ICEBERG CATALOG (
     CATALOG TYPE = 'REST',
     URL = 'http://polaris:8181/api/catalog',
@@ -36,7 +29,6 @@
         NAMESPACE 'default_namespace',
         TABLE 'key_float_table'
     )
-    USING AWS CONNECTION aws_conn
     KEY (k) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
@@ -51,7 +43,6 @@ contains:cannot be used as an Iceberg equality delete key
         NAMESPACE 'default_namespace',
         TABLE 'key_double_table'
     )
-    USING AWS CONNECTION aws_conn
     KEY (k) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
@@ -66,7 +57,6 @@ contains:cannot be used as an Iceberg equality delete key
         NAMESPACE 'default_namespace',
         TABLE 'key_map_table'
     )
-    USING AWS CONNECTION aws_conn
     KEY (k) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
@@ -80,6 +70,21 @@ contains:cannot be used as an Iceberg equality delete key
     INTO ICEBERG CATALOG CONNECTION polaris (
         NAMESPACE 'default_namespace',
         TABLE 'key_list_table'
+    )
+    KEY (k) NOT ENFORCED
+    MODE UPSERT
+    WITH (COMMIT INTERVAL '1s');
+contains:cannot be used as an Iceberg equality delete key
+
+# Range key — ranges lower to Iceberg structs, which iceberg-rust's
+# RecordBatchProjector skips as nested, so they cannot be equality delete keys.
+> CREATE TABLE key_range (k int4range, v text);
+
+! CREATE SINK key_range_sink
+    FROM key_range
+    INTO ICEBERG CATALOG CONNECTION polaris (
+        NAMESPACE 'default_namespace',
+        TABLE 'key_range_table'
     )
     USING AWS CONNECTION aws_conn
     KEY (k) NOT ENFORCED
@@ -97,7 +102,6 @@ contains:cannot be used as an Iceberg equality delete key
         NAMESPACE 'default_namespace',
         TABLE 'val_float_table'
     )
-    USING AWS CONNECTION aws_conn
     KEY (k) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
@@ -108,3 +112,4 @@ contains:cannot be used as an Iceberg equality delete key
 > DROP TABLE key_double;
 > DROP TABLE key_map;
 > DROP TABLE key_list;
+> DROP TABLE key_range;

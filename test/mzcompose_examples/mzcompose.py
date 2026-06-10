@@ -15,7 +15,6 @@ from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 versioned_mz = [
     Materialized(
@@ -32,7 +31,6 @@ mz_with_options = [
 
 SERVICES = [
     Minio(setup_materialize=True),
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     *versioned_mz,
@@ -58,7 +56,7 @@ def workflow_default(c: Composition) -> None:
 
 
 def workflow_start_confluents(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry")
+    c.up("kafka", "schema-registry")
 
 
 def workflow_versioned_mz(c: Composition) -> None:

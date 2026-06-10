@@ -29,7 +29,7 @@ import IncidentStatusWidget from "./IncidentStatusWidget/IncidentStatusWidget";
 /** Initializes global features, rendered after frontegg token is available if Cloud */
 const useAppInitializer = () => {
   useTrackFocus();
-  usePollEnvironmentHealth({ intervalMs: 5000 });
+  usePollEnvironmentHealth({ intervalMs: 30_000 });
   useShowEnvironmentErrors();
   useSetInitialRegion();
   usePrivileges();

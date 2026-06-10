@@ -428,245 +428,228 @@ describe("QueryHistoryList", () => {
     },
   );
 
-  it(
-    "Should select filters and get data that corresponds to the query key",
-    {
-      // Increase the timeout because this test takes around ~10 seconds to run in CI which passes the 5 second default threshold.
-      timeout: 25_000,
-    },
-    async () => {
-      // Mock "new Date()"
-      const mockedDateNow = new Date("1999-09-03T00:00:00");
-      vi.useFakeTimers({
-        now: mockedDateNow,
-        shouldAdvanceTime: true, // MSW doesn't match handlers without this
-      });
-      const user = userEvent.setup();
+  // This test takes ~10s in CI (many sequential user interactions); it relies
+  // on the generous global testTimeout in vitest.config.ts.
+  it("Should select filters and get data that corresponds to the query key", async () => {
+    // Mock "new Date()"
+    const mockedDateNow = new Date("1999-09-03T00:00:00");
+    vi.useFakeTimers({
+      now: mockedDateNow,
+      shouldAdvanceTime: true, // MSW doesn't match handlers without this
+    });
+    const user = userEvent.setup();
 
-      const initialFilters = queryHistoryListSchema.parse(
-        DEFAULT_SCHEMA_VALUES,
-      );
-      // Mock query history list fetch with default filters
-      server.use(
-        buildSqlQueryHandlerV2({
-          queryKey: queryHistoryQueryKeys.list({
-            filters: initialFilters,
-            isRedacted: false,
-            isV0_132_0: false,
-          }),
-          results: mapKyselyToTabular({
-            columns: useFetchQueryHistoryListColumns,
-            // Initial page should be empty
-            rows: [],
-          }),
+    const initialFilters = queryHistoryListSchema.parse(DEFAULT_SCHEMA_VALUES);
+    // Mock query history list fetch with default filters
+    server.use(
+      buildSqlQueryHandlerV2({
+        queryKey: queryHistoryQueryKeys.list({
+          filters: initialFilters,
+          isRedacted: false,
+          isV0_132_0: false,
         }),
-      );
-
-      // Mock user list fetch
-      server.use(
-        buildSqlQueryHandlerV2({
-          queryKey: queryHistoryQueryKeys.users(),
-          results: mapKyselyToTabular({
-            rows: [{ email: "jun@materialize.com" }],
-            columns: useFetchQueryHistoryUsersColumns,
-          }),
+        results: mapKyselyToTabular({
+          columns: useFetchQueryHistoryListColumns,
+          // Initial page should be empty
+          rows: [],
         }),
-      );
+      }),
+    );
 
-      const CATALOG_SERVER_CLUSTER = {
-        id: "s2",
-        name: "mz_catalog_server",
-      };
-      // Mock cluster list fetch
-      server.use(
-        buildSqlQueryHandlerV2({
-          queryKey: queryHistoryQueryKeys.clusters(),
-          results: mapKyselyToTabular({
-            columns: useFetchQueryHistoryClustersColumns,
-            rows: [
-              {
-                id: "u28",
-                name: "default",
-              },
-              {
-                id: "u34",
-                name: "my_production_cluster",
-              },
-              CATALOG_SERVER_CLUSTER,
-              {
-                id: "s1",
-                name: "mz_system",
-              },
-            ],
-          }),
+    // Mock user list fetch
+    server.use(
+      buildSqlQueryHandlerV2({
+        queryKey: queryHistoryQueryKeys.users(),
+        results: mapKyselyToTabular({
+          rows: [{ email: "jun@materialize.com" }],
+          columns: useFetchQueryHistoryUsersColumns,
         }),
-      );
+      }),
+    );
 
-      const expectedStartTimeFilter = new Date("1999-09-01T00:00:00");
-      const expectedEndTimeFilter = new Date("1999-09-02T23:59:59.999");
-      const durationMinutes = 5;
-      const expectedFilters: QueryHistoryListSchema = {
-        dateRange: [
-          expectedStartTimeFilter.toISOString(),
-          expectedEndTimeFilter.toISOString(),
-        ],
-        user: "jun@materialize.com",
-        sessionId: "279dd8ac-3a4f-478e-af83-a21ff2509702",
-        applicationName: "web_console",
-        sqlText: "SELECT",
-        executionId: "65cc0294-46b4-41b7-a785-4a52c46db6cd",
-        clusterId: CATALOG_SERVER_CLUSTER.id,
-        finishedStatuses: ["error"],
-        statementTypes: ["select"],
-        durationRange: {
-          minDuration: 30,
-          maxDuration: null,
-        },
-        showConsoleIntrospection: true,
-        sortOrder: "asc",
-        sortField: "duration",
-      };
-
-      const expectedRow = {
-        applicationName: "web_console",
-        clusterName: "mz_catalog_server",
-        executionId: "65cc0294-46b4-41b7-a785-4a52c46db6cd",
-        executionStrategy: "standard",
-        finishedAt: "1705526864756",
-        finishedStatus: expectedFilters.finishedStatuses[0],
-        sessionId: expectedFilters.sessionId,
-        sql: "SELECT * FROM mz_catalog.mz_schemas",
-        authenticatedUser: expectedFilters.user,
-        duration: `00:0${durationMinutes}:00.000`,
-        startTime: `${expectedFilters.dateRange[0]}`,
-        endTime: `${expectedFilters.dateRange[1]}`,
-        rowsReturned: "5069",
-        resultSize: "2048",
-        throttledCount: "0",
-      };
-
-      // Mock query history list fetch with expected filters
-      server.use(
-        buildSqlQueryHandlerV2({
-          queryKey: queryHistoryQueryKeys.list({
-            filters: expectedFilters,
-            isRedacted: false,
-            isV0_132_0: false,
-          }),
-          results: mapKyselyToTabular({
-            columns: useFetchQueryHistoryListColumns,
-            rows: [expectedRow],
-          }),
+    const CATALOG_SERVER_CLUSTER = {
+      id: "s2",
+      name: "mz_catalog_server",
+    };
+    // Mock cluster list fetch
+    server.use(
+      buildSqlQueryHandlerV2({
+        queryKey: queryHistoryQueryKeys.clusters(),
+        results: mapKyselyToTabular({
+          columns: useFetchQueryHistoryClustersColumns,
+          rows: [
+            {
+              id: "u28",
+              name: "default",
+            },
+            {
+              id: "u34",
+              name: "my_production_cluster",
+            },
+            CATALOG_SERVER_CLUSTER,
+            {
+              id: "s1",
+              name: "mz_system",
+            },
+          ],
         }),
-      );
+      }),
+    );
 
-      await renderComponent(
-        <QueryHistoryList
-          initialFilters={initialFilters}
-          initialColumns={ALL_COLUMNS}
-        />,
-        {
-          initializeState: ({ set }) =>
-            setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
-        },
-      );
+    const expectedStartTimeFilter = new Date("1999-09-01T00:00:00");
+    const expectedEndTimeFilter = new Date("1999-09-02T23:59:59.999");
+    const durationMinutes = 5;
+    const expectedFilters: QueryHistoryListSchema = {
+      dateRange: [
+        expectedStartTimeFilter.toISOString(),
+        expectedEndTimeFilter.toISOString(),
+      ],
+      user: "jun@materialize.com",
+      sessionId: "279dd8ac-3a4f-478e-af83-a21ff2509702",
+      applicationName: "web_console",
+      sqlText: "SELECT",
+      executionId: "65cc0294-46b4-41b7-a785-4a52c46db6cd",
+      clusterId: CATALOG_SERVER_CLUSTER.id,
+      finishedStatuses: ["error"],
+      statementTypes: ["select"],
+      durationRange: {
+        minDuration: 30,
+        maxDuration: null,
+      },
+      showConsoleIntrospection: true,
+      sortOrder: "asc",
+      sortField: "duration",
+    };
 
-      expect(await screen.findByText("No results found.")).toBeVisible();
+    const expectedRow = {
+      applicationName: "web_console",
+      clusterName: "mz_catalog_server",
+      executionId: "65cc0294-46b4-41b7-a785-4a52c46db6cd",
+      executionStrategy: "standard",
+      finishedAt: "1705526864756",
+      finishedStatus: expectedFilters.finishedStatuses[0],
+      sessionId: expectedFilters.sessionId,
+      sql: "SELECT * FROM mz_catalog.mz_schemas",
+      authenticatedUser: expectedFilters.user,
+      duration: `00:0${durationMinutes}:00.000`,
+      startTime: `${expectedFilters.dateRange[0]}`,
+      endTime: `${expectedFilters.dateRange[1]}`,
+      rowsReturned: "5069",
+      resultSize: "2048",
+      throttledCount: "0",
+    };
 
-      // Set user filter
-      await user.click(screen.getByLabelText("User filter"));
-      await user.click(screen.getByText(expectedFilters.user));
+    // Mock query history list fetch with expected filters
+    server.use(
+      buildSqlQueryHandlerV2({
+        queryKey: queryHistoryQueryKeys.list({
+          filters: expectedFilters,
+          isRedacted: false,
+          isV0_132_0: false,
+        }),
+        results: mapKyselyToTabular({
+          columns: useFetchQueryHistoryListColumns,
+          rows: [expectedRow],
+        }),
+      }),
+    );
 
-      // Set cluster filter
-      await user.click(screen.getByLabelText("Cluster filter"));
-      await user.click(screen.getByText(CATALOG_SERVER_CLUSTER.name));
+    await renderComponent(
+      <QueryHistoryList
+        initialFilters={initialFilters}
+        initialColumns={ALL_COLUMNS}
+      />,
+      {
+        initializeState: ({ set }) =>
+          setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
+      },
+    );
 
-      // Set date range filter
-      await user.click(screen.getByLabelText("Date range filter"));
+    expect(await screen.findByText("No results found.")).toBeVisible();
 
-      await user.click(
-        // Min start time
-        await screen.findByLabelText(
-          new Date("1999-09-01T00:00:00").toString(),
-        ),
-      );
+    // Set user filter
+    await user.click(screen.getByLabelText("User filter"));
+    await user.click(screen.getByText(expectedFilters.user));
 
-      await user.click(
-        // Max start time
-        await screen.findByLabelText(
-          new Date("1999-09-02T00:00:00").toString(),
-        ),
-      );
-      await user.click(screen.getByText("Apply filter"));
+    // Set cluster filter
+    await user.click(screen.getByLabelText("Cluster filter"));
+    await user.click(screen.getByText(CATALOG_SERVER_CLUSTER.name));
 
-      // Set statement filter
-      await user.click(screen.getByLabelText("Filter menu")); // Open accordion item
-      await user.click(screen.getByLabelText("Statement type"));
-      await user.click(
-        screen.getByLabelText(expectedFilters.statementTypes[0]),
-      );
+    // Set date range filter
+    await user.click(screen.getByLabelText("Date range filter"));
 
-      await user.click(screen.getByLabelText("Status"));
-      await user.click(
-        screen.getByLabelText(expectedFilters.finishedStatuses[0]),
-      );
+    await user.click(
+      // Min start time
+      await screen.findByLabelText(new Date("1999-09-01T00:00:00").toString()),
+    );
 
-      // Set duration filter
-      await user.click(screen.getByLabelText("Duration (ms)")); // Open accordion item
-      const minDurationTextInput = screen.getByPlaceholderText("10");
-      await user.type(
-        minDurationTextInput,
-        expectedFilters.durationRange.minDuration!.toString(),
-      );
+    await user.click(
+      // Max start time
+      await screen.findByLabelText(new Date("1999-09-02T00:00:00").toString()),
+    );
+    await user.click(screen.getByText("Apply filter"));
 
-      // Set session ID filter
-      await user.click(screen.getByLabelText("Session ID")); // Open accordion item
-      const sessionIdTextInput =
-        screen.getByPlaceholderText("Enter session ID");
-      await user.type(sessionIdTextInput, expectedFilters.sessionId!);
+    // Set statement filter
+    await user.click(screen.getByLabelText("Filter menu")); // Open accordion item
+    await user.click(screen.getByLabelText("Statement type"));
+    await user.click(screen.getByLabelText(expectedFilters.statementTypes[0]));
 
-      // Set application name filter
-      await user.click(screen.getByLabelText("Application name")); // Open accordion item
-      const applicationNameTextInput = screen.getByPlaceholderText(
-        "Enter application name",
-      );
-      await user.type(
-        applicationNameTextInput,
-        expectedFilters.applicationName!,
-      );
+    await user.click(screen.getByLabelText("Status"));
+    await user.click(
+      screen.getByLabelText(expectedFilters.finishedStatuses[0]),
+    );
 
-      // Set SQL text filter
-      await user.click(screen.getByLabelText("SQL text")); // Open accordion item
-      const sqlTextInput = screen.getByPlaceholderText("Enter SQL text");
-      await user.type(sqlTextInput, expectedFilters.sqlText!);
+    // Set duration filter
+    await user.click(screen.getByLabelText("Duration (ms)")); // Open accordion item
+    const minDurationTextInput = screen.getByPlaceholderText("10");
+    await user.type(
+      minDurationTextInput,
+      expectedFilters.durationRange.minDuration!.toString(),
+    );
 
-      // Set query ID filter
-      await user.click(screen.getByLabelText("Query ID")); // Open accordion item
-      const executionIdInput = screen.getByPlaceholderText("Enter query ID");
+    // Set session ID filter
+    await user.click(screen.getByLabelText("Session ID")); // Open accordion item
+    const sessionIdTextInput = screen.getByPlaceholderText("Enter session ID");
+    await user.type(sessionIdTextInput, expectedFilters.sessionId!);
 
-      await user.type(executionIdInput, expectedFilters.executionId!);
+    // Set application name filter
+    await user.click(screen.getByLabelText("Application name")); // Open accordion item
+    const applicationNameTextInput = screen.getByPlaceholderText(
+      "Enter application name",
+    );
+    await user.type(applicationNameTextInput, expectedFilters.applicationName!);
 
-      // Set show console introspection filter
-      await user.click(screen.getByLabelText("Show Console introspection")); // toggle checkbox
+    // Set SQL text filter
+    await user.click(screen.getByLabelText("SQL text")); // Open accordion item
+    const sqlTextInput = screen.getByPlaceholderText("Enter SQL text");
+    await user.type(sqlTextInput, expectedFilters.sqlText!);
 
-      // Apply filters
-      await user.click(screen.getByText("Apply filter"));
+    // Set query ID filter
+    await user.click(screen.getByLabelText("Query ID")); // Open accordion item
+    const executionIdInput = screen.getByPlaceholderText("Enter query ID");
 
-      // Set sort order to ascending
+    await user.type(executionIdInput, expectedFilters.executionId!);
 
-      await user.click(screen.getByLabelText("Sort filter")); // Open sort filter
-      await user.click(screen.getByText(/Ascending/g));
+    // Set show console introspection filter
+    await user.click(screen.getByLabelText("Show Console introspection")); // toggle checkbox
 
-      // Set sort by to duration
-      await user.click(screen.getByLabelText("Sort filter")); // Open sort filter
+    // Apply filters
+    await user.click(screen.getByText("Apply filter"));
 
-      const durationElements = screen.getAllByText("Duration"); // Since many elements with text 'Duration' exist
-      await user.click(durationElements[0]);
+    // Set sort order to ascending
 
-      // The expected API handler should be called and display the expected row
-      expect(await screen.findByText(expectedRow.sql)).toBeVisible();
+    await user.click(screen.getByLabelText("Sort filter")); // Open sort filter
+    await user.click(screen.getByText(/Ascending/g));
 
-      vitest.useRealTimers();
-    },
-  );
+    // Set sort by to duration
+    await user.click(screen.getByLabelText("Sort filter")); // Open sort filter
+
+    const durationElements = screen.getAllByText("Duration"); // Since many elements with text 'Duration' exist
+    await user.click(durationElements[0]);
+
+    // The expected API handler should be called and display the expected row
+    expect(await screen.findByText(expectedRow.sql)).toBeVisible();
+
+    vitest.useRealTimers();
+  });
 });

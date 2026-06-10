@@ -127,6 +127,14 @@ steps:
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
+        retry:
+          automatic:
+            - signal_reason: agent_stop
+              limit: 2
+            - exit_status: 128
+              limit: 2
+            - exit_status: 199
+              limit: 2
 
       - id: devel-docker-tags
         label: Tag development docker images
@@ -399,17 +407,6 @@ steps:
               composition: ssh-connection
         agents:
           queue: hetzner-x86-64-8cpu-16gb
-
-      - id: fivetran-destination-tests
-        label: Fivetran Destination
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        inputs: [test/fivetran-destination]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: fivetran-destination
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
 
   - group: Kafka
     key: kafka-tests

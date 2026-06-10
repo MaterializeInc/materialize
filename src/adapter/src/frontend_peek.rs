@@ -200,11 +200,7 @@ impl PeekClient {
 
         // Set up statement logging, and log the beginning of execution.
         // (But only if we're not executing in the context of another statement.)
-        // The end of execution will be logged in one of the following ways:
-        // - At the end of this function, if the execution is finished by then.
-        // - Later by the Coordinator, either due to RegisterFrontendPeek or
-        //   ExecuteSlowPathPeek.
-        let statement_logging_id = self.begin_statement_logging(
+        let logging_guard = self.begin_statement_logging(
             session,
             &params,
             &logging,
@@ -212,44 +208,52 @@ impl PeekClient {
             lifecycle_timestamps,
             outer_ctx_extra,
         );
+        let statement_logging_id = logging_guard.id();
+        // Streaming peek/subscribe/slow-path/copy-to responses hand off the
+        // end-execution event to the coordinator (via
+        // `handle_peek_notification` / `cancel_pending_peeks`), so letting
+        // the RAII guard's `Drop` also emit `Aborted` on mid-flight drop
+        // would double-end and panic at `end_statement_execution`. Defuse
+        // and manage the lifecycle explicitly below: streaming arms skip
+        // emitting; non-streaming arms emit via `log_ended_execution`.
+        logging_guard.defuse();
 
         let result = self
             .try_frontend_peek_inner(session, catalog, stmt, params, statement_logging_id)
             .await;
 
-        // Log the end of execution if we are logging this statement and execution has already
-        // ended.
+        // Log the end of execution if we are logging this statement and
+        // execution has already ended.
         if let Some(logging_id) = statement_logging_id {
             let reason = match &result {
-                // Streaming results are handled asynchronously by the coordinator
+                // Streaming results are handled asynchronously by the
+                // coordinator — it will log the end via
+                // `handle_peek_notification`, so skip emitting here.
                 Ok(Some(
                     ExecuteResponse::SendingRowsStreaming { .. }
                     | ExecuteResponse::Subscribing { .. },
                 )) => {
-                    // Don't log here - the peek or subscribe is still executing.
-                    // It will be logged when handle_peek_notification is called.
                     return result;
                 }
-                // COPY TO needs to check its inner response
+                // COPY TO wrapping a streaming response: same handoff.
                 Ok(Some(resp @ ExecuteResponse::CopyTo { resp: inner, .. })) => {
                     match inner.as_ref() {
                         ExecuteResponse::SendingRowsStreaming { .. }
                         | ExecuteResponse::Subscribing { .. } => {
-                            // Don't log here - the peek or subscribe is still executing.
-                            // It will be logged when handle_peek_notification is called.
                             return result;
                         }
-                        // For non-streaming COPY TO responses, use the outer CopyTo for conversion
+                        // For non-streaming COPY TO responses, use the outer
+                        // CopyTo for conversion.
                         _ => resp.into(),
                     }
                 }
-                // Bailout case, which should not happen
+                // Bailout case, which should not happen.
                 Ok(None) => {
                     soft_panic_or_log!(
                         "Bailed out from `try_frontend_peek_inner` after we already logged the beginning of statement execution."
                     );
-                    // This statement will be handled by the old peek sequencing, which will do its
-                    // own statement logging from the beginning. So, let's close out this one.
+                    // The old peek sequencing would start its own statement
+                    // logging from scratch; close out this one as errored.
                     self.log_ended_execution(
                         logging_id,
                         StatementEndedExecutionReason::Errored {
@@ -259,10 +263,10 @@ impl PeekClient {
                     );
                     return result;
                 }
-                // All other success responses - use the From implementation
-                // TODO(peek-seq): After we delete the old peek sequencing, we'll be able to adjust
-                // the From implementation to do exactly what we need in the frontend peek
-                // sequencing, so that the above special cases won't be needed.
+                // All other success responses — use the `From` implementation.
+                // TODO(peek-seq): After we delete the old peek sequencing, we
+                // can adjust the `From` impl to do exactly what we need here,
+                // so the special cases above won't be needed.
                 Ok(Some(resp)) => resp.into(),
                 Err(e) => StatementEndedExecutionReason::Errored {
                     error: e.to_string(),
@@ -452,7 +456,7 @@ impl PeekClient {
         let contains_temporal = match query_plan {
             QueryPlan::Select(s) => s.source.contains_temporal(),
             QueryPlan::CopyTo(s, _) => s.source.contains_temporal(),
-            QueryPlan::Subscribe(s) => Ok(s.from.contains_temporal()),
+            QueryPlan::Subscribe(s) => s.from.contains_temporal(),
         };
 
         // # From sequence_plan
@@ -477,7 +481,7 @@ impl PeekClient {
 
         // Log cluster selection
         if let Some(logging_id) = &statement_logging_id {
-            self.log_set_cluster(*logging_id, target_cluster_id);
+            self.log_set_cluster(*logging_id, target_cluster_id, target_cluster_name.clone());
         }
 
         coord::catalog_serving::check_cluster_restrictions(
@@ -544,7 +548,7 @@ impl PeekClient {
         // simple benchmarks), because it traverses transitive dependencies even of indexed views and
         // materialized views (also traversing their MIR plans).
         let mut timeline_context = catalog.validate_timeline_context(source_ids.iter().copied())?;
-        if matches!(timeline_context, TimelineContext::TimestampIndependent) && contains_temporal? {
+        if matches!(timeline_context, TimelineContext::TimestampIndependent) && contains_temporal {
             // If the source IDs are timestamp independent but the query contains temporal functions,
             // then the timeline context needs to be upgraded to timestamp dependent. This is
             // required because `source_ids` doesn't contain functions.
@@ -885,19 +889,18 @@ impl PeekClient {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                            // COPY TO path
-                            // HIR ⇒ MIR lowering and MIR optimization (local)
-                            let local_mir_plan =
-                                optimizer.catch_unwind_optimize(raw_expr.clone())?;
-                            // Attach resolved context required to continue the pipeline.
-                            let local_mir_plan = local_mir_plan.resolve(
-                                timestamp_context.clone(),
-                                &session_meta,
-                                stats,
-                            );
-                            // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                            let global_lir_plan =
-                                optimizer.catch_unwind_optimize(local_mir_plan)?;
+                            // COPY TO path: HIR ⇒ local MIR ⇒ resolve ⇒ global LIR.
+                            let global_lir_plan = optimize::optimize_oneshot(
+                                &mut optimizer,
+                                raw_expr.clone(),
+                                |local_mir_plan| {
+                                    local_mir_plan.resolve(
+                                        timestamp_context.clone(),
+                                        &session_meta,
+                                        stats,
+                                    )
+                                },
+                            )?;
                             Ok(Execution::CopyToS3 {
                                 global_lir_plan,
                                 source_ids: source_ids_for_closure,
@@ -927,28 +930,22 @@ impl PeekClient {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                            // SELECT/EXPLAIN path
-                            // HIR ⇒ MIR lowering and MIR optimization (local)
-
-                            // The purpose of wrapping the following in a closure is to control where the
-                            // `?`s return from, so that even when a `catch_unwind_optimize` call fails,
-                            // we can still handle `EXPLAIN BROKEN`.
-                            let pipeline = || {
-                                let local_mir_plan =
-                                    optimizer.catch_unwind_optimize(raw_expr.clone())?;
-                                // Attach resolved context required to continue the pipeline.
-                                let local_mir_plan = local_mir_plan.resolve(
-                                    timestamp_context.clone(),
-                                    &session_meta,
-                                    stats,
-                                );
-                                // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                                let global_lir_plan =
-                                    optimizer.catch_unwind_optimize(local_mir_plan)?;
-                                Ok::<_, AdapterError>(global_lir_plan)
-                            };
-
-                            let global_lir_plan_result = pipeline();
+                            // SELECT/EXPLAIN path: HIR ⇒ local MIR ⇒ resolve ⇒
+                            // global LIR. We capture the result (rather than
+                            // propagating with `?`) so that a failure can still be
+                            // routed to `EXPLAIN BROKEN` below.
+                            let global_lir_plan_result = optimize::optimize_oneshot(
+                                &mut optimizer,
+                                raw_expr.clone(),
+                                |local_mir_plan| {
+                                    local_mir_plan.resolve(
+                                        timestamp_context.clone(),
+                                        &session_meta,
+                                        stats,
+                                    )
+                                },
+                            )
+                            .map_err(AdapterError::from);
                             let optimization_finished_at = now();
 
                             let create_insights_ctx =
@@ -1531,7 +1528,7 @@ impl PeekClient {
                     true => "true",
                     false => "false",
                 },
-                isolation_level.as_str(),
+                isolation_level.as_variant_str(),
                 &compute_instance.to_string(),
             ])
             .inc();

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:20-slim
+FROM node:22-slim
 
 RUN apt-get update && \
     apt-get install -y eatmydata netcat-openbsd && \

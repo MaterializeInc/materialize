@@ -917,7 +917,7 @@ fn handle_mutation_using_clause(
                     c.column -= using_rel_arity;
                 };
             }
-        })?;
+        });
 
         // Filter `USING` tables like `<using_rel_expr> WHERE <expr>`. Note that
         // this filters the `USING` tables, _not_ the joined `USING..., FROM`
