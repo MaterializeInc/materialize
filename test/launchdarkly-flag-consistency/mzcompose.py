@@ -17,7 +17,7 @@ LaunchDarkly at runtime by the `SystemParameterFrontend`, keyed by the
 parameter name (see `src/adapter/src/config/frontend.rs`). If a parameter has
 no corresponding LaunchDarkly flag, `client.variation` silently falls back to
 the compiled-in default, which means the flag can never be controlled in
-production. This check reports three conditions:
+production. This check reports four conditions:
 
   * ERROR  -- a synchronized parameter exists in Materialize but has no flag in
               LaunchDarkly. This fails the build (unless `--no-fail`).
@@ -27,10 +27,16 @@ production. This check reports three conditions:
               avoid false positives we consider both the current build and the
               last published release.
   * WARN   -- a flag exists in both, but the value LaunchDarkly serves by
-              default (checked in each of `LAUNCHDARKLY_ENVIRONMENTS`) diverges
-              from Materialize's compiled-in default. This is not necessarily a
-              bug (it is how a default is intentionally overridden), but it is
-              worth surfacing so that unintended drift is noticed.
+              default in the production environment differs from Materialize's
+              compiled-in default. Self-managed deployments have no LaunchDarkly
+              and run on the compiled-in default, so this means cloud and
+              self-managed behave differently (e.g. a feature enabled in cloud
+              but still off by default in self-managed). Parameters that
+              deliberately tune cloud-only infrastructure are listed in
+              `INTENTIONAL_LD_OVERRIDES` and excluded.
+  * WARN   -- a flag's served default differs *between* LaunchDarkly
+              environments (e.g. production vs staging), which usually only
+              happens during a staged rollout.
 
 Note: not every synchronized parameter has (or needs) a LaunchDarkly flag --
 many just ride their compiled-in default. The check therefore runs with
@@ -51,6 +57,7 @@ that today, but if one is ever added it would be silently omitted here and
 should be enabled before running this check (or added to a small allowlist).
 """
 
+import itertools
 import math
 import os
 import re
@@ -78,7 +85,9 @@ LAUNCHDARKLY_PROJECT = os.environ.get("LAUNCHDARKLY_PROJECT", "default")
 # The LaunchDarkly environments to check default divergence against. Flag
 # *existence* is project-level (identical across environments), so the
 # missing/stale checks do not depend on the environment; only the served
-# default value can differ per environment.
+# default value can differ per environment. The first environment is treated as
+# the production / cloud baseline that is compared against the compiled-in
+# default (i.e. what self-managed deployments use).
 LAUNCHDARKLY_ENVIRONMENTS = [
     env.strip()
     for env in os.environ.get("LAUNCHDARKLY_ENVIRONMENTS", "production,staging").split(
@@ -86,6 +95,9 @@ LAUNCHDARKLY_ENVIRONMENTS = [
     )
     if env.strip()
 ]
+PRODUCTION_ENVIRONMENT = (
+    LAUNCHDARKLY_ENVIRONMENTS[0] if LAUNCHDARKLY_ENVIRONMENTS else ""
+)
 
 # The internal SQL port, on which we can connect as `mz_system`.
 MZ_SYSTEM_PORT = 6877
@@ -164,6 +176,28 @@ CI_TEST_TAG = "ci-test"
 # Should normally be empty; add a name here (with a comment explaining why) only
 # if a parameter is deliberately not managed via LaunchDarkly.
 IGNORED_MZ_PARAMETERS: set[str] = set()
+
+# Parameters whose production LaunchDarkly value is *deliberately* different from
+# the compiled-in default, because they tune cloud-specific infrastructure that
+# does not apply to self-managed deployments. These are excluded from the
+# "cloud vs self-managed" divergence warning (but still participate in the
+# cross-environment prod-vs-staging check). Curate this list; everything else
+# that diverges is surfaced so a feature accidentally left off in self-managed
+# is noticed.
+INTENTIONAL_LD_OVERRIDES: set[str] = {
+    # Cloud replica expiration (confirmed cloud-only behavior).
+    "compute_replica_expiration_offset",
+    "enable_compute_replica_expiration",
+    # Cloud resource quotas / available replica sizes.
+    "allowed_cluster_replica_sizes",
+    "max_clusters",
+    "max_connections",
+    "max_credit_consumption_rate",
+    "max_aws_privatelink_connections",
+    "max_materialized_views",
+    "max_sources",
+    "max_tables",
+}
 
 
 def synced_parameters(c: Composition) -> dict[str, str]:
@@ -336,40 +370,50 @@ def parse_duration_seconds(
     return total
 
 
-def values_diverge(mz_value: str, ld_value: Any) -> bool | None:
-    """Return whether the Materialize default `mz_value` (a string, as printed
-    by `SHOW`) diverges from the LaunchDarkly value `ld_value` (typed). Returns
-    `None` when the two cannot be compared confidently, so that we never warn on
-    a representation mismatch (e.g. `"1GB"` vs `1073741824`)."""
-    if ld_value is None:
-        return None
-    if isinstance(ld_value, bool):
-        truthy = {"on", "true", "t", "yes", "1"}
-        falsy = {"off", "false", "f", "no", "0"}
-        mz = mz_value.strip().lower()
-        if mz in truthy:
-            return ld_value is not True
-        if mz in falsy:
-            return ld_value is not False
-        return None
-    # Durations: Materialize prints them with a unit (e.g. "1 min"); compare by
-    # value so that representation differences ("1 min" vs "60s", "10 s" vs the
-    # raw-milliseconds "10000") are not reported as divergences.
-    mz_seconds = parse_duration_seconds(mz_value)
-    if mz_seconds is not None:
-        ld_seconds = parse_duration_seconds(str(ld_value), assume_bare_millis=True)
-        if ld_seconds is None:
-            return None
-        return not math.isclose(mz_seconds, ld_seconds, rel_tol=1e-9, abs_tol=1e-12)
-    if isinstance(ld_value, int | float):
-        try:
-            return float(mz_value) != float(ld_value)
-        except ValueError:
-            # `mz_value` is not plainly numeric (e.g. has a unit); don't guess.
-            return None
-    if isinstance(ld_value, str):
-        return ld_value.strip() != mz_value.strip()
+def _as_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    if s in {"on", "true", "t", "yes", "1"}:
+        return True
+    if s in {"off", "false", "f", "no", "0"}:
+        return False
     return None
+
+
+def values_equivalent(a: Any, b: Any) -> bool | None:
+    """Whether two values represent the same setting, comparing durations by
+    value so representation differences ("1 min" vs "60s", "10 s" vs the
+    raw-milliseconds "10000") are not treated as differences. `a` and `b` may be
+    Materialize's `SHOW` strings or LaunchDarkly's typed values. Returns `None`
+    when the two cannot be compared confidently (e.g. one side is missing, or a
+    byte size like "1GB" vs the raw number 1073741824)."""
+    if a is None or b is None:
+        return None
+    if isinstance(a, bool) or isinstance(b, bool):
+        ba, bb = _as_bool(a), _as_bool(b)
+        if ba is None or bb is None:
+            return None
+        return ba == bb
+    sa, sb = str(a).strip(), str(b).strip()
+    if sa == "" or sb == "":
+        # Only equal if both are empty; an empty default vs a set value differs.
+        return sa == sb
+    da, db = parse_duration_seconds(sa), parse_duration_seconds(sb)
+    if da is not None or db is not None:
+        # At least one side is a duration with a unit; parse a bare number on
+        # the other side as milliseconds (how Materialize reads it).
+        if da is None:
+            da = parse_duration_seconds(sa, assume_bare_millis=True)
+        if db is None:
+            db = parse_duration_seconds(sb, assume_bare_millis=True)
+        if da is None or db is None:
+            return None
+        return math.isclose(da, db, rel_tol=1e-9, abs_tol=1e-12)
+    try:
+        return float(sa) == float(sb)
+    except ValueError:
+        return sa == sb
 
 
 def report(title: str, names: Iterable[str]) -> None:
@@ -457,32 +501,41 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # or the last release (ignoring throwaway CI test flags).
     stale_in_ld = {key for key in ld_keys - known if CI_TEST_TAG not in ld_tags[key]}
 
-    # WARN: flags present in both whose served default diverges from the
-    # Materialize default, in any checked environment. We also count how many
-    # flags could actually be compared, so an empty result is distinguishable
-    # from "nothing was comparable".
-    diverging_defaults: dict[str, list[tuple[str, str, Any]]] = {}
-    indeterminate: set[str] = set()
+    # WARN: cloud vs self-managed. Self-managed deployments have no LaunchDarkly
+    # and run on the compiled-in default, so a production LaunchDarkly value that
+    # differs from the compiled-in default means cloud and self-managed behave
+    # differently. That is worth surfacing (e.g. a feature enabled in cloud but
+    # still off by default in self-managed), except for parameters that
+    # deliberately tune cloud-only infrastructure (INTENTIONAL_LD_OVERRIDES).
+    cloud_vs_self_managed: dict[str, tuple[str, Any]] = {}
     for name in in_both:
-        mz_value = current[name]
-        comparable = False
-        for environment in LAUNCHDARKLY_ENVIRONMENTS:
-            ld_value = served_defaults.get(name, {}).get(environment)
-            diverges = values_diverge(mz_value, ld_value)
-            if diverges is None:
-                continue
-            comparable = True
-            if diverges:
-                diverging_defaults.setdefault(name, []).append(
-                    (environment, mz_value, ld_value)
-                )
-        if not comparable:
-            indeterminate.add(name)
+        if name in INTENTIONAL_LD_OVERRIDES:
+            continue
+        prod_value = served_defaults.get(name, {}).get(PRODUCTION_ENVIRONMENT)
+        if values_equivalent(current[name], prod_value) is False:
+            cloud_vs_self_managed[name] = (current[name], prod_value)
+
+    # WARN: flags whose served default differs *between environments* (e.g.
+    # production vs staging). Environments should serve the same default unless a
+    # staged rollout is in progress. No allowlist needed -- a value overridden
+    # the same way in every environment (e.g. replica expiration) agrees across
+    # environments and so does not warn.
+    env_divergences: dict[str, dict[str, Any]] = {}
+    for name in in_both:
+        per_env = served_defaults.get(name, {})
+        differs = any(
+            values_equivalent(per_env.get(a), per_env.get(b)) is False
+            for a, b in itertools.combinations(LAUNCHDARKLY_ENVIRONMENTS, 2)
+        )
+        if differs:
+            env_divergences[name] = {
+                e: per_env.get(e) for e in LAUNCHDARKLY_ENVIRONMENTS
+            }
+
     print(
-        f"Default divergence: {len(in_both)} flag(s) present in both Materialize "
-        f"and LaunchDarkly; {len(diverging_defaults)} diverged, "
-        f"{len(indeterminate)} not comparable (no determinable LaunchDarkly "
-        f"default or a representation mismatch such as '1GB' vs 1073741824)."
+        f"Divergence: {len(cloud_vs_self_managed)} flag(s) differ between cloud "
+        f"('{PRODUCTION_ENVIRONMENT}') and the self-managed compiled-in default; "
+        f"{len(env_divergences)} differ between environments."
     )
 
     if stale_in_ld:
@@ -496,20 +549,34 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "once no deployed version relies on them."
         )
 
-    if diverging_defaults:
+    if cloud_vs_self_managed:
         print(
-            "--- WARNING: flags whose LaunchDarkly default diverges from the "
-            "Materialize default"
+            f"--- WARNING: flags whose cloud default ('{PRODUCTION_ENVIRONMENT}') "
+            f"differs from the self-managed compiled-in default"
         )
-        for name in sorted(diverging_defaults):
-            for environment, mz_value, ld_value in diverging_defaults[name]:
-                print(
-                    f"  {name} [{environment}]: "
-                    f"materialize={mz_value!r} launchdarkly={ld_value!r}"
-                )
+        for name in sorted(cloud_vs_self_managed):
+            mz_value, prod_value = cloud_vs_self_managed[name]
+            print(f"  {name}: self-managed={mz_value!r} cloud={prod_value!r}")
         print(
-            "A diverging default overrides the compiled-in value. "
-            "Confirm this is intentional."
+            "Self-managed deployments run on the compiled-in default. If the "
+            "difference is intentional cloud-only tuning, add the flag to "
+            "INTENTIONAL_LD_OVERRIDES; otherwise reconcile the compiled-in "
+            "default (e.g. a feature enabled in cloud but still off by default)."
+        )
+
+    if env_divergences:
+        print(
+            f"--- WARNING: flags whose LaunchDarkly default differs between "
+            f"environments ({', '.join(LAUNCHDARKLY_ENVIRONMENTS)})"
+        )
+        for name in sorted(env_divergences):
+            rendered = ", ".join(
+                f"{env}={value!r}" for env, value in env_divergences[name].items()
+            )
+            print(f"  {name}: {rendered}")
+        print(
+            "Environments should usually serve the same default; confirm any "
+            "staged rollout is intentional."
         )
 
     if missing_in_ld:
@@ -527,8 +594,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         else:
             raise UIError(message)
 
-    if not missing_in_ld and not stale_in_ld and not diverging_defaults:
+    if (
+        not missing_in_ld
+        and not stale_in_ld
+        and not cloud_vs_self_managed
+        and not env_divergences
+    ):
         print(
             "All synchronized parameters are defined in LaunchDarkly, with "
-            "matching defaults, and no stale flags were found."
+            "matching defaults across environments and with the self-managed "
+            "compiled-in default, and no stale flags were found."
         )
