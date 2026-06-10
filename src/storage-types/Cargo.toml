@@ -20,12 +20,15 @@ async-trait.workspace = true
 aws-config.workspace = true
 aws-credential-types.workspace = true
 aws-sdk-sts.workspace = true
+aws-sigv4.workspace = true
+aws-smithy-runtime-api.workspace = true
 aws-types.workspace = true
 bytes.workspace = true
 columnation.workspace = true
 dec.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
+gcp_auth.workspace = true
 hex.workspace = true
 http.workspace = true
 itertools.workspace = true
@@ -74,6 +77,7 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 base64.workspace = true
 iceberg.workspace = true
 iceberg-catalog-rest.workspace = true
+iceberg-storage-opendal.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

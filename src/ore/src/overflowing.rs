@@ -184,6 +184,11 @@ mod columnar {
     }
 
     impl<'a, T: Copy, TC: AsBytes<'a>> AsBytes<'a> for Overflows<T, TC> {
+        const SLICE_COUNT: usize = TC::SLICE_COUNT;
+        #[inline(always)]
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            self.0.get_byte_slice(index)
+        }
         #[inline(always)]
         fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
             self.0.as_bytes()

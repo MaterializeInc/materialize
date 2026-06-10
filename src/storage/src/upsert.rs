@@ -24,11 +24,15 @@ use itertools::Itertools;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_rocksdb::ValueIterator;
+use mz_sql_server_util::cdc::Lsn;
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::envelope::UpsertEnvelope;
+use mz_storage_types::sources::kafka::{KafkaTimestamp, RangeBound};
+use mz_storage_types::sources::mysql::GtidPartition;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton,
@@ -68,12 +72,262 @@ pub type UpsertValue = Result<Row, Box<UpsertError>>;
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize
+    Deserialize,
+    bytemuck::AnyBitPattern,
+    bytemuck::NoUninit
 )]
+#[repr(transparent)]
 pub struct UpsertKey([u8; 32]);
 
 impl columnation::Columnation for UpsertKey {
     type InnerRegion = columnation::CopyRegion<UpsertKey>;
+}
+
+/// Columnar (the `columnar` crate, distinct from `columnation`) support for
+/// `UpsertKey`, so the upsert-v2 source stash can use a paged columnar merge
+/// batcher keyed natively by `UpsertKey` (no `Row` packing). `UpsertKey` is a
+/// POD `[u8; 32]` newtype, so the container is a fixed-stride byte column.
+///
+/// This is hand-rolled rather than `#[derive(Columnar)]`d for one load-bearing
+/// reason: the reference type must be `&UpsertKey`. `&UpsertKey` is `Copy + Ord`
+/// (the lexicographic `[u8; 32]` order the persist-feedback trace is keyed on),
+/// which both satisfies the merge batcher's `Ref: Copy + Ord` requirement and —
+/// crucially — matches the read item of the feedback arrangement's
+/// `ColumnationStack<UpsertKey>` key container, so the paged `ValRow` builder
+/// can reconcile the `Column` input against the spine (its `BuilderInput` bound
+/// is `ReadItem: PartialEq<Ref<UpsertKey>>`). A derived impl would yield a
+/// generated `UpsertKeyReference` (and route `[u8; 32]` through the generic,
+/// non-fixed-stride array container), breaking that reconciliation.
+mod columnar_upsert_key {
+    use super::UpsertKey;
+    use columnar::Columnar;
+    use mz_ore::cast::CastFrom;
+    use std::ops::Range;
+
+    /// A newtype wrapper for a vector of `UpsertKey` values.
+    #[derive(Clone, Copy, Default, Debug)]
+    pub struct UpsertKeys<T>(T);
+    impl<D, T: columnar::Push<D>> columnar::Push<D> for UpsertKeys<T> {
+        #[inline(always)]
+        fn push(&mut self, item: D) {
+            self.0.push(item)
+        }
+    }
+    impl<T: columnar::Clear> columnar::Clear for UpsertKeys<T> {
+        #[inline(always)]
+        fn clear(&mut self) {
+            self.0.clear()
+        }
+    }
+    impl<T: columnar::Len> columnar::Len for UpsertKeys<T> {
+        #[inline(always)]
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+    }
+    impl<'a> columnar::Index for UpsertKeys<&'a [UpsertKey]> {
+        type Ref = &'a UpsertKey;
+
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            &self.0[index]
+        }
+    }
+
+    impl Columnar for UpsertKey {
+        #[inline(always)]
+        fn into_owned<'a>(other: columnar::Ref<'a, Self>) -> Self {
+            *other
+        }
+        type Container = UpsertKeys<Vec<UpsertKey>>;
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(thing: columnar::Ref<'a, Self>) -> columnar::Ref<'b, Self>
+        where
+            Self: 'a,
+        {
+            thing
+        }
+    }
+
+    impl columnar::Borrow for UpsertKeys<Vec<UpsertKey>> {
+        type Ref<'a> = &'a UpsertKey;
+        type Borrowed<'a>
+            = UpsertKeys<&'a [UpsertKey]>
+        where
+            Self: 'a;
+        #[inline(always)]
+        fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
+            UpsertKeys(self.0.as_slice())
+        }
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(item: Self::Borrowed<'a>) -> Self::Borrowed<'b>
+        where
+            Self: 'a,
+        {
+            UpsertKeys(item.0)
+        }
+        #[inline(always)]
+        fn reborrow_ref<'b, 'a: 'b>(item: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            item
+        }
+    }
+
+    impl columnar::Container for UpsertKeys<Vec<UpsertKey>> {
+        #[inline(always)]
+        fn extend_from_self(&mut self, other: Self::Borrowed<'_>, range: Range<usize>) {
+            self.0.extend_from_self(other.0, range)
+        }
+        #[inline(always)]
+        fn reserve_for<'a, I>(&mut self, selves: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = Self::Borrowed<'a>> + Clone,
+        {
+            self.0.reserve_for(selves.map(|s| s.0));
+        }
+    }
+
+    impl<'a> columnar::AsBytes<'a> for UpsertKeys<&'a [UpsertKey]> {
+        const SLICE_COUNT: usize = 1;
+        #[inline(always)]
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            debug_assert!(index < Self::SLICE_COUNT);
+            (
+                u64::cast_from(align_of::<UpsertKey>()),
+                bytemuck::cast_slice(self.0),
+            )
+        }
+        #[inline(always)]
+        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
+            std::iter::once((
+                u64::cast_from(align_of::<UpsertKey>()),
+                bytemuck::cast_slice(self.0),
+            ))
+        }
+    }
+    impl<'a> columnar::FromBytes<'a> for UpsertKeys<&'a [UpsertKey]> {
+        const SLICE_COUNT: usize = 1;
+        #[inline(always)]
+        fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
+            UpsertKeys(bytemuck::cast_slice(
+                bytes.next().expect("Iterator exhausted prematurely"),
+            ))
+        }
+    }
+}
+
+/// Projects a source's native `FromTime` to a columnar, totally-ordered key
+/// used by the upsert source stash to keep the latest update per `(key, time)`.
+///
+/// The upsert stash is a paged columnar merge batcher; its diff carries this
+/// projection rather than the raw `FromTime`, so the only columnar type the
+/// stash needs is `Order` — never the (possibly structurally complex) source
+/// timestamp. This is what keeps the columnar requirement off the generic
+/// source-render path: that path only ever needs `FromTime: UpsertSourceTime`.
+/// Only the relative order matters; the value is never read back.
+///
+/// The upsert envelope is rendered for Kafka and the KEY VALUE load generator,
+/// so those source times (`KafkaTimestamp`, `MzOffset`) project to a real order
+/// key. The remaining source times implement the trait only for coherence on
+/// the generic render path — their sources never render upsert — so their
+/// projection is a panicking guard rather than a real key.
+pub trait UpsertSourceTime
+where
+    for<'a> columnar::Ref<'a, Self::Order>: Ord,
+{
+    /// Columnar order key. Must order consistently with the source time it is
+    /// projected from.
+    type Order: columnar::Columnar + Clone + Default + Ord + Send + Sync + 'static;
+    /// Project the source time onto its order key.
+    fn upsert_order(&self) -> Self::Order;
+}
+
+impl UpsertSourceTime for KafkaTimestamp {
+    /// Per-record Kafka source times are exact singletons (a single partition
+    /// at a single offset; see the source reader), and `KafkaTimestamp`'s
+    /// derived `Ord` is lexicographic on `(partition, offset)`, so this flat
+    /// projection is order-preserving. `RangeBound`'s infinities map to the
+    /// `i64` extrema to remain order-consistent for any non-singleton bound.
+    type Order = (i64, u64);
+    fn upsert_order(&self) -> (i64, u64) {
+        let partition = match self.interval().lower {
+            RangeBound::NegInfinity => i64::MIN,
+            RangeBound::Elem(p, _) => i64::from(p),
+            RangeBound::PosInfinity => i64::MAX,
+        };
+        (partition, self.timestamp().offset)
+    }
+}
+
+/// Load-generator (and Postgres) source time. The KEY VALUE load generator is
+/// the one non-Kafka source that renders the upsert envelope (see
+/// `apply_source_envelope_encoding` in the planner), so this projects to the
+/// record offset: offsets increase with each update, so "max order wins" is
+/// exactly "latest update wins" for dedup.
+impl UpsertSourceTime for MzOffset {
+    type Order = u64;
+    fn upsert_order(&self) -> u64 {
+        self.offset
+    }
+}
+
+/// Source times whose sources never render the upsert envelope (MySQL and SQL
+/// Server CDC). `Order = ()` keeps the generic render path free of any columnar
+/// requirement on the source time. The projection panics rather than returning:
+/// `()` would collapse every `from_time` to equal, silently breaking "latest
+/// offset wins" dedup, so if such a source ever reaches the upsert path we want
+/// a loud failure, not arbitrary per-key output.
+macro_rules! upsert_source_time_unit {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl UpsertSourceTime for $ty {
+            type Order = ();
+            fn upsert_order(&self) {
+                unreachable!(
+                    "upsert source stash is not rendered for this source, but \
+                     {} reached the projection",
+                    std::any::type_name::<Self>(),
+                )
+            }
+        }
+    )+};
+}
+upsert_source_time_unit!(GtidPartition, Lsn);
+
+/// Pager for the upsert-v2 source stash.
+///
+/// This draws from the same process-wide [`TieredPolicy`] budget pool as the
+/// compute column-paged batcher — there is one budget and one underlying
+/// `mz_ore::pager` — but whether the stash *uses* it is gated by storage's own
+/// `enable_upsert_paged_spill` flag, independently of compute's
+/// `enable_column_paged_batcher_spill`. The shared pool's budget / backend /
+/// codec are configured by compute's `apply_tiered_config` (storage and compute
+/// run in the same `clusterd` process).
+///
+/// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
+pub mod upsert_stash_pager {
+    use std::sync::{LazyLock, RwLock};
+
+    use mz_timely_util::column_pager::{ColumnPager, shared_pager};
+
+    /// Active pager handed to upsert source-stash batchers. Defaults to
+    /// disabled (every chunk resident) until [`set_enabled`] turns it on.
+    static PAGER: LazyLock<RwLock<ColumnPager>> =
+        LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
+
+    /// Enable or disable the stash's use of the shared column pager. When
+    /// enabled, the stash spills through the shared budget pool; when disabled
+    /// it keeps every chunk resident.
+    pub fn set_enabled(enabled: bool) {
+        *PAGER.write().expect("upsert stash pager poisoned") = shared_pager(enabled);
+    }
+
+    /// The current upsert-stash pager. Cheap: clones the inner `Arc`.
+    pub fn pager() -> ColumnPager {
+        PAGER.read().expect("upsert stash pager poisoned").clone()
+    }
 }
 
 impl Debug for UpsertKey {
@@ -371,9 +625,12 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
 )
 where
     T: Timestamp + TotalOrder + Sync,
-    T: Refines<mz_repr::Timestamp> + TotalOrder + differential_dataflow::lattice::Lattice + Sync,
+    T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
+    T: columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
     FromTime: Timestamp + Clone + Sync,
+    FromTime: UpsertSourceTime,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,

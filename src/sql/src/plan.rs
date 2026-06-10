@@ -57,10 +57,12 @@ use mz_sql_parser::ast::{
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
+use mz_storage_types::connections::gcp::GcpConnection;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
-    AwsPrivatelinkConnection, CsrConnection, IcebergCatalogConnection, KafkaConnection,
-    MySqlConnection, PostgresConnection, SqlServerConnectionDetails, SshConnection,
+    AwsPrivatelinkConnection, CsrConnection, GlueSchemaRegistryConnection,
+    IcebergCatalogConnection, KafkaConnection, MySqlConnection, PostgresConnection,
+    SqlServerConnectionDetails, SshConnection,
 };
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
@@ -935,9 +937,7 @@ impl SubscribeFrom {
     pub fn contains_temporal(&self) -> bool {
         match self {
             SubscribeFrom::Id(_) => false,
-            SubscribeFrom::Query { expr, .. } => expr
-                .contains_temporal()
-                .expect("Unexpected error in `visit_scalars` call"),
+            SubscribeFrom::Query { expr, .. } => expr.contains_temporal(),
         }
     }
 }
@@ -1668,6 +1668,7 @@ pub struct Connection {
 pub enum ConnectionDetails {
     Kafka(KafkaConnection<ReferencedConnection>),
     Csr(CsrConnection<ReferencedConnection>),
+    GlueSchemaRegistry(GlueSchemaRegistryConnection<ReferencedConnection>),
     Postgres(PostgresConnection<ReferencedConnection>),
     Ssh {
         connection: SshConnection,
@@ -1676,6 +1677,7 @@ pub enum ConnectionDetails {
     },
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
+    Gcp(GcpConnection),
     MySql(MySqlConnection<ReferencedConnection>),
     SqlServer(SqlServerConnectionDetails<ReferencedConnection>),
     IcebergCatalog(IcebergCatalogConnection<ReferencedConnection>),
@@ -1688,6 +1690,9 @@ impl ConnectionDetails {
                 mz_storage_types::connections::Connection::Kafka(c.clone())
             }
             ConnectionDetails::Csr(c) => mz_storage_types::connections::Connection::Csr(c.clone()),
+            ConnectionDetails::GlueSchemaRegistry(c) => {
+                mz_storage_types::connections::Connection::GlueSchemaRegistry(c.clone())
+            }
             ConnectionDetails::Postgres(c) => {
                 mz_storage_types::connections::Connection::Postgres(c.clone())
             }
@@ -1698,6 +1703,7 @@ impl ConnectionDetails {
             ConnectionDetails::AwsPrivatelink(c) => {
                 mz_storage_types::connections::Connection::AwsPrivatelink(c.clone())
             }
+            ConnectionDetails::Gcp(c) => mz_storage_types::connections::Connection::Gcp(c.clone()),
             ConnectionDetails::MySql(c) => {
                 mz_storage_types::connections::Connection::MySql(c.clone())
             }

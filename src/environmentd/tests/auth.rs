@@ -712,6 +712,7 @@ async fn test_auth_base_require_tls_frontegg() {
         permissions: Vec::new(),
         token_type: ClaimTokenType::UserToken,
         metadata: None,
+        unknown_claims: Default::default(),
     };
     let frontegg_jwt = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),

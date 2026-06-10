@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_arrow_util::builder::ArrowBuilder;
-use mz_expr::RowSetFinishing;
+use mz_expr::{ColumnOrder, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::separated;
@@ -269,7 +269,7 @@ fn plan_select_inner(
     // we just disallow AS OF when there is an unmaterializable function in a query (except mz_now).
     if scx.is_feature_flag_enabled(&DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF)
         && select.as_of.is_some()
-        && expr.contains_unmaterializable_except_temporal()?
+        && expr.contains_unmaterializable_except_temporal()
     {
         bail_unsupported!("unmaterializable function (except `mz_now`) in an AS OF query");
     }
@@ -1724,6 +1724,7 @@ pub fn plan_subscribe(
             if !map_exprs.is_empty() {
                 return Err(PlanError::InvalidKeysInSubscribeEnvelopeUpsert);
             }
+            check_distinct_key_columns(&order_by, &output_columns)?;
             plan::SubscribeOutput::EnvelopeUpsert {
                 order_by_keys: order_by,
             }
@@ -1749,6 +1750,7 @@ pub fn plan_subscribe(
             if !map_exprs.is_empty() {
                 return Err(PlanError::InvalidKeysInSubscribeEnvelopeDebezium);
             }
+            check_distinct_key_columns(&order_by, &output_columns)?;
             plan::SubscribeOutput::EnvelopeDebezium {
                 order_by_keys: order_by,
             }
@@ -1800,6 +1802,23 @@ pub fn plan_subscribe(
         emit_progress: progress.unwrap_or(false),
         output,
     }))
+}
+
+/// Ensures each `ColumnOrder` in `order_by` references a distinct column,
+/// returning `DuplicateKeyColumnInSubscribeEnvelope` on the first repeat.
+fn check_distinct_key_columns(
+    order_by: &[ColumnOrder],
+    output_columns: &[(usize, &mz_repr::ColumnName)],
+) -> Result<(), PlanError> {
+    let mut seen = BTreeSet::new();
+    for co in order_by {
+        if !seen.insert(co.column) {
+            return Err(PlanError::DuplicateKeyColumnInSubscribeEnvelope {
+                column_name: output_columns[co.column].1.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub fn describe_copy_from_table(

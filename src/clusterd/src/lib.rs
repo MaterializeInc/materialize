@@ -33,9 +33,9 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use mz_service::emit_boot_diagnostics;
-use mz_service::grpc::GrpcServerMetrics;
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_service::transport;
+use mz_service::transport::ClusterServerMetrics;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_types::connections::ConnectionContext;
 use mz_timely_util::capture::arc_event_link;
@@ -376,7 +376,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
 
     let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
-    let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
+    let cluster_server_metrics = ClusterServerMetrics::register_with(&metrics_registry);
 
     let mut storage_timely_config = args.storage_timely_config;
     storage_timely_config.process = args.process;
@@ -423,7 +423,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             grpc_host.clone(),
             Duration::MAX,
             storage_client_builder,
-            grpc_server_metrics.for_server("storage"),
+            cluster_server_metrics.for_server("storage"),
         )
         .instrument(info_span!("ctp", name = "storage")),
     );
@@ -455,7 +455,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             grpc_host.clone(),
             Duration::MAX,
             compute_client_builder,
-            grpc_server_metrics.for_server("compute"),
+            cluster_server_metrics.for_server("compute"),
         )
         .instrument(info_span!("ctp", name = "compute")),
     );

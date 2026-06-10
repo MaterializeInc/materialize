@@ -1582,6 +1582,9 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_compute_peek_response_stash"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -1607,6 +1610,21 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_upsert_v2"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_coalesce_case_transform"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_compute_sync_mv_sink"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_column_paged_batcher"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_column_paged_batcher_spill"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["column_paged_batcher_budget_fraction"] = [
+            "0.0",
+            "0.01",
+            "0.05",
+            "0.25",
+        ]
+        self.flags_with_values["column_paged_batcher_lz4"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["column_paged_batcher_swap_pageout"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the

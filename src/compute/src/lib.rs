@@ -21,5 +21,9 @@ mod extensions;
 mod logging;
 mod metrics;
 mod render;
+/// MV sink machinery, exposed for benchmarks.
+#[cfg(feature = "bench")]
+pub mod sink;
+#[cfg(not(feature = "bench"))]
 mod sink;
 mod typedefs;

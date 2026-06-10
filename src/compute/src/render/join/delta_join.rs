@@ -416,7 +416,7 @@ where
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
-                datums_local.extend(lookup_row.to_datum_iter());
+                lookup_row.extend_datums(&mut datums_local, None);
 
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
 
@@ -464,7 +464,7 @@ where
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
-                datums_local.extend(lookup_row.to_datum_iter());
+                lookup_row.extend_datums(&mut datums_local, None);
 
                 if let Some(row) = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -527,7 +527,7 @@ where
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
-                datums_local.extend(lookup_row.to_datum_iter());
+                lookup_row.extend_datums(&mut datums_local, None);
 
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
 
@@ -574,7 +574,7 @@ where
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
-                datums_local.extend(lookup_row.to_datum_iter());
+                lookup_row.extend_datums(&mut datums_local, None);
 
                 if let Some(row) = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -654,8 +654,8 @@ where
                                         let temp_storage = RowArena::new();
 
                                         let mut datums_local = datums.borrow();
-                                        datums_local.extend(key.to_datum_iter());
-                                        datums_local.extend(val.to_datum_iter());
+                                        key.extend_datums(&mut datums_local, None);
+                                        val.extend_datums(&mut datums_local, None);
 
                                         if !initial_closure.is_identity() {
                                             match initial_closure

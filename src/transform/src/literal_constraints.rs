@@ -701,10 +701,10 @@ impl LiteralConstraints {
                             *e = or; // The modified OR will be the new top-level expr.
                         }
                     }
-                })?;
+                });
                 p.visit_mut_post(&mut |e: &mut MirScalarExpr| {
                     e.flatten_associative();
-                })?;
+                });
             }
             Ok(())
         })

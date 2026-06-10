@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/fusion/union.rs
-revision: e757b4d11b
+revision: fc2aaf02e7
 ---
 
 # mz-transform::fusion::union

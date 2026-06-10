@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/column_knowledge.rs
-revision: 703a0c27c8
+revision: fc2aaf02e7
 ---
 
 # mz-transform::column_knowledge

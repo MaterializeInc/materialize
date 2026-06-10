@@ -830,7 +830,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16702  mz_databases
 16703  mz_schemas
 16704  mz_columns
-16705  mz_indexes
 16706  mz_index_columns
 16707  mz_tables
 16708  mz_connections
@@ -1192,3 +1191,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17085  mz_object_arrangement_size_history_ts_ind
 17086  mz_session_role_memberships
 17087  mz_builtin_sources
+17088  mz_indexes
+17089  generate_series_unoptimized
+17090  generate_series_unoptimized

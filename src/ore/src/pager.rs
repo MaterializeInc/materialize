@@ -21,6 +21,7 @@ mod file;
 mod swap;
 
 pub use file::set_scratch_dir;
+pub use swap::advise_pageout;
 
 use crate::pager::file::FileInner;
 use crate::pager::swap::SwapInner;

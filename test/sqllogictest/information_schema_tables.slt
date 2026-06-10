@@ -158,7 +158,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_indexes
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_kafka_connections

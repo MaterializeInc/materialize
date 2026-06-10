@@ -292,22 +292,6 @@ This will incur downtime when the cluster contains objects that need
 re-hydration before they are ready. This includes indexes, materialized views,
 and some types of sources.
 
-### Schedule
-
-{{< private-preview />}}
-
-For use cases that require using [scheduled clusters](/sql/create-cluster/#scheduling),
-you can set or change the originally configured schedule and related options
-using the `ALTER CLUSTER` command.
-```sql
-ALTER CLUSTER c1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'));
-```
-
-See the reference documentation for [`CREATE
-CLUSTER`](../create-cluster/#scheduling) or [`CREATE MATERIALIZED
-VIEW`](../create-materialized-view/#refresh-strategies) for more details on
-scheduled clusters.
-
 ### Converting unmanaged to managed clusters
 
 {{< note >}}

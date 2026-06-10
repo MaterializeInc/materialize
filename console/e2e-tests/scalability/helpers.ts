@@ -141,7 +141,7 @@ function labelFromSql(sql: string): string | undefined {
  *   2. SQL body regex match (V1 useSqlTyped)
  *   3. Truncated SQL
  */
-function labelRequest(request: Request): string {
+export function labelRequest(request: Request): string {
   const fromKey = labelFromQueryKey(request);
   if (fromKey) return fromKey;
 

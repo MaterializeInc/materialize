@@ -20,6 +20,7 @@ use mz_compute_types::dyncfgs::{
 use mz_compute_types::sinks::{ComputeSinkDesc, CopyToS3OneshotSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::consolidate_pact;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -61,7 +62,7 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
 
         // We exchange the data according to batch, but we don't want to send the batch ID to the
         // sink. The sink can re-compute the batch ID from the data.
-        let input = consolidate_pact::<KeyBatcher<_, _, _>, _>(
+        let input = consolidate_pact::<ColumnationChunker<_>, KeyBatcher<_, _, _>, _, _>(
             sinked_collection.map(move |row| (row, ())).inner,
             Exchange::new(move |((row, ()), _, _): &((Row, _), _, _)| row.hashed() % batch_count),
             "Consolidated COPY TO S3 input",
@@ -69,7 +70,7 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
         .probe_notify_with(vec![output_probe.clone()]);
 
         // We need to consolidate the error collection to ensure we don't act on retracted errors.
-        let error = consolidate_pact::<KeyBatcher<_, _, _>, _>(
+        let error = consolidate_pact::<ColumnationChunker<_>, KeyBatcher<_, _, _>, _, _>(
             err_collection.map(move |err| (err, ())).inner,
             Exchange::new(move |((err, _), _, _): &((DataflowErrorSer, _), _, _)| {
                 err.hashed() % batch_count

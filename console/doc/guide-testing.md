@@ -320,6 +320,65 @@ clusters (useClusters)                       1/1.161 595/1072.983 1/1.545
 High queue times indicate browser connection pool contention (HTTP/1.1 6-connection
 limit). High server times indicate slow SQL execution on the Materialize side.
 
+### Running Load Tests (k6)
+
+[k6](https://k6.io) scripts in `e2e-tests/k6/` replay the console's `/api/sql`
+traffic against Materialize at increasing virtual-user counts. Complements the
+Playwright scalability tests above: Playwright covers end-to-end browser UX
+under load, k6 isolates pure server-side concurrency on `mz_catalog_server`.
+
+#### Setup
+
+```shell
+brew install k6
+```
+
+#### Step 1: Dump live queries
+
+The k6 script replays exact `/api/sql` POSTs. Capture them once against your
+running stack:
+
+```shell
+cd console
+npx playwright test --project=scalability dump-queries
+```
+
+Writes one entry per query label to `e2e-tests/k6/queries.json` (gitignored —
+environment-specific). Re-run whenever the console's query set changes.
+
+Defaults: `BASE_URL=http://localhost:3000`, `CLUSTER_ID=s2`,
+`CLUSTER_NAME=mz_catalog_server`. Same env vars as the Playwright scalability
+tests.
+
+#### Step 2: Run k6
+
+```shell
+cd console/e2e-tests/k6
+MZ_HTTP_URL=http://localhost:6876 k6 run cluster-detail.ts
+```
+
+`MZ_HTTP_URL` points at Materialize's HTTP SQL endpoint. For workload-replay,
+find the host port mapping with `docker port workload-replay-materialized-1`.
+
+Sanity check first at 1 VU to confirm the dump is faithful:
+
+```shell
+MZ_HTTP_URL=http://localhost:6876 k6 run --vus 1 --duration 30s cluster-detail.ts
+```
+
+Default ramp goes 5 → 20 → 50 → 100 VUs over ~6 minutes. Override per stage:
+
+```shell
+VUS_STAGE_1=10 VUS_STAGE_2=50 VUS_STAGE_3=100 VUS_STAGE_4=200 k6 run cluster-detail.ts
+```
+
+#### Reading the output
+
+The end-of-run summary prints per-label `http_req_duration` percentiles using
+the same label scheme as the Playwright audits (`clusters.list`, `healthCheck`,
+etc.). Threshold lines (`✓` / `✗`) show pass/fail against per-query SLA gates
+defined in `cluster-detail.ts`. Baseline runs live in `e2e-tests/k6/baselines/`.
+
 ## Testing Philosophy
 
 We follow the same testing philosophy as the rest of the company. In particular:

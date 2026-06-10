@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: 3df8ae2fd8
+revision: cc73ab4d73
 ---
 
 # mz-sql::session::vars
@@ -10,3 +10,4 @@ Defines `Var`, `ServerVar`, and `SystemVar` traits; `FeatureFlag` for feature-ga
 Delegates to `definitions` for all variable declarations, `value` for parsing/formatting, `constraints` for validation, and `errors` for error types.
 `set_default` (used by `ALTER ROLE ... SET`) skips `check_read_only` for variables listed in `allow_role_default`; currently only `restrict_to_user_objects` is listed there, pairing with a superuser RBAC check in `rbac.rs`.
 `restrict_to_user_objects()` returns the value of the `restrict_to_user_objects` session variable.
+All dyncfg-backed system variables are internal-only and not reachable via `ALTER SYSTEM SET` by environment superusers.

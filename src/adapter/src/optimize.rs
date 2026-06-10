@@ -65,6 +65,7 @@ use std::fmt::Debug;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::PERSIST_FAST_PATH_ORDER;
 use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
+use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::SUBSCRIBE_SNAPSHOT_OPTIMIZATION;
 use mz_compute_types::plan::Plan;
@@ -75,9 +76,12 @@ use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::names::{FullItemName, QualifiedItemName};
-use mz_sql::plan::PlanError;
+use mz_sql::plan::{HirRelationExpr, PlanError};
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::SystemVars;
-use mz_transform::{MaybeShouldPanic, TransformCtx, TransformError};
+use mz_transform::{MaybeShouldPanic, StatisticsOracle, TransformCtx, TransformError};
+
+use crate::TimestampContext;
 
 // Alias types
 // -----------
@@ -118,6 +122,121 @@ pub trait Optimize<From> {
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
         mz_transform::catch_unwind_optimize(|| self.optimize(plan))
     }
+}
+
+// One-shot peek optimizer dispatch
+// --------------------------------
+
+/// The optimizer driving a one-shot statement through the peek sequencing state
+/// machine.
+///
+/// `SELECT` and `EXPLAIN` are optimized by the [`peek::Optimizer`], while `COPY
+/// TO` is optimized by the [`copy_to::Optimizer`]. Both share the same
+/// surrounding state machine (timestamp selection, read holds, off-thread
+/// optimization, …), so this enum lets that shared machinery carry either
+/// optimizer without caring which one it is. The variants are kept distinct
+/// (rather than abstracted behind a trait object) because the downstream stages
+/// need to recover the concrete optimizer and its statement-specific result.
+#[derive(Debug)]
+pub enum PeekOptimizer {
+    /// Optimizer for `SELECT` and `EXPLAIN` statements.
+    Select(peek::Optimizer),
+    /// Optimizer for `COPY TO` statements.
+    CopyTo(copy_to::Optimizer),
+}
+
+/// The global LIR plan produced by [`PeekOptimizer::optimize`], tagged with the
+/// path that produced it.
+#[derive(Debug)]
+pub enum PeekGlobalLirPlan {
+    /// The result of the `SELECT`/`EXPLAIN` pipeline.
+    Select(peek::GlobalLirPlan),
+    /// The result of the `COPY TO` pipeline.
+    CopyTo(copy_to::GlobalLirPlan),
+}
+
+impl PeekOptimizer {
+    /// The cluster that will run the optimized dataflow.
+    pub fn cluster_id(&self) -> ComputeInstanceId {
+        match self {
+            PeekOptimizer::Select(optimizer) => optimizer.cluster_id(),
+            PeekOptimizer::CopyTo(optimizer) => optimizer.cluster_id(),
+        }
+    }
+
+    /// Runs the full one-shot optimization pipeline end-to-end:
+    ///
+    /// 1. HIR ⇒ MIR lowering and local MIR optimization,
+    /// 2. timestamp resolution,
+    /// 3. global MIR optimization, MIR ⇒ LIR lowering, and global LIR
+    ///    optimization.
+    ///
+    /// The pipeline shape is identical for both variants; only the concrete
+    /// (statement-specific) plan types differ, so the steps are shared via
+    /// [`optimize_oneshot`].
+    pub fn optimize(
+        &mut self,
+        raw_expr: HirRelationExpr,
+        timestamp_ctx: TimestampContext,
+        session: &dyn SessionMetadata,
+        stats: Box<dyn StatisticsOracle>,
+    ) -> Result<PeekGlobalLirPlan, OptimizerError> {
+        match self {
+            PeekOptimizer::Select(optimizer) => {
+                let plan = optimize_oneshot(optimizer, raw_expr, |local_mir_plan| {
+                    local_mir_plan.resolve(timestamp_ctx, session, stats)
+                })?;
+                Ok(PeekGlobalLirPlan::Select(plan))
+            }
+            PeekOptimizer::CopyTo(optimizer) => {
+                let plan = optimize_oneshot(optimizer, raw_expr, |local_mir_plan| {
+                    local_mir_plan.resolve(timestamp_ctx, session, stats)
+                })?;
+                Ok(PeekGlobalLirPlan::CopyTo(plan))
+            }
+        }
+    }
+
+    /// Consumes `self`, returning the inner [`peek::Optimizer`] if this is the
+    /// `SELECT`/`EXPLAIN` path and `None` otherwise.
+    pub fn into_select(self) -> Option<peek::Optimizer> {
+        match self {
+            PeekOptimizer::Select(optimizer) => Some(optimizer),
+            PeekOptimizer::CopyTo(_) => None,
+        }
+    }
+
+    /// Consumes `self`, returning the inner [`copy_to::Optimizer`] if this is
+    /// the `COPY TO` path and `None` otherwise.
+    pub fn into_copy_to(self) -> Option<copy_to::Optimizer> {
+        match self {
+            PeekOptimizer::CopyTo(optimizer) => Some(optimizer),
+            PeekOptimizer::Select(_) => None,
+        }
+    }
+}
+
+/// Runs the shared one-shot optimization pipeline for a single optimizer.
+///
+/// This factors out the (otherwise duplicated) HIR ⇒ local MIR ⇒ resolve ⇒
+/// global LIR sequence that is common to the `SELECT`/`EXPLAIN` and `COPY TO`
+/// paths. The `resolve` closure attaches the timestamp/session/stats context to
+/// the local plan; it is path-specific only in the concrete plan type it
+/// operates on.
+pub(crate) fn optimize_oneshot<O, LocalPlan, ResolvedPlan, GlobalPlan>(
+    optimizer: &mut O,
+    raw_expr: HirRelationExpr,
+    resolve: impl FnOnce(LocalPlan) -> ResolvedPlan,
+) -> Result<GlobalPlan, OptimizerError>
+where
+    O: Optimize<HirRelationExpr, To = LocalPlan> + Optimize<ResolvedPlan, To = GlobalPlan>,
+{
+    // HIR ⇒ MIR lowering and MIR optimization (local).
+    let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+    // Attach resolved context required to continue the pipeline.
+    let resolved_mir_plan = resolve(local_mir_plan);
+    // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global).
+    optimizer.catch_unwind_optimize(resolved_mir_plan)
 }
 
 // Optimizer configuration

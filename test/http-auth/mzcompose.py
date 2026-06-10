@@ -98,3 +98,33 @@ def workflow_default(c: Composition) -> None:
                 "permission denied"
                 in r.json()["results"][0]["error"]["message"].lower()
             )
+
+    check_livez_coordinator_coupling(c)
+
+
+def check_livez_coordinator_coupling(c: Composition) -> None:
+    """Regression test for SQL-343: previously having group_claim_for above
+    the authenticator match in http_auth, so unauthenticated internal
+    endpoints (/api/livez, /api/readyz, /metrics) began round-tripping
+    the coordinator (`Command::GetSystemVars`) on every request for a value
+    only the Frontegg arm uses.
+    """
+    c.up("materialized")
+    base = f"http://localhost:{c.port('materialized', 6878)}"
+
+    # Coordinator-side count of GetSystemVars commands, scraped from /metrics.
+    def get_system_vars_count() -> int:
+        for line in requests.get(f"{base}/metrics").text.splitlines():
+            if (
+                line.startswith("mz_slow_message_handling_count{")
+                and "get_system_vars" in line
+            ):
+                return int(float(line.split()[-1]))
+        return 0
+
+    with c.test_case("livez_does_not_round_trip_coordinator"):
+        before = get_system_vars_count()
+        for _ in range(100):
+            assert requests.get(f"{base}/api/livez").status_code == 200
+        delta = get_system_vars_count() - before
+        assert delta < 50, f"100 liveness probes caused {delta} coordinator round-trips"

@@ -57,6 +57,11 @@ struct Args {
     /// JSON of the form: `[{"id":"1", "name": "Organization Admin"}, {"id":"2", "name": "Organization Member"}]`
     #[clap(long)]
     roles: Option<String>,
+    /// JWT `expires_in` (seconds). Lower values speed up the background
+    /// refresh task; useful for tests that need to observe refresh-driven
+    /// behavior on a short timescale.
+    #[clap(long, default_value_t = 500)]
+    expires_in_secs: i64,
 }
 
 #[tokio::main]
@@ -128,7 +133,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         tenant_api_tokens,
         role_permissions,
         SYSTEM_TIME.clone(),
-        500,
+        args.expires_in_secs,
         None,
         roles,
     )

@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/pure.rs
-revision: be6145e2f6
+revision: 8d94c2a06c
 ---
 
 # mz-sql::pure

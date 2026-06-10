@@ -2081,7 +2081,7 @@ pub static PG_USER: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
         .with_column("usesuper", SqlScalarType::Bool.nullable(true))
         .with_column("userepl", SqlScalarType::Bool.nullable(false))
         .with_column("usebypassrls", SqlScalarType::Bool.nullable(false))
-        .with_column("passwd", SqlScalarType::String.nullable(true))
+        .with_column("passwd", SqlScalarType::String.nullable(false))
         .with_column(
             "valuntil",
             SqlScalarType::TimestampTz { precision: None }.nullable(true),
@@ -2100,7 +2100,7 @@ SELECT
     rolsuper AS usesuper,
     rolreplication AS userepl,
     rolbypassrls AS usebypassrls,
-    rolpassword as passwd,
+    '********' as passwd,
     rolvaliduntil as valuntil,
     (
         SELECT array_agg(parameter_name || '=' || parameter_value)

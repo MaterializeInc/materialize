@@ -44,7 +44,6 @@ from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
@@ -74,7 +73,6 @@ SERVICES = [
         },
         support_external_clusterd=True,
     ),
-    CockroachOrPostgresMetadata(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),
@@ -2469,7 +2467,7 @@ class Metrics:
         return values[0]
 
     def get_last_command_received(self, server_name: str) -> float:
-        metrics = self.with_name("mz_grpc_server_last_command_received")
+        metrics = self.with_name("mz_cluster_server_last_command_received")
         values = [v for k, v in metrics.items() if server_name in k]
         assert len(values) == 1
         return values[0]
@@ -2589,6 +2587,19 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         ), f"unexpected persist sink max correction capacity per worker: {mv_correction_max_cap_per_worker}"
 
         assert metrics.get_last_command_received("compute") >= before_connection_time
+
+        # The metric must stay fresh on a healthy but idle connection, kept current by CTP
+        # keepalives even when no commands are flowing. Otherwise the
+        # `clusterd-not-receiving-commands` alert false-positives on healthy clusters (CLU-103).
+        idle_seconds = 10
+        time.sleep(idle_seconds)
+        metrics = fetch_metrics()
+        for server in ("compute", "storage"):
+            staleness = time.time() - metrics.get_last_command_received(server)
+            assert staleness < idle_seconds, (
+                f"{server} last_command_received is stale ({staleness:.1f}s old) on an idle "
+                "but healthy connection; keepalives should keep it fresh"
+            )
 
         count = metrics.get_compute_collection_count("log", "0")
         assert count == 0, "unexpected number of unhydrated log collections"
@@ -4104,6 +4115,63 @@ def workflow_cluster_drop_concurrent(
                     )
             for thread in threads:
                 assert not thread.is_alive(), f"Thread {thread.name} is still running"
+
+
+def workflow_test_drop_cluster_during_peeks(c: Composition) -> None:
+    """Race peeks against DROP/CREATE of their target cluster; environmentd
+    must not panic in `set_statement_execution_cluster`."""
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("CREATE CLUSTER victim SIZE 'scale=1,workers=1'")
+
+        stop = [False]
+
+        def peek_loop() -> None:
+            while not stop[0]:
+                try:
+                    with c.sql_cursor() as cur:
+                        cur.execute("SET auto_route_catalog_queries = false")
+                        cur.execute("SET cluster = victim")
+                        while not stop[0]:
+                            cur.execute("SELECT 1")
+                            cur.fetchone()
+                except DatabaseError:
+                    pass
+
+        def churn_loop() -> None:
+            while not stop[0]:
+                try:
+                    with c.sql_cursor() as cur:
+                        cur.execute("DROP CLUSTER IF EXISTS victim CASCADE")
+                        cur.execute("CREATE CLUSTER victim SIZE 'scale=1,workers=1'")
+                except DatabaseError:
+                    pass
+
+        threads = [
+            PropagatingThread(target=peek_loop, name=f"peek-{i}") for i in range(8)
+        ] + [PropagatingThread(target=churn_loop, name="churn")]
+        for t in threads:
+            t.start()
+        try:
+            time.sleep(30)
+        finally:
+            stop[0] = True
+            for t in threads:
+                t.join(timeout=10)
+
+        with c.sql_cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
 
 
 def workflow_test_refresh_mv_warmup(
@@ -6389,33 +6457,69 @@ def workflow_test_slow_seqno_hold(c: Composition):
     try:
         [(gid,)] = c.sql_query("SELECT id FROM mz_tables where name = 'source1_tbl'")
 
-        def get_reader_seqno():
+        def get_leased_readers():
             [(state_json,)] = c.sql_query(
                 f"INSPECT SHARD '{gid}'", port=6877, user="mz_system"
             )
-            leased_readers = state_json["leased_readers"]
-            if not leased_readers:
-                return None, None
-            assert len(leased_readers) == 1
-            id, value = leased_readers.popitem()
-            return id, value["seqno"]
+            return state_json["leased_readers"]
 
-        # Show that the seqno is making progress - grab an initial value and then one higher value.
-        reader_id = None
-        initial_seqno = None
-        while initial_seqno is None:
-            reader_id, initial_seqno = get_reader_seqno()
+        # Poll `get_leased_readers` on a deadline, returning the first non-None
+        # value `predicate` produces. We use a bounded deadline (well below the
+        # CI step timeout) so that a regression fails this test quickly with a
+        # useful diagnostic, instead of silently hanging the whole `cluster
+        # --slow-only` step until the global timeout fires (which previously
+        # burned ~30 minutes per occurrence, e.g. nightly build 16706).
+        def poll_until(predicate, timeout, description):
+            deadline = time.time() + timeout
+            last = None
+            while time.time() < deadline:
+                last = get_leased_readers()
+                result = predicate(last)
+                if result is not None:
+                    return result
+                time.sleep(1)
+            raise AssertionError(
+                f"timed out after {timeout}s waiting for {description}; "
+                f"last observed leased_readers={last}"
+            )
+
+        # The blocked SELECT installs a reader on the source's shard that can't
+        # make progress. Wait for that single stalled reader to show up and grab
+        # its id + initial seqno. (The source restarts periodically while its
+        # upstream is down, which can briefly expose a second, transient reader;
+        # only latch on once exactly one reader is present.)
+        def single_reader(leased_readers):
+            if len(leased_readers) != 1:
+                return None
+            ((reader_id, value),) = leased_readers.items()
+            return reader_id, value["seqno"]
+
+        reader_id, initial_seqno = poll_until(
+            single_reader,
+            timeout=120,
+            description="a single leased reader to appear on the stalled shard",
+        )
 
         print(
             f"{reader_id} has initial seqno {initial_seqno}. Waiting for progress, which may take a minute..."
         )
-        while True:
-            id, seqno = get_reader_seqno()
-            assert id == reader_id
-            assert seqno is not None
-            if seqno > initial_seqno:
-                break
-            time.sleep(1)
+
+        # Show that the seqno is making progress: even though the upstream
+        # frontier is stuck, the reader should periodically downgrade its seqno
+        # hold, advancing it past the initial value.
+        def seqno_advanced(leased_readers):
+            value = leased_readers.get(reader_id)
+            if value is None:
+                # The reader momentarily vanished (e.g. a source restart). Keep
+                # polling; a permanent disappearance surfaces at the deadline.
+                return None
+            return True if value["seqno"] > initial_seqno else None
+
+        poll_until(
+            seqno_advanced,
+            timeout=300,
+            description=f"reader {reader_id} to advance its seqno past {initial_seqno}",
+        )
 
     # Cleanup: unblock the select and wait for it to complete.
     finally:

@@ -118,8 +118,8 @@ steps:
         label: Package-isolated cargo check
         command: bin/ci-builder run stable bin/check-package-isolation
         depends_on: []
-        timeout_in_minutes: 45
-        parallelism: 5
+        timeout_in_minutes: 60
+        parallelism: 8
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         sanitizer: skip
@@ -2381,6 +2381,19 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
               run: revert-rollout
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-rollout-timeout
+        label: Orchestratord cancel rollout after timeout
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: rollout-timeout
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

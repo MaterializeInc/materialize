@@ -17,6 +17,7 @@ path = "src/bin/crd_writer.rs"
 anyhow.workspace = true
 chrono.workspace = true
 futures.workspace = true
+humantime.workspace = true
 indexmap.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true

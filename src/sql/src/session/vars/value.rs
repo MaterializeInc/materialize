@@ -291,11 +291,12 @@ impl Value for Duration {
     {
         let s = extract_single_value(input)?;
         let s = s.trim();
-        // Take all numeric values from [0..]
-        let split_pos = s
-            .chars()
-            .position(|p| !char::is_numeric(p))
-            .unwrap_or_else(|| s.chars().count());
+        // Find where the leading run of ASCII digits ends. `str::find` returns a
+        // byte index, so it is safe to slice with directly. We restrict to ASCII
+        // digits (rather than `char::is_numeric`) because that is exactly what
+        // `u64::parse` accepts; matching broader Unicode numerics such as '²'
+        // would yield a byte offset that can land mid-character and panic.
+        let split_pos = s.find(|p: char| !p.is_ascii_digit()).unwrap_or(s.len());
 
         // Error if the numeric values don't parse, i.e. there aren't any.
         let d = s[..split_pos]
@@ -909,32 +910,46 @@ pub enum IsolationLevel {
 }
 
 impl IsolationLevel {
-    pub fn as_str(&self) -> &'static str {
+    const READ_UNCOMMITTED: &'static str = "read uncommitted";
+    const READ_COMMITTED: &'static str = "read committed";
+    const REPEATABLE_READ: &'static str = "repeatable read";
+    const SERIALIZABLE: &'static str = "serializable";
+    const STRONG_SESSION_SERIALIZABLE: &'static str = "strong session serializable";
+    const STRICT_SERIALIZABLE: &'static str = "strict serializable";
+
+    /// Unit-cardinality variant identifier, suitable for Prometheus labels,
+    /// equality checks against parsed input, and other contexts where one
+    /// bucket per kind of isolation is wanted.
+    ///
+    /// For the user-facing rendering (which round-trips through
+    /// [`Value::parse`]) use the [`fmt::Display`] impl — that is what
+    /// `SHOW transaction_isolation` returns.
+    pub fn as_variant_str(&self) -> &'static str {
         match self {
-            Self::ReadUncommitted => "read uncommitted",
-            Self::ReadCommitted => "read committed",
-            Self::RepeatableRead => "repeatable read",
-            Self::Serializable => "serializable",
-            Self::StrongSessionSerializable => "strong session serializable",
-            Self::StrictSerializable => "strict serializable",
+            Self::ReadUncommitted => Self::READ_UNCOMMITTED,
+            Self::ReadCommitted => Self::READ_COMMITTED,
+            Self::RepeatableRead => Self::REPEATABLE_READ,
+            Self::Serializable => Self::SERIALIZABLE,
+            Self::StrongSessionSerializable => Self::STRONG_SESSION_SERIALIZABLE,
+            Self::StrictSerializable => Self::STRICT_SERIALIZABLE,
         }
     }
 
     fn valid_values() -> Vec<&'static str> {
         vec![
-            Self::ReadUncommitted.as_str(),
-            Self::ReadCommitted.as_str(),
-            Self::RepeatableRead.as_str(),
-            Self::Serializable.as_str(),
-            // TODO(jkosh44) Add StrongSessionSerializable when it becomes available to users.
-            Self::StrictSerializable.as_str(),
+            Self::READ_UNCOMMITTED,
+            Self::READ_COMMITTED,
+            Self::REPEATABLE_READ,
+            Self::SERIALIZABLE,
+            // TODO(jkosh44) Add STRONG_SESSION_SERIALIZABLE when it becomes available to users.
+            Self::STRICT_SERIALIZABLE,
         ]
     }
 }
 
 impl fmt::Display for IsolationLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.as_variant_str())
     }
 }
 
@@ -955,15 +970,15 @@ impl Value for IsolationLevel {
 
         // We don't have any optimizations for levels below Serializable,
         // so we upgrade them all to Serializable.
-        if s == Self::ReadUncommitted.as_str()
-            || s == Self::ReadCommitted.as_str()
-            || s == Self::RepeatableRead.as_str()
-            || s == Self::Serializable.as_str()
+        if s == Self::READ_UNCOMMITTED
+            || s == Self::READ_COMMITTED
+            || s == Self::REPEATABLE_READ
+            || s == Self::SERIALIZABLE
         {
             Ok(Self::Serializable)
-        } else if s == Self::StrongSessionSerializable.as_str() {
+        } else if s == Self::STRONG_SESSION_SERIALIZABLE {
             Ok(Self::StrongSessionSerializable)
-        } else if s == Self::StrictSerializable.as_str() {
+        } else if s == Self::STRICT_SERIALIZABLE {
             Ok(Self::StrictSerializable)
         } else {
             Err(VarParseError::ConstrainedParameter {
@@ -978,7 +993,7 @@ impl Value for IsolationLevel {
     }
 
     fn format(&self) -> String {
-        self.as_str().into()
+        self.to_string()
     }
 }
 
@@ -1240,6 +1255,13 @@ mod tests {
         errs("x");
         errs("s");
         errs("18446744073709551615 min");
+        // Unicode numerics such as '²' (U+00B2) are multi-byte and must not be
+        // treated as parseable digits: their char index differs from their byte
+        // offset, so slicing on them would land mid-character and panic.
+        errs("²");
+        errs("1²ms");
+        errs("½");
+        errs("１ms");
     }
 
     #[mz_ore::test]

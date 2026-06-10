@@ -30,6 +30,7 @@ use futures::FutureExt;
 use http::Request;
 use itertools::Itertools;
 use jsonwebtoken::{DecodingKey, EncodingKey};
+use mz_auth::password::Password;
 use mz_environmentd::test_util::{self, Ca, KAFKA_ADDRS, PostgresErrorExt, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -2695,12 +2696,24 @@ fn test_metrics_public_endpoint() {
         .start_blocking();
 
     let cluster_name = "test_cluster_1";
-    let label = format!("cluster_name=\"{cluster_name}\"");
+    let cluster_label = format!("cluster_name=\"{cluster_name}\"");
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
         .batch_execute(&format!(
             "CREATE CLUSTER {cluster_name} REPLICAS (r1 (SIZE 'scale=2,workers=2'))"
+        ))
+        .unwrap();
+
+    // Create a materialized view on the cluster so a compute dataflow runs and
+    // reports `mz_dataflow_wallclock_lag_seconds`. That metric carries a
+    // `collection_id` label, which the federated endpoint resolves to a
+    // `collection_name` via the metric's advertised `ObjectNameLookup` rule.
+    let view_name = "test_mv_1";
+    let collection_label = format!("collection_name=\"{view_name}\"");
+    client
+        .batch_execute(&format!(
+            "CREATE MATERIALIZED VIEW {view_name} IN CLUSTER {cluster_name} AS SELECT 1"
         ))
         .unwrap();
 
@@ -2715,25 +2728,35 @@ fn test_metrics_public_endpoint() {
         res.text().unwrap()
     };
 
-    // Retry the scrape until the replica's `http` listener is up;
-    // until then `/metrics/public` only returns env's local metrics with no
-    // cluster_name labels.
+    // Retry the scrape until the replica's `http` listener is up and the
+    // wallclock-lag dataflow has reported. Until then `/metrics/public` only
+    // returns env's local metrics, without the cluster_name/collection_name
+    // labels resolved from the replica's metrics.
     Retry::default()
         .max_duration(Duration::from_secs(60))
         .retry(|_| {
-            if fetch_body().contains(label.as_str()) {
-                Ok(())
-            } else {
-                Err(format!("{label} not yet in /metrics/public"))
+            let body = fetch_body();
+            match (
+                body.contains(cluster_label.as_str()),
+                body.contains(collection_label.as_str()),
+            ) {
+                (true, true) => Ok(()),
+                (cluster, collection) => Err(format!(
+                    "labels not yet in /metrics/public \
+                     (cluster_name={cluster}, collection_name={collection})"
+                )),
             }
         })
         .unwrap();
 
+    // Dropping the cluster (and its dependent view) removes both labels.
     client
-        .batch_execute(&format!("DROP CLUSTER {cluster_name}"))
+        .batch_execute(&format!("DROP CLUSTER {cluster_name} CASCADE"))
         .unwrap();
 
-    assert!(!fetch_body().contains(label.as_str()));
+    let body = fetch_body();
+    assert!(!body.contains(cluster_label.as_str()));
+    assert!(!body.contains(collection_label.as_str()));
 }
 
 #[mz_ore::test]
@@ -5827,6 +5850,434 @@ fn test_mcp_agent_with_data_product() {
     assert!(
         body["error"].is_object(),
         "injection in cluster should produce an error, not succeed"
+    );
+}
+
+/// Verifies that the `WWW-Authenticate` challenge on a 401 for an MCP
+/// route includes both the Bearer (with `resource_metadata`) and Basic
+/// challenges, so OAuth-aware clients (Claude Desktop, ChatGPT remote
+/// MCP) can discover the protected resource metadata while existing
+/// callers that send Basic still see a usable challenge. This is the
+/// half of RFC 9728 that doesn't require an authorization server to be
+/// configured — even with no `oidc_issuer` set, the Bearer challenge
+/// itself fires (clients then probe the well-known URI and get a 404,
+/// which is the documented fallback path).
+#[mz_ore::test]
+fn test_mcp_unauth_emits_bearer_and_basic_challenges() {
+    // An OIDC listener is the authenticator kind that advertises OAuth
+    // (see `McpOAuthDiscovery`); an unauthenticated MCP request on it 401s
+    // with both the Bearer and Basic challenges. (A `None` listener would
+    // default to anonymous_http_user and never challenge.) `with_oidc_auth`
+    // must precede `with_mcp_routes` because it replaces the listener config.
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, true)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .start_blocking();
+
+    for endpoint in ["agent", "developer"] {
+        let url = format!("http://{}/api/mcp/{endpoint}", server.http_local_addr());
+        let res = Client::new()
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .send()
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "MCP {endpoint} without auth should 401",
+        );
+        let challenges: Vec<String> = res
+            .headers()
+            .get_all(http::header::WWW_AUTHENTICATE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert!(
+            challenges.iter().any(|c| c.starts_with("Bearer ")
+                && c.contains("resource_metadata=")
+                && c.contains("/.well-known/oauth-protected-resource")
+                && c.contains("scope=\"mcp.read\"")),
+            "expected a Bearer challenge with resource_metadata AND scope on /api/mcp/{endpoint}, got: {challenges:?}",
+        );
+        assert!(
+            challenges.iter().any(|c| c.starts_with("Basic ")),
+            "expected a Basic challenge alongside Bearer so curl/legacy callers \
+             still see a usable challenge, got: {challenges:?}",
+        );
+    }
+}
+
+/// MCP routes on a `Password`-authenticator listener must NOT advertise
+/// OAuth — discovery is scoped to `Oidc` listeners by
+/// [`oauth_metadata::McpOAuthDiscovery::for_authenticator`]. Regression
+/// guard for the seam: even with MCP routes enabled, a Password listener
+/// emits only `Basic` on a 401 and 404s the well-known discovery URI.
+#[mz_ore::test]
+fn test_mcp_unauth_on_password_listener_does_not_advertise_oauth() {
+    let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_mcp_routes(true, true)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    for endpoint in ["agent", "developer"] {
+        let res = Client::new()
+            .post(&format!(
+                "http://{}/api/mcp/{endpoint}",
+                server.http_local_addr()
+            ))
+            .header("Content-Type", "application/json")
+            .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let challenges: Vec<String> = res
+            .headers()
+            .get_all(http::header::WWW_AUTHENTICATE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert!(
+            challenges.iter().any(|c| c.starts_with("Basic ")),
+            "Password listener should still emit Basic on /api/mcp/{endpoint}: {challenges:?}",
+        );
+        assert!(
+            !challenges.iter().any(|c| c.starts_with("Bearer ")),
+            "Password listener MUST NOT advertise OAuth on /api/mcp/{endpoint}: {challenges:?}",
+        );
+    }
+
+    // The discovery endpoint must 404 on a Password listener even though
+    // `oidc_issuer` is set — there is no OAuth flow this listener honours.
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "discovery doc must not be published on a Password listener",
+    );
+}
+
+/// The SQL HTTP layer must NOT gain the Bearer challenge — only MCP
+/// routes opt into OAuth discovery. Regression guard so we don't
+/// accidentally widen the OAuth surface to the rest of the HTTP server.
+#[mz_ore::test]
+fn test_sql_http_unauth_keeps_only_basic_challenge() {
+    let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
+        .start_blocking();
+
+    // `/` triggers the WWW-Authenticate path (see auth_middleware) so we
+    // get a 401 with the challenge header.
+    let res = Client::new()
+        .get(&format!("http://{}/", server.http_local_addr()))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let challenges: Vec<String> = res
+        .headers()
+        .get_all(http::header::WWW_AUTHENTICATE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        challenges.iter().any(|c| c.starts_with("Basic ")),
+        "SQL HTTP layer should still emit Basic challenge: {challenges:?}",
+    );
+    assert!(
+        !challenges.iter().any(|c| c.starts_with("Bearer ")),
+        "SQL HTTP layer must NOT advertise OAuth: {challenges:?}",
+    );
+}
+
+/// The well-known protected resource metadata document is public (no
+/// auth) and returns the configured authorization server when
+/// `oidc_issuer` is set. Pinning the JSON shape protects MCP clients
+/// from accidental contract drift.
+///
+/// Uses `with_oidc_auth` because the discovery handler only publishes on
+/// an OIDC listener — the one authenticator kind that validates bearer
+/// tokens against `oidc_issuer` (see `McpOAuthDiscovery`). The listener
+/// never validates a token in this test, so no live IdP is needed.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_advertises_issuer() {
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: serde_json::Value = res.json().unwrap();
+
+    // `resource` is built from the request host and must point at the
+    // MCP path prefix — clients use this as the `aud` value in their
+    // RFC 8707 resource indicator.
+    let resource = body["resource"].as_str().expect("resource is a string");
+    assert!(
+        resource.ends_with("/api/mcp"),
+        "resource should point at /api/mcp prefix, got: {resource}",
+    );
+
+    let authorization_servers: Vec<String> = body["authorization_servers"]
+        .as_array()
+        .expect("authorization_servers is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        authorization_servers,
+        vec!["https://issuer.test.example.com".to_string()],
+        "should advertise the configured oidc_issuer verbatim",
+    );
+
+    let bearer_methods: Vec<String> = body["bearer_methods_supported"]
+        .as_array()
+        .expect("bearer_methods_supported is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        bearer_methods,
+        vec!["header".to_string()],
+        "we only accept the Authorization header, not a query param",
+    );
+
+    let scopes_supported: Vec<String> = body["scopes_supported"]
+        .as_array()
+        .expect("scopes_supported is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        scopes_supported,
+        vec!["mcp.read".to_string()],
+        "should advertise the mcp.read scope so clients know what to request",
+    );
+}
+
+/// Path-suffixed well-known URIs (RFC 9728 §3.1) MUST serve the same
+/// document as the bare well-known URI. Strict clients look these up
+/// first based on the resource path; if they 404 here, those clients
+/// never make it to the working bare URI.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_path_suffixed_aliases() {
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, true)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    for suffix in [
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/api/mcp/agent",
+        "/.well-known/oauth-protected-resource/api/mcp/developer",
+    ] {
+        let res = Client::new()
+            .get(&format!("http://{}{suffix}", server.http_local_addr()))
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "expected 200 at {suffix}");
+        let body: serde_json::Value = res.json().unwrap();
+        let authorization_servers: Vec<String> = body["authorization_servers"]
+            .as_array()
+            .expect("authorization_servers is an array")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            authorization_servers,
+            vec!["https://issuer.test.example.com".to_string()],
+            "all three URIs must serve the same metadata document",
+        );
+    }
+}
+
+/// An `oidc_issuer` value that does not parse as a URL must NOT be
+/// published verbatim — RFC 9728 §3 requires entries in
+/// `authorization_servers` to be valid URLs, and publishing garbage
+/// would steer every client into an unrecoverable error on their next
+/// discovery hop. The honest response is a 503 plus a server-side
+/// warning so operators can see and fix the misconfiguration.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_rejects_invalid_issuer() {
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            // Whitespace + missing scheme: not a valid URI per `http::Uri`.
+            "not a url".to_string(),
+        )
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "invalid oidc_issuer must surface as 503, not a published malformed doc",
+    );
+}
+
+/// When no `oidc_issuer` is configured on a listener that *does*
+/// validate tokens, the endpoint MUST 404. RFC 9728 requires
+/// `authorization_servers` to be non-empty, and returning an honest
+/// 404 lets clients fall back to whatever else they support instead of
+/// being misled by a half-baked document.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_404_when_no_issuer() {
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "no oidc_issuer => 404, not an empty metadata doc",
+    );
+}
+
+/// End-to-end discovery flow: an unauthenticated MCP request emits a
+/// 401 with a `resource_metadata` URL on the same host as the request,
+/// and the discovery document at that path resolves to a 200 with the
+/// configured issuer. Pinning the sequence guards against any one
+/// piece being broken in a way the per-piece tests would miss.
+///
+/// The published `resource_metadata` URL uses the `https` scheme even
+/// though the test listener is plain HTTP (we always advertise `https`;
+/// see `oauth_metadata::PUBLISHED_SCHEME`), so we extract the path
+/// suffix and re-issue the GET against the actual local HTTP listener.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_end_to_end_flow() {
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    let local_addr = server.http_local_addr();
+    let mcp_res = Client::new()
+        .post(&format!("http://{local_addr}/api/mcp/agent"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+        .send()
+        .unwrap();
+    assert_eq!(mcp_res.status(), StatusCode::UNAUTHORIZED);
+
+    let bearer_challenge = mcp_res
+        .headers()
+        .get_all(http::header::WWW_AUTHENTICATE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .find(|c| c.starts_with("Bearer "))
+        .expect("a Bearer WWW-Authenticate challenge");
+    let advertised_url = bearer_challenge
+        .split(',')
+        .find_map(|part| {
+            part.trim()
+                .strip_prefix("resource_metadata=\"")
+                .and_then(|s| s.strip_suffix('"'))
+        })
+        .expect("resource_metadata parameter in Bearer challenge");
+    assert!(
+        advertised_url.starts_with("https://"),
+        "discovery URL must always be https: {advertised_url}",
+    );
+
+    let path_suffix = advertised_url
+        .splitn(4, '/')
+        .nth(3)
+        .expect("path on the advertised URL");
+    let discovery_res = Client::new()
+        .get(&format!("http://{local_addr}/{path_suffix}"))
+        .send()
+        .unwrap();
+    assert_eq!(discovery_res.status(), StatusCode::OK);
+    let body: serde_json::Value = discovery_res.json().unwrap();
+    assert_eq!(
+        body["authorization_servers"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str()),
+        Some("https://issuer.test.example.com"),
+    );
+}
+
+/// A `None`-authenticator listener (anonymous_http_user) MUST 404 even
+/// if an `oidc_issuer` is configured: publishing on a listener that
+/// never validates tokens would mislead clients into a flow they cannot
+/// complete.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_404_on_no_auth_listener() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "None-authenticator listener must not publish OAuth metadata even with oidc_issuer set",
     );
 }
 

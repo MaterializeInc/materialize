@@ -33,7 +33,6 @@ from launchdarkly_api.model.variation import Variation  # type: ignore
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_ORG_ID
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
@@ -53,7 +52,6 @@ LD_CONTEXT_KEY = DEFAULT_MZ_ENVIRONMENT_ID
 LD_FEATURE_FLAG_KEY = f"ci-test-{BUILDKITE_JOB_ID}"
 
 SERVICES = [
-    CockroachOrPostgresMetadata(),
     Materialized(
         environment_extra=[
             f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",

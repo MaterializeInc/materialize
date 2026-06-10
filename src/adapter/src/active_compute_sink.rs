@@ -115,6 +115,9 @@ pub struct ActiveSubscribe {
     pub start_time: EpochMillis,
     /// How to present the subscribe's output.
     pub output: SubscribeOutput,
+    /// If true, this is an internal subscribe that should not appear in
+    /// introspection tables like mz_subscriptions.
+    pub internal: bool,
 }
 
 impl ActiveSubscribe {
@@ -269,7 +272,18 @@ impl ActiveSubscribe {
                     // [(key, v1, -1), (key, v2, +1)] => ("upsert", key, v1, v2)
                     // [(key, value, -1)] => ("delete", key, value, NULL)
                     // everything else => ("key_violation", key, NULL, NULL)
-                    let value_columns = self.arity - order_by_keys.len();
+                    // Defense in depth: the planner ensures that KEY columns are
+                    // distinct columns of the underlying relation, so this
+                    // subtraction must never underflow. If it does, we'd OOM
+                    // the coordinator with a giant loop, so check it here.
+                    mz_ore::soft_assert_or_log!(
+                        order_by_keys.len() <= self.arity,
+                        "SUBSCRIBE ENVELOPE has more KEY columns ({}) than \
+                         relation arity ({}); planner should have rejected this",
+                        order_by_keys.len(),
+                        self.arity,
+                    );
+                    let value_columns = self.arity.saturating_sub(order_by_keys.len());
                     let mut packer = row_buf.packer();
                     match &group[..] {
                         [(row, _, Diff::ONE)] => {
@@ -307,7 +321,7 @@ impl ActiveSubscribe {
                                     }
                                 }
                             }
-                            for _ in 0..self.arity - order_by_keys.len() {
+                            for _ in 0..value_columns {
                                 packer.push(Datum::Null);
                             }
                             push_row(row_buf.as_row_ref(), *start.1, Diff::ZERO)
@@ -341,11 +355,11 @@ impl ActiveSubscribe {
                                 packer.push(datums[column_order.column]);
                             }
                             if debezium {
-                                for _ in 0..(self.arity - order_by_keys.len()) {
+                                for _ in 0..value_columns {
                                     packer.push(Datum::Null);
                                 }
                             }
-                            for _ in 0..(self.arity - order_by_keys.len()) {
+                            for _ in 0..value_columns {
                                 packer.push(Datum::Null);
                             }
                             push_row(row_buf.as_row_ref(), *start.1, Diff::ZERO)

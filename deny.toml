@@ -128,6 +128,21 @@ skip = [
     { name = "fallible-iterator", version = "0.3.0" },
     # arrow
     { name = "hashbrown", version = "0.16.1" },
+    # Used by dynfmt; iceberg/typetag pulls in v0.4.
+    { name = "erased-serde", version = "0.3.26" },
+    # gcp_auth → hyper-rustls → rustls-native-certs pulls newer versions
+    # while native-tls still pulls older versions.
+    { name = "core-foundation", version = "0.10.1" },
+    { name = "security-framework", version = "3.7.0" },
+    { name = "openssl-probe", version = "0.2.1" },
+    # reqsign (via iceberg-storage-opendal / opendal) pins older deps
+    # than the workspace.
+    { name = "jsonwebtoken", version = "9.3.1" },
+    { name = "quick-xml", version = "0.37.5" },
+    # aws-lc-rs (via jsonwebtoken 10) and ring pull different `untrusted`.
+    { name = "untrusted", version = "0.7.1" },
+    # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
+    { name = "spin", version = "0.5.2" },
 ]
 
 [[bans.deny]]
@@ -204,9 +219,11 @@ wrappers = [
 ]
 
 # We prefer the system's native TLS or OpenSSL to Rustls, since they are more
-# mature and more widely used.
+# mature and more widely used. `gcp_auth` only ships with rustls-based TLS,
+# so allow it through.
 [[bans.deny]]
 name = "rustls"
+wrappers = ["hyper-rustls", "tokio-rustls"]
 
 # once_cell is going to be added to std, and doesn't use macros
 # Unfortunately, its heavily used, so we have lots of exceptions.
@@ -217,6 +234,7 @@ wrappers = [
     "findshlibs",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
+    "num-bigint-dig",
     "prometheus",
     "rayon-core",
     "sharded-slab",
@@ -244,8 +262,14 @@ version = 2
 ignore = [
     # Consider `encoding_rs` instead of `encoding` (unmaintained)
     "RUSTSEC-2021-0153",
-    # proc-macro-error is unmaintained, possible alternative: proc-macro-error2
-    "RUSTSEC-2024-0370",
+    # `proc-macro-error2` (the maintained fork of `proc-macro-error`) is now also
+    # unmaintained. Pulled in transitively via `tabled` -> `tabled_derive`. No
+    # safe upgrade is available.
+    "RUSTSEC-2026-0173",
+    # `http-types`'s `Authorization::value`/`WwwAuthenticate::value` can violate
+    # ASCII invariants. The crate is unmaintained and pulled in transitively via
+    # the `azure_*` crates. No safe upgrade is available.
+    "RUSTSEC-2026-0174",
     # `derivative` is unmaintained; consider using an alternative (unmaintained)
     "RUSTSEC-2024-0388",
     # The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) that this project is not longer maintained as well as archived the repository

@@ -19,7 +19,7 @@ use mz_catalog::builtin::{
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
     MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_DEFAULT_PRIVILEGES,
     MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS,
-    MZ_INDEX_COLUMNS, MZ_INDEXES, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
+    MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
     MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
     MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
@@ -401,9 +401,7 @@ impl CatalogState {
         let privileges_row = self.pack_privilege_array_row(entry.privileges());
         let privileges = privileges_row.unpack_first();
         let mut updates = match entry.item() {
-            CatalogItem::Index(index) => {
-                self.pack_index_update(id, oid, name, owner_id, index, diff)
-            }
+            CatalogItem::Index(index) => self.pack_index_update(id, index, diff),
             CatalogItem::Table(table) => {
                 let mut updates = self
                     .pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff, table);
@@ -938,6 +936,8 @@ impl CatalogState {
                 updates.push(self.pack_ssh_tunnel_connection_update(id, key_1, key_2, diff));
             }
             ConnectionDetails::Csr(_)
+            | ConnectionDetails::GlueSchemaRegistry(_)
+            | ConnectionDetails::Gcp(_)
             | ConnectionDetails::Postgres(_)
             | ConnectionDetails::MySql(_)
             | ConnectionDetails::SqlServer(_)
@@ -1292,9 +1292,6 @@ impl CatalogState {
     fn pack_index_update(
         &self,
         id: CatalogItemId,
-        oid: u32,
-        name: &str,
-        owner_id: &RoleId,
         index: &Index,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
@@ -1316,22 +1313,6 @@ impl CatalogState {
                 .expect("key_parts is filled in during planning"),
             _ => unreachable!(),
         };
-        let on_item_id = self.get_entry_by_global_id(&index.on).id();
-
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_INDEXES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(name),
-                Datum::String(&on_item_id.to_string()),
-                Datum::String(&index.cluster_id.to_string()),
-                Datum::String(&owner_id.to_string()),
-                Datum::String(&index.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        ));
 
         let on_entry = self.get_entry_by_global_id(&index.on);
         let on_desc = on_entry

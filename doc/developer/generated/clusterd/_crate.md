@@ -1,13 +1,13 @@
 ---
 source: src/clusterd/src/lib.rs
-revision: 8b77a4950e
+revision: 2bb8e26dbb
 ---
 
 # clusterd
 
 Implements the `clusterd` binary: the per-replica process that co-hosts a storage Timely cluster and a compute Timely cluster for Materialize.
 
-On startup, `main()` initializes tracing, a Persist client cache, a connection context, and launches both the storage server (listening on `STORAGE_CONTROLLER_LISTEN_ADDR`) and the compute server (listening on `COMPUTE_CONTROLLER_LISTEN_ADDR`) as gRPC services via `mz_service::transport::serve`.
+On startup, `main()` initializes tracing, a Persist client cache, a connection context, and launches both the storage server (listening on `STORAGE_CONTROLLER_LISTEN_ADDR`) and the compute server (listening on `COMPUTE_CONTROLLER_LISTEN_ADDR`) via `mz_service::transport::serve`. A `ClusterServerMetrics` instance is registered once and shared across both servers via `ClusterServerMetrics::for_server("storage")` and `ClusterServerMetrics::for_server("compute")`.
 An internal HTTP server (port 6878 by default) exposes liveness, Prometheus metrics, tracing controls, and the `/api/usage-metrics` endpoint backed by the `usage_metrics` module.
 When `--enable-storage-introspection-logs` is set, per-worker `arc_event_link` bridges are created so that storage Timely logging events are forwarded to the compute logging dataflow, making storage operators visible in `mz_introspection.mz_dataflow_*` tables.
 The crate depends on `mz-compute`, `mz-storage`, `mz-persist-client`, `mz-cluster-client`, and `mz-service`; it is consumed only as a binary by the Materialize cluster orchestration layer.

@@ -775,6 +775,14 @@ fn test_pgtest_mz_affected() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_copy_binary_unsupported() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/copy-binary-unsupported.pt"),
+        true,
+    );
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_copy_from_csv() {
     pg_test_inner(Path::new("../../test/pgtest-mz/copy-from-csv.pt"), true);
 }

@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/mz_internal.rs
-revision: df9e016020
+revision: 4078f8a2c8
 ---
 
 # catalog::builtin::mz_internal
@@ -15,7 +15,8 @@ This is the largest builtin submodule, exporting 186 public items: sources, tabl
 
 **Materialized views** (`BuiltinMaterializedView`) — Derived catalog views backed by queries over `mz_catalog_raw` and other sources: aggregated statistics, lag histograms, and other derived metrics.
 
-**Views** (`BuiltinView`) — 80 entries covering the full `mz_internal` SQL surface: cluster introspection, compute operator metrics, peek durations, arrangement sizes, source/sink status, wall-clock lag, statement execution history, privilege management, dependency graph views, and more. Views carry inline SQL queries over `mz_catalog`, `mz_introspection`, and `mz_internal` tables. Access levels vary: most grant `PUBLIC_SELECT`; sensitive views use `MONITOR_SELECT`, `MONITOR_REDACTED_SELECT`, `SUPPORT_SELECT`, or `ANALYTICS_SELECT`. `MZ_MCP_DATA_PRODUCTS` and `MZ_MCP_DATA_PRODUCT_DETAILS` are MCP-agent-facing views listing data products and their column/key details that are exempted from `restrict_to_user_objects` blocking.
+**Views** (`BuiltinView`) — 80 entries covering the full `mz_internal` SQL surface: cluster introspection, compute operator metrics, peek durations, arrangement sizes, source/sink status, wall-clock lag, statement execution history, privilege management, dependency graph views, and more. Views carry inline SQL queries over `mz_catalog`, `mz_introspection`, and `mz_internal` tables. Access levels vary: most grant `PUBLIC_SELECT`; sensitive views use `MONITOR_SELECT`, `MONITOR_REDACTED_SELECT`, `SUPPORT_SELECT`, or `ANALYTICS_SELECT`. `MZ_MCP_DATA_PRODUCTS` and `MZ_MCP_DATA_PRODUCT_DETAILS` are MCP-agent-facing views listing data products and their column/key details that are exempted from `restrict_to_user_objects` blocking. `MZ_MCP_DATA_PRODUCT_DETAILS` includes a `hydration` column (JSONB) reporting readiness across the cluster's replicas, with fields `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int).
+`MZ_BUILTIN_SOURCES` is a view in `mz_internal` listing builtin and log sources that do not appear in `mz_catalog_raw`; user sources are exposed via `mz_catalog.mz_sources`.
 
 **Connections** (`BuiltinConnection`) — System-level connection definitions.
 

@@ -163,6 +163,15 @@ mod columnar_timestamp {
     }
 
     impl<'a> columnar::AsBytes<'a> for Timestamps<&'a [Timestamp]> {
+        const SLICE_COUNT: usize = 1;
+        #[inline(always)]
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            debug_assert!(index < Self::SLICE_COUNT);
+            (
+                u64::cast_from(align_of::<Timestamp>()),
+                bytemuck::cast_slice(self.0),
+            )
+        }
         #[inline(always)]
         fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
             std::iter::once((

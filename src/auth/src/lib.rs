@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod group_claims;
 pub mod hash;
 pub mod password;
 

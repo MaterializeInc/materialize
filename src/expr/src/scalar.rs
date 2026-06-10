@@ -42,6 +42,7 @@ pub use crate::scalar::columns::Columns;
 pub use crate::scalar::eval::Eval;
 use crate::scalar::func::variadic::{And, Or};
 use crate::scalar::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
+pub use crate::scalar::optimizable::OptimizableExpr;
 use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::visit::{Visit, VisitChildren};
 
@@ -49,6 +50,7 @@ pub mod columns;
 pub mod eval;
 pub mod func;
 pub mod like_pattern;
+pub mod optimizable;
 mod reduce;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
@@ -1166,39 +1168,6 @@ impl MirScalarExpr {
     }
 }
 
-impl Columns for MirScalarExpr {
-    fn is_column(&self) -> bool {
-        matches!(self, MirScalarExpr::Column(_col, _name))
-    }
-
-    fn as_column(&self) -> Option<usize> {
-        if let MirScalarExpr::Column(c, _) = self {
-            Some(*c)
-        } else {
-            None
-        }
-    }
-
-    fn support_into(&self, support: &mut BTreeSet<usize>) {
-        self.visit_pre(|e| {
-            if let MirScalarExpr::Column(i, _) = e {
-                support.insert(*i);
-            }
-        });
-    }
-
-    fn visit_columns<F>(&mut self, mut action: F)
-    where
-        F: FnMut(&mut usize),
-    {
-        self.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(col, _) = e {
-                action(col);
-            }
-        });
-    }
-}
-
 impl Eval for MirScalarExpr {
     fn eval<'a>(
         &'a self,
@@ -1252,6 +1221,51 @@ impl Eval for MirScalarExpr {
                 cond.could_error() || then.could_error() || els.could_error()
             }
         }
+    }
+}
+
+impl Columns for MirScalarExpr {
+    fn column(c: usize) -> Self {
+        MirScalarExpr::column(c)
+    }
+
+    fn is_column(&self) -> bool {
+        matches!(self, MirScalarExpr::Column(_col, _name))
+    }
+
+    fn as_column(&self) -> Option<usize> {
+        if let MirScalarExpr::Column(c, _) = self {
+            Some(*c)
+        } else {
+            None
+        }
+    }
+
+    fn as_column_mut(&mut self) -> Option<&mut usize> {
+        if let MirScalarExpr::Column(c, _) = self {
+            Some(c)
+        } else {
+            None
+        }
+    }
+
+    fn support_into(&self, support: &mut BTreeSet<usize>) {
+        self.visit_pre(|e| {
+            if let MirScalarExpr::Column(i, _) = e {
+                support.insert(*i);
+            }
+        });
+    }
+
+    fn visit_columns<F>(&mut self, mut action: F)
+    where
+        F: FnMut(&mut usize),
+    {
+        self.visit_pre_mut(|e| {
+            if let MirScalarExpr::Column(col, _) = e {
+                action(col);
+            }
+        });
     }
 }
 
@@ -1313,7 +1327,6 @@ impl VisitChildren<Self> for MirScalarExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use MirScalarExpr::*;
         match self {
@@ -1342,7 +1355,6 @@ impl VisitChildren<Self> for MirScalarExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use MirScalarExpr::*;
         match self {
@@ -1366,6 +1378,20 @@ impl VisitChildren<Self> for MirScalarExpr {
             }
         }
         Ok(())
+    }
+
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a Self>
+    where
+        Self: 'a,
+    {
+        self.children()
+    }
+
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut Self>
+    where
+        Self: 'a,
+    {
+        self.children_mut()
     }
 }
 
@@ -1595,7 +1621,7 @@ impl FilterCharacteristics {
                         }
                     }
                 },
-            )?;
+            );
             if literal_inequality_in_current_filter {
                 literal_inequality += 1;
             }
@@ -2525,5 +2551,72 @@ mod tests {
                 tc.output
             );
         }
+    }
+
+    /// Exercises the `unsafe` pointer stack in [`Visit::visit_mut_post`] with a
+    /// closure that *replaces subtrees* (`*expr = ...`). Miri's aliasing model
+    /// should shout if the "stack mirrors the call stack" becomes untrue.
+    #[mz_ore::test]
+    fn test_visit_mut_post_replace_subtrees() {
+        let col = MirScalarExpr::column;
+        let mut expr = col(0).if_then_else(col(1).if_then_else(col(2), col(3)), col(4));
+
+        expr.visit_mut_post(&mut |expr: &mut MirScalarExpr| match expr {
+            MirScalarExpr::Column(n, _) => *n += 1,
+            MirScalarExpr::If { then, .. } => {
+                let then = then.take();
+                *expr = then;
+            }
+            _ => {}
+        });
+
+        // collapses to then-most branch
+        assert_eq!(expr, col(3));
+    }
+
+    /// Exercises the `unsafe` pointer stack in [`Visit::visit_mut_pre_post`] with
+    /// a `pre` that both *replaces the visited node wholesale* (`*expr = ...`)
+    /// and *returns an explicit child set* borrowed from the freshly written
+    /// value. Miri's aliasing model should shout if the "stack mirrors the call
+    /// stack" becomes untrue.
+    #[mz_ore::test]
+    fn test_visit_mut_pre_post_explicit_children() {
+        let col = MirScalarExpr::column;
+        let mut expr = col(5)
+            .if_then_else(col(6), col(7))
+            .if_then_else(col(1).if_then_else(col(2), col(3)), col(4));
+
+        // turns conditions into column 0 in pre
+        // doesn't traverse conditions of ifs
+        // adds 10 to all column refs in post (but not in conditions!)
+        expr.visit_mut_pre_post(
+            &mut |expr: &mut MirScalarExpr| -> Option<Vec<&mut MirScalarExpr>> {
+                if let MirScalarExpr::If { .. } = expr {
+                    let MirScalarExpr::If { then, els, .. } = expr else {
+                        unreachable!()
+                    };
+                    let then = then.take();
+                    let els = els.take();
+                    *expr = MirScalarExpr::column(0).if_then_else(then, els);
+
+                    let MirScalarExpr::If { then, els, .. } = expr else {
+                        unreachable!()
+                    };
+                    Some(vec![then.as_mut(), els.as_mut()])
+                } else {
+                    // Leaves recurse with their default (empty) child set.
+                    None
+                }
+            },
+            &mut |expr: &mut MirScalarExpr| {
+                if let MirScalarExpr::Column(n, _) = expr {
+                    *n += 10;
+                }
+            },
+        );
+
+        // conditions become 0; everyone else += 10
+        let expected = col(0).if_then_else(col(0).if_then_else(col(12), col(13)), col(14));
+        assert_eq!(expr, expected);
     }
 }

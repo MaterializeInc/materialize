@@ -12,7 +12,7 @@
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array};
@@ -46,6 +46,7 @@ use tracing::{Instrument, debug, debug_span, trace_span};
 use crate::ShardId;
 use crate::cfg::PersistConfig;
 use crate::error::InvalidUsage;
+use crate::internal::apply::Applier;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, MetricsPermits, ReadMetrics, ShardMetrics};
@@ -176,6 +177,7 @@ where
             filter,
             filter_pushdown_audit,
             part,
+            reader_id: _,
         } = part;
         let part: BatchPart<T> = part.decode_to().expect("valid part");
         if shard_id != self.shard_id {
@@ -255,6 +257,58 @@ where
         };
         Ok(Ok(fetched_blob))
     }
+
+    /// Diagnoses a missing-blob fetch failure for a part leased by the given
+    /// reader. See the free function `missing_blob_diagnostics`.
+    pub async fn missing_blob_diagnostics(&self, reader_id: &LeasedReaderId) -> String {
+        missing_blob_diagnostics(self.schema_cache.applier(), reader_id).await
+    }
+}
+
+/// Diagnoses a missing-blob fetch failure: refreshes the shard state and
+/// reports whether the reader that leased the part is still present in it.
+///
+/// A missing blob means garbage collection deleted a blob that the part's
+/// lease (a seqno hold in shard state) should have protected. If the reader
+/// has been expired out of state, the lease was lost: this can happen when the
+/// process fails to heartbeat the reader for longer than the lease duration,
+/// e.g. because the machine went to sleep, was starved of CPU or memory, or
+/// was partitioned from consensus. If the reader is still present, the hold
+/// did not protect the blob, which points at a GC or lease-tracking bug.
+pub(crate) async fn missing_blob_diagnostics<K, V, T, D>(
+    applier: &Applier<K, V, T, D>,
+    reader_id: &LeasedReaderId,
+) -> String
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64,
+{
+    // Refreshing state talks to consensus; this runs on an already-fatal path
+    // and a partition from consensus may be the very reason the lease was
+    // lost, so don't let the diagnosis block the restart indefinitely.
+    let refresh = applier.fetch_and_update_state(None);
+    if tokio::time::timeout(Duration::from_secs(30), refresh)
+        .await
+        .is_err()
+    {
+        return format!(
+            "reader {reader_id}: could not refresh state within 30s to diagnose the lease; \
+             partitioned from consensus?"
+        );
+    }
+    match applier.reader_lease(reader_id.clone()) {
+        Some(lease_state) => format!(
+            "reader {reader_id} is still present in state ({lease_state:?}); \
+             a missing blob despite a live lease indicates a GC bug"
+        ),
+        None => format!(
+            "reader {reader_id} has been expired out of state; \
+             the process likely failed to heartbeat it within the lease duration \
+             (machine sleep, CPU/memory starvation, or a partition from consensus?)"
+        ),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,7 +384,7 @@ where
     D: Monoid + Codec64 + Send + Sync,
 {
     let fetch_config = FetchConfig::from_persist_config(cfg);
-    let encoded_part = EncodedPart::fetch(
+    let encoded_part = match EncodedPart::fetch(
         &fetch_config,
         &part.shard_id,
         blob,
@@ -341,17 +395,21 @@ where
         &part.part,
     )
     .await
-    .unwrap_or_else(|blob_key| {
-        // Ideally, readers should never encounter a missing blob. They place a seqno
-        // hold as they consume their snapshot/listen, preventing any blobs they need
-        // from being deleted by garbage collection, and all blob implementations are
-        // linearizable so there should be no possibility of stale reads.
-        //
-        // If we do have a bug and a reader does encounter a missing blob, the state
-        // cannot be recovered, and our best option is to panic and retry the whole
-        // process.
-        panic!("{} could not fetch batch part: {}", reader_id, blob_key)
-    });
+    {
+        Ok(x) => x,
+        Err(blob_key) => {
+            // Ideally, readers should never encounter a missing blob. They place a seqno
+            // hold as they consume their snapshot/listen, preventing any blobs they need
+            // from being deleted by garbage collection, and all blob implementations are
+            // linearizable so there should be no possibility of stale reads.
+            //
+            // If we do have a bug and a reader does encounter a missing blob, the state
+            // cannot be recovered, and our best option is to panic and retry the whole
+            // process.
+            let diagnostics = missing_blob_diagnostics(schema_cache.applier(), reader_id).await;
+            panic!("could not fetch batch part {}: {}", blob_key, diagnostics)
+        }
+    };
     let part_cfg = BatchFetcherConfig::new(cfg);
     let migration = PartMigration::new(&part.part, read_schemas, schema_cache)
         .await
@@ -517,6 +575,10 @@ pub struct LeasedBatchPart<T> {
     /// The lease that prevents this part from being GCed. Code should ensure that this lease
     /// lives as long as the part is needed.
     pub(crate) lease: Lease,
+    /// The id of the reader that leased this part, for diagnostics: if the
+    /// blob backing the part goes missing, knowing whether this reader is
+    /// still present in state distinguishes a lost lease from a GC bug.
+    pub(crate) reader_id: LeasedReaderId,
     pub(crate) filter_pushdown_audit: bool,
 }
 
@@ -542,6 +604,7 @@ where
             desc: self.desc.clone(),
             filter: self.filter.clone(),
             part: LazyProto::from(&self.part.into_proto()),
+            reader_id: self.reader_id.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit,
         };
         (part, lease)
@@ -1439,6 +1502,9 @@ pub struct ExchangeableBatchPart<T> {
     desc: Description<T>,
     filter: FetchBatchFilter<T>,
     part: LazyProto<ProtoHollowBatchPart>,
+    /// The id of the reader that leased this part. See the corresponding field
+    /// on [LeasedBatchPart].
+    reader_id: LeasedReaderId,
     filter_pushdown_audit: bool,
 }
 
@@ -1446,6 +1512,11 @@ impl<T> ExchangeableBatchPart<T> {
     /// Returns the encoded size of the given part.
     pub fn encoded_size_bytes(&self) -> usize {
         self.encoded_size_bytes
+    }
+
+    /// Returns the id of the reader that leased this part.
+    pub fn reader_id(&self) -> &LeasedReaderId {
+        &self.reader_id
     }
 }
 

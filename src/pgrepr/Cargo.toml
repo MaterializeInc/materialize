@@ -22,5 +22,11 @@ mz-repr = { path = "../repr", default-features = false }
 postgres-types.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+mz-repr = { path = "../repr", default-features = false, features = ["proptest"] }
+proptest.workspace = true
+proptest-derive.workspace = true
+
 [features]
 default = []

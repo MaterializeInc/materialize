@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/extensions/arrange.rs
-revision: b0fa98e931
+revision: 225aeaa79f
 ---
 
 # mz-compute::extensions::arrange

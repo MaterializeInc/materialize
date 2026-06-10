@@ -4,7 +4,7 @@ description: "How to use connection pooling with Materialize"
 menu:
   main:
     parent: "integrations"
-    weight: 10
+    weight: 20
     name: "Connection Pooling"
 ---
 

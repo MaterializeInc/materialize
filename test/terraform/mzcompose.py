@@ -13,8 +13,11 @@ Tests the mz command line tool against a real Cloud instance
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 from collections.abc import Sequence
@@ -1156,6 +1159,63 @@ def workflow_aws_persistent_destroy(
     aws.destroy()
 
 
+def _terraform_apply_gcp(path: Path, vars: list[str]) -> None:
+    """Run `terraform apply` for the GCP setup, recovering from a known flake.
+
+    Cloud SQL instance creation occasionally fails on the Terraform side while
+    waiting for the create operation to finish ("Error waiting for Create
+    Instance"), even though GCP goes on to actually create the instance.
+    Terraform never records it in state, so a plain retry then fails with
+    "Error 409: The Cloud SQL instance already exists". When we detect that, we
+    import the orphaned instance into state so the next apply can proceed.
+
+    Terraform's progress (stdout) keeps streaming live; only its diagnostics
+    (stderr) are captured so we can parse the instance name out of the 409.
+    """
+    apply_cmd: list[Path | str] = ["terraform", "apply", "-auto-approve", *vars]
+    for attempt in range(3):
+        with tempfile.TemporaryFile() as stderr_file:
+            try:
+                spawn.runv(apply_cmd, cwd=path, stderr=stderr_file)
+                stderr_file.seek(0)
+                sys.stderr.write(stderr_file.read().decode("utf-8", "replace"))
+                return
+            except subprocess.CalledProcessError:
+                stderr_file.seek(0)
+                last_err = stderr_file.read().decode("utf-8", "replace")
+                sys.stderr.write(last_err)
+                if attempt == 2:
+                    raise
+
+        match = re.search(
+            r"failed to create instance (\S+): googleapi: Error 409", last_err
+        )
+        if match:
+            instance_name = match.group(1)
+            print(
+                f"--- Importing orphaned Cloud SQL instance {instance_name} "
+                "(created on GCP but missing from Terraform state), then retrying"
+            )
+            # Best effort: if the import fails (e.g. it raced into state
+            # already), fall through to the retry regardless.
+            try:
+                spawn.runv(
+                    [
+                        "terraform",
+                        "import",
+                        *vars,
+                        "module.database.module.postgresql.google_sql_database_instance.default",
+                        f"materialize-ci/{instance_name}",
+                    ],
+                    cwd=path,
+                )
+            except subprocess.CalledProcessError:
+                pass
+        else:
+            print("terraform apply failed, retrying")
+        time.sleep(5)
+
+
 def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
     add_arguments_temporary_test(parser)
     args = parser.parse_args()
@@ -1219,11 +1279,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             spawn.runv(["terraform", "init"], cwd=path)
             spawn.runv(["terraform", "validate"], cwd=path)
             spawn.runv(["terraform", "plan", *vars], cwd=path)
-            try:
-                spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
-            except:
-                # Sometimes fails for unknown reason, so just retry
-                spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
+            _terraform_apply_gcp(path, vars)
 
         gke_cluster = json.loads(
             spawn.capture(

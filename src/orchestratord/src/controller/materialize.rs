@@ -18,14 +18,14 @@ use http::HeaderValue;
 use k8s_openapi::{
     api::core::v1::{Affinity, ResourceRequirements, Secret, Toleration},
     apimachinery::pkg::apis::meta::v1::{Condition, Time},
-    jiff::Timestamp,
+    jiff::{SignedDuration, Timestamp},
 };
 use kube::{
     Api, Client, Resource, ResourceExt,
     api::{ListParams, PostParams},
     runtime::controller::Action,
 };
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -408,6 +408,70 @@ impl k8s_controller::Context for Context {
             }
             // There are changes pending, and we want to apply them.
             (false, true, true) => {
+                // If a rollout has been in progress for longer than the
+                // configured timeout, cancel it. While a rollout is in
+                // progress the new generation runs un-promoted and holds back
+                // compaction via read holds; promoting it after a long delay
+                // can cause incident-inducing load, so we abort instead and
+                // let the user retry by requesting a fresh rollout.
+                //
+                // We never cancel a force-promoting rollout (including the
+                // `ImmediatelyPromoteCausingDowntime` strategy), because by
+                // then the previously-active generation may already be torn
+                // down, leaving nothing to fall back to.
+                if !mz.should_force_promote() {
+                    if let Some(started) = mz.rollout_in_progress_since() {
+                        let timeout = mz.rollout_request_timeout();
+                        let elapsed = Timestamp::now().duration_since(started);
+                        let timed_out = SignedDuration::try_from(timeout)
+                            .is_ok_and(|timeout| elapsed >= timeout);
+                        if timed_out {
+                            warn!(
+                                "rollout to generation {desired_generation} exceeded timeout, cancelling"
+                            );
+                            // Tear down the un-promoted generation to release
+                            // its read holds.
+                            resources
+                                .teardown_generation(&client, mz, next_generation)
+                                .await?;
+                            self.update_status(
+                                &mz_api,
+                                mz,
+                                MaterializeStatus {
+                                    active_generation,
+                                    // Mark this rollout request as completed so
+                                    // that we don't immediately retry it; the
+                                    // user must request a new rollout to try
+                                    // again.
+                                    last_completed_rollout_request: mz
+                                        .requested_reconciliation_id(),
+                                    last_completed_rollout_environmentd_image_ref: status
+                                        .last_completed_rollout_environmentd_image_ref
+                                        .clone(),
+                                    resource_id: status.resource_id.clone(),
+                                    resources_hash: status.resources_hash.clone(),
+                                    conditions: vec![Condition {
+                                        type_: "UpToDate".into(),
+                                        status: "False".into(),
+                                        last_transition_time: Time(Timestamp::now()),
+                                        message: format!(
+                                            "Cancelled rollout to generation \
+                                             {desired_generation} after it \
+                                             exceeded the rollout timeout of {}",
+                                            humantime::format_duration(timeout),
+                                        ),
+                                        observed_generation: mz.meta().generation,
+                                        reason: "RolloutTimeout".into(),
+                                    }],
+                                },
+                                active_generation != desired_generation,
+                            )
+                            .await?;
+                            return Ok(None);
+                        }
+                    }
+                }
+
                 if !mz.within_upgrade_window() {
                     let last_completed_rollout_environmentd_image_ref =
                         status.last_completed_rollout_environmentd_image_ref;
@@ -535,7 +599,15 @@ impl k8s_controller::Context for Context {
                                     conditions: vec![Condition {
                                         type_: "UpToDate".into(),
                                         status: "Unknown".into(),
-                                        last_transition_time: Time(Timestamp::now()),
+                                        // Carry the `Applying` phase's
+                                        // timestamp forward (both phases are
+                                        // `Unknown`) so the rollout timeout
+                                        // spans Applying + ReadyToPromote
+                                        // rather than resetting here.
+                                        last_transition_time: Time(mz.up_to_date_transition_time(
+                                            "Unknown",
+                                            Timestamp::now(),
+                                        )),
                                         message: format!(
                                             "Ready to promote generation {desired_generation}"
                                         ),

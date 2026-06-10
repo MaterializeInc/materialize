@@ -76,7 +76,6 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use imbl::OrdMap;
-use mz_adapter_types::dyncfgs::{OIDC_GROUP_CLAIM, OIDC_GROUP_ROLE_SYNC_STRICT};
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
 use mz_persist_client::cfg::{
@@ -905,7 +904,7 @@ impl SessionVars {
             .vars
             .get_mut(UncasedStr::new(TRANSACTION_ISOLATION.name()))
             .expect("transaction_isolation variable must exist");
-        var.set(VarInput::Flat(transaction_isolation.as_str()), true)
+        var.set(VarInput::Flat(&transaction_isolation.to_string()), true)
             .expect("setting transaction isolation must succeed");
     }
 
@@ -1248,51 +1247,33 @@ impl SystemVars {
         let dyncfgs = mz_dyncfgs::all_dyncfgs();
         let dyncfg_vars: Vec<_> = dyncfgs
             .entries()
-            .map(|cfg| {
-                // Most dyncfgs are internal-only; these two must be visible to
-                // environment superusers so ALTER SYSTEM SET can reach them.
-                let user_visible = cfg.name() == OIDC_GROUP_CLAIM.name()
-                    || cfg.name() == OIDC_GROUP_ROLE_SYNC_STRICT.name();
-                match cfg.default() {
-                    ConfigVal::Bool(default) => {
-                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), user_visible)
-                    }
-                    ConfigVal::U32(default) => {
-                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), user_visible)
-                    }
-                    ConfigVal::Usize(default) => {
-                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), user_visible)
-                    }
-                    ConfigVal::OptUsize(default) => {
-                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), user_visible)
-                    }
-                    ConfigVal::F64(default) => {
-                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), user_visible)
-                    }
-                    ConfigVal::String(default) => VarDefinition::new_runtime(
-                        cfg.name(),
-                        default.clone(),
-                        cfg.desc(),
-                        user_visible,
-                    ),
-                    ConfigVal::OptString(default) => VarDefinition::new_runtime(
-                        cfg.name(),
-                        default.clone(),
-                        cfg.desc(),
-                        user_visible,
-                    ),
-                    ConfigVal::Duration(default) => VarDefinition::new_runtime(
-                        cfg.name(),
-                        default.clone(),
-                        cfg.desc(),
-                        user_visible,
-                    ),
-                    ConfigVal::Json(default) => VarDefinition::new_runtime(
-                        cfg.name(),
-                        default.clone(),
-                        cfg.desc(),
-                        user_visible,
-                    ),
+            .map(|cfg| match cfg.default() {
+                ConfigVal::Bool(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                }
+                ConfigVal::U32(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                }
+                ConfigVal::Usize(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                }
+                ConfigVal::OptUsize(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                }
+                ConfigVal::F64(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                }
+                ConfigVal::String(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                }
+                ConfigVal::OptString(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                }
+                ConfigVal::Duration(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                }
+                ConfigVal::Json(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
                 }
             })
             .collect();
@@ -1393,8 +1374,6 @@ impl SystemVars {
         SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(name))
             || name == ENABLE_RBAC_CHECKS.name()
             || name == NETWORK_POLICY.name()
-            || name == OIDC_GROUP_CLAIM.name()
-            || name == OIDC_GROUP_ROLE_SYNC_STRICT.name()
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the

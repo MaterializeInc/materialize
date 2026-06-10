@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/statement.rs
-revision: dcf61051e7
+revision: 9f1a1d48fa
 ---
 
 # mz-sql-parser::ast::defs::statement
@@ -19,3 +19,5 @@ Each statement variant has a corresponding struct with its specific fields.
 `KafkaMatchingBrokerRule<T: AstInfo>` represents a `MATCHING` rule inside a `BROKERS (...)` clause that routes brokers matching a pattern through an AWS PrivateLink tunnel. Fields: `pattern: ConnectionRulePattern` and `tunnel: KafkaBrokerAwsPrivatelink<T>`. Its `AstDisplay` impl prints `MATCHING {pattern} {tunnel}`.
 
 `WithOptionValue<T>` includes a `KafkaMatchingBrokerRule(KafkaMatchingBrokerRule<T>)` variant. Its `AstDisplay` impl delegates to the inner rule's display. This variant is not redacted.
+
+`CreateTableFromSourceStatement<T>`'s `AstDisplay` impl opens a parenthesized column/constraint list only when `columns` is not `NotSpecified` or the `constraints` list is non-empty. When `columns` is `NotSpecified` but constraints exist, the constraints are written directly without a preceding `, ` separator.

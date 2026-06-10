@@ -29,14 +29,16 @@ use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::{
     AwsAssumeRole, AwsAuth, AwsConnection, AwsConnectionReference, AwsCredentials,
 };
+use mz_storage_types::connections::gcp::GcpConnection;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, AwsPrivatelinkRule, CsrConnection,
-    CsrConnectionHttpAuth, IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType,
-    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
-    MySqlSslMode, PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog,
-    SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity, Tunnel,
+    CsrConnectionHttpAuth, GlueSchemaRegistryConnection, IcebergCatalogConnection,
+    IcebergCatalogImpl, IcebergCatalogType, KafkaConnection, KafkaSaslConfig, KafkaTlsConfig,
+    KafkaTopicOptions, MySqlConnection, MySqlSslMode, PostgresConnection, RestIcebergCatalog,
+    S3TablesRestIcebergCatalog, SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity,
+    Tunnel,
 };
 
 use crate::names::Aug;
@@ -66,12 +68,14 @@ generate_extracted_config!(
     (PublicKey1, String),
     (PublicKey2, String),
     (Region, String),
+    (Registry, String),
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
     (SaslUsername, StringOrSecret),
     (Scope, String),
     (SecretAccessKey, with_options::Secret),
     (SecurityProtocol, String),
+    (ServiceAccountKey, with_options::Secret),
     (ServiceName, String),
     (SshTunnel, with_options::Object),
     (SslCertificate, StringOrSecret),
@@ -115,6 +119,8 @@ pub(super) fn validate_options_per_connection_type(
         ]
         .as_slice(),
         CreateConnectionType::AwsPrivatelink => &[AvailabilityZones, Port, ServiceName],
+        CreateConnectionType::GlueSchemaRegistry => &[AwsConnection, Registry],
+        CreateConnectionType::Gcp => &[ServiceAccountKey],
         CreateConnectionType::Csr => &[
             AwsPrivatelink,
             Password,
@@ -312,6 +318,13 @@ impl ConnectionOptionExtracted {
                 }
                 ConnectionDetails::AwsPrivatelink(connection)
             }
+            CreateConnectionType::Gcp => {
+                let credentials_json = self
+                    .service_account_key
+                    .ok_or_else(|| sql_err!("SERVICE ACCOUNT KEY option is required"))?
+                    .into();
+                ConnectionDetails::Gcp(GcpConnection { credentials_json })
+            }
             CreateConnectionType::Kafka => {
                 let (tls, sasl) = plan_kafka_security(scx, &self)?;
                 let (static_brokers, matching_rules) = self.get_brokers_and_rules(scx)?;
@@ -398,6 +411,23 @@ impl ConnectionOptionExtracted {
                     tls_identity,
                     http_auth,
                     tunnel,
+                })
+            }
+            CreateConnectionType::GlueSchemaRegistry => {
+                scx.require_feature_flag(&vars::ENABLE_GLUE_SCHEMA_REGISTRY)?;
+
+                let aws_connection = get_aws_connection_reference(scx, &self)?
+                    .ok_or_else(|| sql_err!("AWS CONNECTION option is required"))?;
+                let registry_name = self
+                    .registry
+                    .ok_or_else(|| sql_err!("REGISTRY option is required"))?;
+                if registry_name.is_empty() {
+                    sql_bail!("invalid CONNECTION: REGISTRY must not be empty");
+                }
+
+                ConnectionDetails::GlueSchemaRegistry(GlueSchemaRegistryConnection {
+                    aws_connection,
+                    registry_name,
                 })
             }
             CreateConnectionType::Postgres => {

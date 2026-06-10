@@ -44,7 +44,7 @@ use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
-use crate::upsert::{UpsertKey, UpsertValue};
+use crate::upsert::{UpsertKey, UpsertSourceTime, UpsertValue};
 
 /// _Renders_ complete _differential_ collections
 /// that represent the final source and its errors
@@ -79,6 +79,7 @@ pub fn render_source<'scope, 'root, C>(
 )
 where
     C: SourceConnection + SourceRender + 'static,
+    C::Time: UpsertSourceTime,
 {
     // Tokens that we should return from the method.
     let mut needed_tokens = Vec::new();
@@ -178,6 +179,7 @@ fn render_source_stream<'scope, FromTime>(
 )
 where
     FromTime: Timestamp + Sync,
+    FromTime: UpsertSourceTime,
 {
     let mut needed_tokens = vec![];
 

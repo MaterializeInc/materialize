@@ -1625,7 +1625,7 @@ impl HirScalarExpr {
                         }
                         _ => {}
                     },
-                )?;
+                );
             }
 
             if subqueries.is_empty() {

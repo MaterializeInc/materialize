@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/lib.rs
-revision: b89a9e0ec5
+revision: 6d8705a7be
 ---
 
 # mz-ore
@@ -54,6 +54,7 @@ Modules are included here when they are broadly useful but too small to warrant 
 | `metrics` | `metrics` | Prometheus integration: `MetricsRegistry`, `metric!` macro, delete-on-drop wrappers, `MetricsFutureExt` |
 | `netio` | `network` | Async networking utilities: framed codec, DNS, socket helpers, timeouts |
 | `overflowing` | `overflowing` | `Overflowing<T>` newtype for wrapping arithmetic |
+| `pager` | `pager` (unix only) | Swap-backed and file-backed pager backends for spilling data out of memory; provides `SwapPager` and `FilePager` |
 | `panic` | `panic` | Panic handler with Sentry integration |
 | `process` | `process` | `halting` process exit via `libc` |
 | `region` | `region` | Columnar region allocator with lgalloc support |
