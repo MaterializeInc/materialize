@@ -127,7 +127,10 @@ pub struct Pool(Arc<PoolInner>);
 
 #[derive(Debug)]
 struct PoolInner {
-    budget_bytes: u64,
+    /// Resident-bytes target. Atomic so a running pool can be retuned in
+    /// place (operator-driven budget changes) without orphaning live
+    /// handles, which share this value through their `Arc<PoolInner>`.
+    budget_bytes: AtomicU64,
     /// One region per entry of [`SIZE_CLASSES`], same order.
     regions: Vec<Region>,
     /// Second-chance FIFO of eviction candidates. Entries for freed chunks
@@ -209,7 +212,7 @@ impl Pool {
             .map(|&class_size| Region::new(class_size, cfg.class_capacity_bytes))
             .collect::<std::io::Result<Vec<_>>>()?;
         Ok(Pool(Arc::new(PoolInner {
-            budget_bytes: u64::cast_from(cfg.budget_bytes),
+            budget_bytes: AtomicU64::new(u64::cast_from(cfg.budget_bytes)),
             regions,
             queue: Mutex::new(VecDeque::new()),
             live_slotted: AtomicU64::new(0),
@@ -338,6 +341,17 @@ impl Pool {
         self.0.enforce_budget();
     }
 
+    /// Retunes the resident-bytes budget in place and enforces it. Live
+    /// handles share the new value immediately through their `Arc<PoolInner>`;
+    /// a shrink takes effect by evicting on this call, a grow simply leaves
+    /// more headroom for future inserts and fault-ins.
+    pub fn set_budget(&self, budget_bytes: usize) {
+        self.0
+            .budget_bytes
+            .store(u64::cast_from(budget_bytes), Ordering::Relaxed);
+        self.0.enforce_budget();
+    }
+
     /// Test-only: the number of entries in the second-chance queue, live and
     /// stale.
     #[cfg(test)]
@@ -406,7 +420,8 @@ impl PoolInner {
             .expect("pool queue poisoned")
             .len()
             .saturating_mul(2);
-        while remaining > 0 && resident(&self.counters) > self.budget_bytes {
+        while remaining > 0 && resident(&self.counters) > self.budget_bytes.load(Ordering::Relaxed)
+        {
             remaining -= 1;
             let popped = self.queue.lock().expect("pool queue poisoned").pop_front();
             let Some(weak) = popped else {
@@ -887,6 +902,32 @@ mod tests {
             })
             .count();
         assert_eq!(resident, 2, "budget holds exactly two small chunks");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn set_budget_retunes_in_place() {
+        let pool = test_pool(usize::MAX);
+        let mut handles = Vec::new();
+        for seed in 0..8 {
+            handles.push(pool.insert(&mut payload(SMALL, 200 + seed)));
+        }
+        assert_eq!(pool.stats().evictions_compress, 0);
+
+        // Shrinking the budget evicts immediately.
+        pool.set_budget(128 << 10);
+        let stats = pool.stats();
+        assert!(stats.resident_bytes <= 128 << 10);
+        assert!(stats.evictions_compress >= 6);
+
+        // Growing it leaves headroom: a fresh insert stays resident.
+        pool.set_budget(usize::MAX);
+        let h = pool.insert(&mut payload(SMALL, 300));
+        assert_eq!(h.residency(), Residency::UnbackedResident);
+        for h in &handles {
+            let pin = h.pin();
+            assert_eq!(pin.len(), SMALL);
+        }
     }
 
     #[mz_ore::test]

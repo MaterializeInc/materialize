@@ -1645,6 +1645,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["column_paged_batcher_swap_pageout"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["column_paged_batcher_use_pool"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
 
         # If you are adding a new config flag in Materialize, consider using it

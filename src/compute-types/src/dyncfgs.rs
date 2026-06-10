@@ -115,6 +115,22 @@ pub const COLUMN_PAGED_BATCHER_SWAP_PAGEOUT: Config<bool> = Config::new(
      meaningful when `column_paged_batcher_lz4 = true` and the swap backend is active.",
 );
 
+/// Route column-paged batcher spill through the buffer pool
+/// (`mz_ore::pool`, swap-backed extents) instead of the tiered pager
+/// backends. The pool owns residency: chunks stay resident at stable
+/// addresses until its budget (the same fraction-derived total as the
+/// tiered policy's) forces compression into swap-backed extents, and
+/// chunks consumed before eviction never cost a write at all. The backend
+/// and lz4 configs are ignored in pool mode; the pool always compresses at
+/// the eviction boundary. Falls back to the tiered path if the pool's
+/// virtual reservation fails.
+pub const COLUMN_PAGED_BATCHER_USE_POOL: Config<bool> = Config::new(
+    "column_paged_batcher_use_pool",
+    false,
+    "Route column-paged batcher spill through the buffer pool (swap-backed extents) instead of \
+     the tiered pager backends. Only meaningful when `enable_column_paged_batcher_spill = true`.",
+);
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     "enable_mz_join_core",
@@ -536,4 +552,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_LZ4)
         .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
+        .add(&COLUMN_PAGED_BATCHER_USE_POOL)
 }

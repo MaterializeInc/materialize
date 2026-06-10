@@ -354,6 +354,7 @@ pub fn apply_tiered_config(
     swap_pageout: bool,
 ) {
     SWAP_PAGEOUT.store(swap_pageout, Ordering::Relaxed);
+    POOL_MODE.store(false, std::sync::atomic::Ordering::Relaxed);
     let p: &Arc<policy::TieredPolicy> = &TIERED_POLICY;
     p.reconfigure(total_budget, backend, codec);
     if enabled {
@@ -365,29 +366,97 @@ pub fn apply_tiered_config(
     }
 }
 
+/// Process-wide buffer pool shared by every pooled pager in the process.
+///
+/// A singleton for the same reason [`TIERED_POLICY`] is one: live
+/// [`PagedColumn::Pooled`] handles keep their `Arc` into the pool, so
+/// replacing it on reconfigure would split residency accounting across two
+/// budgets. Operator-driven tunes go through
+/// [`mz_ore::pool::Pool::set_budget`] on the one instance instead.
+///
+/// Construction reserves virtual address space only (a few GiB per size
+/// class); physical memory is paid per resident chunk. On the rare platforms
+/// or configurations where the reservation fails, the pool is permanently
+/// unavailable for this process and [`apply_pool_config`] reports that by
+/// returning `false` so callers can fall back to the tiered path.
+static GLOBAL_POOL: LazyLock<Option<mz_ore::pool::Pool>> =
+    LazyLock::new(
+        || match mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig::default()) {
+            Ok(pool) => Some(pool),
+            Err(err) => {
+                tracing::warn!(
+                    %err,
+                    "column pager: buffer pool reservation failed; pool mode unavailable",
+                );
+                None
+            }
+        },
+    );
+
+/// Whether the pool is the active shared spill mechanism (set by
+/// [`apply_pool_config`], cleared by [`apply_tiered_config`]). Read by
+/// [`shared_pager`] so per-consumer opt-ins follow whichever mechanism the
+/// last config apply installed.
+static POOL_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Returns the process-wide buffer pool, initializing it on first call.
+/// `None` if the virtual reservation failed at first use.
+pub fn global_pool() -> Option<mz_ore::pool::Pool> {
+    GLOBAL_POOL.clone()
+}
+
+/// Apply a pool-backed pager configuration. Returns `false` (and changes
+/// nothing) if the pool is unavailable, so the caller can fall back to
+/// [`apply_tiered_config`].
+///
+/// On success the pool becomes the active shared mechanism: the global pager
+/// is pool-backed when `enabled` (disabled otherwise — per-consumer opt-ins
+/// via [`shared_pager`] still work either way), and the pool's resident
+/// budget is retuned in place so live handles stay coherent.
+pub fn apply_pool_config(enabled: bool, budget_bytes: usize) -> bool {
+    let Some(pool) = global_pool() else {
+        return false;
+    };
+    pool.set_budget(budget_bytes);
+    POOL_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
+    if enabled {
+        set_global_pager(ColumnPager::pooled(pool));
+    } else {
+        set_global_pager(ColumnPager::disabled());
+    }
+    true
+}
+
 /// Returns the current global pager. Cheap: clones the inner `Arc<dyn
 /// PagingPolicy>`.
 pub fn global_pager() -> ColumnPager {
     GLOBAL_PAGER.read().expect("global pager poisoned").clone()
 }
 
-/// A pager that, when `enabled`, draws from the shared [`tiered_policy`] budget
-/// pool — the same pool `apply_tiered_config` sizes for the process-global
-/// pager — and otherwise is a disabled (always-resident) pager.
+/// A pager that, when `enabled`, draws from the process-wide shared spill
+/// mechanism — the buffer pool when [`apply_pool_config`] installed it, else
+/// the [`tiered_policy`] budget `apply_tiered_config` sizes — and otherwise is
+/// a disabled (always-resident) pager.
 ///
 /// This lets a second consumer (e.g. the storage upsert source stash) opt into
-/// the one shared budget independently of whether `apply_tiered_config` enabled
+/// the one shared budget independently of whether the config apply enabled
 /// the process-global pager for its own (compute) batchers. There is still a
-/// single budget pool and a single underlying `mz_ore::pager`; only the
-/// enable decision is per-consumer.
+/// single budget; only the enable decision is per-consumer. Which mechanism
+/// is shared follows the most recent config apply ([`apply_pool_config`] vs
+/// [`apply_tiered_config`]), so a consumer that captured a pager before a
+/// mechanism flip keeps its old one until it next calls here.
 pub fn shared_pager(enabled: bool) -> ColumnPager {
-    if enabled {
-        #[allow(clippy::clone_on_ref_ptr)]
-        let dyn_policy: Arc<dyn PagingPolicy> = TIERED_POLICY.clone();
-        ColumnPager::new(dyn_policy)
-    } else {
-        ColumnPager::disabled()
+    if !enabled {
+        return ColumnPager::disabled();
     }
+    if POOL_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Some(pool) = global_pool() {
+            return ColumnPager::pooled(pool);
+        }
+    }
+    #[allow(clippy::clone_on_ref_ptr)]
+    let dyn_policy: Arc<dyn PagingPolicy> = TIERED_POLICY.clone();
+    ColumnPager::new(dyn_policy)
 }
 
 impl ColumnPager {
@@ -871,5 +940,45 @@ mod tests {
             Column::Align(v) => assert_eq!(v, body),
             other => panic!("expected Align, got {:?}", std::mem::discriminant(&other)),
         }
+    }
+
+    /// Exercises the process-global mechanism switch end to end. Runs as one
+    /// test because it mutates the process-wide `POOL_MODE` / global pager;
+    /// no other test reads those globals (all construct their own pagers).
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
+    fn pool_mode_routing() {
+        // Pool mode on: the global pager and shared pager both go pooled.
+        let ok = apply_pool_config(true, 1 << 30);
+        assert!(ok, "pool reservation expected to succeed in tests");
+        let mut col = sample_typed();
+        let paged = global_pager().page(&mut col);
+        assert!(matches!(paged, PagedColumn::Pooled { .. }));
+        let rt = global_pager().take(paged);
+        assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
+
+        let mut col = sample_typed();
+        let paged = shared_pager(true).page(&mut col);
+        assert!(matches!(paged, PagedColumn::Pooled { .. }));
+        drop(shared_pager(true).take(paged));
+
+        // Disabled consumers stay resident regardless of mechanism.
+        let mut col = sample_typed();
+        let paged = shared_pager(false).page(&mut col);
+        assert!(matches!(paged, PagedColumn::Resident(_, _)));
+        drop(paged);
+
+        // Tiered config flips the mechanism back: shared pager no longer pools.
+        apply_tiered_config(true, usize::MAX, Backend::Swap, None);
+        let mut col = sample_typed();
+        let paged = shared_pager(true).page(&mut col);
+        assert!(
+            !matches!(paged, PagedColumn::Pooled { .. }),
+            "tiered mode must not hand out pooled columns",
+        );
+        drop(paged);
+
+        // Leave the globals in the disabled state for any future test runs.
+        apply_tiered_config(false, 0, Backend::Swap, None);
     }
 }

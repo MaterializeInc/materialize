@@ -79,6 +79,22 @@ pub fn register(registry: &MetricsRegistry, policy: &'static TieredPolicy) {
             move || u64::try_from(policy.configured_total()).unwrap_or(u64::MAX),
         );
 
+        // Buffer-pool gauges read the process-wide pool's stats at scrape
+        // time (the first scrape initializes the pool's virtual reservation;
+        // they report zero only if that reservation failed). The cumulative
+        // fields are exposed as computed gauges rather than counters because
+        // the pool owns the atomics; all are monotonic except
+        // resident/oversize bytes.
+        register_pool_gauge(registry, "resident_bytes", "Uncompressed bytes resident in the buffer pool.", |s| s.resident_bytes);
+        register_pool_gauge(registry, "oversize_bytes", "Bytes held by oversize chunks that bypass pool paging.", |s| s.oversize_bytes);
+        register_pool_gauge(registry, "inserts_total", "Chunks inserted into the buffer pool.", |s| s.inserts);
+        register_pool_gauge(registry, "frees_total", "Chunks freed from the buffer pool.", |s| s.frees);
+        register_pool_gauge(registry, "elided_frees_total", "Chunks freed while unbacked: dead data that never cost a compression or an extent write.", |s| s.elided_frees);
+        register_pool_gauge(registry, "evictions_compress_total", "Evictions that compressed a chunk into a new swap-backed extent.", |s| s.evictions_compress);
+        register_pool_gauge(registry, "evictions_cheap_total", "Evictions of already-backed chunks: physical pages released with no compression or extent write.", |s| s.evictions_cheap);
+        register_pool_gauge(registry, "faults_total", "Fault-ins decompressing a chunk from its extent back into its pool slot.", |s| s.faults);
+        register_pool_gauge(registry, "extent_bytes_written_total", "Compressed bytes written into swap-backed extents.", |s| s.extent_bytes_written);
+
         PagerMetrics {
             skip_decisions_total: registry.register(metric!(
                 name: "mz_column_pager_skip_decisions_total",
@@ -119,6 +135,28 @@ pub fn register(registry: &MetricsRegistry, policy: &'static TieredPolicy) {
             )),
         }
     });
+}
+
+/// Registers one computed gauge over a [`mz_ore::pool::PoolStats`] field,
+/// named `mz_column_pool_{suffix}`. Reads the process-wide pool at scrape
+/// time, initializing it on first scrape; zero if the pool is unavailable.
+fn register_pool_gauge(
+    registry: &MetricsRegistry,
+    suffix: &str,
+    help: &str,
+    field: fn(&mz_ore::pool::PoolStats) -> u64,
+) {
+    let _gauge: ComputedUIntGauge = registry.register_computed_gauge(
+        metric!(
+            name: format!("mz_column_pool_{suffix}"),
+            help: help,
+        ),
+        move || {
+            crate::column_pager::global_pool()
+                .map(|pool| field(&pool.stats()))
+                .unwrap_or(0)
+        },
+    );
 }
 
 #[inline]
