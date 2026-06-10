@@ -57,6 +57,7 @@ fn alter_role_password_preserved() {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn declare_inner_secret_not_redacted() {
     // DECLARE/PREPARE wrap an inner statement and used to fall back to the
     // redacting AstDisplay for the whole wrapper, turning a secret in the inner
