@@ -77,6 +77,12 @@ def create_profiles() -> None:
     ports (6875 for users, 6877 for ``mz_system``) rather than the host-mapped
     ports.
 
+    Each profile sets ``sslmode = "disable"``: the mzcompose Materialized
+    instance serves plaintext pgwire, but mz-deploy defaults an unset sslmode
+    to ``require`` for any non-loopback host (only loopback defaults to
+    ``prefer``). Without the override, connecting to the ``materialized``
+    hostname would force a TLS handshake that the server can't satisfy.
+
     Every profile sets ``enable_session_rbac_checks = true`` via the
     libpq-style ``options`` map. Materialize's compiled session default is
     ``false``, and ``mz-deploy setup``'s ``is_rbac_enabled`` check ANDs the
@@ -84,16 +90,16 @@ def create_profiles() -> None:
     the role/grant phase in the local mzcompose environment and downstream
     GRANTs fail with "unknown role 'materialize_deployer'". Production
     deployments have the session flag flipped at the server level."""
-    rbac_options = '\noptions = { enable_session_rbac_checks = "true" }'
+    opts = '\nsslmode = "disable"\noptions = { enable_session_rbac_checks = "true" }'
     # `setup` issues GRANT ... ON SYSTEM, which only mz_system can perform via
     # the internal port (6877); everything else uses the user port (6875).
     with open(PROJECTS_DIR / "profiles.toml", "w") as f:
         f.write(
-            f'[admin]\nhost = "materialized"\nport = 6877\nusername = "mz_system"{rbac_options}\n\n'
-            f'[default]\nhost = "materialized"\nport = 6875\nusername = "deploy_user"{rbac_options}\n\n'
-            f'[staging]\nhost = "materialized"\nport = 6875\nusername = "deploy_user"{rbac_options}\n\n'
-            f'[dev]\nhost = "materialized"\nport = 6875\nusername = "dev_user"{rbac_options}\n\n'
-            f'[monitor]\nhost = "materialized"\nport = 6875\nusername = "monitor_user"{rbac_options}\n'
+            f'[admin]\nhost = "materialized"\nport = 6877\nusername = "mz_system"{opts}\n\n'
+            f'[default]\nhost = "materialized"\nport = 6875\nusername = "deploy_user"{opts}\n\n'
+            f'[staging]\nhost = "materialized"\nport = 6875\nusername = "deploy_user"{opts}\n\n'
+            f'[dev]\nhost = "materialized"\nport = 6875\nusername = "dev_user"{opts}\n\n'
+            f'[monitor]\nhost = "materialized"\nport = 6875\nusername = "monitor_user"{opts}\n'
         )
 
 
