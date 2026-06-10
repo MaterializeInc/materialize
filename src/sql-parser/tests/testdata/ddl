@@ -642,6 +642,13 @@ CREATE CONNECTION glueconn TO AWS GLUE SCHEMA REGISTRY (AWS CONNECTION = awsconn
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("glueconn")]), connection_type: GlueSchemaRegistry, if_not_exists: false, values: [ConnectionOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("awsconn")])))) }, ConnectionOption { name: Registry, value: Some(Value(String("my-registry"))) }], with_options: [CreateConnectionOption { name: Validate, value: Some(Value(Boolean(false))) }] })
 
 parse-statement
+CREATE CONNECTION biglake TO ICEBERG CATALOG (CATALOG TYPE = 'rest', URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog', GCP CONNECTION = gcpconn, WAREHOUSE = 'gs://iceberg-test')
+----
+CREATE CONNECTION biglake TO ICEBERG CATALOG (CATALOG TYPE = 'rest', URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog', GCP CONNECTION = gcpconn, WAREHOUSE = 'gs://iceberg-test')
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("biglake")]), connection_type: IcebergCatalog, if_not_exists: false, values: [ConnectionOption { name: CatalogType, value: Some(Value(String("rest"))) }, ConnectionOption { name: Url, value: Some(Value(String("https://biglake.googleapis.com/iceberg/v1/restcatalog"))) }, ConnectionOption { name: GcpConnection, value: Some(Item(Name(UnresolvedItemName([Ident("gcpconn")])))) }, ConnectionOption { name: Warehouse, value: Some(Value(String("gs://iceberg-test"))) }], with_options: [] })
+
+parse-statement
 CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun, DATABASE 'db', PASSWORD 'pw', SSL CERTIFICATE 'cert', SSL KEY 'key', SSL MODE 'mode', USER 'postgres'
 ----
 CREATE CONNECTION pgconn TO POSTGRES (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun, DATABASE = 'db', PASSWORD = 'pw', SSL CERTIFICATE = 'cert', SSL KEY = 'key', SSL MODE = 'mode', USER = 'postgres')
@@ -2879,7 +2886,7 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
 ----
-error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CATALOG or CREDENTIAL or DATABASE or ENDPOINT or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or REGISTRY or ROLE or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
+error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CATALOG or CREDENTIAL or DATABASE or ENDPOINT or GCP or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or REGISTRY or ROLE or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
                                                ^
 

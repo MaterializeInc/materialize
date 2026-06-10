@@ -274,6 +274,10 @@ case "$cmd" in
                 --env AZURE_SERVICE_ACCOUNT_PASSWORD
                 --env AZURE_SERVICE_ACCOUNT_TENANT
                 --env GCP_SERVICE_ACCOUNT_JSON
+                # For test/gcp Iceberg E2E
+                --env ICEBERG_GCS_BUCKET
+                --env ICEBERG_GCP_PROJECT
+                --env ICEBERG_GCP_SA_JSON_B64
                 --env GITHUB_TOKEN
                 --env GITHUB_GHCR_TOKEN
                 --env GPG_KEY
