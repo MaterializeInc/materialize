@@ -50,13 +50,15 @@ use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
     ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
-    ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
-    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    ClusterReplicaValue, ClusterSystemConfiguration, ClusterSystemConfigurationKey,
+    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey,
+    ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
+    DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, ReplicaSystemConfiguration, Role, RoleKey, RoleValue, Schema, SchemaKey,
-    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
-    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
+    ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
+    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
+    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
     SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
@@ -95,6 +97,10 @@ pub struct Transaction<'a> {
     settings: TableTransaction<SettingKey, SettingValue>,
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
+    cluster_system_configurations:
+        TableTransaction<ClusterSystemConfigurationKey, ClusterSystemConfigurationValue>,
+    replica_system_configurations:
+        TableTransaction<ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     source_references: TableTransaction<SourceReferencesKey, SourceReferencesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
@@ -132,6 +138,8 @@ impl<'a> Transaction<'a> {
             source_references,
             system_object_mappings,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -182,6 +190,8 @@ impl<'a> Transaction<'a> {
             source_references: TableTransaction::new(source_references)?,
             system_gid_mapping: TableTransaction::new(system_object_mappings)?,
             system_configurations: TableTransaction::new(system_configurations)?,
+            cluster_system_configurations: TableTransaction::new(cluster_system_configurations)?,
+            replica_system_configurations: TableTransaction::new(replica_system_configurations)?,
             default_privileges: TableTransaction::new(default_privileges)?,
             system_privileges: TableTransaction::new(system_privileges)?,
             storage_collection_metadata: TableTransaction::new(storage_collection_metadata)?,
@@ -1043,6 +1053,8 @@ impl<'a> Transaction<'a> {
             settings: self.settings.current_items_proto(),
             system_object_mappings: self.system_gid_mapping.current_items_proto(),
             system_configurations: self.system_configurations.current_items_proto(),
+            cluster_system_configurations: self.cluster_system_configurations.current_items_proto(),
+            replica_system_configurations: self.replica_system_configurations.current_items_proto(),
             default_privileges: self.default_privileges.current_items_proto(),
             source_references: self.source_references.current_items_proto(),
             system_privileges: self.system_privileges.current_items_proto(),
@@ -2154,45 +2166,84 @@ impl<'a> Transaction<'a> {
         self.system_configurations.delete(|_k, _v| true, self.op_id);
     }
 
+    /// Returns the persisted cluster-coherent scoped system configurations.
+    pub fn get_cluster_system_configurations(
+        &self,
+    ) -> impl Iterator<Item = ClusterSystemConfiguration> + use<'_> {
+        self.cluster_system_configurations
+            .items()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
+    }
+
+    /// Upserts the persisted cluster-coherent scoped configuration `name` = `value`
+    /// for `cluster_id`.
+    pub fn upsert_cluster_system_config(
+        &mut self,
+        cluster_id: ClusterId,
+        name: &str,
+        value: String,
+    ) -> Result<(), CatalogError> {
+        let key = ClusterSystemConfigurationKey {
+            cluster_id,
+            name: name.to_string(),
+        };
+        let value = ClusterSystemConfigurationValue { value };
+        self.cluster_system_configurations
+            .set(key, Some(value), self.op_id)?;
+        Ok(())
+    }
+
+    /// Removes the persisted cluster-coherent scoped configuration `name` for
+    /// `cluster_id`.
+    pub fn remove_cluster_system_config(&mut self, cluster_id: ClusterId, name: &str) {
+        let key = ClusterSystemConfigurationKey {
+            cluster_id,
+            name: name.to_string(),
+        };
+        self.cluster_system_configurations
+            .set(key, None, self.op_id)
+            .expect("cannot have uniqueness violation");
+    }
+
     /// Returns the persisted replica-local scoped system configurations.
-    ///
-    /// STUB: durable storage for replica-local scoped parameters is not yet
-    /// implemented (see [`ReplicaSystemConfiguration`] and
-    /// `doc/developer/design/20260610_scoped_feature_flags_persistence_notes.md`).
-    /// Always returns empty, so on startup resolution falls back to the
-    /// coordinator's in-memory working copy until the first LaunchDarkly sync.
     pub fn get_replica_system_configurations(
         &self,
-    ) -> impl Iterator<Item = ReplicaSystemConfiguration> {
-        std::iter::empty()
+    ) -> impl Iterator<Item = ReplicaSystemConfiguration> + use<'_> {
+        self.replica_system_configurations
+            .items()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
     /// Upserts the persisted replica-local scoped configuration `name` = `value`
     /// for `replica_id`.
-    ///
-    /// STUB: see [`get_replica_system_configurations`](Self::get_replica_system_configurations);
-    /// currently a no-op.
     pub fn upsert_replica_system_config(
         &mut self,
         replica_id: ReplicaId,
         name: &str,
         value: String,
     ) -> Result<(), CatalogError> {
-        // TODO(scoped-flags): persist into the `replica_system_configurations`
-        // durable collection once it is added (see the implementation note).
-        let _ = (replica_id, name, value);
+        let key = ReplicaSystemConfigurationKey {
+            replica_id,
+            name: name.to_string(),
+        };
+        let value = ReplicaSystemConfigurationValue { value };
+        self.replica_system_configurations
+            .set(key, Some(value), self.op_id)?;
         Ok(())
     }
 
     /// Removes the persisted replica-local scoped configuration `name` for
     /// `replica_id`.
-    ///
-    /// STUB: see [`get_replica_system_configurations`](Self::get_replica_system_configurations);
-    /// currently a no-op.
     pub fn remove_replica_system_config(&mut self, replica_id: ReplicaId, name: &str) {
-        // TODO(scoped-flags): remove from the `replica_system_configurations`
-        // durable collection once it is added (see the implementation note).
-        let _ = (replica_id, name);
+        let key = ReplicaSystemConfigurationKey {
+            replica_id,
+            name: name.to_string(),
+        };
+        self.replica_system_configurations
+            .set(key, None, self.op_id)
+            .expect("cannot have uniqueness violation");
     }
 
     pub(crate) fn insert_config(&mut self, key: String, value: u64) -> Result<(), CatalogError> {
@@ -2376,6 +2427,8 @@ impl<'a> Transaction<'a> {
             introspection_sources,
             system_gid_mapping,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             source_references,
             system_privileges,
@@ -2425,6 +2478,16 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 system_configurations,
                 StateUpdateKind::SystemConfiguration,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                cluster_system_configurations,
+                StateUpdateKind::ClusterSystemConfiguration,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                replica_system_configurations,
+                StateUpdateKind::ReplicaSystemConfiguration,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
@@ -2532,6 +2595,8 @@ impl<'a> Transaction<'a> {
             settings: self.settings.pending(),
             system_gid_mapping: self.system_gid_mapping.pending(),
             system_configurations: self.system_configurations.pending(),
+            cluster_system_configurations: self.cluster_system_configurations.pending(),
+            replica_system_configurations: self.replica_system_configurations.pending(),
             default_privileges: self.default_privileges.pending(),
             system_privileges: self.system_privileges.pending(),
             storage_collection_metadata: self.storage_collection_metadata.pending(),
@@ -2577,6 +2642,8 @@ impl<'a> Transaction<'a> {
             settings,
             system_gid_mapping,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -2603,6 +2670,8 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(source_references);
         differential_dataflow::consolidation::consolidate_updates(system_gid_mapping);
         differential_dataflow::consolidation::consolidate_updates(system_configurations);
+        differential_dataflow::consolidation::consolidate_updates(cluster_system_configurations);
+        differential_dataflow::consolidation::consolidate_updates(replica_system_configurations);
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
         differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
@@ -2791,6 +2860,16 @@ pub struct TransactionBatch {
         proto::ServerConfigurationValue,
         Diff,
     )>,
+    pub(crate) cluster_system_configurations: Vec<(
+        proto::ClusterSystemConfigurationKey,
+        proto::ClusterSystemConfigurationValue,
+        Diff,
+    )>,
+    pub(crate) replica_system_configurations: Vec<(
+        proto::ReplicaSystemConfigurationKey,
+        proto::ReplicaSystemConfigurationValue,
+        Diff,
+    )>,
     pub(crate) default_privileges: Vec<(
         proto::DefaultPrivilegesKey,
         proto::DefaultPrivilegesValue,
@@ -2837,6 +2916,8 @@ impl TransactionBatch {
             source_references,
             system_gid_mapping,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -2861,6 +2942,8 @@ impl TransactionBatch {
             && source_references.is_empty()
             && system_gid_mapping.is_empty()
             && system_configurations.is_empty()
+            && cluster_system_configurations.is_empty()
+            && replica_system_configurations.is_empty()
             && default_privileges.is_empty()
             && system_privileges.is_empty()
             && storage_collection_metadata.is_empty()
@@ -2928,11 +3011,13 @@ mod unique_name {
     impl_no_unique_name!(
         (),
         ClusterIntrospectionSourceIndexValue,
+        ClusterSystemConfigurationValue,
         CommentValue,
         ConfigValue,
         DefaultPrivilegesValue,
         GidMappingValue,
         IdAllocValue,
+        ReplicaSystemConfigurationValue,
         ServerConfigurationValue,
         SettingValue,
         SourceReferencesValue,

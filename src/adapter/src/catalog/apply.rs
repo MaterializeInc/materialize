@@ -315,6 +315,16 @@ impl CatalogState {
             StateUpdateKind::SystemConfiguration(system_configuration) => {
                 self.apply_system_configuration_update(system_configuration, diff, retractions);
             }
+            StateUpdateKind::ClusterSystemConfiguration(_)
+            | StateUpdateKind::ReplicaSystemConfiguration(_) => {
+                // Scoped (per-cluster / per-replica) system parameters are a
+                // durable cache written solely by the system-parameter sync
+                // loop. Their in-memory working copy is owned by the
+                // coordinator (loaded from the durable collection on bootstrap,
+                // updated by `reconcile_scoped_system_parameters`), not by
+                // `CatalogState`, so there is nothing to apply here. Moving the
+                // working copy into `CatalogState` is a follow-up.
+            }
             StateUpdateKind::Cluster(cluster) => {
                 self.apply_cluster_update(cluster, diff, retractions);
             }
@@ -1401,6 +1411,12 @@ impl CatalogState {
                 vec![self.pack_system_privileges_update(system_privilege, diff)]
             }
             StateUpdateKind::SystemConfiguration(_) => Vec::new(),
+            // Scoped system parameters surface in `mz_cluster_system_parameters`
+            // / `mz_replica_system_parameters`, but those rows are packed from
+            // the coordinator's working copy in `pack_scoped_param_updates`, not
+            // from this durable-update path.
+            StateUpdateKind::ClusterSystemConfiguration(_)
+            | StateUpdateKind::ReplicaSystemConfiguration(_) => Vec::new(),
             StateUpdateKind::Cluster(cluster) => self.pack_cluster_update(&cluster.name, diff),
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.pack_item_update(introspection_source_index.item_id, diff)
@@ -2198,8 +2214,10 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 &mut pre_cluster_additions,
             ),
             StateUpdateKind::Cluster(_)
+            | StateUpdateKind::ClusterSystemConfiguration(_)
             | StateUpdateKind::IntrospectionSourceIndex(_)
-            | StateUpdateKind::ClusterReplica(_) => push_update(
+            | StateUpdateKind::ClusterReplica(_)
+            | StateUpdateKind::ReplicaSystemConfiguration(_) => push_update(
                 update,
                 diff,
                 &mut cluster_retractions,
@@ -2545,6 +2563,8 @@ impl ApplyState {
             | DefaultPrivilege(_)
             | SystemPrivilege(_)
             | SystemConfiguration(_)
+            | ClusterSystemConfiguration(_)
+            | ReplicaSystemConfiguration(_)
             | Cluster(_)
             | NetworkPolicy(_)
             | ClusterReplica(_)

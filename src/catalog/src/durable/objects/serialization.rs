@@ -15,11 +15,13 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
-    ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
+    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
+    ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
+    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
+    NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
+    ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
@@ -746,6 +748,66 @@ impl RustType<proto::ServerConfigurationValue> for ServerConfigurationValue {
 
     fn from_proto(proto: proto::ServerConfigurationValue) -> Result<Self, TryFromProtoError> {
         Ok(ServerConfigurationValue { value: proto.value })
+    }
+}
+
+impl RustType<proto::ClusterSystemConfigurationKey> for ClusterSystemConfigurationKey {
+    fn into_proto(&self) -> proto::ClusterSystemConfigurationKey {
+        proto::ClusterSystemConfigurationKey {
+            cluster_id: self.cluster_id.into_proto(),
+            name: self.name.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterSystemConfigurationKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterSystemConfigurationKey {
+            cluster_id: proto.cluster_id.into_rust()?,
+            name: proto.name,
+        })
+    }
+}
+
+impl RustType<proto::ClusterSystemConfigurationValue> for ClusterSystemConfigurationValue {
+    fn into_proto(&self) -> proto::ClusterSystemConfigurationValue {
+        proto::ClusterSystemConfigurationValue {
+            value: self.value.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::ClusterSystemConfigurationValue,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterSystemConfigurationValue { value: proto.value })
+    }
+}
+
+impl RustType<proto::ReplicaSystemConfigurationKey> for ReplicaSystemConfigurationKey {
+    fn into_proto(&self) -> proto::ReplicaSystemConfigurationKey {
+        proto::ReplicaSystemConfigurationKey {
+            replica_id: self.replica_id.into_proto(),
+            name: self.name.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ReplicaSystemConfigurationKey) -> Result<Self, TryFromProtoError> {
+        Ok(ReplicaSystemConfigurationKey {
+            replica_id: proto.replica_id.into_rust()?,
+            name: proto.name,
+        })
+    }
+}
+
+impl RustType<proto::ReplicaSystemConfigurationValue> for ReplicaSystemConfigurationValue {
+    fn into_proto(&self) -> proto::ReplicaSystemConfigurationValue {
+        proto::ReplicaSystemConfigurationValue {
+            value: self.value.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::ReplicaSystemConfigurationValue,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(ReplicaSystemConfigurationValue { value: proto.value })
     }
 }
 

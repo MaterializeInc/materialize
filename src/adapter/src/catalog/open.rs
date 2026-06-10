@@ -266,6 +266,8 @@ impl Catalog {
                 | BootstrapStateUpdateKind::DefaultPrivilege(_)
                 | BootstrapStateUpdateKind::SystemPrivilege(_)
                 | BootstrapStateUpdateKind::SystemConfiguration(_)
+                | BootstrapStateUpdateKind::ClusterSystemConfiguration(_)
+                | BootstrapStateUpdateKind::ReplicaSystemConfiguration(_)
                 | BootstrapStateUpdateKind::Cluster(_)
                 | BootstrapStateUpdateKind::NetworkPolicy(_)
                 | BootstrapStateUpdateKind::ClusterReplica(_) => {
