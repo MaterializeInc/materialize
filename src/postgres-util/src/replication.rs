@@ -232,7 +232,17 @@ pub async fn get_timeline_id(client: &Client) -> Result<u64, PostgresError> {
 }
 
 pub async fn get_current_wal_lsn(client: &Client) -> Result<PgLsn, PostgresError> {
-    let row = client.query_one("SELECT pg_current_wal_lsn()", &[]).await?;
+    // `pg_current_wal_lsn()` errors with "recovery is in progress" on a physical
+    // standby. When reading from a standby (logical decoding on standby, PG 16+)
+    // the relevant frontier is how far WAL has been replayed locally, which is
+    // exactly what `pg_last_wal_replay_lsn()` reports.
+    let row = client
+        .query_one(
+            "SELECT CASE WHEN pg_is_in_recovery() \
+             THEN pg_last_wal_replay_lsn() ELSE pg_current_wal_lsn() END",
+            &[],
+        )
+        .await?;
     let lsn: PgLsn = row.get(0);
 
     Ok(lsn)
