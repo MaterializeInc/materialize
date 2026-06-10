@@ -99,51 +99,71 @@ where
     }
 }
 
+/// Configuration for the conversion webhook that serves the v1 version of the
+/// Materialize CRD. When present, the v1 version is registered alongside
+/// v1alpha1 with webhook conversion between them; when absent, only v1alpha1
+/// is registered.
+#[derive(Debug, Clone)]
+pub struct ConversionWebhookConfig {
+    pub service_name: String,
+    pub service_namespace: String,
+    pub service_port: u16,
+    pub ca_cert_path: String,
+}
+
 pub async fn register_crds(
     client: Client,
     additional_crd_columns: Vec<CustomResourceColumnDefinition>,
-    webhook_service_name: String,
-    webhook_service_namespace: String,
-    webhook_service_port: u16,
-    ca_cert_path: String,
+    conversion_webhook: Option<ConversionWebhookConfig>,
 ) -> Result<(), anyhow::Error> {
-    let ca_bytes = tokio::fs::read(ca_cert_path).await?;
-    let mut mz_crd = crd::materialize::v1::Materialize::crd();
-    let default_columns = mz_crd.spec.versions[0]
+    let (mut mz_crds, mz_conversion) = match conversion_webhook {
+        Some(config) => {
+            let ca_bytes = tokio::fs::read(config.ca_cert_path).await?;
+            let conversion = CustomResourceConversion {
+                strategy: "Webhook".to_owned(),
+                webhook: Some(WebhookConversion {
+                    client_config: Some(WebhookClientConfig {
+                        ca_bundle: Some(ByteString(ca_bytes)),
+                        service: Some(ServiceReference {
+                            name: config.service_name,
+                            namespace: config.service_namespace,
+                            path: Some("/convert".to_owned()),
+                            port: Some(config.service_port.into()),
+                        }),
+                        url: None,
+                    }),
+                    conversion_review_versions: vec!["v1".to_owned()],
+                }),
+            };
+            (
+                vec![
+                    crd::materialize::v1::Materialize::crd(),
+                    crd::materialize::v1alpha1::Materialize::crd(),
+                ],
+                Some(conversion),
+            )
+        }
+        None => (vec![crd::materialize::v1alpha1::Materialize::crd()], None),
+    };
+    let default_columns = mz_crds[0].spec.versions[0]
         .additional_printer_columns
         .take()
         .expect("should contain ImageRef and UpToDate columns");
-    mz_crd.spec.versions[0].additional_printer_columns = Some(
+    mz_crds[0].spec.versions[0].additional_printer_columns = Some(
         additional_crd_columns
             .into_iter()
             .chain(default_columns)
             .collect(),
     );
-    let mz_conversion = CustomResourceConversion {
-        strategy: "Webhook".to_owned(),
-        webhook: Some(WebhookConversion {
-            client_config: Some(WebhookClientConfig {
-                ca_bundle: Some(ByteString(ca_bytes)),
-                service: Some(ServiceReference {
-                    name: webhook_service_name,
-                    namespace: webhook_service_namespace,
-                    path: Some("/convert".to_owned()),
-                    port: Some(webhook_service_port.into()),
-                }),
-                url: None,
-            }),
-            conversion_review_versions: vec!["v1".to_owned()],
-        }),
-    };
     tokio::time::timeout(
         Duration::from_secs(120),
         register_versioned_crds(
             client.clone(),
             vec![
                 VersionedCrd {
-                    crds: vec![mz_crd, crd::materialize::v1alpha1::Materialize::crd()],
+                    crds: mz_crds,
                     stored_version: String::from("v1alpha1"),
-                    conversion: Some(mz_conversion),
+                    conversion: mz_conversion,
                 },
                 VersionedCrd {
                     crds: vec![crd::balancer::v1alpha1::Balancer::crd()],
