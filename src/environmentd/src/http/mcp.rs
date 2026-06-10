@@ -635,7 +635,7 @@ async fn handle_mcp_method(
     match &request.method {
         McpMethod::Initialize(_) => {
             debug!(endpoint = %endpoint_type, "Processing initialize");
-            handle_initialize(endpoint_type).await
+            handle_initialize(endpoint_type, query_tool_enabled).await
         }
         McpMethod::ToolsList => {
             debug!(endpoint = %endpoint_type, "Processing tools/list");
@@ -661,44 +661,63 @@ async fn handle_mcp_method(
 
 /// Instructions returned in the `initialize` response for each endpoint type.
 /// These guide the AI agent on how to use the server correctly.
-fn endpoint_instructions(endpoint_type: McpEndpointType) -> Option<String> {
+fn endpoint_instructions(
+    endpoint_type: McpEndpointType,
+    query_tool_enabled: bool,
+) -> Option<String> {
     match endpoint_type {
-        McpEndpointType::Agent => Some(concat!(
-            "You have access to Materialize data products via MCP. ",
-            "Prefer indexed objects (served from memory) over unindexed materialized views ",
-            "(read from persistent storage). `read_data_product` automatically routes the ",
-            "read to the cluster recorded in the data product catalog so indexes are used; ",
-            "you only need to set the `cluster` parameter if you intentionally want the ",
-            "read to run on a different cluster (e.g. one with larger or more replicas). ",
-            "`get_data_product_details` returns a `hydration` object with `hydrated`, ",
-            "`replica_count`, and `hydrated_replica_count` fields. Reads never return ",
-            "partial data: a read against a not-yet-hydrated product blocks until the ",
-            "dataflow catches up, and may hit the request timeout. Check `hydrated` ",
-            "before reading: if it is false and `replica_count` is greater than 0, the ",
-            "dataflow is still warming up, so wait and retry; if `replica_count` is 0 the ",
-            "cluster has no replicas and the read cannot make progress until one is added.",
-        ).to_string()),
-        McpEndpointType::Developer => Some(concat!(
-            "You are connected to the Materialize developer MCP server for troubleshooting and observability.\n\n",
-            "Tools:\n",
-            "- query_system_catalog: read-only SELECT/SHOW/EXPLAIN restricted to system catalog tables (mz_*, pg_catalog, information_schema). No cluster argument; prefer this for most catalog lookups.\n",
-            "- query: read-only SELECT/SHOW/EXPLAIN that can also reach user objects on a named cluster. Use this for EXPLAIN ANALYZE and for inspecting user objects directly. The tool may be hidden if the operator has disabled it.\n\n",
-            "IMPORTANT: Before writing queries, discover table schemas using the mz_ontology tables:\n",
-            "- mz_internal.mz_ontology_entity_types: what catalog entities exist and which tables they map to\n",
-            "- mz_internal.mz_ontology_link_types: relationships between entities (foreign keys, metrics, etc.)\n",
-            "- mz_internal.mz_ontology_properties: column names, types, and descriptions for each entity\n",
-            "- mz_internal.mz_ontology_semantic_types: typed ID domains (CatalogItemId, ReplicaId, etc.)\n\n",
-            "Use these to find the correct tables, join paths, and column names instead of guessing.\n\n",
-            "Key rules:\n",
-            "- mz_source_statuses and mz_sink_statuses use `last_status_change_at` (NOT `updated_at`)\n",
-            "- mz_cluster_replica_utilization only has `replica_id` — JOIN with mz_cluster_replicas and mz_clusters to get names\n",
-            "- Do NOT query mz_introspection.mz_dataflow_arrangement_sizes — it is cluster-scoped and has uint8/text type mismatches\n",
-            "- Use SHOW COLUMNS FROM <table> to verify column names if unsure",
-        ).to_string()),
+        McpEndpointType::Agent => Some(
+            concat!(
+                "You have access to Materialize data products via MCP. ",
+                "Prefer indexed objects (served from memory) over unindexed materialized views ",
+                "(read from persistent storage). `read_data_product` automatically routes the ",
+                "read to the cluster recorded in the data product catalog so indexes are used; ",
+                "you only need to set the `cluster` parameter if you intentionally want the ",
+                "read to run on a different cluster (e.g. one with larger or more replicas). ",
+                "`get_data_product_details` returns a `hydration` object with `hydrated`, ",
+                "`replica_count`, and `hydrated_replica_count` fields. Reads never return ",
+                "partial data: a read against a not-yet-hydrated product blocks until the ",
+                "dataflow catches up, and may hit the request timeout. Check `hydrated` ",
+                "before reading: if it is false and `replica_count` is greater than 0, the ",
+                "dataflow is still warming up, so wait and retry; if `replica_count` is 0 the ",
+                "cluster has no replicas and the read cannot make progress until one is added.",
+            )
+            .to_string(),
+        ),
+        McpEndpointType::Developer => {
+            // Only advertise the `query` tool when it is actually exposed:
+            // otherwise the instructions would point agents at a tool that
+            // tools/list does not list.
+            let query_tool_line = if query_tool_enabled {
+                "- query: read-only SELECT/SHOW/EXPLAIN that can also reach user objects on a named cluster. Use this for EXPLAIN ANALYZE and for inspecting user objects directly.\n"
+            } else {
+                ""
+            };
+            Some(format!(
+                "You are connected to the Materialize developer MCP server for troubleshooting and observability.\n\n\
+                 Tools:\n\
+                 - query_system_catalog: read-only SELECT/SHOW/EXPLAIN restricted to system catalog tables (mz_*, pg_catalog, information_schema). No cluster argument; prefer this for most catalog lookups.\n\
+                 {query_tool_line}\n\
+                 IMPORTANT: Before writing queries, discover table schemas using the mz_ontology tables:\n\
+                 - mz_internal.mz_ontology_entity_types: what catalog entities exist and which tables they map to\n\
+                 - mz_internal.mz_ontology_link_types: relationships between entities (foreign keys, metrics, etc.)\n\
+                 - mz_internal.mz_ontology_properties: column names, types, and descriptions for each entity\n\
+                 - mz_internal.mz_ontology_semantic_types: typed ID domains (CatalogItemId, ReplicaId, etc.)\n\n\
+                 Use these to find the correct tables, join paths, and column names instead of guessing.\n\n\
+                 Key rules:\n\
+                 - mz_source_statuses and mz_sink_statuses use `last_status_change_at` (NOT `updated_at`)\n\
+                 - mz_cluster_replica_utilization only has `replica_id` — JOIN with mz_cluster_replicas and mz_clusters to get names\n\
+                 - Do NOT query mz_introspection.mz_dataflow_arrangement_sizes — it is cluster-scoped and has uint8/text type mismatches\n\
+                 - Use SHOW COLUMNS FROM <table> to verify column names if unsure",
+            ))
+        }
     }
 }
 
-async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, McpRequestError> {
+async fn handle_initialize(
+    endpoint_type: McpEndpointType,
+    query_tool_enabled: bool,
+) -> Result<McpResult, McpRequestError> {
     Ok(McpResult::Initialize(InitializeResult {
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
         capabilities: Capabilities { tools: json!({}) },
@@ -706,7 +725,7 @@ async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, 
             name: format!("materialize-mcp-{}", endpoint_type),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
-        instructions: endpoint_instructions(endpoint_type),
+        instructions: endpoint_instructions(endpoint_type, query_tool_enabled),
     }))
 }
 

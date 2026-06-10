@@ -5137,7 +5137,7 @@ fn test_mcp_agent_disabled() {
 
 /// Tests the MCP developer endpoint with the query tool explicitly disabled.
 #[mz_ore::test]
-fn test_mcp_developer() {
+fn test_mcp_developer_with_query_tool_disabled() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(false, true)
         .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
