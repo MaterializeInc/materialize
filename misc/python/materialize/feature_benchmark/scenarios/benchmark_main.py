@@ -994,22 +994,27 @@ ALTER SYSTEM SET enable_column_paged_batcher = true;
 class DifferentialJoinHydration(Dataflow):
     """Non-leaf parent for the linear-join hydration benchmark family.
 
-    Holds the shared `init` / `benchmark` (replica-toggle hydration loop) so
-    Baseline and File variants only need to override `shared()` with the
-    dyncfgs they want set. Has subclasses, so the feature-benchmark runner
-    treats it as non-leaf and never executes it directly — pick one of the
-    leaf classes via `--root-scenario`.
+    Holds the shared `init` / `benchmark` so Baseline and File variants only
+    need to override `shared()` with the dyncfgs they want set. Has
+    subclasses, so the feature-benchmark runner treats it as non-leaf and
+    never executes it directly — pick one of the leaf classes via
+    `--root-scenario`.
 
-    Run both leaves under a memory-capped Materialized (`--this-memory=2g`)
-    so the baseline has to swap and the paged-file variant has somewhere
-    predictable to spill.
+    Each iteration drops and re-creates a materialized view over a self-join
+    of `v1`, timing the rebuild of the join arrangement from persist. The
+    dataflow runs on the default cluster, which in the feature-benchmark
+    composition is `cluster_default` on the external `clusterd` container —
+    so the MEMORY_CLUSTERD measurement reflects the join arrangement rather
+    than sharing a container with environmentd. Only `v2` is dropped between
+    iterations; `v1` stays hydrated throughout.
     """
 
-    # SCALE=8 → 100M rows per side, ~1.6 GiB per side input. Two sides plus
-    # the join arrangement (typically 2–4× input) reliably exceeds a few
-    # GiB total; a 2g container cap forces real swap pressure on the
-    # baseline. File variant's 16 MiB per-worker + 128 MiB shared budget
-    # means almost everything spills under that cap.
+    # SCALE=8 → 100M rows per side, ~1.6 GiB per side input. The
+    # merge-batcher transient while arranging that input dwarfs the File
+    # variant's spill budget floors (16 MiB per worker + 128 MiB shared),
+    # so nearly all of it spills, while the Baseline holds it in memory.
+    # Note `cluster_default` runs with a single worker, so iterations are
+    # slow; use `--scale` to dial down for quick checks.
     SCALE = 8
 
     @classmethod
@@ -1021,10 +1026,6 @@ class DifferentialJoinHydration(Dataflow):
         return version > MzVersion.create(26, 28, 0)
 
     def init(self) -> list[Action]:
-        # `v1` lives on the default cluster, not `join_cluster`, so the
-        # replication-factor toggle in `benchmark` only tears down `v2`'s
-        # dataflow. Keeps the measurement scoped to the join-arrangement
-        # rebuild we're trying to measure.
         return [
             self.view_ten(),
             TdAction(f"""
@@ -1032,41 +1033,31 @@ class DifferentialJoinHydration(Dataflow):
   AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
 > SELECT COUNT(*) FROM v1
 {self.n()}
-
-> CREATE CLUSTER join_cluster SIZE 'scale=1,workers=16', REPLICATION FACTOR 1
 """),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        # Match HydrateIndex's pattern: take the cluster offline *before*
-        # defining the object so the dataflow doesn't pre-hydrate. The
-        # `REPLICATION FACTOR 1` flip after `/* A */` is the actual
-        # hydration trigger we want to time.
         return Td(f"""
 > DROP MATERIALIZED VIEW IF EXISTS v2
-
-> ALTER CLUSTER join_cluster SET (REPLICATION FACTOR 0)
-
-> CREATE MATERIALIZED VIEW v2
-  IN CLUSTER join_cluster
-  AS SELECT COUNT(*) FROM v1 AS a1 JOIN v1 AS a2 USING (f1)
 
 > SELECT 1
   /* A */
 1
-> ALTER CLUSTER join_cluster SET (REPLICATION FACTOR 1)
-> SET CLUSTER = join_cluster
+
+> CREATE MATERIALIZED VIEW v2
+  AS SELECT COUNT(*) FROM v1 AS a1 JOIN v1 AS a2 USING (f1)
+
 > SELECT * FROM v2
   /* B */
 {self.n()}
-> SET CLUSTER = default
 """)
 
 
 class DifferentialJoinHydrationBaseline(DifferentialJoinHydration):
     """Hydration measurement with the paged batcher disabled (current
-    production path). Compare against `DifferentialJoinHydrationFile` to
-    see if user-space file-backed spill beats OS swap under pressure.
+    production path). Compare against `DifferentialJoinHydrationFile` for
+    the wallclock cost and memory savings of file-backed spill relative to
+    the all-in-memory path.
     """
 
     def shared(self) -> Action:
@@ -1082,10 +1073,11 @@ class DifferentialJoinHydrationFile(DifferentialJoinHydration):
     a tight budget fraction so the merge-batcher transient spills rather
     than competing with the spine for RAM.
 
-    `budget_fraction = 0.01` (1% of announced memory limit) lands in the
-    clamp floors of the worker-init derivation (per-worker 16 MiB,
-    shared 128 MiB), giving us the same effective sizing we benchmarked
-    before the fraction-knob refactor.
+    `budget_fraction = 0.01` is 1% of the announced memory limit. The
+    clusterd container runs uncapped, so that's 1% of host RAM — on small
+    hosts the derivation's clamp floors (per-worker 16 MiB, shared
+    128 MiB) kick in. Either way it's far below the SCALE=8 batcher
+    transient, so the bulk of the input spills.
     """
 
     def shared(self) -> Action:
