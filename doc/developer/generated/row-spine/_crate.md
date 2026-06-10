@@ -1,6 +1,6 @@
 ---
 source: src/row-spine/src/lib.rs
-revision: 225aeaa79f
+revision: 90644c4837
 ---
 
 # mz-row-spine
@@ -33,6 +33,7 @@ All builders use `RcBuilder` wrapping the appropriate `OrdValBuilder` or `OrdKey
 * `RowRowBuilder<T, R>`, `RowValBuilder<V, T, R>`, `RowBuilder<T, R>`, `ValRowBuilder<K, T, R>`
 
 `RowRowColPagedBuilder<T, R>` is a `RowRowBuilder` variant that consumes `Column` chunks instead of `ColumnationStack` input. It pairs with `Col2ValPagedBatcher` for the spillable arrange path.
+`ValRowColPagedBuilder<K, T, R>` is a `ValRowBuilder` variant that consumes `Column` chunks; pairs with `Col2ValPagedBatcher<K, Row, T, R>` for the spillable arrange path where keys are arbitrary `Columnar` values and values are packed `Row` bytes.
 
 ## Layout structs (internal)
 

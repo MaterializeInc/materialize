@@ -1,18 +1,19 @@
 ---
 source: src/auth/src/lib.rs
-revision: aa7a1afd31
+revision: 33b8db85da
 ---
 
 # mz-auth
 
-Provides shared authentication logic for Materialize, including password representation, SCRAM-SHA-256 credential management, and authenticator kind identification.
+Provides shared authentication logic for Materialize, including password representation, SCRAM-SHA-256 credential management, authenticator kind identification, and JWT group-claim extraction.
 
 ## Module structure
 
 * `password` — the `Password` newtype with redacted debug output and zeroize-on-drop.
 * `hash` — PBKDF2-SHA-256 hashing and SCRAM-SHA-256 / SASL verification primitives.
+* `group_claims` — shared logic for extracting group names from JWT claims, used by both the Frontegg and OIDC authenticators.
 
-The crate root (`lib.rs`) re-exports these two modules and defines the `Authenticated` sentinel type and the `AuthenticatorKind` enum.
+The crate root (`lib.rs`) re-exports these three modules and defines the `Authenticated` sentinel type and the `AuthenticatorKind` enum.
 
 ## Key types
 

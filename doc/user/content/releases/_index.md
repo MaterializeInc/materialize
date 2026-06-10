@@ -15,6 +15,61 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.27.0
+*Released to Materialize Cloud: 2026-06-04* <br>
+*Released to Materialize Self-Managed: 2026-06-05* <br>
+
+This release includes improvements to the MCP Server for Agents, general
+improvements, and bug fixes.
+
+### MCP Server for Agents
+We've made several improvements to our MCP Server for Agents, which can be used to give agents in production fresh context from Materialize.
+
+- **`query` tool enabled by default**: The MCP Server for Agents now
+  enables the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query)
+  by default, allowing agents to join across data products.
+- **Data product routing**: The `read_data_product` tool now
+  automatically routes queries to the data product's catalog cluster,
+  eliminating the need to specify the cluster manually.
+- **Data product hydration status**: The MCP Server for Agents now
+  surfaces hydration readiness state for data products, enabling agents
+  to check whether a data product is fully hydrated before querying.
+
+For more information, refer to:
+- [MCP Server for Agents](/integrations/mcp-server/mcp-agent/)
+
+### Improvements {#v26.27-improvements}
+
+- **Improved `EXPLAIN` output**: Default `EXPLAIN` output now uses
+  cleaner formatting for joins and explicitly identifies cross joins.
+
+### Bug Fixes {#v26.27-bug-fixes}
+
+- Fixed the Console in self-managed deployments not displaying the
+  balancerd hostname in the connection dialog.
+- Fixed incorrect query results from filter pushdown when using
+  timestamp or date arithmetic with interval values.
+- Fixed incorrect query results from filter pushdown when using `CASE`
+  expressions over JSON columns with keys present in only one branch.
+- Fixed `LATERAL` subqueries with table functions returning wrong
+  results when the input table has an index on a non-leading column.
+- Fixed `COPY FROM` CSV decoding silently treating quoted `NULL` markers
+  as SQL `NULL` and dropping rows after a quoted end-of-copy marker.
+- Fixed a panic when applying a timezone offset to a near-maximum
+  timestamp value.
+- Fixed a panic when applying a timezone offset to a leap-second
+  timestamp value.
+- Fixed a panic when a replica targeted by `CREATE MATERIALIZED VIEW ...
+  IN CLUSTER ... REPLICA <name>` was concurrently dropped.
+- Fixed a panic when specifying a `REFRESH` interval shorter than
+  1 millisecond; now returns a clear error instead.
+- Fixed SSH tunnel connections to HTTPS schema registries failing with
+  TLS handshake errors when the URL omitted the default port.
+- Fixed Iceberg sink errors when writing tables with `smallint` columns,
+  map-typed columns, or `range`-typed equality delete keys.
+- Fixed `SHOW CREATE` incorrectly displaying passwords and `AS OF`
+  clauses.
+
 ## v26.26.0
 *Released to Materialize Cloud: 2026-05-28* <br>
 *Released to Materialize Self-Managed: 2026-05-29* <br>

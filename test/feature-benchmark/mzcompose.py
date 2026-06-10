@@ -189,15 +189,12 @@ def run_one_scenario(
 
     instances = ["this"] if args.skip_other else ["this", "other"]
     for mz_id, instance in enumerate(instances):
-        balancerd, tag, size, params, memory, memory_swap, mem_swappiness = (
+        balancerd, tag, size, params = (
             (
                 args.this_balancerd,
                 args.this_tag,
                 args.this_size,
                 args.this_params,
-                args.this_memory,
-                args.this_memory_swap,
-                args.this_mem_swappiness,
             )
             if instance == "this"
             else (
@@ -205,9 +202,6 @@ def run_one_scenario(
                 args.other_tag,
                 args.other_size,
                 args.other_params,
-                args.other_memory,
-                args.other_memory_swap,
-                args.other_mem_swappiness,
             )
         )
 
@@ -238,18 +232,12 @@ def run_one_scenario(
             size,
             additional_system_parameter_defaults,
             args.azurite and instance == "this",
-            memory=memory,
-            memory_swap=memory_swap,
-            mem_swappiness=mem_swappiness,
         )
         clusterd_image = f"materialize/clusterd:{tag}" if tag else None
         clusterd = create_clusterd_service(
             clusterd_image,
             size,
             additional_system_parameter_defaults,
-            memory=memory,
-            memory_swap=memory_swap,
-            mem_swappiness=mem_swappiness,
         )
 
         if tag is not None and not c.try_pull_service_image(mz):
@@ -263,18 +251,12 @@ def run_one_scenario(
                 size,
                 additional_system_parameter_defaults,
                 args.azurite and instance == "this",
-                memory=memory,
-                memory_swap=memory_swap,
-                mem_swappiness=mem_swappiness,
             )
             clusterd_image = f"materialize/clusterd:{tag}" if tag else None
             clusterd = create_clusterd_service(
                 clusterd_image,
                 size,
                 additional_system_parameter_defaults,
-                memory=memory,
-                memory_swap=memory_swap,
-                mem_swappiness=mem_swappiness,
             )
 
         start_overridden_mz_clusterd_and_cockroach(
@@ -386,9 +368,6 @@ def create_mz_service(
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
     azurite: bool,
-    memory: str | None = None,
-    memory_swap: str | None = None,
-    mem_swappiness: int | None = None,
 ) -> Materialized:
     return Materialized(
         image=mz_image,
@@ -403,9 +382,6 @@ def create_mz_service(
         blob_store_is_azure=azurite,
         sanity_restart=False,
         support_external_clusterd=True,
-        memory=memory,
-        memory_swap=memory_swap,
-        mem_swappiness=mem_swappiness,
     )
 
 
@@ -413,16 +389,8 @@ def create_clusterd_service(
     clusterd_image: str | None,
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
-    memory: str | None = None,
-    memory_swap: str | None = None,
-    mem_swappiness: int | None = None,
 ) -> Clusterd:
-    return Clusterd(
-        image=clusterd_image,
-        memory=memory,
-        memory_swap=memory_swap,
-        mem_swappiness=mem_swappiness,
-    )
+    return Clusterd(image=clusterd_image)
 
 
 def start_overridden_mz_clusterd_and_cockroach(
@@ -557,62 +525,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=int,
         default=4,
         help="SIZE use for 'THIS'",
-    )
-
-    parser.add_argument(
-        "--this-memory",
-        metavar="MEM",
-        type=str,
-        default=os.getenv("THIS_MEMORY", None),
-        help="Docker memory limit for the 'THIS' Materialized + Clusterd "
-        "containers (e.g. '2g', '512m'). Defaults to no limit. Useful for "
-        "exercising spill paths under realistic pressure.",
-    )
-
-    parser.add_argument(
-        "--other-memory",
-        metavar="MEM",
-        type=str,
-        default=os.getenv("OTHER_MEMORY", None),
-        help="Docker memory limit for the 'OTHER' Materialized + Clusterd containers.",
-    )
-
-    parser.add_argument(
-        "--this-memory-swap",
-        metavar="MEM",
-        type=str,
-        default=os.getenv("THIS_MEMORY_SWAP", None),
-        help="Total RAM + swap available to the 'THIS' Materialized + Clusterd "
-        "containers (e.g. '5g'). Must be >= --this-memory to enable swap. "
-        "Lets the host kernel swap pages instead of OOM-killing under "
-        "memory pressure — useful for benchmarking OS swap as a baseline "
-        "vs application-managed spill.",
-    )
-
-    parser.add_argument(
-        "--this-mem-swappiness",
-        metavar="N",
-        type=int,
-        default=None,
-        help="`mem_swappiness` (0-100) for the 'THIS' containers. Higher "
-        "values bias the kernel toward swapping anonymous pages aggressively "
-        "instead of dropping page cache. Default leaves Docker's default.",
-    )
-
-    parser.add_argument(
-        "--other-memory-swap",
-        metavar="MEM",
-        type=str,
-        default=os.getenv("OTHER_MEMORY_SWAP", None),
-        help="Total RAM + swap for the 'OTHER' containers.",
-    )
-
-    parser.add_argument(
-        "--other-mem-swappiness",
-        metavar="N",
-        type=int,
-        default=None,
-        help="`mem_swappiness` (0-100) for the 'OTHER' containers.",
     )
 
     parser.add_argument(

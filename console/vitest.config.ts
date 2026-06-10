@@ -51,7 +51,13 @@ const vitestConfig = defineConfig({
     fakeTimers: {
       toFake: ["Date", "setTimeout", "clearTimeout"],
     },
-    testTimeout: 10_000,
+    // Console integration tests render real components and wait on async
+    // (MSW-mocked) data. On loaded CI runners a render+fetch round-trip can
+    // momentarily exceed a tight budget, so the slowest tests flake together.
+    // Keep generous headroom over their genuine ~10s runtime. See also the
+    // asyncUtilTimeout bump in src/vitest.setup.ts, which governs the
+    // findBy/waitFor wait for an individual element.
+    testTimeout: 30_000,
     pool: "forks",
     poolOptions: {
       forks: {

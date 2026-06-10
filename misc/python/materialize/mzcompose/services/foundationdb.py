@@ -116,6 +116,7 @@ class FoundationDBCluster(Service):
         image: str | None = None,
         node_names: list[str] | None = None,
         cluster_file_contents: str | None = None,
+        storage_engine: str = "ssd",
     ) -> None:
         """
         Create a FoundationDB cluster initialization service.
@@ -126,6 +127,8 @@ class FoundationDBCluster(Service):
         :param name: Service name (typically "foundationdb" for dependency compatibility).
         :param node_names: List of FDB server node service names to depend on.
         :param cluster_file_contents: Contents of the FDB cluster file.
+        :param storage_engine: FDB storage engine ("ssd" for durable, "memory"
+                               for a RAM-backed store with no on-disk data).
         """
         node_names = node_names or []
 
@@ -147,7 +150,7 @@ class FoundationDBCluster(Service):
             "fi; "
             # Not configured - configure it now
             "echo 'Configuring new database...'; "
-            "fdbcli -C /var/fdb/fdb.cluster --exec 'configure new single ssd' --timeout 30; "
+            f"fdbcli -C /var/fdb/fdb.cluster --exec 'configure new single {storage_engine}' --timeout 30; "
             "echo 'Database configured successfully'; "
             "exec sleep infinity"
         )
@@ -187,6 +190,7 @@ def foundationdb_services(
         "FDB_NETWORKING_MODE=container",
     ],
     restart: str = "no",
+    storage_engine: str = "ssd",
 ) -> list[Service]:
     """
     Create a list of FoundationDB services forming a cluster.
@@ -234,6 +238,7 @@ def foundationdb_services(
             image=image,
             node_names=node_names,
             cluster_file_contents=cluster_file_contents,
+            storage_engine=storage_engine,
         )
     )
 

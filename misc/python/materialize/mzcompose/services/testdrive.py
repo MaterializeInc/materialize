@@ -22,6 +22,7 @@ from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.metadata_store import (
     EXTERNAL_METADATA_STORE_ADDRESS,
     METADATA_STORE,
+    metadata_store_companions,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 
@@ -60,9 +61,6 @@ class Testdrive(Service):
         external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
         external_blob_store: bool = False,
         blob_store_is_azure: bool = False,
-        fivetran_destination: bool = False,
-        fivetran_destination_url: str = "http://fivetran-destination:6874",
-        fivetran_destination_files_path: str = "/share/tmp",
         mz_service: str = "materialized",
         metadata_store: str = METADATA_STORE,
         stop_grace_period: str = "120s",
@@ -173,12 +171,6 @@ class Testdrive(Service):
         if check_statement_logging:
             entrypoint.append("--check-statement-logging")
 
-        if fivetran_destination:
-            entrypoint.append(f"--fivetran-destination-url={fivetran_destination_url}")
-            entrypoint.append(
-                f"--fivetran-destination-files-path={fivetran_destination_files_path}"
-            )
-
         if set_persist_urls:
             if external_blob_store:
                 blob_store = "azurite" if blob_store_is_azure else "minio"
@@ -234,4 +226,10 @@ class Testdrive(Service):
         super().__init__(
             name=name,
             config=config,
+        )
+
+        # Pull the external metadata store container(s) into the composition
+        # automatically, so compositions don't have to spell them out.
+        self.companions = metadata_store_companions(
+            metadata_store, external_metadata_store
         )

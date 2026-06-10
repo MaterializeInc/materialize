@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/sinks.rs
-revision: c0559e3dbe
+revision: 9c9b2926db
 ---
 
 # storage-types::sinks

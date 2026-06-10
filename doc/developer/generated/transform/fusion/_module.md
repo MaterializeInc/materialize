@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/fusion.rs
-revision: a5355b2e89
+revision: fc2aaf02e7
 ---
 
 # mz-transform::fusion

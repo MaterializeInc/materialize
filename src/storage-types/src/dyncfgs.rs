@@ -294,6 +294,21 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     "Limit snapshot buffering in upsert.",
 );
 
+/// Allow the upsert-v2 source stash's paged columnar merge batcher to spill
+/// cold chains out of RSS via the column pager. The stash draws from the same
+/// shared budget pool (and backend / codec) as the compute column-paged
+/// batcher — there is one budget — but this flag gates the stash's
+/// participation independently of the compute-side
+/// `enable_column_paged_batcher_spill`.
+///
+/// Off by default; the stash keeps every chunk resident until enabled.
+pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
+    "enable_upsert_paged_spill",
+    false,
+    "Allow the upsert-v2 source stash to spill chunks via the shared column pager, gated \
+     independently of the compute `enable_column_paged_batcher_spill`.",
+);
+
 // RocksDB
 
 /// How many times to try to cleanup old RocksDB DB's on disk before giving up.
@@ -402,6 +417,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
         .add(&ENABLE_UPSERT_V2)
         .add(&SUSPENDABLE_SOURCES)
+        .add(&ENABLE_UPSERT_PAGED_SPILL)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)

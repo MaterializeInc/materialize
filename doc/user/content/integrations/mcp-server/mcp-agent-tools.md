@@ -13,8 +13,9 @@ menu:
 
 ### `get_data_products`
 
-Discovers all available data products. Returns a lightweight list with name,
-cluster, and description for each product.
+Returns the list of data products discoverable by the tool. Materialized views
+and indexed views are discoverable by `get_data_products`. Regular views must
+have an index to be discoverable.
 
 **Parameters:** None.
 
@@ -98,21 +99,16 @@ Reads rows from a data product.
 {{< /warning >}}
 
 Allows the agent to run arbitrary `SELECT` statements (including joins) against
-**any** object for which it has `SELECT` privileges (not just the discoverable
-objects). It is disabled by default.
+**any** object for which the agent has the appropriate privileges (`SELECT` on
+the object, `USAGE` on the object's schema), not just the objects
+discoverable by `get_data_products`. Starting in v26.27, it is enabled by
+default.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `cluster` | string | Yes | Exact cluster name from the data product details. |
 | `sql_query` | string | Yes | PostgreSQL-compatible `SELECT` statement. |
 
-To enable the tool, set the [`enable_mcp_agent_query_tool`
-configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool)
-system parameter to `true`.
-
-To prevent an agent from querying the system catalog objects (`mz_catalog.*`,
-`mz_internal.*`, `pg_catalog.*`, and `information_schema.*`), see [Restrict
-`query` tool access to user objects only](#restrict-to-user-objects).
 
 **Example response:**
 
@@ -132,10 +128,25 @@ To prevent an agent from querying the system catalog objects (`mz_catalog.*`,
 }
 ```
 
+{{< note >}}
+
+- *Recommended*. To prevent an agent from querying the system catalog objects
+  (`mz_catalog.*`, `mz_internal.*`, `pg_catalog.*`, and `information_schema.*`),
+  see [Restrict `query` tool access to user objects
+  only](#restrict-to-user-objects).
+
+- To disable the tool, set the [`enable_mcp_agent_query_tool`
+  configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool)
+  system parameter to `false`. Once disabled, you can only query data products
+  that are discoverable by [`get_data_products`](#get_data_products).
+
+{{< /note >}}
+
+
 #### Restricting `query` tool access to user objects only {#restrict-to-user-objects}
 
 When the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query) is
-enabled, a role can, by default, query any object for which it has `SELECT`
+enabled, a role can, by default, query any object for which it has appropriate
 privileges, including system catalog objects (`mz_catalog.*`, `mz_internal.*`,
 `pg_catalog.*`, and `information_schema.*`).
 

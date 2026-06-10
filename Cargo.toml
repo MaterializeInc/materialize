@@ -40,7 +40,6 @@ members = [
     "src/expr-derive-impl",
     "src/expr-parser",
     "src/expr-test-util",
-    "src/fivetran-destination",
     "src/foundationdb",
     "src/frontegg-auth",
     "src/frontegg-client",
@@ -368,8 +367,9 @@ hyper-0-14 = { package = "hyper", version = "0.14", features = ["client", "tcp"]
 hyper-openssl = "0.10.2"
 hyper-util = "0.1.20"
 tower-service = "0.3.3"
-iceberg = "0.7.0"
-iceberg-catalog-rest = "0.7.0"
+iceberg = "0.9.0"
+iceberg-catalog-rest = "0.9.0"
+iceberg-storage-opendal = { version = "0.9.0", default-features = false, features = ["opendal-s3"] }
 imbl = { version = "7.0.0", features = ["serde"] }
 include_dir = "0.7.4"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
@@ -627,9 +627,10 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
-# All changes should go to the `mz_changes` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
+# All changes should go to the `mz_v0.9.0` branch.
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.

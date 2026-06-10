@@ -944,6 +944,7 @@ where
                     desc: desc.clone(),
                     part: part.expect("leased part").into_owned(),
                     lease: lease.clone(),
+                    reader_id: self.reader_id.clone(),
                     filter_pushdown_audit: false,
                 }
             }

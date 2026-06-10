@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/literal_constraints.rs
-revision: 52af3ba2a1
+revision: fc2aaf02e7
 ---
 
 # mz-transform::literal_constraints

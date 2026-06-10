@@ -456,7 +456,7 @@ impl PeekClient {
         let contains_temporal = match query_plan {
             QueryPlan::Select(s) => s.source.contains_temporal(),
             QueryPlan::CopyTo(s, _) => s.source.contains_temporal(),
-            QueryPlan::Subscribe(s) => Ok(s.from.contains_temporal()),
+            QueryPlan::Subscribe(s) => s.from.contains_temporal(),
         };
 
         // # From sequence_plan
@@ -481,7 +481,7 @@ impl PeekClient {
 
         // Log cluster selection
         if let Some(logging_id) = &statement_logging_id {
-            self.log_set_cluster(*logging_id, target_cluster_id);
+            self.log_set_cluster(*logging_id, target_cluster_id, target_cluster_name.clone());
         }
 
         coord::catalog_serving::check_cluster_restrictions(
@@ -548,7 +548,7 @@ impl PeekClient {
         // simple benchmarks), because it traverses transitive dependencies even of indexed views and
         // materialized views (also traversing their MIR plans).
         let mut timeline_context = catalog.validate_timeline_context(source_ids.iter().copied())?;
-        if matches!(timeline_context, TimelineContext::TimestampIndependent) && contains_temporal? {
+        if matches!(timeline_context, TimelineContext::TimestampIndependent) && contains_temporal {
             // If the source IDs are timestamp independent but the query contains temporal functions,
             // then the timeline context needs to be upgraded to timestamp dependent. This is
             // required because `source_ids` doesn't contain functions.
@@ -889,19 +889,18 @@ impl PeekClient {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                            // COPY TO path
-                            // HIR ⇒ MIR lowering and MIR optimization (local)
-                            let local_mir_plan =
-                                optimizer.catch_unwind_optimize(raw_expr.clone())?;
-                            // Attach resolved context required to continue the pipeline.
-                            let local_mir_plan = local_mir_plan.resolve(
-                                timestamp_context.clone(),
-                                &session_meta,
-                                stats,
-                            );
-                            // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                            let global_lir_plan =
-                                optimizer.catch_unwind_optimize(local_mir_plan)?;
+                            // COPY TO path: HIR ⇒ local MIR ⇒ resolve ⇒ global LIR.
+                            let global_lir_plan = optimize::optimize_oneshot(
+                                &mut optimizer,
+                                raw_expr.clone(),
+                                |local_mir_plan| {
+                                    local_mir_plan.resolve(
+                                        timestamp_context.clone(),
+                                        &session_meta,
+                                        stats,
+                                    )
+                                },
+                            )?;
                             Ok(Execution::CopyToS3 {
                                 global_lir_plan,
                                 source_ids: source_ids_for_closure,
@@ -931,28 +930,22 @@ impl PeekClient {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                            // SELECT/EXPLAIN path
-                            // HIR ⇒ MIR lowering and MIR optimization (local)
-
-                            // The purpose of wrapping the following in a closure is to control where the
-                            // `?`s return from, so that even when a `catch_unwind_optimize` call fails,
-                            // we can still handle `EXPLAIN BROKEN`.
-                            let pipeline = || {
-                                let local_mir_plan =
-                                    optimizer.catch_unwind_optimize(raw_expr.clone())?;
-                                // Attach resolved context required to continue the pipeline.
-                                let local_mir_plan = local_mir_plan.resolve(
-                                    timestamp_context.clone(),
-                                    &session_meta,
-                                    stats,
-                                );
-                                // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                                let global_lir_plan =
-                                    optimizer.catch_unwind_optimize(local_mir_plan)?;
-                                Ok::<_, AdapterError>(global_lir_plan)
-                            };
-
-                            let global_lir_plan_result = pipeline();
+                            // SELECT/EXPLAIN path: HIR ⇒ local MIR ⇒ resolve ⇒
+                            // global LIR. We capture the result (rather than
+                            // propagating with `?`) so that a failure can still be
+                            // routed to `EXPLAIN BROKEN` below.
+                            let global_lir_plan_result = optimize::optimize_oneshot(
+                                &mut optimizer,
+                                raw_expr.clone(),
+                                |local_mir_plan| {
+                                    local_mir_plan.resolve(
+                                        timestamp_context.clone(),
+                                        &session_meta,
+                                        stats,
+                                    )
+                                },
+                            )
+                            .map_err(AdapterError::from);
                             let optimization_finished_at = now();
 
                             let create_insights_ctx =
@@ -1535,7 +1528,7 @@ impl PeekClient {
                     true => "true",
                     false => "false",
                 },
-                isolation_level.as_str(),
+                isolation_level.as_variant_str(),
                 &compute_instance.to_string(),
             ])
             .inc();

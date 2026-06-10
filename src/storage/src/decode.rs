@@ -27,6 +27,7 @@ use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
+use mz_storage_types::wire_format::WireFormat;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -352,16 +353,23 @@ async fn get_decoder(
         DataEncoding::Avro(AvroEncoding {
             schema,
             reference_schemas,
-            csr_connection,
-            confluent_wire_format,
+            wire_format,
         }) => {
-            let csr_client = match csr_connection {
-                None => None,
-                Some(csr_connection) => {
-                    let csr_client = csr_connection
+            // Only the Confluent variant is reachable from SQL today; Glue
+            // is not yet wired to the planner.
+            let (csr_client, confluent_wire_format) = match wire_format {
+                WireFormat::None => (None, false),
+                WireFormat::Confluent { registry: None } => (None, true),
+                WireFormat::Confluent {
+                    registry: Some(csr_connection),
+                } => {
+                    let client = csr_connection
                         .connect(storage_configuration, InTask::Yes)
                         .await?;
-                    Some(csr_client)
+                    (Some(client), true)
+                }
+                WireFormat::Glue { .. } => {
+                    unreachable!("AWS Glue Schema Registry not supported yet")
                 }
             };
             let state = avro::AvroDecoderState::new(

@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/coalesce_case.rs
-revision: 4f4538b61a
+revision: fc2aaf02e7
 ---
 
 # mz-transform::coalesce_case

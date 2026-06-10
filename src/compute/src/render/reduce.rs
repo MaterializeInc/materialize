@@ -319,7 +319,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 move |key, _input, output| {
                     let temp_storage = RowArena::new();
                     let mut datums_local = datums1.borrow();
-                    datums_local.extend(key.to_datum_iter());
+                    key.extend_datums(&mut datums_local, None);
 
                     // Note that the key contains all the columns in a `Distinct` and that `mfp_after` is
                     // required to preserve the key. Therefore, if `mfp_after` maps, then it must project
@@ -352,9 +352,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 // If `mfp_after` can error, then evaluate it here.
                 let Some(mfp) = &mfp_after2 else { return };
                 let temp_storage = RowArena::new();
-                let datum_iter = key.to_datum_iter();
                 let mut datums_local = datums2.borrow();
-                datums_local.extend(datum_iter);
+                key.extend_datums(&mut datums_local, None);
 
                 if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
                     output.push((e.into(), Diff::ONE));
@@ -429,9 +428,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>("ReduceFuseBasic", {
                 move |key, input, output| {
                     let temp_storage = RowArena::new();
-                    let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums1.borrow();
-                    datums_local.extend(datum_iter);
+                    key.extend_datums(&mut datums_local, None);
                     let key_len = datums_local.len();
 
                     for ((_, row), _) in input.iter() {
@@ -458,9 +456,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         // Since negative accumulations are checked in at least one component
                         // aggregate, we only need to look for MFP errors here.
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.to_datum_iter();
                         let mut datums_local = datums2.borrow();
-                        datums_local.extend(datum_iter);
+                        key.extend_datums(&mut datums_local, None);
 
                         for ((_, row), _) in input.iter() {
                             datums_local.push(row.unpack_first());
@@ -594,9 +591,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         });
 
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.to_datum_iter();
                         let mut datums_local = datums1.borrow();
-                        datums_local.extend(datum_iter);
+                        key.extend_datums(&mut datums_local, None);
                         let key_len = datums_local.len();
                         datums_local.push(
                         // Note that this is not necessarily a window aggregation, in which case
@@ -631,7 +627,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         // This is the part that is specific to the `fused_unnest_list` branch.
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums_key_1.borrow();
-                        datums_local.extend(key.to_datum_iter());
+                        key.extend_datums(&mut datums_local, None);
                         let key_len = datums_local.len();
                         for datum in func
                             .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
@@ -696,9 +692,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             });
 
                             let temp_storage = RowArena::new();
-                            let datum_iter = key.to_datum_iter();
                             let mut datums_local = datums2.borrow();
-                            datums_local.extend(datum_iter);
+                            key.extend_datums(&mut datums_local, None);
                             datums_local.push(
                                 func2.eval_with_fast_window_agg::<
                                     _,
@@ -734,7 +729,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
                             let temp_storage = RowArena::new();
                             let mut datums_local = datums_key_2.borrow();
-                            datums_local.extend(key.to_datum_iter());
+                            key.extend_datums(&mut datums_local, None);
                             let key_len = datums_local.len();
                             for datum in func2
                                 .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
@@ -968,9 +963,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                 // We know that `mfp_after` can error if it exists, so try to evaluate it here.
                                 let Some(mfp) = &mfp_after2 else { return };
                                 let temp_storage = RowArena::new();
-                                let datum_iter = key.to_datum_iter();
                                 let mut datums_local = datums2.borrow();
-                                datums_local.extend(datum_iter);
+                                key.extend_datums(&mut datums_local, None);
 
                                 let mut source_iters = source
                                     .iter()
@@ -1001,9 +995,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         "ReduceMinsMaxes",
                         move |key, source, target| {
                             let temp_storage = RowArena::new();
-                            let datum_iter = key.to_datum_iter();
                             let mut datums_local = datums1.borrow();
-                            datums_local.extend(datum_iter);
+                            key.extend_datums(&mut datums_local, None);
                             let key_len = datums_local.len();
 
                             let mut source_iters = source
@@ -1264,9 +1257,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>("ReduceMonotonic", {
                 move |key, input, output| {
                     let temp_storage = RowArena::new();
-                    let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums1.borrow();
-                    datums_local.extend(datum_iter);
+                    key.extend_datums(&mut datums_local, None);
                     let key_len = datums_local.len();
                     let accum = &input[0].1;
                     for monoid in accum.iter() {
@@ -1291,9 +1283,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     "ReduceMonotonic Error Check",
                     move |key, input, output| {
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.to_datum_iter();
                         let mut datums_local = datums2.borrow();
-                        datums_local.extend(datum_iter);
+                        key.extend_datums(&mut datums_local, None);
                         let accum = &input[0].1;
                         for monoid in accum.iter() {
                             datums_local.extend(monoid.finalize().iter());
@@ -1461,9 +1452,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     let (ref accums, total) = input[0].1;
 
                     let temp_storage = RowArena::new();
-                    let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums1.borrow();
-                    datums_local.extend(datum_iter);
+                    key.extend_datums(&mut datums_local, None);
                     let key_len = datums_local.len();
                     for (aggr, accum) in full_aggrs.iter().zip_eq(accums) {
                         datums_local.push(finalize_accum(&aggr.func, accum, total));
@@ -1521,9 +1511,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     // If `mfp_after` can error, then evaluate it here.
                     let Some(mfp) = &mfp_after2 else { return };
                     let temp_storage = RowArena::new();
-                    let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums2.borrow();
-                    datums_local.extend(datum_iter);
+                    key.extend_datums(&mut datums_local, None);
                     for (aggr, accum) in full_aggrs2.iter().zip_eq(accums) {
                         datums_local.push(finalize_accum(&aggr.func, accum, total));
                     }

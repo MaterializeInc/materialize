@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/reduce.rs
-revision: 4fe7ed31b7
+revision: fc2aaf02e7
 ---
 
 # mz-expr::scalar::reduce
@@ -9,7 +9,7 @@ Rewrite-rule-driven simplification of `MirScalarExpr`. This module owns the top-
 
 ## Entry point
 
-`reduce(expr, column_types)` drives simplification by repeatedly calling `visit_mut_pre_post_nolimit` until the expression stops changing. Each iteration applies:
+`reduce(expr, column_types)` drives simplification by repeatedly calling `visit_mut_pre_post` until the expression stops changing. Each iteration applies:
 
 1. **Pre-order pass** (`reduce_pre`) — fires before children are visited. Handles `IsNull` and `Not` because these rules push themselves inward and the result at the current position must then be visited again normally:
    - `IsNull` on a non-nullable expression → `false`.

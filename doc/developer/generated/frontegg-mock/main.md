@@ -1,6 +1,6 @@
 ---
 source: src/frontegg-mock/src/main.rs
-revision: 2a6ac3ab4c
+revision: 33b8db85da
 ---
 
 # frontegg-mock::main

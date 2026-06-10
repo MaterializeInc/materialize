@@ -1466,6 +1466,7 @@ mod tests {
     /// structure exists to support), and assert `iter()` roundtrips values, order,
     /// and diffs across the spill boundary.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow: crossing the ~2 MiB mint boundary needs ~200k updates
     fn chain_builder_roundtrips_across_mint_boundary() {
         // A single `mint()` fires near the ~2 MiB (`SHIP_WORDS`) serialized boundary. With
         // three 8-byte columns per update that's tens of thousands of updates; pushing 200k

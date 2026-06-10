@@ -96,6 +96,11 @@ where
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Monoid + Codec64,
 {
+    /// Returns the [Applier] backing this cache.
+    pub(crate) fn applier(&self) -> &Applier<K, V, T, D> {
+        &self.applier
+    }
+
     pub fn new(maps: Arc<SchemaCacheMaps<K, V>>, applier: Applier<K, V, T, D>) -> Self {
         let key_migration_by_ids = MigrationCacheMap {
             metrics: applier.metrics.schema.cache_migration.clone(),

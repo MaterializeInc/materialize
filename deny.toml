@@ -128,6 +128,8 @@ skip = [
     { name = "fallible-iterator", version = "0.3.0" },
     # arrow
     { name = "hashbrown", version = "0.16.1" },
+    # Used by dynfmt; iceberg/typetag pulls in v0.4.
+    { name = "erased-serde", version = "0.3.26" },
 ]
 
 [[bans.deny]]
@@ -244,8 +246,14 @@ version = 2
 ignore = [
     # Consider `encoding_rs` instead of `encoding` (unmaintained)
     "RUSTSEC-2021-0153",
-    # proc-macro-error is unmaintained, possible alternative: proc-macro-error2
-    "RUSTSEC-2024-0370",
+    # `proc-macro-error2` (the maintained fork of `proc-macro-error`) is now also
+    # unmaintained. Pulled in transitively via `tabled` -> `tabled_derive`. No
+    # safe upgrade is available.
+    "RUSTSEC-2026-0173",
+    # `http-types`'s `Authorization::value`/`WwwAuthenticate::value` can violate
+    # ASCII invariants. The crate is unmaintained and pulled in transitively via
+    # the `azure_*` crates. No safe upgrade is available.
+    "RUSTSEC-2026-0174",
     # `derivative` is unmaintained; consider using an alternative (unmaintained)
     "RUSTSEC-2024-0388",
     # The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) that this project is not longer maintained as well as archived the repository

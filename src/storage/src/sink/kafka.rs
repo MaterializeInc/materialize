@@ -124,6 +124,7 @@ use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, StorageSinkDesc,
 };
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::wire_format::WireFormat;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -1437,12 +1438,24 @@ fn encode_collection<'scope>(
                     (Some(desc), Some(KafkaSinkFormatType::Avro {
                         schema,
                         compatibility_level,
-                        csr_connection,
+                        wire_format,
                     })) => {
                         // Ensure that schemas are registered with the schema registry.
                         //
                         // Note that where this lies in the rendering cycle means that we will publish the
                         // schemas each time the sink is rendered.
+                        let csr_connection = match wire_format {
+                            WireFormat::Confluent {
+                                registry: Some(csr),
+                            } => csr,
+                            // Sinks are only ever built with a Confluent
+                            // registry (see the sink planner), so anything
+                            // else is unreachable.
+                            other => unreachable!(
+                                "sink Avro key wire_format must be Confluent with registry, got {:?}",
+                                other
+                            ),
+                        };
                         let ccsr = csr_connection
                             .connect(&storage_configuration, InTask::Yes)
                             .await?;
@@ -1479,8 +1492,17 @@ fn encode_collection<'scope>(
                 KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level,
-                    csr_connection,
+                    wire_format,
                 } => {
+                    let csr_connection = match wire_format {
+                        WireFormat::Confluent {
+                            registry: Some(csr),
+                        } => csr,
+                        other => unreachable!(
+                            "sink Avro value wire_format must be Confluent with registry, got {:?}",
+                            other
+                        ),
+                    };
                     // Ensure that schemas are registered with the schema registry.
                     //
                     // Note that where this lies in the rendering cycle means that we will publish the
