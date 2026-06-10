@@ -25,7 +25,7 @@ use mz_compute_client::protocol::command::{
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
@@ -1292,7 +1292,7 @@ impl PendingPeek {
             };
             let result = match result {
                 Ok(rows) => PeekResponse::Rows(vec![RowCollection::new(rows, &order_by)]),
-                Err(e) => PeekResponse::Error(e.to_string()),
+                Err(e) => PeekResponse::Error(e),
             };
             match result_tx.send((result, start.elapsed())) {
                 Ok(()) => {}
@@ -1356,11 +1356,11 @@ impl PersistPeek {
         mfp_plan: SafeMfpPlan,
         max_result_size: usize,
         mut limit_remaining: usize,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+    ) -> Result<Vec<(Row, NonZeroUsize)>, PeekError> {
         let client = persist_clients
             .open(metadata.persist_location)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| PeekError::internal(e.to_string()))?;
 
         let mut reader: ReadHandle<SourceData, (), Timestamp, StorageDiff> = client
             .open_leased_reader(
@@ -1371,7 +1371,7 @@ impl PersistPeek {
                 USE_CRITICAL_SINCE_SNAPSHOT.get(client.dyncfgs()),
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| PeekError::internal(e.to_string()))?;
 
         // If we are using txn-wal for this collection, then the upper might
         // be advanced lazily and we have to go through txn-wal for reads.
@@ -1397,7 +1397,9 @@ impl PersistPeek {
         )
         .await
         .map_err(|since| {
-            format!("attempted to peek at {as_of}, but the since has advanced to {since:?}")
+            PeekError::internal(format!(
+                "attempted to peek at {as_of}, but the since has advanced to {since:?}"
+            ))
         })?;
 
         // Re-used state for processing and building rows.
@@ -1417,7 +1419,10 @@ impl PersistPeek {
                 break;
             };
             for (data, _, d) in batch {
-                let row = data.map_err(|e| e.to_string())?;
+                // A stored error (e.g. from a materialized view) is already a
+                // structured `DataflowError`; preserve it so the adapter can
+                // assign a precise SQLSTATE.
+                let row = data.map_err(PeekError::from)?;
 
                 if let Some(literal) = &literal_constraint {
                     match row.iter().take(literal_len).cmp(literal.iter()) {
@@ -1432,11 +1437,11 @@ impl PersistPeek {
                         shard = %metadata.data_shard, diff = d, ?row,
                         "persist peek encountered negative multiplicities",
                     );
-                    format!(
+                    PeekError::internal(format!(
                         "Invalid data in source, \
                          saw retractions ({}) for row that does not exist: {:?}",
                         -d, row,
-                    )
+                    ))
                 })?;
                 let Some(count) = NonZeroUsize::new(count) else {
                     continue;
@@ -1445,16 +1450,16 @@ impl PersistPeek {
                 let eval_result = mfp_plan
                     .evaluate_into(&mut datum_local, &arena, &mut row_builder)
                     .map(|row| row.cloned())
-                    .map_err(|e| e.to_string())?;
+                    .map_err(PeekError::from)?;
                 if let Some(row) = eval_result {
                     total_size = total_size
                         .saturating_add(row.byte_len())
                         .saturating_add(std::mem::size_of::<NonZeroUsize>());
                     if total_size > max_result_size {
-                        return Err(format!(
+                        return Err(PeekError::internal(format!(
                             "result exceeds max size of {}",
                             ByteSize::b(u64::cast_from(max_result_size))
-                        ));
+                        )));
                     }
                     result.push((row, count));
                     limit_remaining = limit_remaining.saturating_sub(count.get());
@@ -1531,7 +1536,7 @@ impl IndexPeek {
                 read_frontier.elements(),
                 self.peek.timestamp,
             );
-            return PeekStatus::Ready(PeekResponse::Error(error));
+            return PeekStatus::Ready(PeekResponse::Error(PeekError::internal(error)));
         }
 
         metrics
@@ -1578,14 +1583,17 @@ impl IndexPeek {
                     target = %self.peek.target.id(), diff = %copies, %error,
                     "index peek encountered negative multiplicities in error trace",
                 );
-                return PeekStatus::Ready(PeekResponse::Error(format!(
+                return PeekStatus::Ready(PeekResponse::Error(PeekError::internal(format!(
                     "Invalid data in source errors, \
                     saw retractions ({}) for row that does not exist: {}",
                     -copies, error,
-                )));
+                ))));
             }
             if copies.is_positive() {
-                return PeekStatus::Ready(PeekResponse::Error(cursor.key(&storage).to_string()));
+                // Preserve the structured dataflow error so the adapter can
+                // assign a precise SQLSTATE instead of a generic internal error.
+                let error = cursor.key(&storage).deserialize();
+                return PeekStatus::Ready(PeekResponse::Error(PeekError::Dataflow(Box::new(error))));
             }
             cursor.step_key(&storage);
         }
@@ -1674,10 +1682,10 @@ impl IndexPeek {
                 return PeekStatus::UsePeekStash;
             }
             if total_size > max_result_size {
-                return PeekStatus::Ready(PeekResponse::Error(format!(
+                return PeekStatus::Ready(PeekResponse::Error(PeekError::internal(format!(
                     "result exceeds max size of {}",
                     ByteSize::b(u64::cast_from(max_result_size))
-                )));
+                ))));
             }
 
             results.push((row, copies));

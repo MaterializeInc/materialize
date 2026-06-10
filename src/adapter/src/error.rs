@@ -1412,6 +1412,23 @@ impl From<EvalError> for AdapterError {
     }
 }
 
+impl From<mz_compute_client::protocol::response::PeekError> for AdapterError {
+    fn from(e: mz_compute_client::protocol::response::PeekError) -> AdapterError {
+        use mz_compute_client::protocol::response::PeekError;
+        use mz_storage_types::errors::DataflowError;
+        match e {
+            // Preserve evaluation errors structurally, so they receive the same
+            // precise SQLSTATE that constant folding produces (and shed the
+            // `Evaluation error:` prefix that `DataflowError`'s `Display` adds).
+            PeekError::Dataflow(e) => match *e {
+                DataflowError::EvalError(e) => AdapterError::Eval(*e),
+                e => AdapterError::Unstructured(anyhow::anyhow!(e)),
+            },
+            PeekError::Internal(e) => AdapterError::Unstructured(anyhow::Error::msg(e)),
+        }
+    }
+}
+
 impl From<ExplainError> for AdapterError {
     fn from(e: ExplainError) -> AdapterError {
         match e {

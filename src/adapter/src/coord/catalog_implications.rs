@@ -39,7 +39,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_client::protocol::response::PeekResponse;
+use mz_compute_client::protocol::response::{PeekError, PeekResponse};
 use mz_controller::clusters::{ClusterRole, ReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
@@ -911,7 +911,8 @@ impl Coordinator {
             if !peeks_to_drop.is_empty() {
                 for (dep, uuid) in peeks_to_drop {
                     if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-                        let cancel_reason = PeekResponse::Error(dep.query_terminated_error());
+                        let cancel_reason =
+                            PeekResponse::Error(PeekError::internal(dep.query_terminated_error()));
                         self.controller
                             .compute
                             .cancel_peek(pending_peek.cluster_id, uuid, cancel_reason)

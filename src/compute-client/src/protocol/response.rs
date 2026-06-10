@@ -9,12 +9,16 @@
 
 //! Compute protocol responses.
 
+use std::fmt;
+
+use mz_expr::EvalError;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::ShardId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp, UpdateCollection};
+use mz_storage_types::errors::DataflowError;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
@@ -194,7 +198,7 @@ pub enum PeekResponse {
     /// Results of the peek were stashed in persist batches.
     Stashed(Box<StashedPeekResponse>),
     /// Error of an unsuccessful peek.
-    Error(String),
+    Error(PeekError),
     /// The peek was canceled.
     Canceled,
 }
@@ -207,6 +211,50 @@ impl PeekResponse {
             Self::Stashed(stashed) => stashed.inline_rows.iter().map(|r| r.byte_len()).sum(),
             Self::Error(_) | Self::Canceled => 0,
         }
+    }
+}
+
+/// The error of an unsuccessful peek.
+///
+/// Errors that arise while evaluating the dataflow (e.g. an arithmetic error
+/// computed over a collection) carry a structured [`DataflowError`], so the
+/// adapter can map them to a precise SQLSTATE just like constant-folded
+/// expressions. Errors from the peek machinery itself (e.g. a failed persist
+/// read or a violated internal invariant) have no structured representation;
+/// they carry an opaque message and are reported as `INTERNAL_ERROR`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PeekError {
+    /// A structured error produced while evaluating the dataflow.
+    Dataflow(Box<DataflowError>),
+    /// An internal error from the peek machinery, with no structured form.
+    Internal(String),
+}
+
+impl PeekError {
+    /// Constructs an [`PeekError::Internal`] from anything string-like.
+    pub fn internal(message: impl Into<String>) -> Self {
+        PeekError::Internal(message.into())
+    }
+}
+
+impl fmt::Display for PeekError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PeekError::Dataflow(err) => err.fmt(f),
+            PeekError::Internal(err) => f.write_str(err),
+        }
+    }
+}
+
+impl From<DataflowError> for PeekError {
+    fn from(err: DataflowError) -> Self {
+        PeekError::Dataflow(Box::new(err))
+    }
+}
+
+impl From<EvalError> for PeekError {
+    fn from(err: EvalError) -> Self {
+        PeekError::Dataflow(Box::new(err.into()))
     }
 }
 

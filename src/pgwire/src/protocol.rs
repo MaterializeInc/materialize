@@ -2410,9 +2410,13 @@ where
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
-                        Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
+                        Some(PeekResponseUnary::Error(err)) => {
+                            FetchResult::Error(err.into_response(Severity::Error))
+                        }
                         Some(PeekResponseUnary::DependencyDropped(dep)) => {
-                            FetchResult::Error(dep.query_terminated_error())
+                            FetchResult::Error(
+                                dep.to_concurrent_dependency_drop().into_response(Severity::Error),
+                            )
                         }
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
@@ -2484,12 +2488,10 @@ where
                     self.send(notice.into_response()).await?;
                     self.conn.flush().await?;
                 }
-                FetchResult::Error(text) => {
+                FetchResult::Error(resp) => {
+                    let text = resp.message.clone();
                     return self
-                        .send_error_and_get_state(ErrorResponse::error(
-                            SqlState::INTERNAL_ERROR,
-                            text.clone(),
-                        ))
+                        .send_error_and_get_state(resp)
                         .await
                         .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                 }
@@ -2668,11 +2670,11 @@ where
                 e = self.conn.wait_closed() => return Err(e),
                 batch = stream.recv() => match batch {
                     None => break,
-                    Some(PeekResponseUnary::Error(text)) => {
-                        let err =
-                            ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone());
+                    Some(PeekResponseUnary::Error(err)) => {
+                        let text = err.to_string();
+                        let resp = err.into_response(Severity::Error);
                         return self
-                            .send_error_and_get_state(err)
+                            .send_error_and_get_state(resp)
                             .await
                             .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                     }
@@ -3243,7 +3245,7 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 enum FetchResult {
     Rows(Option<Box<dyn RowIterator + Send + Sync>>),
     Canceled,
-    Error(String),
+    Error(ErrorResponse),
     Notice(AdapterNotice),
 }
 
