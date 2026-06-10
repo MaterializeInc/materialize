@@ -235,8 +235,7 @@ input[type="submit"] {
     5. Links inside notes
     6. Links inside notes with <code/>
 **/
-.btn,
-.btn-ghost {
+.btn {
     color: var(--white);
     text-decoration: none;
 
@@ -321,13 +320,38 @@ a {
 
 .btn-ghost {
     position: relative;
-    background: var(--bg);
-    border: 1px solid var(--brand);
-    color: var(--important);
+    display: inline-flex;
+    align-items: center;
+    gap: rem(0.75);
+    padding: rem(0.55) rem(0.85);
+    border: 1px solid var(--divider-light);
+    border-radius: rem(0.75);
+    background: var(--card-light);
+    color: var(--sub);
+    font-size: var(--sm);
+    font-weight: 400;
+    letter-spacing: 0;
+    line-height: 1;
+    text-decoration: none;
+    text-transform: none;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    svg {
+        flex: 0 0 auto;
+    }
 
     &:hover,
     &:focus {
         color: var(--important);
+        border-color: var(--highlight);
+        background: var(--tip);
+        box-shadow: none;
+        text-decoration: none;
+    }
+
+    &:focus-visible {
+        outline: 2px solid var(--highlight);
+        outline-offset: 2px;
     }
 }
 
