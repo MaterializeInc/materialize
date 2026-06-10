@@ -29,16 +29,16 @@ use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::{
     AwsAssumeRole, AwsAuth, AwsConnection, AwsConnectionReference, AwsCredentials,
 };
-use mz_storage_types::connections::gcp::GcpConnection;
+use mz_storage_types::connections::gcp::{GcpConnection, GcpConnectionReference};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, AwsPrivatelinkRule, CsrConnection,
-    CsrConnectionHttpAuth, GlueSchemaRegistryConnection, IcebergCatalogConnection,
-    IcebergCatalogImpl, IcebergCatalogType, KafkaConnection, KafkaSaslConfig, KafkaTlsConfig,
-    KafkaTopicOptions, MySqlConnection, MySqlSslMode, PostgresConnection, RestIcebergCatalog,
-    S3TablesRestIcebergCatalog, SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity,
-    Tunnel,
+    CsrConnectionHttpAuth, GlueSchemaRegistryConnection, IcebergCatalogAuth,
+    IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType, KafkaConnection,
+    KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection, MySqlSslMode,
+    PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog, SqlServerConnectionDetails,
+    SshConnection, SshTunnel, TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;
@@ -60,6 +60,7 @@ generate_extracted_config!(
     (Credential, StringOrSecret),
     (Database, String),
     (Endpoint, String),
+    (GcpConnection, with_options::Object),
     (Host, String),
     (Password, with_options::Secret),
     (Port, u16),
@@ -192,6 +193,7 @@ pub(super) fn validate_options_per_connection_type(
             AwsConnection,
             CatalogType,
             Credential,
+            GcpConnection,
             Scope,
             Url,
             Warehouse,
@@ -688,9 +690,15 @@ impl ConnectionOptionExtracted {
                 let warehouse = self.warehouse.clone();
                 let credential = self.credential.clone();
                 let aws_connection = get_aws_connection_reference(scx, &self)?;
+                let gcp_connection = get_gcp_connection_reference(scx, &self)?;
 
                 let catalog = match catalog_type {
                     IcebergCatalogType::S3TablesRest => {
+                        if gcp_connection.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support GCP CONNECTION"
+                            );
+                        }
                         let Some(warehouse) = warehouse else {
                             sql_bail!(
                                 "invalid CONNECTION: ICEBERG s3tablesrest connections must specify WAREHOUSE"
@@ -708,17 +716,37 @@ impl ConnectionOptionExtracted {
                         })
                     }
                     IcebergCatalogType::Rest => {
-                        let Some(credential) = credential else {
+                        if aws_connection.is_some() {
                             sql_bail!(
-                                "invalid CONNECTION: ICEBERG rest connections require a CREDENTIAL"
+                                "invalid CONNECTION: ICEBERG rest connections do not support AWS CONNECTION.\n\nTry s3tablesrest instead."
                             );
+                        }
+                        let auth = match (credential, gcp_connection) {
+                            (Some(_), Some(_)) => sql_bail!(
+                                "invalid CONNECTION: ICEBERG rest connections may set CREDENTIAL or GCP CONNECTION, not both"
+                            ),
+                            (Some(credential), None) => IcebergCatalogAuth::OAuth {
+                                credential,
+                                scope: self.scope.clone(),
+                            },
+                            (None, Some(gcp_connection)) => {
+                                /// All BigLake Iceberg REST Catalogs use the same catalog URI.
+                                const BIGLAKE_CATALOG_URI: &str =
+                                    "https://biglake.googleapis.com/iceberg/v1/restcatalog";
+                                if uri.to_string() != BIGLAKE_CATALOG_URI {
+                                    sql_bail!(
+                                        "GCP connection can only be used with '{}'",
+                                        BIGLAKE_CATALOG_URI
+                                    );
+                                }
+                                IcebergCatalogAuth::Gcp(gcp_connection)
+                            }
+                            (None, None) => sql_bail!(
+                                "invalid CONNECTION: ICEBERG rest connections require a CREDENTIAL or GCP CONNECTION"
+                            ),
                         };
 
-                        IcebergCatalogImpl::Rest(RestIcebergCatalog {
-                            credential,
-                            scope: self.scope.clone(),
-                            warehouse,
-                        })
+                        IcebergCatalogImpl::Rest(RestIcebergCatalog { auth, warehouse })
                     }
                 };
 
@@ -834,6 +862,24 @@ fn get_aws_connection_reference(
             connection: id,
         }),
         _ => sql_bail!("{} is not an AWS connection", item.name().item),
+    })
+}
+fn get_gcp_connection_reference(
+    scx: &StatementContext,
+    conn_options: &ConnectionOptionExtracted,
+) -> Result<Option<GcpConnectionReference<ReferencedConnection>>, PlanError> {
+    let Some(gcp_connection_id) = conn_options.gcp_connection else {
+        return Ok(None);
+    };
+
+    let id = CatalogItemId::from(gcp_connection_id);
+    let item = scx.catalog.get_item(&id);
+    Ok(match item.connection()? {
+        Connection::Gcp(_) => Some(GcpConnectionReference {
+            connection_id: id,
+            connection: id,
+        }),
+        _ => sql_bail!("{} is not a GCP connection", item.name().item),
     })
 }
 
