@@ -278,7 +278,7 @@ table.inline-headings {
     li.level-1 {
         &>a {
             font-weight: 500;
-            color: var(--highlight);
+            color: var(--important);
         }
 
         &>ul {

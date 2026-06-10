@@ -215,10 +215,9 @@ p+p {
     }
 
     .callout {
-        background: var(--brand);
-        border-radius: 3px;
-        padding: 1px;
+        background: var(--card-light);
         border-radius: rem(1.2);
+        border: 1px solid var(--divider-light);
         box-shadow: var(--shadow-default);
 
         &:not(.bottom) {
@@ -340,7 +339,7 @@ p+p {
 
     th {
         color: var(--important);
-        border-bottom: 1px var(--highlight) solid;
+        border-bottom: 1px solid var(--th-border, var(--highlight));
         text-align: left;
         padding: 8px;
         font-size: rem(1.3);
@@ -884,7 +883,7 @@ p+p {
         top: 0;
 
         &:after {
-            border-bottom: 1px var(--highlight) solid;
+            border-bottom: 1px solid var(--th-border, var(--highlight));
             content: "";
             bottom: -1px;
             left: 0;

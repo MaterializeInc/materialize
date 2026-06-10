@@ -38,32 +38,32 @@ $rem-scale: 0.585;
     --medium: #{rem(5)};
     --large: #{rem(6)};
 
-    --orchid: #e537c0;
+    --orchid: var(--color-pink-500);
     --orange: #ee8660;
-    --lavender: #ad37e5;
-    --brand: #7f4eff;
-    --purple-dark: #472f85;
+    --lavender: var(--color-purple-300);
+    --brand: var(--color-purple-500);
+    --purple-dark: var(--color-purple-800);
 
-    --white: #fff;
+    --white: var(--color-white);
     --white-light: #fefefe;
     --code-block-light: #f9f7fd;
 
-    --nav-light: #fff;
-    --nav-dark: #111111d9;
+    --nav-light: var(--color-white);
+    --nav-dark: oklch(0.14 0.012 291 / 88%);
 
-    --bg-black: #000;
+    --bg-black: oklch(0.14 0.012 291);
 
-    --black: #111111;
-    --black-mid: #141414;
-    --black-light: #181818;
-    --black-lighter: #222222;
-    --black-lightest: #343434;
+    --black: var(--color-black);
+    --black-mid: oklch(0.18 0.014 291);
+    --black-light: oklch(0.21 0.016 291);
+    --black-lighter: oklch(0.25 0.018 292);
+    --black-lightest: oklch(0.30 0.020 292);
 
     --gray-dark: #555555;
     --gray-mid: #888888;
-    --gray: #bbb;
+    --gray: #bbbbbb;
     --gray-light: #dddddd;
-    --gray-lighter: #dddd;
+    --gray-lighter: rgba(221, 221, 221, 0.87);
     --gray-lightest: #eeeeee;
 
     --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} #{rem(0)} rgba(0, 0, 0, 0.08);
@@ -79,7 +79,7 @@ body.dark {
     --divider: var(--black-lighter);
     --divider-light: var(--black-lightest);
 
-    --link: var(--highlight);
+    --link: var(--color-purple-100);
 
     --code-block: var(--card-light);
     --code-simple: #c2c2c2;
@@ -90,10 +90,10 @@ body.dark {
     --code-green: #819A7B;
     --code-highlight: var(--code-blue);
 
-    --important: var(--gray-lightest);
+    --important: var(--color-white);
     --sub: var(--gray-light);
     --body: var(--gray);
-    --highlight: #e0a5fb;
+    --highlight: var(--color-teal-500);
 
     --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} 0 rgba(0, 0, 0, 0.4);
     --note: #fffad411;
@@ -123,6 +123,8 @@ body.dark {
     --tab-bg: var(--gray-lightest);
     --tab-selected-bg: var(--tip-after);
     --font-h4: var(--gray-lightest);
+
+    --th-border: oklch(var(--color-teal-500-oklch) / 30%);
 }
 
 body.light {
@@ -178,6 +180,7 @@ body.light {
     --tab-bg: var(--gray-lighter);
     --tab-selected-bg: var(--tip);
     --font-h4: var(--gray-dark);
+
 }
 
 *,
@@ -335,9 +338,9 @@ a {
 }
 
 select.version-dropdown {
-    appearance: none;
 	-moz-appearance: none;
 	-webkit-appearance: none;
+    appearance: none;
 	background-image: url('https://res.cloudinary.com/mzimgcdn/image/upload/v1737129759/dropdown.svg');
 	background-position: right 0.5rem top 50%, 0 0;
 	background-repeat: no-repeat, repeat;
