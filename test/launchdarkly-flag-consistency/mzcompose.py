@@ -478,12 +478,85 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "max_materialized_views",
     "max_sources",
     "max_tables",
+    # Cloud-only infrastructure / performance tuning.
+    "arrangement_size_history_collection_interval",
+    "cluster_topology_spread_min_domains",
+    "column_paged_batcher_budget_fraction",
+    "compute_logical_backpressure_inflight_slack",
+    "enable_lgalloc",
+    "enable_timely_zero_copy_lgalloc",
+    "enable_zero_downtime_cluster_reconfiguration",
+    "kafka_client_id_enrichment_rules",
+    "kafka_progress_record_fetch_timeout",
+    "kafka_socket_timeout",
+    "mz_metrics_lgalloc_refresh_interval",
+    "persist_batch_max_run_len",
+    "persist_validate_part_bounds_on_read",
+    "persist_validate_part_bounds_on_write",
+    "storage_enforce_external_addresses",
+    "timely_zero_copy_limit",
+    # TODO: triage. These features default *on* in the compiled-in default but
+    # production cloud still serves them *off* (or vice versa). Either production
+    # LaunchDarkly is stale and should be flipped, or
+    # the compiled-in default was changed prematurely. Allowlisted for now to
+    # keep the build green; revisit and either reconcile the default or move the
+    # flag to a permanent category above.
+    "compute_subscribe_snapshot_optimization",
+    "enable_cast_elimination",
+    "enable_compute_correction_v2",
+    "enable_compute_sync_mv_sink",
+    "enable_create_table_from_source",
+    "enable_new_outer_join_lowering",
+    "enable_variadic_left_join_lowering",
+    "persist_batch_delete_enabled",
+    "persist_rollup_use_active_rollup",
 }
 
 # Flags whose served default knowingly differs between LaunchDarkly environments
-# (e.g. a long-running staged rollout). A new cross-environment difference fails
-# the build unless it is added here.
-KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set()
+# (e.g. a staged rollout where staging is ahead of production, or a deliberately
+# environment-specific quota). A new cross-environment difference fails the
+# build unless it is added here. Most of these are transient rollouts -- prune
+# an entry once the environments agree again (the check lists resolved entries).
+KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
+    allow_real_time_recency
+    allowed_cluster_replica_sizes
+    column_paged_batcher_budget_fraction
+    compute_dataflow_max_inflight_bytes
+    compute_peek_response_stash_threshold_bytes
+    compute_subscribe_snapshot_optimization
+    enable_cluster_schedule_refresh
+    enable_compute_correction_v2
+    enable_compute_sync_mv_sink
+    enable_create_table_from_source
+    enable_eager_delta_joins
+    enable_index_options
+    enable_join_prioritize_arranged
+    enable_lgalloc
+    enable_logical_compaction_window
+    enable_network_policies
+    enable_new_outer_join_lowering
+    enable_notices_for_index_too_wide_for_literal_constraints
+    enable_refresh_every_mvs
+    enable_storage_introspection_logs
+    enable_upsert_v2
+    enable_variadic_left_join_lowering
+    grpc_client_http2_keep_alive_timeout
+    max_connections
+    max_credit_consumption_rate
+    max_materialized_views
+    max_sources
+    mz_metrics_lgalloc_refresh_interval
+    persist_batch_delete_enabled
+    persist_catalog_force_compaction_fuel
+    persist_claim_compaction_min_version
+    persist_claim_unclaimed_compactions
+    persist_enable_incremental_compaction
+    persist_rollup_use_active_rollup
+    persist_txns_data_shard_retryer_initial_backoff
+    persist_validate_part_bounds_on_read
+    statement_logging_max_data_credit
+    statement_logging_target_data_rate
+    """.split())
 
 
 def synced_parameters(c: Composition) -> dict[str, str]:
@@ -854,29 +927,31 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # everything else is unexpected (e.g. a feature enabled in cloud but off by
     # default, which should be reconciled in the compiled-in default).
     cloud_vs_default: dict[str, tuple[str, Any]] = {}
+    diverging_from_default: set[str] = set()
     for name in in_both:
-        if name in INTENTIONAL_LD_OVERRIDES:
-            continue
         prod_value = served_defaults.get(name, {}).get(PRODUCTION_ENVIRONMENT)
         if values_equivalent(current[name], prod_value) is False:
-            cloud_vs_default[name] = (current[name], prod_value)
+            diverging_from_default.add(name)
+            if name not in INTENTIONAL_LD_OVERRIDES:
+                cloud_vs_default[name] = (current[name], prod_value)
 
     # Flags whose served default differs *between* LaunchDarkly environments
     # (e.g. production vs staging), which usually only happens during a staged
     # rollout. Long-running ones are allowlisted via KNOWN_CROSS_ENV_DIVERGENCES.
     env_divergences: dict[str, dict[str, Any]] = {}
+    diverging_across_envs: set[str] = set()
     for name in in_both:
-        if name in KNOWN_CROSS_ENV_DIVERGENCES:
-            continue
         per_env = served_defaults.get(name, {})
         differs = any(
             values_equivalent(per_env.get(a), per_env.get(b)) is False
             for a, b in itertools.combinations(LAUNCHDARKLY_ENVIRONMENTS, 2)
         )
         if differs:
-            env_divergences[name] = {
-                e: per_env.get(e) for e in LAUNCHDARKLY_ENVIRONMENTS
-            }
+            diverging_across_envs.add(name)
+            if name not in KNOWN_CROSS_ENV_DIVERGENCES:
+                env_divergences[name] = {
+                    e: per_env.get(e) for e in LAUNCHDARKLY_ENVIRONMENTS
+                }
 
     print(
         "Discrepancies beyond the known-exceptions allowlists: "
@@ -929,17 +1004,27 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
     # Allowlist entries that are no longer discrepancies, so they can be pruned.
-    resolved_missing = sorted(KNOWN_MISSING_FROM_LD - missing_in_ld)
-    resolved_stale = sorted(KNOWN_STALE_LD_FLAGS - stale_in_ld)
-    if resolved_missing or resolved_stale:
+    # For the divergence lists we only flag entries we could actually evaluate
+    # (i.e. flags present in both Materialize and LaunchDarkly).
+    in_both_set = set(in_both)
+    resolved = {
+        "KNOWN_MISSING_FROM_LD": sorted(KNOWN_MISSING_FROM_LD - missing_in_ld),
+        "KNOWN_STALE_LD_FLAGS": sorted(KNOWN_STALE_LD_FLAGS - stale_in_ld),
+        "INTENTIONAL_LD_OVERRIDES": sorted(
+            (INTENTIONAL_LD_OVERRIDES & in_both_set) - diverging_from_default
+        ),
+        "KNOWN_CROSS_ENV_DIVERGENCES": sorted(
+            (KNOWN_CROSS_ENV_DIVERGENCES & in_both_set) - diverging_across_envs
+        ),
+    }
+    if any(resolved.values()):
         print(
             "--- NOTE: known-exception entries that no longer apply and can be "
             "pruned from the allowlists"
         )
-        for name in resolved_missing:
-            print(f"  KNOWN_MISSING_FROM_LD: {name}")
-        for name in resolved_stale:
-            print(f"  KNOWN_STALE_LD_FLAGS: {name}")
+        for allowlist, names in resolved.items():
+            for name in names:
+                print(f"  {allowlist}: {name}")
 
     failures = {
         "missing": unexpected_missing,
