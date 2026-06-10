@@ -32,6 +32,33 @@ h1 {
     margin-bottom: var(--xx-small);
 }
 
+.title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--milli);
+
+    .btn-ghost {
+        flex: 0 0 auto;
+        margin-top: rem(0.45);
+
+        svg {
+            width: rem(1.8);
+            height: auto;
+        }
+    }
+
+    @media(max-width: 850px) {
+        flex-direction: column;
+        align-items: flex-start;
+
+        .btn-ghost {
+            margin-top: calc(-1 * var(--micro));
+            margin-bottom: var(--micro);
+        }
+    }
+}
+
 h2 {
     font-size: var(--h2);
     margin: var(--medium) 0 var(--nano);
