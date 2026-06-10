@@ -27,10 +27,15 @@ production. This check reports three conditions:
               avoid false positives we consider both the current build and the
               last published release.
   * WARN   -- a flag exists in both, but the value LaunchDarkly serves by
-              default diverges from Materialize's compiled-in default. This is
-              not necessarily a bug (it is how a default is intentionally
-              overridden in production), but it is worth surfacing so that
-              unintended drift is noticed.
+              default (checked in each of `LAUNCHDARKLY_ENVIRONMENTS`) diverges
+              from Materialize's compiled-in default. This is not necessarily a
+              bug (it is how a default is intentionally overridden), but it is
+              worth surfacing so that unintended drift is noticed.
+
+Note: not every synchronized parameter has (or needs) a LaunchDarkly flag --
+many just ride their compiled-in default. The check therefore runs with
+`--no-fail` in CI for now, so the missing-flag condition only warns; flip to a
+hard failure once the existing backlog has been triaged.
 
 The set of synchronized parameters (and their defaults) is obtained by booting
 Materialize and running `SHOW ALL` as `mz_system`, then filtering out the
@@ -61,10 +66,21 @@ from materialize.version_list import get_latest_published_version
 # Access token required for reading the LaunchDarkly configuration.
 LAUNCHDARKLY_API_TOKEN = os.environ.get("LAUNCHDARKLY_API_TOKEN")
 
-# The LaunchDarkly project and environment that mirror Materialize's system
-# parameters. Overridable so the same check can be pointed at a staging project.
+# The LaunchDarkly project that mirrors Materialize's system parameters.
+# Overridable so the same check can be pointed at a different project.
 LAUNCHDARKLY_PROJECT = os.environ.get("LAUNCHDARKLY_PROJECT", "default")
-LAUNCHDARKLY_ENVIRONMENT = os.environ.get("LAUNCHDARKLY_ENVIRONMENT", "production")
+
+# The LaunchDarkly environments to check default divergence against. Flag
+# *existence* is project-level (identical across environments), so the
+# missing/stale checks do not depend on the environment; only the served
+# default value can differ per environment.
+LAUNCHDARKLY_ENVIRONMENTS = [
+    env.strip()
+    for env in os.environ.get("LAUNCHDARKLY_ENVIRONMENTS", "production,staging").split(
+        ","
+    )
+    if env.strip()
+]
 
 # The internal SQL port, on which we can connect as `mz_system`.
 MZ_SYSTEM_PORT = 6877
@@ -148,12 +164,14 @@ IGNORED_MZ_PARAMETERS: set[str] = set()
 class Flag:
     """A LaunchDarkly flag, reduced to what this check needs."""
 
-    def __init__(self, tags: list[str], default: Any | None) -> None:
+    def __init__(self, tags: list[str], defaults: dict[str, Any | None]) -> None:
         self.tags = tags
         # The value LaunchDarkly serves to an unmatched context (targeting off
-        # -> off variation, otherwise the fallthrough variation). `None` when it
-        # could not be determined unambiguously (e.g. a percentage rollout).
-        self.default = default
+        # -> off variation, otherwise the fallthrough variation), per checked
+        # environment. A value is `None` when it could not be determined
+        # unambiguously (e.g. a percentage rollout) or the environment is
+        # unknown to the flag.
+        self.defaults = defaults
 
 
 def synced_parameters(c: Composition) -> dict[str, str]:
@@ -186,13 +204,13 @@ def collect_synced_parameters(
         return None
 
 
-def ld_served_default(flag: dict[str, Any]) -> Any | None:
-    """Return the value LaunchDarkly serves to an unmatched context in the
-    configured environment, or `None` if it cannot be determined (e.g. a
-    percentage rollout). Mirrors what `client.variation` returns for a context
-    that matches no specific targeting rule."""
+def ld_served_default(flag: dict[str, Any], environment: str) -> Any | None:
+    """Return the value LaunchDarkly serves to an unmatched context in the given
+    environment, or `None` if it cannot be determined (e.g. a percentage
+    rollout). Mirrors what `client.variation` returns for a context that matches
+    no specific targeting rule."""
     variations = flag.get("variations") or []
-    env = (flag.get("environments") or {}).get(LAUNCHDARKLY_ENVIRONMENT)
+    env = (flag.get("environments") or {}).get(environment)
     if env is None:
         return None
     if env.get("on"):
@@ -216,10 +234,10 @@ def launchdarkly_flags() -> dict[str, Flag]:
         offset = 0
         while True:
             # `summary=False` so that per-environment targeting (needed to
-            # determine the served default) is included.
+            # determine the served default) is included. No `env` filter so all
+            # checked environments are returned.
             page = api.get_feature_flags(
                 LAUNCHDARKLY_PROJECT,
-                env=LAUNCHDARKLY_ENVIRONMENT,
                 summary=False,
                 limit=limit,
                 offset=offset,
@@ -228,7 +246,10 @@ def launchdarkly_flags() -> dict[str, Flag]:
             for flag in items:
                 flags[flag["key"]] = Flag(
                     tags=list(flag.get("tags") or []),
-                    default=ld_served_default(flag),
+                    defaults={
+                        env: ld_served_default(flag, env)
+                        for env in LAUNCHDARKLY_ENVIRONMENTS
+                    },
                 )
             total = page.get("total_count")
             offset += len(items)
@@ -312,8 +333,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"Error calling the LaunchDarkly API (status={e.status}, reason={e.reason})"
         )
     print(
-        f"Found {len(ld)} flags in LaunchDarkly project "
-        f"'{LAUNCHDARKLY_PROJECT}' (env '{LAUNCHDARKLY_ENVIRONMENT}')"
+        f"Found {len(ld)} flags in LaunchDarkly project '{LAUNCHDARKLY_PROJECT}' "
+        f"(default-divergence checked against environments: "
+        f"{', '.join(LAUNCHDARKLY_ENVIRONMENTS)})"
     )
 
     ld_keys = set(ld)
@@ -326,14 +348,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     stale_in_ld = {key for key in ld_keys - known if CI_TEST_TAG not in ld[key].tags}
 
     # WARN: flags present in both whose served default diverges from the
-    # Materialize default.
-    diverging_defaults = {}
+    # Materialize default, in any checked environment.
+    diverging_defaults: dict[str, list[tuple[str, str, Any]]] = {}
     for name, mz_value in current.items():
         flag = ld.get(name)
         if flag is None or CI_TEST_TAG in flag.tags:
             continue
-        if values_diverge(mz_value, flag.default):
-            diverging_defaults[name] = (mz_value, flag.default)
+        for environment in LAUNCHDARKLY_ENVIRONMENTS:
+            ld_value = flag.defaults.get(environment)
+            if values_diverge(mz_value, ld_value):
+                diverging_defaults.setdefault(name, []).append(
+                    (environment, mz_value, ld_value)
+                )
 
     if stale_in_ld:
         report(
@@ -352,10 +378,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "Materialize default"
         )
         for name in sorted(diverging_defaults):
-            mz_value, ld_value = diverging_defaults[name]
-            print(f"  {name}: materialize={mz_value!r} launchdarkly={ld_value!r}")
+            for environment, mz_value, ld_value in diverging_defaults[name]:
+                print(
+                    f"  {name} [{environment}]: "
+                    f"materialize={mz_value!r} launchdarkly={ld_value!r}"
+                )
         print(
-            "A diverging default overrides the compiled-in value in production. "
+            "A diverging default overrides the compiled-in value. "
             "Confirm this is intentional."
         )
 

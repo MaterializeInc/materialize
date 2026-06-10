@@ -1446,6 +1446,10 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: launchdarkly-flag-consistency
+              # Warn-only for now: many synchronized parameters legitimately
+              # have no LaunchDarkly flag. Drop --no-fail once the backlog of
+              # missing flags has been triaged.
+              args: [--no-fail]
 
   - group: E2E
     key: e2e
