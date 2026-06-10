@@ -4178,30 +4178,25 @@ def workflow_test_drop_cluster_during_peeks(c: Composition) -> None:
 
 def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
     """Race registered *slow-path* peeks against DROP/CREATE of their target
-    cluster; environmentd must survive. (It historically panicked on a
-    statement-logging begin/end mismatch in `end_statement_execution`.)
+    cluster; environmentd must survive and every statement must be ended
+    exactly once.
 
-    Unlike `workflow_test_drop_cluster_during_peeks`, which runs `SELECT 1` (a
-    *constant* fast path that is handled inline and never registered with the
-    coordinator), this reads a real table with no usable index, so the optimizer
-    produces a `standard` slow-path dataflow peek (`ExecuteSlowPathPeek`) that
-    registers a pending peek with the coordinator. When a concurrent
-    `DROP CLUSTER` makes the peek fail, `implement_peek_plan` returns an error
-    before taking ownership of its `ExecuteContextExtra`. The frontend owns
-    end-of-execution logging on the error path, so the `ExecuteSlowPathPeek`
-    handler must defuse its throwaway `ExecuteContextGuard`; letting the
-    guard's `Drop` emit a spurious `Aborted` end on top of the frontend's
-    `Errored` end is the double end that historically panicked and aborted
-    environmentd (it is now also dropped at the sink, with a warning).
+    A bare scan of a table with no usable index becomes a `standard` slow-path
+    peek (`ExecuteSlowPathPeek`) registered with the coordinator; a constant
+    query like `SELECT 1` (exercised by `workflow_test_drop_cluster_during_peeks`)
+    is handled inline and never registered. When a concurrent `DROP CLUSTER`
+    makes the peek fail, the frontend owns the error end of statement logging
+    and the coordinator must defuse its own guard instead of emitting
+    `Aborted`. Two ends for one statement historically panicked and aborted
+    environmentd; today the duplicate is dropped at the sink with the warning
+    we assert on below.
 
-    The narrow fast-path variant of this race (a `PeekExisting` peek retired by
-    the teardown in the window between `RegisterFrontendPeek` and `client.peek()`)
-    is too timing-sensitive to hit by brute force; it is covered deterministically
-    by `workflow_test_drop_cluster_during_registered_peeks_fast_path`.
-
-    The race window is narrow, so we hammer several clusters in parallel — each
-    churned by its own thread, to get the DROP rate past the CREATE-CLUSTER
-    provisioning bottleneck — with many peekers each.
+    The fast-path variant of this race has a sub-millisecond window that brute
+    force can't hit;
+    `workflow_test_drop_cluster_during_registered_peeks_fast_path` covers it
+    deterministically. Here we hammer several clusters in parallel, each
+    churned by its own thread to get the DROP rate past the CREATE-CLUSTER
+    provisioning bottleneck, with many peekers each.
     """
 
     num_clusters = 4
@@ -4236,18 +4231,14 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
                             # a plain `str`, and passing `bytes` sidesteps that.
                             cur.execute(f"SET cluster = {cluster}".encode())
                             while not stop[0]:
-                                # A bare table scan with no usable index: a
-                                # registered `standard` slow-path peek (not an
-                                # inlined constant), dispatched on cluster
-                                # `{cluster}`.
+                                # Bare table scan, no usable index: a
+                                # registered slow-path peek (see docstring).
                                 cur.execute("SELECT * FROM t")
                                 cur.fetchall()
                     except Exception:
-                        # The target cluster vanishing out from under us is the
-                        # whole point; once environmentd is down `c.sql_cursor()`
-                        # raises a `UIError` rather than a `DatabaseError`, so
-                        # catch broadly (these are chaos threads — the real
-                        # signal is whether environmentd survived, asserted below).
+                        # Chaos thread; failures are the point. Catch broadly:
+                        # a downed environmentd raises UIError, not
+                        # DatabaseError. The real signal is asserted below.
                         time.sleep(0.05)
 
             return peek_loop
@@ -4264,11 +4255,9 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
                                 f"CREATE CLUSTER {cluster} SIZE 'scale=1,workers=1'".encode()
                             )
                     except Exception:
-                        # The target cluster vanishing out from under us is the
-                        # whole point; once environmentd is down `c.sql_cursor()`
-                        # raises a `UIError` rather than a `DatabaseError`, so
-                        # catch broadly (these are chaos threads — the real
-                        # signal is whether environmentd survived, asserted below).
+                        # Chaos thread; failures are the point. Catch broadly:
+                        # a downed environmentd raises UIError, not
+                        # DatabaseError. The real signal is asserted below.
                         time.sleep(0.05)
 
             return churn_loop
@@ -4295,19 +4284,16 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
             for t in threads:
                 t.join(timeout=30)
 
-        # A panic on the coordinator thread during the race aborts the entire
-        # environmentd process (src/ore/src/panic.rs). With no restart policy
-        # the container then stays down, so this fresh connection raises. (An
-        # unrelated clusterd crash propagates to environmentd too, and is also
-        # worth failing on.)
+        # A panic on the coordinator thread aborts the entire environmentd
+        # process (src/ore/src/panic.rs); with no restart policy the container
+        # stays down and this fresh connection raises.
         with c.sql_cursor() as cur:
             cur.execute("SELECT 1")
             assert cur.fetchone() == (1,)
 
         # All the raced statements must have been ended exactly once. A
         # duplicate end is dropped at the sink, so environmentd survives it,
-        # but it means end-of-execution ownership was held by two parties at
-        # once and the handoff protocol regressed.
+        # but it means the end-of-execution ownership handoff regressed.
         logs = c.invoke("logs", "materialized", capture=True)
         assert (
             "duplicate end_statement_execution" not in logs.stdout
@@ -4318,28 +4304,22 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
     c: Composition,
 ) -> None:
     """Deterministically exercise the *fast-path* variant of the registered-peek
-    teardown race (see `workflow_test_drop_cluster_during_registered_peeks` for
-    the slow-path variant).
+    teardown race (slow-path variant:
+    `workflow_test_drop_cluster_during_registered_peeks`).
 
-    A `PeekExisting` fast-path peek registers with the coordinator
-    (`RegisterFrontendPeek`) and only *then* issues `client.peek()`. Successful
-    registration hands ownership of end-of-execution logging to the
-    coordinator. If a `DROP CLUSTER` lands in the registration/issue window,
-    the coordinator's teardown retires the pending peek and logs its end, while
-    `client.peek()` fails on the frontend; the frontend's subsequent
-    `UnregisterFrontendPeek` finds the peek already retired and must be a
-    no-op. (Historically the frontend ended the statement itself here, a
-    double `end_statement_execution` that panicked and aborted environmentd.)
+    A `PeekExisting` fast-path peek registers with the coordinator and only
+    *then* issues `client.peek()`; registration hands ownership of
+    end-of-execution logging to the coordinator. If a `DROP CLUSTER` lands in
+    that window, the teardown retires the pending peek and logs its end,
+    `client.peek()` fails, and the frontend's `UnregisterFrontendPeek` must be
+    a no-op. Historically the frontend ended the statement itself here, and
+    the double end panicked and aborted environmentd.
 
-    That window is a sub-millisecond cross-thread gap, hopeless to hit by brute
-    force (unlike the slow-path variant, whose error window spans a whole
-    `ExecuteSlowPathPeek` command). So we make it deterministic with the
-    `peek_after_register_before_issue` failpoint: pause a peek right after it
-    registers, drop its cluster while it's parked (the coordinator retires the
-    peek and logs its end), then resume so `client.peek()` fails. The test
-    asserts that environmentd survives *and* that the statement was not ended
-    twice (a duplicate end is dropped at the sink with a warning, which we
-    check the logs for).
+    The window is a sub-millisecond cross-thread gap, so we make it
+    deterministic with the `peek_after_register_before_issue` failpoint: pause
+    a peek right after it registers, drop its cluster while it's parked, then
+    resume so `client.peek()` fails. Assert that environmentd survives and
+    that no duplicate end was logged.
     """
 
     failpoint = "peek_after_register_before_issue"
@@ -4387,8 +4367,8 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
         peek_thread.start()
 
         # Drive the race from a single control connection opened *before* the
-        # failpoint is armed — so its own connection-setup peeks don't park, which
-        # would otherwise deadlock it against the very failpoint it must turn off.
+        # failpoint is armed, so its own connection-setup peeks don't park and
+        # deadlock it against the very failpoint it must turn off.
         with c.sql_cursor() as control:
             assert peeker_ready.wait(timeout=30), "peeker failed to connect"
             # Arm: every fast-path peek now parks right after registering.
@@ -4416,15 +4396,14 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
         ), f"expected the peek to fail on the dropped cluster, got: {peek_outcome[0]}"
 
         # A panic on the coordinator thread aborts the entire environmentd
-        # process (src/ore/src/panic.rs). With no restart policy the container
-        # stays down, so this fresh connection raises.
+        # process (src/ore/src/panic.rs); with no restart policy the container
+        # stays down and this fresh connection raises.
         with c.sql_cursor() as cur:
             cur.execute("SELECT 1")
             assert cur.fetchone() == (1,)
 
-        # The race must have been single-ended: registration handed
-        # end-of-execution ownership to the coordinator, whose teardown logged
-        # the only end. A duplicate end is dropped at the sink, so environmentd
+        # The race must have been single-ended: the teardown logged the only
+        # end. A duplicate would be dropped at the sink, so environmentd
         # survives it, but it means the ownership handoff regressed.
         logs = c.invoke("logs", "materialized", capture=True)
         assert (

@@ -695,15 +695,14 @@ impl FastPathPlan {
 impl crate::coord::Coordinator {
     /// Implements a peek plan produced by `create_plan` above.
     ///
-    /// Ownership of `ctx_extra` (the statement-logging guard): on success its
-    /// contents are taken and end-of-execution logging is handed off — retired
-    /// immediately for a constant peek, or moved into `pending_peeks` for
-    /// `handle_peek_notification` to retire on a streaming peek. On an early error
-    /// return (e.g. a concurrent dependency drop before the peek is registered) the
-    /// contents are left intact, so the caller must take ownership: `retire` it if
-    /// the caller is the sole end-logger, or `defuse` it if something else logs the
-    /// end on error (as the frontend does via `implement_slow_path_peek`). Otherwise
-    /// the guard's `Drop` emits a spurious `Aborted`, double-ending the statement.
+    /// On success this takes the contents of `ctx_extra`, the
+    /// statement-logging guard: a constant peek is retired immediately, and a
+    /// streaming peek moves them into `pending_peeks` for
+    /// `handle_peek_notification` to retire. On an error return the contents
+    /// are left intact and the caller must take ownership of them: `retire`
+    /// if the caller is the sole end-logger, `defuse` if something else logs
+    /// the error end. Dropping the guard armed emits a spurious `Aborted`,
+    /// double-ending the statement.
     #[mz_ore::instrument(level = "debug")]
     pub async fn implement_peek_plan(
         &mut self,
@@ -1384,16 +1383,9 @@ impl crate::coord::Coordinator {
             source_ids,
         };
 
-        // Call the old peek sequencing's implement_peek_plan for now.
         // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
         // relevant parts of the old `implement_peek_plan` into this method, and remove the old
         // `implement_peek_plan`.
-        //
-        // `implement_peek_plan` leaves the guard's contents intact on an error
-        // return (see its doc comment). Defuse on error so the frontend stays the
-        // sole end-logger: letting the guard's `Drop` also emit `Aborted` would
-        // double-end the `Errored` and panic in `end_statement_execution`. Matches
-        // the watch-set invariant noted above.
         let mut ctx_guard =
             ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone());
         let result = self
@@ -1407,6 +1399,9 @@ impl crate::coord::Coordinator {
                 max_query_result_size,
             )
             .await;
+        // On error `implement_peek_plan` left the guard's contents intact (see
+        // its doc comment) and the frontend logs the error end, so we defuse
+        // rather than let the guard's `Drop` emit a spurious `Aborted`.
         if result.is_err() {
             let _ = ctx_guard.defuse();
         }

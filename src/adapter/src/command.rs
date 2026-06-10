@@ -326,15 +326,14 @@ pub enum Command {
         tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
-    /// Unregister and retire a pending peek that was registered but failed to
-    /// issue. This is used for cleanup when `client.peek()` fails after
-    /// `RegisterFrontendPeek` succeeds.
+    /// Unregister and retire a pending peek that was registered but then
+    /// failed to issue, ending its statement-logging execution with the given
+    /// reason.
     ///
     /// Registration handed ownership of end-of-execution logging to the
-    /// coordinator, so the coordinator retires the peek and logs the given end
-    /// reason. If a concurrent teardown (e.g. a `DROP CLUSTER`) already
-    /// retired the peek and logged its end, this is a no-op. The frontend
-    /// must not log the end in either case.
+    /// coordinator, so the frontend must not log the end itself. If a
+    /// concurrent teardown (e.g. a `DROP CLUSTER`) already retired the peek
+    /// and logged its end, this is a no-op.
     UnregisterFrontendPeek {
         uuid: Uuid,
         reason: StatementEndedExecutionReason,
