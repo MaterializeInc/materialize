@@ -86,7 +86,7 @@ fn optimize_housed(e: &mut MirRelationExpr) -> Result<(), TransformError> {
     let root: *const MirRelationExpr = &**housed;
     let mut result = Ok(());
     housed.visit_mut_post(&mut |inner| {
-        if result.is_ok() && !std::ptr::eq(inner as *const _, root) {
+        if result.is_ok() && !std::ptr::eq(std::ptr::from_ref(inner), root) {
             result = optimize_housed(inner);
         }
     });
