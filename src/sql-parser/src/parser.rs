@@ -3861,7 +3861,7 @@ impl<'a> Parser<'a> {
         &mut self,
     ) -> Result<CreateSinkConnection<Raw>, ParserError> {
         self.expect_keyword(CONNECTION)?;
-        let connection = self.parse_raw_name()?;
+        let catalog_connection = self.parse_raw_name()?;
 
         let options = if self.consume_token(&Token::LParen) {
             let options = self.parse_comma_separated(Parser::parse_iceberg_sink_config_option)?;
@@ -3871,8 +3871,11 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        self.expect_keywords(&[USING, AWS, CONNECTION])?;
-        let aws_connection = self.parse_raw_name()?;
+        let aws_connection = if self.parse_keywords(&[USING, AWS, CONNECTION]) {
+            Some(self.parse_raw_name()?)
+        } else {
+            None
+        };
 
         let key = if self.parse_keyword(KEY) {
             let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
@@ -3887,7 +3890,7 @@ impl<'a> Parser<'a> {
         };
 
         Ok(CreateSinkConnection::Iceberg {
-            connection,
+            catalog_connection,
             aws_connection,
             key,
             options,
