@@ -6557,45 +6557,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-fivetran-destination"
-version = "0.0.0"
-dependencies = [
- "async-compression",
- "bytes",
- "clap",
- "csv-async",
- "futures",
- "insta",
- "itertools 0.14.0",
- "mz-build-tools",
- "mz-ore",
- "mz-pgrepr",
- "mz-sql-parser",
- "openssl",
- "postgres-openssl",
- "postgres-protocol",
- "prost",
- "prost-build",
- "prost-types",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "socket2 0.6.3",
- "thiserror 2.0.18",
- "tokio",
- "tokio-postgres",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
- "tracing",
- "tracing-core",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "mz-foundationdb"
 version = "0.0.0"
 dependencies = [
@@ -8011,10 +7972,12 @@ dependencies = [
  "aws-sdk-sts",
  "axum",
  "bincode",
+ "bytemuck",
  "bytes",
  "bytesize",
  "chrono",
  "clap",
+ "columnar",
  "columnation",
  "crossbeam-channel",
  "csv-core",
@@ -8175,6 +8138,7 @@ dependencies = [
  "aws-types",
  "bytes",
  "bytesize",
+ "columnar",
  "columnation",
  "csv-async",
  "derivative",
@@ -8355,7 +8319,6 @@ dependencies = [
  "postgres-protocol",
  "postgres_array",
  "prost",
- "prost-build",
  "prost-reflect",
  "prost-types",
  "rand 0.9.4",
@@ -8374,9 +8337,6 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tokio-util",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
  "tracing",
  "tracing-subscriber",
  "url",

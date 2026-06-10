@@ -49,6 +49,8 @@ pub(super) struct ReplicaConfig {
     pub grpc_client: GrpcClientParameters,
     /// The offset to use for replica expiration, if any.
     pub expiration_offset: Option<Duration>,
+    /// Whether arrangements on this replica use dictionary compression, captured at creation.
+    pub arrangement_dictionary_compression: bool,
 }
 
 /// A client for a replica task.
@@ -274,6 +276,8 @@ impl ReplicaTask {
                 if ENABLE_COMPUTE_REPLICA_EXPIRATION.get(&self.dyncfg) {
                     config.expiration_offset = self.config.expiration_offset;
                 }
+                config.arrangement_dictionary_compression =
+                    self.config.arrangement_dictionary_compression;
             }
             _ => {}
         }

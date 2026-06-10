@@ -83,7 +83,6 @@ fn build_path(state: &State, cmd: &mut BuiltinCommand) -> Result<PathBuf, anyhow
 
     match container.as_deref() {
         None => Ok(state.temp_path.join(path)),
-        Some("fivetran") => Ok(PathBuf::from(&state.fivetran_destination_files_path).join(path)),
         Some(x) => bail!("Unrecognized container '{x}'"),
     }
 }

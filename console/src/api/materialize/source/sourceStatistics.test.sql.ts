@@ -101,14 +101,21 @@ describe("buildSourceStatisticsQuery", () => {
           FROM KAFKA CONNECTION kafka_conn_multi (TOPIC 'testdrive-multi_rep_input-\${testdrive.seed}')
           ENVELOPE NONE
 
-        # Wait for statistics to show up on multiple replicas with offsets fully committed.
-        # This confirms that stats are being generated for more than one replica and that
-        # offset_committed has caught up to offset_known, so offsetDelta will be 0.
-        # We wait on mz_source_statistics_with_history specifically because the console
-        # query reads from that view, which has a separate index that may advance at a
-        # different frontier than mz_source_statistics.
+        # Wait until both replicas have registered statistics rows for the source.
+        # Two distinct replica_ids is all we need to exercise the console query's
+        # per-source collapse (asserted below), and it is a stable, monotonic signal:
+        # once a replica's row appears it does not disappear.
+        #
+        # We deliberately do NOT wait for offset_committed/offset_known to converge to
+        # a specific value on both replicas. offset_committed is derived from the
+        # shared persist output frontier (see src/storage-client/src/statistics.rs),
+        # and the standby replica observes that frontier with effectively unbounded lag
+        # under CI load. Gating on that convergence is what made this test flaky and got
+        # it repeatedly re-tuned (set-sql-timeout 60s->120s->30s, jest 90s->180s->60s;
+        # PR #35982, #36098) without ever being a real fix. The collapse behavior under
+        # test does not depend on the offsets having converged.
         $ set-sql-timeout duration=30s
-        > SELECT count(distinct replica_id) FROM mz_internal.mz_source_statistics_with_history JOIN mz_sources using(id) where name = 'kafka_multi' AND offset_committed = 3 AND offset_known = 3 AND messages_received > 0
+        > SELECT count(distinct replica_id) FROM mz_internal.mz_source_statistics_with_history JOIN mz_sources using(id) WHERE name = 'kafka_multi'
         2
       `,
       );
@@ -121,20 +128,20 @@ describe("buildSourceStatisticsQuery", () => {
       const query = buildSourceStatisticsQuery(source.id).compile();
       const result = await executeSqlHttp(query);
 
+      // The multi-replica-specific behavior under test is the per-source collapse:
+      // even though two replicas report statistics for `kafka_multi`, the console
+      // query (distinctOn ss.id) must return a single row attributed to a single
+      // replica -- not one row per replica, and not values summed across replicas.
+      //
+      // We intentionally do not assert concrete statistic values (offsets, message
+      // counts, rehydration latency) here. Those depend on cross-replica convergence
+      // -- eventually-consistent with unbounded lag under CI load -- and are already
+      // covered deterministically by the single-replica test above. Re-asserting them
+      // against a live multi-replica cluster is what made this test flaky.
       expect(result.rows).toHaveLength(1);
       expect(result.rows[0]).toEqual(
         expect.objectContaining({
-          bytesReceived: 144,
-          messagesReceived: 3,
-          offsetDelta: 0,
-          rehydrationLatency: expect.any(PostgresInterval),
-          snapshotRecordsKnown: 3,
-          snapshotRecordsStaged: 3,
-          // Accept any number for updates fields as they may vary based on timing and cluster state
-          updatesCommitted: expect.any(Number),
-          updatesStaged: expect.any(Number),
-          // Accept any string for id, replicaId, and replicaName
-          id: expect.any(String),
+          id: source.id,
           replicaId: expect.any(String),
           replicaName: expect.any(String),
         }),

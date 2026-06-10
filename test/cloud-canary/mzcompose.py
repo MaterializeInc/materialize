@@ -34,7 +34,6 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.redpanda_cloud import RedpandaCloud
@@ -197,7 +196,6 @@ class Redpanda:
 
 
 SERVICES = [
-    CockroachOrPostgresMetadata(),
     Materialized(
         # We use materialize/environmentd and not materialize/materialized here
         # in order to ensure a perfect match to the container that should be

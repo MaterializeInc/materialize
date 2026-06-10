@@ -408,3 +408,24 @@ kv 6 6 0 0 false 16
 kv_up 6 6 0 0 false 16
 
 > DROP SOURCE kv CASCADE;
+
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_upsert_v2 = true
+
+> CREATE CLUSTER lg_v2_cluster SIZE '${arg.default-replica-size}'
+
+> CREATE SOURCE up_v2
+  IN CLUSTER lg_v2_cluster
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16, PARTITIONS 4, SNAPSHOT ROUNDS 3, SEED 123, VALUE SIZE 10, BATCH SIZE 2
+  )
+  ENVELOPE UPSERT
+
+> SELECT count(*), MAX(key) FROM up_v2;
+16 15
+
+> DROP CLUSTER lg_v2_cluster CASCADE;
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_upsert_v2 = false

@@ -128,6 +128,7 @@ mod memory;
 mod metrics;
 mod metrics_public;
 mod metrics_viz;
+pub(crate) mod oauth_metadata;
 mod probe;
 mod prometheus;
 mod root;
@@ -158,10 +159,24 @@ pub struct HttpConfig {
     pub allowed_origin_list: Vec<HeaderValue>,
     pub active_connection_counter: ConnectionCounter,
     pub helm_chart_version: Option<String>,
+    /// Externally-visible host name for this environment (without scheme).
+    ///
+    /// Used as the canonical host when constructing absolute URLs that the
+    /// server needs to publish (e.g. the OAuth Protected Resource Metadata
+    /// `resource` field, RFC 9728). When `None`, callers fall back to the
+    /// request's `Host` header, which is correct for unproxied dev setups
+    /// but loses fidelity behind a load balancer that rewrites Host.
+    ///
+    /// We deliberately do NOT consult `X-Forwarded-Host` or
+    /// `X-Forwarded-Proto`: there is no proxy-trust model in environmentd
+    /// today, and an attacker reaching the server directly can otherwise
+    /// poison the published metadata URLs.
+    pub http_host_name: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
     pub mcp_metrics: mcp_metrics::McpMetrics,
+    pub oauth_metadata_metrics: oauth_metadata::OauthMetadataMetrics,
     pub allowed_roles: AllowedRoles,
     pub internal_route_config: Arc<InternalRouteConfig>,
     pub routes_enabled: HttpRoutesEnabled,
@@ -214,10 +229,12 @@ impl HttpServer {
             allowed_origin_list,
             active_connection_counter,
             helm_chart_version,
+            http_host_name,
             concurrent_webhook_req,
             metrics,
             metrics_registry,
             mcp_metrics,
+            oauth_metadata_metrics,
             allowed_roles,
             internal_route_config,
             routes_enabled,
@@ -239,10 +256,12 @@ impl HttpServer {
         let frontegg_middleware = frontegg.clone();
         let oidc_middleware_rx = oidc_rx.clone();
         let adapter_client_middleware_rx = adapter_client_rx.clone();
+        let http_host_name_middleware = http_host_name.clone();
         let auth_middleware = middleware::from_fn(move |req, next| {
             let frontegg = frontegg_middleware.clone();
             let oidc_rx = oidc_middleware_rx.clone();
             let adapter_client_rx = adapter_client_middleware_rx.clone();
+            let http_host_name = http_host_name_middleware.clone();
             async move {
                 http_auth(
                     req,
@@ -253,6 +272,7 @@ impl HttpServer {
                     oidc_rx,
                     adapter_client_rx,
                     allowed_roles,
+                    http_host_name,
                 )
                 .await
             }
@@ -505,6 +525,40 @@ impl HttpServer {
         if routes_enabled.mcp_agent || routes_enabled.mcp_developer {
             use tracing::info;
 
+            // RFC 9728 Protected Resource Metadata. Public route: MCP
+            // clients fetch it before they have a token. Sits on its own
+            // router so the auth middleware never runs on it. The handler
+            // 404s when the listener does not advertise OAuth (see
+            // `McpOAuthDiscovery`) or `oidc_issuer` is unset, so it is safe
+            // to enable unconditionally whenever MCP is enabled.
+            // RFC 9728 §3.1 lets clients look up per-resource metadata
+            // via a path-suffixed well-known URI before falling back to
+            // the bare one. The MCP endpoints share an identical
+            // metadata view today, so we serve the same handler at all
+            // three paths.
+            let oauth_metadata_router = Router::new()
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH_AGENT,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .layer(Extension(adapter_client_rx.clone()))
+                .layer(Extension(oauth_metadata::DiscoveryConfig {
+                    http_host_name: http_host_name.clone(),
+                    discovery: oauth_metadata::McpOAuthDiscovery::for_authenticator(
+                        authenticator_kind,
+                    ),
+                }))
+                .layer(Extension(oauth_metadata_metrics.clone()));
+            router = router.merge(oauth_metadata_router);
+
             let mut mcp_router = Router::new();
 
             if routes_enabled.mcp_agent {
@@ -533,6 +587,9 @@ impl HttpServer {
             let mcp_allowed_origins = Arc::new(allowed_origin_list.clone());
             mcp_router = mcp_router
                 .layer(auth_middleware.clone())
+                .layer(Extension(BearerChallengeConfig {
+                    scope: oauth_metadata::MCP_SCOPE,
+                }))
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()))
                 .layer(Extension(HelmChartVersion(helm_chart_version.clone())))
@@ -718,7 +775,7 @@ async fn x_materialize_user_header_auth(
     Ok(next.run(req).await)
 }
 
-type Delayed<T> = Shared<oneshot::Receiver<T>>;
+pub(crate) type Delayed<T> = Shared<oneshot::Receiver<T>>;
 
 /// Resolve the dyncfg-configured group claim path from a delayed adapter
 /// client. Callers must already have driven `adapter_client_rx` to readiness
@@ -893,6 +950,41 @@ where
     }
 }
 
+/// Route-attached marker that opts a route into OAuth Bearer challenges on a
+/// 401. The auth middleware reads this as a request extension instead of
+/// switching on the URL path, so the middleware stays path-agnostic. Set on
+/// `mcp_router` today; add to other routers if they later want to advertise
+/// OAuth discovery via RFC 9728.
+#[derive(Debug, Clone)]
+pub(crate) struct BearerChallengeConfig {
+    /// OAuth scope advertised in the `Bearer` challenge's `scope=` parameter.
+    pub scope: &'static str,
+}
+
+/// Per-request decision about which `WWW-Authenticate` challenges to emit
+/// on a 401, computed by the auth middleware.
+///
+/// Carries both the `Basic` toggle (today's behavior, kept for the SQL HTTP
+/// layer and friends) and an optional `Bearer` challenge with a
+/// `resource_metadata` URL per RFC 9728. The Bearer challenge is only set
+/// on routes that attach a [`BearerChallengeConfig`] extension; other routes
+/// emit only `Basic` so their behavior is unchanged.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WwwAuthenticateChallenges {
+    /// Whether to emit `WWW-Authenticate: Basic realm=Materialize`.
+    pub include_basic: bool,
+    /// If `Some`, also emit `WWW-Authenticate: Bearer
+    /// resource_metadata="<url>"`. The URL points at this server's RFC 9728
+    /// Protected Resource Metadata document, which advertises the
+    /// authorization server the client should use.
+    pub bearer_resource_metadata: Option<String>,
+    /// If `Some`, also emit `scope="<scope>"` inside the Bearer challenge.
+    /// Tells clients which OAuth scope to request a token with for this
+    /// resource. Only set in conjunction with `bearer_resource_metadata`
+    /// (a scope challenge with no resource hint would be confusing).
+    pub bearer_scope: Option<&'static str>,
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum AuthError {
     #[error("role dissallowed")]
@@ -901,7 +993,7 @@ pub(crate) enum AuthError {
     Frontegg(#[from] FronteggError),
     #[error("missing authorization header")]
     MissingHttpAuthentication {
-        include_www_authenticate_header: bool,
+        challenges: WwwAuthenticateChallenges,
     },
     #[error("{0}")]
     MismatchedUser(String),
@@ -922,16 +1014,45 @@ impl IntoResponse for AuthError {
         let mut headers = HeaderMap::new();
         // We omit most detail from the error message we send to the client, to
         // avoid giving attackers unnecessary information. `OidcFailed` is the
-        // exception — its payload is a sanitized `OidcError::Display` that the
+        // exception: its payload is a sanitized `OidcError::Display` that the
         // console embeds in the login-page error.
         let body = match &self {
-            AuthError::MissingHttpAuthentication {
-                include_www_authenticate_header,
-            } if *include_www_authenticate_header => {
-                headers.insert(
-                    http::header::WWW_AUTHENTICATE,
-                    HeaderValue::from_static("Basic realm=Materialize"),
-                );
+            // Bearer goes first so OAuth-aware clients see it before the
+            // Basic fallback. RFC 7235 allows emitting multiple
+            // `WWW-Authenticate` headers; we use one per scheme so each
+            // challenge is unambiguously framed; some parsers struggle
+            // with multiple schemes on a single header value.
+            AuthError::MissingHttpAuthentication { challenges } => {
+                if let Some(resource_metadata) = &challenges.bearer_resource_metadata {
+                    // `scope` is hard-coded to a vetted constant
+                    // (`MCP_SCOPE`); only `resource_metadata` is derived
+                    // from a header value, and `resolve_host` has already
+                    // round-tripped it through the URI grammar. The quoted
+                    // form follows RFC 6749 §3.3 / RFC 6750 §3.
+                    let value = match &challenges.bearer_scope {
+                        Some(scope) => format!(
+                            "Bearer scope=\"{scope}\", resource_metadata=\"{resource_metadata}\"",
+                        ),
+                        None => format!("Bearer resource_metadata=\"{resource_metadata}\""),
+                    };
+                    match HeaderValue::from_str(&value) {
+                        Ok(v) => {
+                            headers.append(http::header::WWW_AUTHENTICATE, v);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "skipping Bearer WWW-Authenticate challenge: invalid header \
+                                 value derived from resource_metadata={resource_metadata:?}: {e}",
+                            );
+                        }
+                    }
+                }
+                if challenges.include_basic {
+                    headers.append(
+                        http::header::WWW_AUTHENTICATE,
+                        HeaderValue::from_static("Basic realm=Materialize"),
+                    );
+                }
                 "unauthorized".to_string()
             }
             AuthError::OidcFailed(message) => message.clone(),
@@ -1010,6 +1131,7 @@ async fn http_auth(
     oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
     adapter_client_rx: Delayed<Client>,
     allowed_roles: AllowedRoles,
+    http_host_name: Option<String>,
 ) -> Result<impl IntoResponse, AuthError> {
     let creds = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
         Some(Credentials::Password {
@@ -1068,10 +1190,34 @@ async fn http_auth(
     }
 
     let path = req.uri().path();
-    let include_www_authenticate_header = path == "/"
+    // Routes that advertise OAuth opt in via the `BearerChallengeConfig`
+    // extension; the middleware stays path-agnostic. Routes that opt in also
+    // get a `Basic` challenge so existing curl/Bearer-already users still see
+    // a usable challenge. See `crate::http::oauth_metadata` for the discovery
+    // document; the challenge and the discovery handler share
+    // `McpOAuthDiscovery` so they never disagree about whether OAuth is
+    // advertised on this listener.
+    let bearer_config = req.extensions().get::<BearerChallengeConfig>().cloned();
+    let include_basic = path == "/"
         || PROFILING_API_ENDPOINTS
             .iter()
-            .any(|prefix| path.starts_with(prefix));
+            .any(|prefix| path.starts_with(prefix))
+        || bearer_config.is_some();
+    let (bearer_resource_metadata, bearer_scope) = if let Some(config) = &bearer_config
+        && oauth_metadata::McpOAuthDiscovery::for_authenticator(authenticator_kind).is_enabled()
+    {
+        (
+            oauth_metadata::metadata_url(&req, http_host_name.as_deref()),
+            Some(config.scope),
+        )
+    } else {
+        (None, None)
+    };
+    let challenges = WwwAuthenticateChallenges {
+        include_basic,
+        bearer_resource_metadata,
+        bearer_scope,
+    };
     let authenticator = get_authenticator(
         authenticator_kind,
         creds.as_ref(),
@@ -1086,7 +1232,7 @@ async fn http_auth(
         &authenticator,
         creds,
         allowed_roles,
-        include_www_authenticate_header,
+        &challenges,
         Some(&group_claim),
     )
     .await?;
@@ -1178,12 +1324,16 @@ async fn init_ws(
                 &adapter_client_rx,
             )
             .await;
+            // WebSocket init: no 401-with-challenge contract, the
+            // client is reading WS frames, not parsing HTTP headers, so
+            // we just suppress challenge emission entirely.
+            let no_challenges = WwwAuthenticateChallenges::default();
             let group_claim = group_claim_for(&adapter_client_rx).await;
             let user = auth(
                 &authenticator,
                 Some(creds),
                 allowed_roles,
-                false,
+                &no_challenges,
                 Some(&group_claim),
             )
             .await?;
@@ -1293,7 +1443,7 @@ async fn auth(
     authenticator: &Authenticator,
     creds: Option<Credentials>,
     allowed_roles: AllowedRoles,
-    include_www_authenticate_header: bool,
+    challenges: &WwwAuthenticateChallenges,
     group_claim: Option<&str>,
 ) -> Result<AuthedUser, AuthError> {
     let (name, external_metadata_rx, authenticated, groups) = match authenticator {
@@ -1323,7 +1473,7 @@ async fn auth(
             }
             None => {
                 return Err(AuthError::MissingHttpAuthentication {
-                    include_www_authenticate_header,
+                    challenges: challenges.clone(),
                 });
             }
         },
@@ -1337,7 +1487,7 @@ async fn auth(
             }
             _ => {
                 return Err(AuthError::MissingHttpAuthentication {
-                    include_www_authenticate_header,
+                    challenges: challenges.clone(),
                 });
             }
         },
@@ -1346,7 +1496,7 @@ async fn auth(
             // If we do, it's a server misconfiguration.
             // Just in case, we return a 401 rather than panic.
             return Err(AuthError::MissingHttpAuthentication {
-                include_www_authenticate_header,
+                challenges: challenges.clone(),
             });
         }
         Authenticator::Oidc(oidc) => match creds {
@@ -1361,7 +1511,7 @@ async fn auth(
             }
             _ => {
                 return Err(AuthError::MissingHttpAuthentication {
-                    include_www_authenticate_header,
+                    challenges: challenges.clone(),
                 });
             }
         },

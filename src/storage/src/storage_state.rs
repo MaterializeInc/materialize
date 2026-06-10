@@ -843,6 +843,19 @@ impl<'w> Worker<'w> {
                 self.storage_state.server_maintenance_interval =
                     STORAGE_SERVER_MAINTENANCE_INTERVAL
                         .get(self.storage_state.storage_configuration.config_set());
+
+                // Gate the upsert source-stash's use of the column pager. The
+                // pager's budget pool, backend, and codec are the shared ones
+                // configured by compute's `apply_worker_config` (compute and
+                // storage run in the same process); storage only decides whether
+                // its stash participates, via its own dyncfg.
+                {
+                    use mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL;
+
+                    let enabled = ENABLE_UPSERT_PAGED_SPILL
+                        .get(self.storage_state.storage_configuration.config_set());
+                    crate::upsert::upsert_stash_pager::set_enabled(enabled);
+                }
             }
             InternalStorageCommand::StatisticsUpdate { sources, sinks } => self
                 .storage_state
