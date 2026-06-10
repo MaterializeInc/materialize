@@ -2611,17 +2611,28 @@ pub mod tests {
 
         cache.cfg.build_version = Version::new(26, 1, 0);
         let client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
-        let (_, mut reader) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+        let (write, mut reader) = client.expect_open::<String, (), u64, i64>(shard_id).await;
         reader.downgrade_since(&Antichain::from_elem(1)).await;
         assert_eq!(
             fetch_catalog_upgrade_shard_version(&client, shard_id).await,
             Some(Version::new(26, 1, 0)),
         );
 
+        // Expire the old-version handles before bumping the build version. They
+        // share the in-mem state cache, and if their background tasks (reader
+        // heartbeat / writer expiry) are left to linger they can observe the
+        // upgraded 27.1.0 state below and panic on the version mismatch
+        // (apply.rs `code_can_write_data` / encoding.rs `assert_code_can_read_data`),
+        // poisoning the shared state lock and flaking the test. `expire` does
+        // the final cleanup at the current version and awaits the background
+        // task, so nothing at 26.1.0 outlives the upgrade.
+        write.expire().await;
+        reader.expire().await;
+
         // Merely opening and operating on the shard at a new version doesn't bump version...
         cache.cfg.build_version = Version::new(27, 1, 0);
         let client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
-        let (_, mut reader) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+        let (write, mut reader) = client.expect_open::<String, (), u64, i64>(shard_id).await;
         reader.downgrade_since(&Antichain::from_elem(2)).await;
         assert_eq!(
             fetch_catalog_upgrade_shard_version(&client, shard_id).await,
@@ -2637,5 +2648,8 @@ pub mod tests {
             fetch_catalog_upgrade_shard_version(&client, shard_id).await,
             Some(Version::new(27, 1, 0)),
         );
+
+        write.expire().await;
+        reader.expire().await;
     }
 }

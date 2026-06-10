@@ -13,6 +13,7 @@ import "intersection-observer";
 
 import { ResizeObserver } from "@juggle/resize-observer";
 import * as Sentry from "@sentry/react";
+import { configure } from "@testing-library/dom";
 import debug from "debug";
 import { MotionGlobalConfig } from "framer-motion";
 import React from "react";
@@ -28,6 +29,15 @@ import {
 const debugHandlers = debug("console:msw");
 // for some reason logs seem to get swallowed by vitest without this
 debugHandlers.log = console.log.bind(console);
+
+// Raise the timeout for testing-library's async utilities (findBy*, waitFor).
+// The default is 1s, which is too tight for our integration tests: a single
+// findBy waits for a real component render plus an MSW-mocked fetch and a
+// react-query state update, and that round-trip can momentarily exceed 1s on a
+// loaded CI runner, flaking the slowest tests together. Keep this below the
+// vitest testTimeout so a missing element surfaces its descriptive error
+// rather than a generic test-timeout.
+configure({ asyncUtilTimeout: 10_000 });
 
 // Mocks
 
@@ -108,6 +118,11 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  // Restore real timers so a test that enables fake timers can't leak them
+  // into the next test in the same file. A test that times out before its own
+  // vi.useRealTimers() (e.g. the fake-timer tests in QueryHistoryList) would
+  // otherwise leave setTimeout faked, hanging every subsequent findBy/waitFor.
+  vi.useRealTimers();
   // Reset any request handlers that we may add during the tests,
   // so they don't affect other tests.
   server.resetHandlers();

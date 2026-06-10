@@ -10,10 +10,14 @@
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password};Database=test
 
+# A full BACKUP DATABASE is an online operation, so there is no need to put the
+# database into SINGLE_USER mode. Doing so used to race with Materialize's CDC
+# source reconnecting and claiming the single-user slot, which intermittently
+# failed with "Database 'test' is already open and can only have one user at a
+# time." (error 924). Backing up while the database stays in MULTI_USER mode
+# avoids that race entirely.
 $ sql-server-execute name=sql-server split-lines=false
 IF EXISTS (SELECT name FROM sys.databases WHERE name = N'test')
 BEGIN
-    ALTER DATABASE test SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
     BACKUP DATABASE test TO DISK = N'${arg.backup-directory}/test.bak';
-    ALTER DATABASE test SET MULTI_USER;
 END;
