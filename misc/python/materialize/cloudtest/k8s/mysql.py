@@ -59,7 +59,7 @@ class MySqlDeployment(K8sDeployment):
         ports = [V1ContainerPort(container_port=3306, name="sql")]
         container = V1Container(
             name="mysql",
-            image=self.image("mysql", tag="8.0.35", release_mode=True, org=None),
+            image=self.image("mysql", tag="9.7.0", release_mode=True, org=None),
             args=[
                 "--log-bin=mysql-bin",
                 "--gtid_mode=ON",
@@ -67,6 +67,7 @@ class MySqlDeployment(K8sDeployment):
                 "--binlog-format=row",
                 "--log-slave-updates",
                 "--binlog-row-image=full",
+                "--binlog-row-metadata=full",
                 "--server-id=1",
             ],
             env=env,

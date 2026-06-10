@@ -16,6 +16,7 @@
 //! ID generation utilities.
 
 use hibitset::BitSet;
+use serde::{Serialize, Serializer};
 use std::borrow::Borrow;
 use std::fmt;
 use std::hash::Hash;
@@ -94,21 +95,12 @@ pub type AtomicIdGen = AtomicGen<u64>;
 
 /// IdAllocator common traits.
 pub trait IdGenerator:
-    From<u8> + AddAssign + Sub + PartialOrd + Copy + Eq + Hash + Ord + serde::Serialize + fmt::Display
+    From<u8> + AddAssign + Sub + PartialOrd + Copy + Eq + Hash + Ord + Serialize + fmt::Display
 {
 }
 
 impl<T> IdGenerator for T where
-    T: From<u8>
-        + AddAssign
-        + Sub
-        + PartialOrd
-        + Copy
-        + Eq
-        + Hash
-        + Ord
-        + serde::Serialize
-        + fmt::Display
+    T: From<u8> + AddAssign + Sub + PartialOrd + Copy + Eq + Hash + Ord + Serialize + fmt::Display
 {
 }
 
@@ -146,7 +138,7 @@ impl IdAllocatorInner for IdAllocatorInnerBitSet {
         let total = usize::cast_from(max - min);
         assert!(total < BitSet::BITS_PER_USIZE.pow(4));
         IdAllocatorInnerBitSet {
-            next: StdRng::from_entropy(),
+            next: StdRng::from_os_rng(),
             min,
             max,
             mask,
@@ -156,7 +148,7 @@ impl IdAllocatorInner for IdAllocatorInnerBitSet {
 
     fn alloc(&mut self) -> Option<u32> {
         let range = self.min..=self.max;
-        let init = self.next.gen_range(range);
+        let init = self.next.random_range(range);
         let mut next = init;
         loop {
             // Because hibitset has a hard maximum of 64**4 (~16 million), subtract the min in case
@@ -302,28 +294,37 @@ impl<T: IdGenerator, A: IdAllocatorInner> fmt::Display for IdHandle<T, A> {
     }
 }
 
-impl<T: IdGenerator, A: IdAllocatorInner> serde::Serialize for IdHandle<T, A> {
+impl<T: IdGenerator, A: IdAllocatorInner> Serialize for IdHandle<T, A> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
+        S: Serializer,
     {
         self.unhandled().serialize(serializer)
     }
 }
 
 mod internal {
+    use std::fmt::Debug;
     use std::sync::Arc;
 
     use crate::cast::CastFrom;
     use crate::id_gen::{IdAllocator, IdAllocatorInner};
 
-    #[derive(Debug)]
     pub struct IdHandleInner<T, A: IdAllocatorInner> {
         /// A handle to the [`IdAllocator`] used to allocated the provided id.
         pub(super) allocator: IdAllocator<A>,
         /// The actual ID that was allocated.
         pub(super) id: T,
         stored: u32,
+    }
+
+    impl<T: Debug, A: IdAllocatorInner> Debug for IdHandleInner<T, A> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("IdHandleInner")
+                .field("id", &self.id)
+                .field("stored", &self.stored)
+                .finish_non_exhaustive()
+        }
     }
 
     impl<T, A: IdAllocatorInner> IdHandleInner<T, A>

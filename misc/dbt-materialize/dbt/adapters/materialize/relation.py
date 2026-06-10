@@ -34,6 +34,7 @@ class MaterializeRelationType(StrEnum):
 
     # Materialize-specific materialization types.
     Source = "source"
+    SourceTable = "source_table"
     Sink = "sink"
     # NOTE(morsapaes): dbt supports materialized views as a built-in
     # materialization since v1.6.0, so we deprecate the legacy materialization
@@ -48,7 +49,7 @@ class MaterializeRelation(PostgresRelation):
 
     # Materialize does not have a 63-character limit for relation names, unlike
     # PostgreSQL (see dbt-core #2727). Instead, we set 255 as the maximum
-    # identifier length (see #20931).
+    # identifier length (see database-issues#6303).
     def relation_max_name_length(self):
         return 255
 
@@ -62,3 +63,15 @@ class MaterializeRelation(PostgresRelation):
             MaterializeRelationType.MaterializedView,
             MaterializeRelationType.MaterializedViewLegacy,
         ]
+
+    @property
+    def is_source(self) -> bool:
+        return self.type == MaterializeRelationType.Source
+
+    @property
+    def is_source_table(self) -> bool:
+        return self.type == MaterializeRelationType.SourceTable
+
+    @property
+    def is_sink(self) -> bool:
+        return self.type == MaterializeRelationType.Sink

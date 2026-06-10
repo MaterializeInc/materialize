@@ -15,9 +15,17 @@ $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-connect name=mz_support url=postgres://mz_support:materialize@${testdrive.materialize-internal-sql-addr}
 
+> BEGIN
 > CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+  FROM LOAD GENERATOR AUCTION (UP TO 100);
+
+> CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
+> COMMIT
 
 > CREATE VIEW v AS SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 
@@ -27,19 +35,19 @@ SHOW SOURCES;
 
 # The mz_support user can execute `SHOW CREATE ...` commands.
 $ postgres-execute connection=mz_support
-SHOW CREATE SOURCE bids;
+SHOW CREATE TABLE bids;
 
 # The mz_support user can execute `EXPLAIN PLAN ... FOR SELECT` commands.
 $ postgres-execute connection=mz_support
-EXPLAIN OPTIMIZED PLAN FOR SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 
 # The mz_support user can execute `EXPLAIN PLAN ... FOR CREATE MATERIALIZED VIEW` commands.
 $ postgres-execute connection=mz_support
-EXPLAIN OPTIMIZED PLAN FOR CREATE MATERIALIZED VIEW mv AS SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR CREATE MATERIALIZED VIEW mv AS SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 
 # The mz_support user can execute `EXPLAIN PLAN ... FOR CREATE INDEX` commands.
 $ postgres-execute connection=mz_support
-EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON v(auction_id);
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR CREATE INDEX ON v(auction_id);
 
 # The mz_support user can execute `EXPLAIN TIMESTAMP ...` commands.
 $ postgres-execute connection=mz_support

@@ -44,9 +44,6 @@ class OutputPrinter(BaseOutputPrinter):
         self._print_executable(sql)
         self.print_empty_line()
 
-    def print_non_executable_sql(self, sql: str) -> None:
-        self._print_text(sql)
-
     def print_info(self, text: str) -> None:
         self._print_text(text)
 
@@ -58,6 +55,8 @@ class OutputPrinter(BaseOutputPrinter):
         self._print_text(summary.get())
         self.start_section("Operation and function statistics", collapsed=True)
         self._print_text(summary.get_function_and_operation_stats())
+        self.start_section("Used ignore entries", collapsed=True)
+        self._print_text(summary.format_used_ignore_entries())
 
     def print_status(self, status_message: str) -> None:
         self._print_text(status_message)

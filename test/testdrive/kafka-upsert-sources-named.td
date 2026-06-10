@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 $ set-arg-default single-replica-cluster=quickstart
 
 # This testdrive file uses the deprecated syntax, but is otherwise identical to upsert-kafka-new.td
@@ -39,16 +41,20 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE avroavro
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-avroavro-${testdrive.seed}')
+
+> CREATE TABLE avroavro_tbl FROM SOURCE avroavro (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE UPSERT
+> COMMIT
 
-> SELECT (named).key, (named).key2, f1, f2 from avroavro
+> SELECT (named).key, (named).key2, f1, f2 from avroavro_tbl
 key     key2  f1       f2
 ---------------------------
 fish    key2  fishval  1000
@@ -66,16 +72,20 @@ $ kafka-create-topic topic=single
 $ kafka-ingest format=avro topic=single key-format=avro key-schema=${keyschemasingle} schema=${schema}
 {"key": "fish" } {"f1": "fishval", "f2": 1000}
 
+> BEGIN
 > CREATE SOURCE single
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-single-${testdrive.seed}')
+
+> CREATE TABLE single_tbl FROM SOURCE single (REFERENCE "testdrive-single-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${keyschemasingle}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE UPSERT
+> COMMIT
 
-> SELECT named, f1, f2 from single
+> SELECT named, f1, f2 from single_tbl
 named   f1       f2
 ---------------------------
 fish    fishval  1000

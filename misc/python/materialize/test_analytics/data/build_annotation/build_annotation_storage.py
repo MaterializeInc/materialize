@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
-from materialize.test_analytics.util import mz_sql_util
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 @dataclass
@@ -41,8 +41,7 @@ class BuildAnnotationStorage(BaseDataStorage):
 
         sql_statements = []
 
-        sql_statements.append(
-            f"""
+        sql_statements.append(f"""
             INSERT INTO build_annotation
             (
                 build_id,
@@ -53,19 +52,17 @@ class BuildAnnotationStorage(BaseDataStorage):
                 insert_date
             )
             SELECT
-                '{build_id}',
-                '{job_id}',
-                {mz_sql_util.as_sanitized_literal(annotation.test_suite)},
+                {as_sanitized_literal(build_id)},
+                {as_sanitized_literal(job_id)},
+                {as_sanitized_literal(annotation.test_suite)},
                 {annotation.test_retry_count},
                 {annotation.is_failure},
                 now()
             ;
-                """
-        )
+                """)
 
         for error in annotation.errors:
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                 INSERT INTO build_annotation_error
                 (
                     build_job_id,
@@ -75,13 +72,12 @@ class BuildAnnotationStorage(BaseDataStorage):
                     occurrence_count
                 )
                 SELECT
-                    '{job_id}',
-                    '{error.error_type}',
-                    {mz_sql_util.as_sanitized_literal(error.message)},
-                    {mz_sql_util.as_sanitized_literal(error.issue)},
+                    {as_sanitized_literal(job_id)},
+                    {as_sanitized_literal(error.error_type)},
+                    {as_sanitized_literal(error.message)},
+                    {as_sanitized_literal(error.issue)},
                     {error.occurrence_count}
             ;
-            """
-            )
+            """)
 
         self.database_connector.add_update_statements(sql_statements)

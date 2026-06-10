@@ -12,8 +12,8 @@ syntax = "proto3";
 package mz_repr.adt.interval;
 
 message ProtoInterval {
-    // A possibly negative number of months.
-    int32 months = 1;
-    int32 days = 2;
-    int64 micros = 3;
+  // A possibly negative number of months.
+  int32 months = 1;
+  int32 days = 2;
+  int64 micros = 3;
 }

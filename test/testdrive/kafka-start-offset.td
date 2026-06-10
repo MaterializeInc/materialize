@@ -7,10 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default single-replica-cluster=quickstart
+$ set-sql-timeout duration=60s
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+$ set-arg-default single-replica-cluster=quickstart
 
 $ kafka-create-topic topic=t0 partitions=1
 
@@ -23,6 +22,4 @@ $ kafka-create-topic topic=t0 partitions=1
       TOPIC 'testdrive-t0-${testdrive.seed}',
       START OFFSET (100, 100)
     )
-  FORMAT TEXT
-  INCLUDE OFFSET
 exact:START OFFSET specified more partitions (2) than topic (testdrive-t0-${testdrive.seed}) contains (1)

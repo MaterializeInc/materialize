@@ -301,4 +301,4 @@ a per-region metadata database can be satisified in other ways:
      selling this product to our customers?)
 
 [`Stash`]: https://dev.materialize.com/api/rust/mz_stash/index.html
-[sqlite-problems]: https://github.com/MaterializeInc/materialize/issues/11577#issuecomment-1087873791
+[sqlite-problems]: https://github.com/MaterializeInc/database-issues/issues/3378#issuecomment-1087873791

@@ -11,46 +11,52 @@
 
 use std::borrow::Cow;
 use std::fmt::Debug;
+use std::time::Duration;
 
 use mz_dyncfg::ConfigSet;
-use mz_persist_types::ShardId;
+use mz_expr::MirScalarExpr;
 use mz_pgcopy::CopyFormatParams;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::bytes::ByteSize;
-use mz_repr::{GlobalId, RelationDesc};
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
+use timely::progress::frontier::Antichain;
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::connections::{ConnectionContext, KafkaConnection, KafkaTopicOptions};
-use crate::controller::{AlterError, CollectionMetadata};
-use crate::AlterCompatible;
+use crate::controller::AlterError;
+use crate::wire_format::WireFormat;
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sinks.rs"));
+pub mod s3_oneshot_sink;
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> {
+pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
-    pub partition_strategy: SinkPartitionStrategy,
     pub with_snapshot: bool,
     pub version: u64,
     pub envelope: SinkEnvelope,
     pub as_of: Antichain<T>,
-    pub status_id: Option<<S as StorageSinkDescFillState>::StatusId>,
-    pub from_storage_metadata: <S as StorageSinkDescFillState>::StorageMetadata,
+    pub from_storage_metadata: S,
+    pub to_storage_metadata: S,
+    /// The interval at which to commit data to the sink.
+    /// This isn't universally supported by all sinks
+    /// yet, so it is optional. Even for sinks that might
+    /// support it in the future (ahem, kafka) users might
+    /// not want to set it.
+    pub commit_interval: Option<Duration>,
 }
 
-impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + PartialOrder>
-    AlterCompatible for StorageSinkDesc<S, T>
+impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
+    for StorageSinkDesc<S, T>
 {
     /// Determines if `self` is compatible with another `StorageSinkDesc`, in
     /// such a way that it is possible to turn `self` into `other` through a
@@ -73,12 +79,12 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             connection,
             envelope,
             version: _,
-            // The as of of the descriptions may differ.
+            // The as-of of the descriptions may differ.
             as_of: _,
-            status_id,
             from_storage_metadata,
-            partition_strategy,
             with_snapshot,
+            to_storage_metadata,
+            commit_interval: _,
         } = self;
 
         let compatibility_checks = [
@@ -89,15 +95,16 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
                 "connection",
             ),
             (envelope == &other.envelope, "envelope"),
-            (status_id == &other.status_id, "status_id"),
-            (with_snapshot == &other.with_snapshot, "with_snapshot"),
-            (
-                partition_strategy == &other.partition_strategy,
-                "partition_strategy",
-            ),
+            // This can legally change from true to false once the snapshot has been
+            // written out.
+            (*with_snapshot || !other.with_snapshot, "with_snapshot"),
             (
                 from_storage_metadata == &other.from_storage_metadata,
                 "from_storage_metadata",
+            ),
+            (
+                to_storage_metadata == &other.to_storage_metadata,
+                "to_storage_metadata",
             ),
         ];
 
@@ -117,182 +124,19 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
     }
 }
 
-pub trait StorageSinkDescFillState {
-    type StatusId: Debug + Clone + Serialize + for<'a> Deserialize<'a> + Eq + PartialEq;
-    type StorageMetadata: Debug + Clone + Serialize + for<'a> Deserialize<'a> + Eq + PartialEq;
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct MetadataUnfilled;
-impl StorageSinkDescFillState for MetadataUnfilled {
-    type StatusId = GlobalId;
-    type StorageMetadata = ();
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct MetadataFilled;
-impl StorageSinkDescFillState for MetadataFilled {
-    type StatusId = ShardId;
-    type StorageMetadata = CollectionMetadata;
-}
-
-impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<GlobalId>(),
-            any::<RelationDesc>(),
-            any::<StorageSinkConnection>(),
-            any::<SinkEnvelope>(),
-            any::<Option<mz_repr::Timestamp>>(),
-            any::<Option<ShardId>>(),
-            any::<CollectionMetadata>(),
-            any::<SinkPartitionStrategy>(),
-            any::<bool>(),
-            any::<u64>(),
-        )
-            .prop_map(
-                |(
-                    from,
-                    from_desc,
-                    connection,
-                    envelope,
-                    as_of,
-                    status_id,
-                    from_storage_metadata,
-                    partition_strategy,
-                    with_snapshot,
-                    version,
-                )| {
-                    StorageSinkDesc {
-                        from,
-                        from_desc,
-                        connection,
-                        envelope,
-                        version,
-                        as_of: Antichain::from_iter(as_of),
-                        status_id,
-                        from_storage_metadata,
-                        partition_strategy,
-                        with_snapshot,
-                    }
-                },
-            )
-            .boxed()
-    }
-}
-
-impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoStorageSinkDesc {
-        ProtoStorageSinkDesc {
-            connection: Some(self.connection.into_proto()),
-            from: Some(self.from.into_proto()),
-            from_desc: Some(self.from_desc.into_proto()),
-            envelope: Some(self.envelope.into_proto()),
-            as_of: Some(self.as_of.into_proto()),
-            status_id: self.status_id.into_proto(),
-            from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
-            partition_strategy: Some(self.partition_strategy.into_proto()),
-            with_snapshot: self.with_snapshot,
-            version: self.version,
-        }
-    }
-
-    fn from_proto(proto: ProtoStorageSinkDesc) -> Result<Self, TryFromProtoError> {
-        Ok(StorageSinkDesc {
-            from: proto.from.into_rust_if_some("ProtoStorageSinkDesc::from")?,
-            from_desc: proto
-                .from_desc
-                .into_rust_if_some("ProtoStorageSinkDesc::from_desc")?,
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoStorageSinkDesc::connection")?,
-            envelope: proto
-                .envelope
-                .into_rust_if_some("ProtoStorageSinkDesc::envelope")?,
-            as_of: proto
-                .as_of
-                .into_rust_if_some("ProtoStorageSinkDesc::as_of")?,
-            status_id: proto.status_id.into_rust()?,
-            from_storage_metadata: proto
-                .from_storage_metadata
-                .into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,
-            partition_strategy: proto
-                .partition_strategy
-                .into_rust_if_some("ProtoStorageSinkDesc::partition_strategy")?,
-            with_snapshot: proto.with_snapshot,
-            version: proto.version,
-        })
-    }
-}
-
-#[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkEnvelope {
+    /// Only used for Kafka.
     Debezium,
     Upsert,
+    /// Only used for Iceberg.
+    Append,
 }
 
-impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
-    fn into_proto(&self) -> ProtoSinkEnvelope {
-        use proto_sink_envelope::Kind;
-        ProtoSinkEnvelope {
-            kind: Some(match self {
-                SinkEnvelope::Debezium => Kind::Debezium(()),
-                SinkEnvelope::Upsert => Kind::Upsert(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoSinkEnvelope) -> Result<Self, TryFromProtoError> {
-        use proto_sink_envelope::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkEnvelope::kind"))?;
-        Ok(match kind {
-            Kind::Debezium(()) => SinkEnvelope::Debezium,
-            Kind::Upsert(()) => SinkEnvelope::Upsert,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum SinkPartitionStrategy {
-    /// A partition strategy based on the raw encoded bytes of each row.
-    V0,
-    /// A partition strategy that maintains the property row1 = row2 => partition(row1) =
-    /// partition(row2) even when the encoding of each row changes (e.g due to a new avro schema id
-    /// being recorded in the data).
-    V1,
-}
-
-impl RustType<ProtoSinkPartitionStrategy> for SinkPartitionStrategy {
-    fn into_proto(&self) -> ProtoSinkPartitionStrategy {
-        use proto_sink_partition_strategy::Kind;
-        ProtoSinkPartitionStrategy {
-            kind: Some(match self {
-                SinkPartitionStrategy::V0 => Kind::V0(()),
-                SinkPartitionStrategy::V1 => Kind::V1(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoSinkPartitionStrategy) -> Result<Self, TryFromProtoError> {
-        use proto_sink_partition_strategy::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkPartitionStrategy::kind"))?;
-        Ok(match kind {
-            Kind::V0(()) => SinkPartitionStrategy::V0,
-            Kind::V1(()) => SinkPartitionStrategy::V1,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum StorageSinkConnection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaSinkConnection<C>),
+    Iceberg(IcebergSinkConnection<C>),
 }
 
 impl<C: ConnectionAccess> StorageSinkConnection<C> {
@@ -312,6 +156,17 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
             (StorageSinkConnection::Kafka(s), StorageSinkConnection::Kafka(o)) => {
                 s.alter_compatible(id, o)?
             }
+            (StorageSinkConnection::Iceberg(s), StorageSinkConnection::Iceberg(o)) => {
+                s.alter_compatible(id, o)?
+            }
+            _ => {
+                tracing::warn!(
+                    "StorageSinkConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+                return Err(AlterError { id });
+            }
         }
 
         Ok(())
@@ -324,39 +179,21 @@ impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnection, R>
     fn into_inline_connection(self, r: R) -> StorageSinkConnection {
         match self {
             Self::Kafka(conn) => StorageSinkConnection::Kafka(conn.into_inline_connection(r)),
+            Self::Iceberg(conn) => StorageSinkConnection::Iceberg(conn.into_inline_connection(r)),
         }
-    }
-}
-
-impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
-    fn into_proto(&self) -> ProtoStorageSinkConnection {
-        use proto_storage_sink_connection::Kind::*;
-
-        ProtoStorageSinkConnection {
-            kind: Some(match self {
-                Self::Kafka(conn) => KafkaV2(conn.into_proto()),
-            }),
-        }
-    }
-    fn from_proto(proto: ProtoStorageSinkConnection) -> Result<Self, TryFromProtoError> {
-        use proto_storage_sink_connection::Kind::*;
-
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStorageSinkConnection::kind"))?;
-
-        Ok(match kind {
-            KafkaV2(proto) => Self::Kafka(proto.into_rust()?),
-        })
     }
 }
 
 impl<C: ConnectionAccess> StorageSinkConnection<C> {
     /// returns an option to not constrain ourselves in the future
-    pub fn connection_id(&self) -> Option<GlobalId> {
+    pub fn connection_id(&self) -> Option<CatalogItemId> {
         use StorageSinkConnection::*;
         match self {
             Kafka(KafkaSinkConnection { connection_id, .. }) => Some(*connection_id),
+            Iceberg(IcebergSinkConnection {
+                catalog_connection_id: connection_id,
+                ..
+            }) => Some(*connection_id),
         }
     }
 
@@ -365,47 +202,12 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
         use StorageSinkConnection::*;
         match self {
             Kafka(_) => "kafka",
+            Iceberg(_) => "iceberg",
         }
     }
 }
 
-impl RustType<proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices>
-    for (RelationDesc, Vec<usize>)
-{
-    fn into_proto(&self) -> proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices {
-        proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices {
-            desc: Some(self.0.into_proto()),
-            indices: self.1.into_proto(),
-        }
-    }
-
-    fn from_proto(
-        proto: proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok((
-            proto
-                .desc
-                .into_rust_if_some("ProtoKeyDescAndIndices::desc")?,
-            proto.indices.into_rust()?,
-        ))
-    }
-}
-
-impl RustType<proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec> for Vec<usize> {
-    fn into_proto(&self) -> proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec {
-        proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec {
-            relation_key_indices: self.into_proto(),
-        }
-    }
-
-    fn from_proto(
-        proto: proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec,
-    ) -> Result<Self, TryFromProtoError> {
-        proto.relation_key_indices.into_rust()
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KafkaSinkCompressionType {
     None,
     Gzip,
@@ -428,9 +230,9 @@ impl KafkaSinkCompressionType {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub connection: C::Kafka,
     pub format: KafkaSinkFormat<C>,
     /// A natural key of the sinked relation (view or source).
@@ -440,12 +242,16 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     /// The index of the column containing message headers value, if any.
     pub headers_index: Option<usize>,
     pub value_desc: RelationDesc,
+    /// An expression that, if present, computes a hash value that should be
+    /// used to determine the partition for each message.
+    pub partition_by: Option<MirScalarExpr>,
     pub topic: String,
     /// Options to use when creating the topic if it doesn't already exist.
     pub topic_options: KafkaTopicOptions,
     pub compression_type: KafkaSinkCompressionType,
     pub progress_group_id: KafkaIdStyle,
     pub transactional_id: KafkaIdStyle,
+    pub topic_metadata_refresh_interval: Duration,
 }
 
 impl KafkaSinkConnection {
@@ -466,7 +272,7 @@ impl KafkaSinkConnection {
     }
 
     /// Returns the name of the progress topic to use for the sink.
-    pub fn progress_topic(&self, connection_context: &ConnectionContext) -> Cow<str> {
+    pub fn progress_topic(&self, connection_context: &ConnectionContext) -> Cow<'_, str> {
         self.connection
             .progress_topic(connection_context, self.connection_id)
     }
@@ -532,11 +338,13 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             key_desc_and_indices,
             headers_index,
             value_desc,
+            partition_by,
             topic,
             compression_type,
             progress_group_id,
             transactional_id,
             topic_options,
+            topic_metadata_refresh_interval,
         } = self;
 
         let compatibility_checks = [
@@ -556,6 +364,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             ),
             (headers_index == &other.headers_index, "headers_index"),
             (value_desc == &other.value_desc, "value_desc"),
+            (partition_by == &other.partition_by, "partition_by"),
             (topic == &other.topic, "topic"),
             (
                 compression_type == &other.compression_type,
@@ -570,6 +379,10 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
                 "transactional_id",
             ),
             (topic_options == &other.topic_options, "topic_config"),
+            (
+                topic_metadata_refresh_interval == &other.topic_metadata_refresh_interval,
+                "topic_metadata_refresh_interval",
+            ),
         ];
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -599,11 +412,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             headers_index,
             value_desc,
+            partition_by,
             topic,
             compression_type,
             progress_group_id,
             transactional_id,
             topic_options,
+            topic_metadata_refresh_interval,
         } = self;
         KafkaSinkConnection {
             connection_id,
@@ -613,16 +428,18 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             headers_index,
             value_desc,
+            partition_by,
             topic,
             compression_type,
             progress_group_id,
             transactional_id,
             topic_options,
+            topic_metadata_refresh_interval,
         }
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KafkaIdStyle {
     /// A new-style id that is optionally prefixed.
     Prefix(Option<String>),
@@ -630,116 +447,20 @@ pub enum KafkaIdStyle {
     Legacy,
 }
 
-impl RustType<ProtoKafkaIdStyle> for KafkaIdStyle {
-    fn into_proto(&self) -> ProtoKafkaIdStyle {
-        use crate::sinks::proto_kafka_id_style::Kind::*;
-        use crate::sinks::proto_kafka_id_style::ProtoKafkaIdStylePrefix;
-
-        ProtoKafkaIdStyle {
-            kind: Some(match self {
-                Self::Prefix(prefix) => Prefix(ProtoKafkaIdStylePrefix {
-                    prefix: prefix.into_proto(),
-                }),
-                Self::Legacy => Legacy(()),
-            }),
-        }
-    }
-    fn from_proto(proto: ProtoKafkaIdStyle) -> Result<Self, TryFromProtoError> {
-        use crate::sinks::proto_kafka_id_style::Kind::*;
-
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaIdStyle::kind"))?;
-
-        Ok(match kind {
-            Prefix(prefix) => Self::Prefix(prefix.prefix.into_rust()?),
-            Legacy(()) => Self::Legacy,
-        })
-    }
-}
-
-impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
-    fn into_proto(&self) -> ProtoKafkaSinkConnectionV2 {
-        use crate::sinks::proto_kafka_sink_connection_v2::CompressionType;
-        ProtoKafkaSinkConnectionV2 {
-            connection_id: Some(self.connection_id.into_proto()),
-            connection: Some(self.connection.into_proto()),
-            format: Some(self.format.into_proto()),
-            key_desc_and_indices: self.key_desc_and_indices.into_proto(),
-            relation_key_indices: self.relation_key_indices.into_proto(),
-            headers_index: self.headers_index.into_proto(),
-            value_desc: Some(self.value_desc.into_proto()),
-            topic: self.topic.clone(),
-            compression_type: Some(match self.compression_type {
-                KafkaSinkCompressionType::None => CompressionType::None(()),
-                KafkaSinkCompressionType::Gzip => CompressionType::Gzip(()),
-                KafkaSinkCompressionType::Snappy => CompressionType::Snappy(()),
-                KafkaSinkCompressionType::Lz4 => CompressionType::Lz4(()),
-                KafkaSinkCompressionType::Zstd => CompressionType::Zstd(()),
-            }),
-            progress_group_id: Some(self.progress_group_id.into_proto()),
-            transactional_id: Some(self.transactional_id.into_proto()),
-            topic_options: Some(self.topic_options.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSinkConnectionV2) -> Result<Self, TryFromProtoError> {
-        use crate::sinks::proto_kafka_sink_connection_v2::CompressionType;
-        Ok(KafkaSinkConnection {
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoKafkaSinkConnectionV2::connection_id")?,
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoKafkaSinkConnectionV2::connection")?,
-            format: proto
-                .format
-                .into_rust_if_some("ProtoKafkaSinkConnectionV2::format")?,
-            key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
-            relation_key_indices: proto.relation_key_indices.into_rust()?,
-            headers_index: proto.headers_index.into_rust()?,
-            value_desc: proto
-                .value_desc
-                .into_rust_if_some("ProtoKafkaSinkConnectionV2::value_desc")?,
-            topic: proto.topic,
-            compression_type: match proto.compression_type {
-                Some(CompressionType::None(())) => KafkaSinkCompressionType::None,
-                Some(CompressionType::Gzip(())) => KafkaSinkCompressionType::Gzip,
-                Some(CompressionType::Snappy(())) => KafkaSinkCompressionType::Snappy,
-                Some(CompressionType::Lz4(())) => KafkaSinkCompressionType::Lz4,
-                Some(CompressionType::Zstd(())) => KafkaSinkCompressionType::Zstd,
-                None => {
-                    return Err(TryFromProtoError::missing_field(
-                        "ProtoKafkaSinkConnectionV2::compression_type",
-                    ))
-                }
-            },
-            progress_group_id: proto
-                .progress_group_id
-                .into_rust_if_some("ProtoKafkaSinkConnectionV2::progress_group_id")?,
-            transactional_id: proto
-                .transactional_id
-                .into_rust_if_some("ProtoKafkaSinkConnectionV2::transactional_id")?,
-            topic_options: match proto.topic_options {
-                Some(topic_options) => topic_options.into_rust()?,
-                None => Default::default(),
-            },
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
     pub key_format: Option<KafkaSinkFormatType<C>>,
     pub value_format: KafkaSinkFormatType<C>,
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KafkaSinkFormatType<C: ConnectionAccess = InlinedConnection> {
     Avro {
         schema: String,
         compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
-        csr_connection: C::Csr,
+        /// Wire-format dispatch and the registry to publish to. Sinks
+        /// require a registry
+        wire_format: WireFormat<C>,
     },
     Json,
     Text,
@@ -789,18 +510,16 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
-                    csr_connection,
+                    wire_format,
                 },
                 KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
-                    csr_connection: other_csr_connection,
+                    wire_format: other_wire_format,
                 },
             ) => {
                 if schema != other_schema
-                    || csr_connection
-                        .alter_compatible(id, other_csr_connection)
-                        .is_err()
+                    || wire_format.alter_compatible(id, other_wire_format).is_err()
                 {
                     tracing::warn!(
                         "KafkaSinkFormat::Avro incompatible at value_format:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -828,18 +547,16 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 Some(KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
-                    csr_connection,
+                    wire_format,
                 }),
                 Some(KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
-                    csr_connection: other_csr_connection,
+                    wire_format: other_wire_format,
                 }),
             ) => {
                 if schema != other_schema
-                    || csr_connection
-                        .alter_compatible(id, other_csr_connection)
-                        .is_err()
+                    || wire_format.alter_compatible(id, other_wire_format).is_err()
                 {
                     tracing::warn!(
                         "KafkaSinkFormat::Avro incompatible at key_format:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -885,11 +602,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormatType, R>
             KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level,
-                csr_connection,
+                wire_format,
             } => KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level,
-                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
+                wire_format: wire_format.into_inline_connection(r),
             },
             KafkaSinkFormatType::Json => KafkaSinkFormatType::Json,
             KafkaSinkFormatType::Text => KafkaSinkFormatType::Text,
@@ -898,103 +615,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormatType, R>
     }
 }
 
-impl RustType<ProtoKafkaSinkFormatType> for KafkaSinkFormatType {
-    fn into_proto(&self) -> ProtoKafkaSinkFormatType {
-        use proto_kafka_sink_format_type::Type;
-        ProtoKafkaSinkFormatType {
-            r#type: Some(match self {
-                Self::Avro {
-                    schema,
-                    compatibility_level,
-                    csr_connection,
-                } => Type::Avro(proto_kafka_sink_format_type::ProtoKafkaSinkAvroFormat {
-                    schema: schema.clone(),
-                    compatibility_level: csr_compat_level_to_proto(compatibility_level),
-                    csr_connection: Some(csr_connection.into_proto()),
-                }),
-                Self::Json => Type::Json(()),
-                Self::Text => Type::Text(()),
-                Self::Bytes => Type::Bytes(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSinkFormatType) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_sink_format_type::Type;
-        let r#type = proto
-            .r#type
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaSinkFormatType::type"))?;
-
-        Ok(match r#type {
-            Type::Avro(proto) => Self::Avro {
-                schema: proto.schema,
-                compatibility_level: csr_compat_level_from_proto(proto.compatibility_level),
-                csr_connection: proto
-                    .csr_connection
-                    .into_rust_if_some("ProtoKafkaSinkFormatType::csr_connection")?,
-            },
-            Type::Json(()) => Self::Json,
-            Type::Text(()) => Self::Text,
-            Type::Bytes(()) => Self::Bytes,
-        })
-    }
-}
-
-impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
-    fn into_proto(&self) -> ProtoKafkaSinkFormat {
-        ProtoKafkaSinkFormat {
-            key_format: self.key_format.as_ref().map(|f| f.into_proto()),
-            value_format: Some(self.value_format.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSinkFormat) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaSinkFormat {
-            key_format: proto.key_format.into_rust()?,
-            value_format: proto
-                .value_format
-                .into_rust_if_some("ProtoKafkaSinkFormat::value_format")?,
-        })
-    }
-}
-
-fn csr_compat_level_to_proto(compatibility_level: &Option<mz_ccsr::CompatibilityLevel>) -> i32 {
-    use proto_kafka_sink_format_type::proto_kafka_sink_avro_format::CompatibilityLevel as ProtoCompatLevel;
-    match compatibility_level {
-        Some(level) => match level {
-            mz_ccsr::CompatibilityLevel::Backward => ProtoCompatLevel::Backward,
-            mz_ccsr::CompatibilityLevel::BackwardTransitive => ProtoCompatLevel::BackwardTransitive,
-            mz_ccsr::CompatibilityLevel::Forward => ProtoCompatLevel::Forward,
-            mz_ccsr::CompatibilityLevel::ForwardTransitive => ProtoCompatLevel::ForwardTransitive,
-            mz_ccsr::CompatibilityLevel::Full => ProtoCompatLevel::Full,
-            mz_ccsr::CompatibilityLevel::FullTransitive => ProtoCompatLevel::FullTransitive,
-            mz_ccsr::CompatibilityLevel::None => ProtoCompatLevel::None,
-        },
-        None => ProtoCompatLevel::Unset,
-    }
-    .into()
-}
-
-fn csr_compat_level_from_proto(val: i32) -> Option<mz_ccsr::CompatibilityLevel> {
-    use proto_kafka_sink_format_type::proto_kafka_sink_avro_format::CompatibilityLevel as ProtoCompatLevel;
-    match ProtoCompatLevel::try_from(val) {
-        Ok(ProtoCompatLevel::Backward) => Some(mz_ccsr::CompatibilityLevel::Backward),
-        Ok(ProtoCompatLevel::BackwardTransitive) => {
-            Some(mz_ccsr::CompatibilityLevel::BackwardTransitive)
-        }
-        Ok(ProtoCompatLevel::Forward) => Some(mz_ccsr::CompatibilityLevel::Forward),
-        Ok(ProtoCompatLevel::ForwardTransitive) => {
-            Some(mz_ccsr::CompatibilityLevel::ForwardTransitive)
-        }
-        Ok(ProtoCompatLevel::Full) => Some(mz_ccsr::CompatibilityLevel::Full),
-        Ok(ProtoCompatLevel::FullTransitive) => Some(mz_ccsr::CompatibilityLevel::FullTransitive),
-        Ok(ProtoCompatLevel::None) => Some(mz_ccsr::CompatibilityLevel::None),
-        Ok(ProtoCompatLevel::Unset) => None,
-        Err(_) => None,
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum S3SinkFormat {
     /// Encoded using the PG `COPY` protocol, with one of its supported formats.
     PgCopy(CopyFormatParams<'static>),
@@ -1002,32 +623,8 @@ pub enum S3SinkFormat {
     Parquet,
 }
 
-impl RustType<ProtoS3SinkFormat> for S3SinkFormat {
-    fn into_proto(&self) -> ProtoS3SinkFormat {
-        use proto_s3_sink_format::Kind;
-        ProtoS3SinkFormat {
-            kind: Some(match self {
-                Self::PgCopy(params) => Kind::PgCopy(params.into_proto()),
-                Self::Parquet => Kind::Parquet(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoS3SinkFormat) -> Result<Self, TryFromProtoError> {
-        use proto_s3_sink_format::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoS3SinkFormat::kind"))?;
-
-        Ok(match kind {
-            Kind::PgCopy(proto) => Self::PgCopy(proto.into_rust()?),
-            Kind::Parquet(_) => Self::Parquet,
-        })
-    }
-}
-
 /// Info required to copy the data to s3.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct S3UploadInfo {
     /// The s3 uri path to write the data to.
     pub uri: String,
@@ -1039,27 +636,180 @@ pub struct S3UploadInfo {
     pub format: S3SinkFormat,
 }
 
-impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
-    fn into_proto(&self) -> ProtoS3UploadInfo {
-        ProtoS3UploadInfo {
-            uri: self.uri.clone(),
-            max_file_size: self.max_file_size,
-            desc: Some(self.desc.into_proto()),
-            format: Some(self.format.into_proto()),
-        }
-    }
+pub const MIN_S3_SINK_FILE_SIZE: ByteSize = ByteSize::mb(16);
+pub const MAX_S3_SINK_FILE_SIZE: ByteSize = ByteSize::gb(4);
 
-    fn from_proto(proto: ProtoS3UploadInfo) -> Result<Self, TryFromProtoError> {
-        Ok(S3UploadInfo {
-            uri: proto.uri,
-            max_file_size: proto.max_file_size,
-            desc: proto.desc.into_rust_if_some("ProtoS3UploadInfo::desc")?,
-            format: proto
-                .format
-                .into_rust_if_some("ProtoS3UploadInfo::format")?,
-        })
+/// Column name appended by MODE APPEND Iceberg sinks to record the diff (+1/−1).
+pub const ICEBERG_APPEND_DIFF_COLUMN: &str = "_mz_diff";
+/// Column name appended by MODE APPEND Iceberg sinks to record the logical timestamp.
+pub const ICEBERG_APPEND_TIMESTAMP_COLUMN: &str = "_mz_timestamp";
+
+/// The precision needed to store all UInt64 values in a Decimal128.
+/// UInt64 max value is 18,446,744,073,709,551,615 which has 20 digits.
+pub const ICEBERG_UINT64_DECIMAL_PRECISION: u8 = 20;
+
+/// Type overrides for Iceberg-compatible Arrow schemas.
+///
+/// Iceberg doesn't support unsigned integer types or interval natively, so we
+/// map them to compatible types:
+/// - `UInt8`, `UInt16` -> `Int32`
+/// - `UInt32` -> `Int64`
+/// - `UInt64` -> `Decimal128(20, 0)`
+/// - `MzTimestamp` (which uses UInt64) -> `Decimal128(20, 0)`
+/// - `Interval` -> string (`LargeUtf8`)
+///
+/// Pass this to `mz_arrow_util::builder::desc_to_schema_with_overrides`
+/// when producing the Arrow schema for an iceberg sink, and to
+/// `mz_arrow_util::builder::ArrowBuilder::validate_desc_for_parquet` to
+/// validate the desc before sink creation.
+pub fn iceberg_type_overrides(
+    scalar_type: &mz_repr::SqlScalarType,
+) -> Option<(arrow::datatypes::DataType, String)> {
+    use arrow::datatypes::DataType;
+    use mz_repr::SqlScalarType;
+    match scalar_type {
+        SqlScalarType::UInt16 => Some((DataType::Int32, "uint2".to_string())),
+        SqlScalarType::UInt32 => Some((DataType::Int64, "uint4".to_string())),
+        SqlScalarType::UInt64 => Some((
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+            "uint8".to_string(),
+        )),
+        SqlScalarType::MzTimestamp => Some((
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+            "mz_timestamp".to_string(),
+        )),
+        SqlScalarType::Interval => Some((DataType::LargeUtf8, "interval".to_string())),
+        _ => None,
     }
 }
 
-pub const MIN_S3_SINK_FILE_SIZE: ByteSize = ByteSize::mb(16);
-pub const MAX_S3_SINK_FILE_SIZE: ByteSize = ByteSize::gb(4);
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {
+    pub catalog_connection_id: CatalogItemId,
+    pub catalog_connection: C::IcebergCatalog,
+
+    /// We allow users to specify a separate (from the catalog) connection
+    /// for the storage layer, but we currently ignore it.
+    /// S3 Tables uses the same AWS connection for catalog and storage.
+    /// BigLake/Lakehouse uses the same GCP connection for catalog and storage.
+    ///
+    /// TODO(kynan): Once we need separate storage creds, make this generic.
+    ///   And check that the [`IcebergSinkConnection::alter_compatible`]
+    ///   implementation still handles `storage_connection` acceptably.
+    pub storage_connection_id: Option<CatalogItemId>,
+    pub storage_connection: Option<C::Aws>,
+
+    /// A natural key of the sinked relation (view or source).
+    pub relation_key_indices: Option<Vec<usize>>,
+    /// The user-specified key for the sink.
+    pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    pub namespace: String,
+    pub table: String,
+}
+
+impl<C: ConnectionAccess> IcebergSinkConnection<C> {
+    /// Determines if `self` is compatible with another `StorageSinkConnection`,
+    /// in such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// CONNECTION`).
+    pub fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+        let IcebergSinkConnection {
+            catalog_connection_id: connection_id,
+            catalog_connection,
+            storage_connection_id,
+            storage_connection,
+            relation_key_indices,
+            key_desc_and_indices,
+            namespace,
+            table,
+        } = self;
+
+        let compatibility_checks = [
+            (
+                connection_id == &other.catalog_connection_id,
+                "connection_id",
+            ),
+            (
+                catalog_connection
+                    .alter_compatible(id, &other.catalog_connection)
+                    .is_ok(),
+                "catalog_connection",
+            ),
+            // We don't use `storage_connection_id` and `storage_connection`,
+            // so allow them to be removed.
+            (
+                other.storage_connection_id.is_none()
+                    || storage_connection_id == &other.storage_connection_id,
+                "storage_connection_id",
+            ),
+            (
+                match &other.storage_connection {
+                    None => true, // Removing a storage connection OR not adding a storage connection.
+                    Some(after) => {
+                        match storage_connection {
+                            None => false, // Adding a storage connection where there wasn't one before.
+                            Some(before) => before.alter_compatible(id, after).is_ok(),
+                        }
+                    }
+                },
+                "storage_connection",
+            ),
+            (
+                relation_key_indices == &other.relation_key_indices,
+                "relation_key_indices",
+            ),
+            (
+                key_desc_and_indices == &other.key_desc_and_indices,
+                "key_desc_and_indices",
+            ),
+            (namespace == &other.namespace, "namespace"),
+            (table == &other.table, "table"),
+        ];
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "IcebergSinkConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
+    for IcebergSinkConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> IcebergSinkConnection {
+        let IcebergSinkConnection {
+            catalog_connection_id,
+            catalog_connection,
+            storage_connection_id,
+            storage_connection,
+            relation_key_indices,
+            key_desc_and_indices,
+            namespace,
+            table,
+        } = self;
+        IcebergSinkConnection {
+            catalog_connection_id,
+            catalog_connection: r
+                .resolve_connection(catalog_connection)
+                .unwrap_iceberg_catalog(),
+            storage_connection_id,
+            storage_connection: storage_connection.map(|c| r.resolve_connection(c).unwrap_aws()),
+            relation_key_indices,
+            key_desc_and_indices,
+            namespace,
+            table,
+        }
+    }
+}

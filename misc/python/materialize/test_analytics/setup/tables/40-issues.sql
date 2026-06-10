@@ -14,4 +14,5 @@ CREATE TABLE issue (
     state TEXT NOT NULL
 );
 
+ALTER TABLE issue OWNER TO qa;
 GRANT SELECT, INSERT, UPDATE ON TABLE issue TO "hetzner-ci";

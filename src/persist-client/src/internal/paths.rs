@@ -41,7 +41,7 @@ impl FromStr for PartId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('p', "PartId", s).map(PartId)
+        parse_id("p", "PartId", s).map(PartId)
     }
 }
 
@@ -116,13 +116,24 @@ impl Display for WriterKey {
 /// Used to reduce the bytes needed to refer to a blob key in memory and in
 /// persistent state, all access to blobs are always within the context of an
 /// individual shard.
-#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct PartialBatchKey(pub(crate) String);
 
 fn split_batch_key(key: &str) -> Result<(WriterKey, PartId), String> {
     let (writer_key, part_id) = key
         .split_once('/')
-        .ok_or("partial batch key should contain a /".to_owned())?;
+        .ok_or_else(|| "partial batch key should contain a /".to_owned())?;
 
     let writer_key = WriterKey::from_str(writer_key)?;
     let part_id = PartId::from_str(part_id)?;
@@ -134,8 +145,8 @@ impl PartialBatchKey {
         PartialBatchKey(format!("{}/{}", version, part_id))
     }
 
-    pub fn split(&self) -> (WriterKey, PartId) {
-        split_batch_key(&self.0).expect("valid partial batch key")
+    pub fn split(&self) -> Option<(WriterKey, PartId)> {
+        split_batch_key(&self.0).ok()
     }
 
     pub fn complete(&self, shard_id: &ShardId) -> BlobKey {
@@ -169,7 +180,7 @@ impl FromStr for RollupId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('r', "RollupId", s).map(RollupId)
+        parse_id("r", "RollupId", s).map(RollupId)
     }
 }
 
@@ -186,7 +197,18 @@ impl RollupId {
 /// Used to reduce the bytes needed to refer to a blob key in memory and in
 /// persistent state, all access to blobs are always within the context of an
 /// individual shard.
-#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct PartialRollupKey(pub(crate) String);
 
 impl PartialRollupKey {
@@ -250,16 +272,19 @@ impl Deref for BlobKey {
 impl BlobKey {
     pub fn parse_ids(key: &str) -> Result<(ShardId, PartialBlobKey), String> {
         let err = || {
-            format!("invalid blob key format. expected either <shard_id>/<writer_id>/<part_id> or <shard_id>/<seqno>/<rollup_id>. got: {}", key)
+            format!(
+                "invalid blob key format. expected either <shard_id>/<writer_id>/<part_id> or <shard_id>/<seqno>/<rollup_id>. got: {}",
+                key
+            )
         };
-        let (shard, blob) = key.split_once('/').ok_or(err())?;
+        let (shard, blob) = key.split_once('/').ok_or_else(err)?;
         let shard_id = ShardId::from_str(shard)?;
 
         let blob_key = if blob.starts_with('w') | blob.starts_with('n') {
             let (writer, part) = split_batch_key(blob)?;
             PartialBlobKey::Batch(writer, part)
         } else {
-            let (seqno, rollup) = blob.split_once('/').ok_or(err())?;
+            let (seqno, rollup) = blob.split_once('/').ok_or_else(err)?;
             PartialBlobKey::Rollup(SeqNo::from_str(seqno)?, RollupId::from_str(rollup)?)
         };
         Ok((shard_id, blob_key))
@@ -341,7 +366,21 @@ mod tests {
             BlobKey::parse_ids(&format!("{}/{}/{}", shard_id, writer_id, part_id)),
             Ok((
                 shard_id,
-                PartialBlobKey::Batch(WriterKey::Id(writer_id), part_id)
+                PartialBlobKey::Batch(WriterKey::Id(writer_id), part_id.clone())
+            ))
+        );
+
+        let version = Version::new(1, 0, 0);
+        assert_eq!(
+            BlobKey::parse_ids(&format!(
+                "{}/{}/{}",
+                shard_id,
+                WriterKey::for_version(&version),
+                part_id
+            )),
+            Ok((
+                shard_id,
+                PartialBlobKey::Batch(WriterKey::for_version(&version), part_id)
             ))
         );
 

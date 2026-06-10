@@ -9,23 +9,23 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package mz_repr.strconv;
 
+import "google/protobuf/empty.proto";
+
 message ProtoParseError {
-    oneof kind {
-        google.protobuf.Empty out_of_range = 1;
-        google.protobuf.Empty invalid_input_syntax = 2;
-    }
-    string type_name = 1001;
-    string input = 1002;
-    optional string details = 1003;
+  oneof kind {
+    google.protobuf.Empty out_of_range = 1;
+    google.protobuf.Empty invalid_input_syntax = 2;
+  }
+  string type_name = 1001;
+  string input = 1002;
+  optional string details = 1003;
 }
 
 message ProtoParseHexError {
-    oneof kind {
-        uint32 invalid_hex_digit = 1;
-        google.protobuf.Empty odd_length = 2;
-    }
+  oneof kind {
+    uint32 invalid_hex_digit = 1;
+    google.protobuf.Empty odd_length = 2;
+  }
 }

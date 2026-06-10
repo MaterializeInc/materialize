@@ -10,7 +10,9 @@ from dataclasses import dataclass
 
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
+from materialize.feature_benchmark.report import ReportMeasurement
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 @dataclass
@@ -20,10 +22,10 @@ class FeatureBenchmarkResultEntry:
     scenario_version: str
     cycle: int
     scale: str
-    wallclock: float | None
-    messages: int | None
-    memory_mz: float | None
-    memory_clusterd: float | None
+    is_regression: bool
+    wallclock: ReportMeasurement[float]
+    memory_mz: ReportMeasurement[float]
+    memory_clusterd: ReportMeasurement[float]
 
 
 class FeatureBenchmarkResultStorage(BaseDataStorage):
@@ -38,9 +40,8 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
         sql_statements = []
 
         for result_entry in results:
-            # TODO: remove NULL castings when #27429 is resolved
-            sql_statements.append(
-                f"""
+            # TODO: remove NULL castings when database-issues#8100 is resolved
+            sql_statements.append(f"""
                 INSERT INTO feature_benchmark_result
                 (
                     build_job_id,
@@ -50,26 +51,35 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     scenario_version,
                     cycle,
                     scale,
+                    is_regression,
                     wallclock,
                     messages,
                     memory_mz,
-                    memory_clusterd
+                    memory_clusterd,
+                    wallclock_min,
+                    wallclock_max,
+                    wallclock_mean,
+                    wallclock_variance
                 )
                 SELECT
-                    '{job_id}',
-                    '{framework_version}',
-                    '{result_entry.scenario_name}',
-                    '{result_entry.scenario_group}',
-                    '{result_entry.scenario_version}',
+                    {as_sanitized_literal(job_id)},
+                    {as_sanitized_literal(framework_version)},
+                    {as_sanitized_literal(result_entry.scenario_name)},
+                    {as_sanitized_literal(result_entry.scenario_group)},
+                    {as_sanitized_literal(result_entry.scenario_version)},
                     {result_entry.cycle},
-                    '{result_entry.scale}',
-                    {result_entry.wallclock or 'NULL::DOUBLE'},
-                    {result_entry.messages or 'NULL::INT'},
-                    {result_entry.memory_mz or 'NULL::DOUBLE'},
-                    {result_entry.memory_clusterd or 'NULL::DOUBLE'}
+                    {as_sanitized_literal(result_entry.scale)},
+                    {result_entry.is_regression},
+                    {result_entry.wallclock.result or 'NULL::DOUBLE'},
+                    NULL::INT,  -- to be removed when we remove the "messages" column
+                    {result_entry.memory_mz.result or 'NULL::DOUBLE'},
+                    {result_entry.memory_clusterd.result or 'NULL::DOUBLE'},
+                    {result_entry.wallclock.min or 'NULL::DOUBLE'},
+                    {result_entry.wallclock.max or 'NULL::DOUBLE'},
+                    {result_entry.wallclock.mean or 'NULL::DOUBLE'},
+                    {result_entry.wallclock.variance or 'NULL::DOUBLE'}
                 ;
-                """
-            )
+                """)
 
         self.database_connector.add_update_statements(sql_statements)
 
@@ -82,32 +92,40 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
         sql_statements = []
 
         for discarded_entry in discarded_entries:
-            # TODO: remove NULL castings when #27429 is resolved
+            # TODO: remove NULL castings when database-issues#8100 is resolved
 
             # Do not store framework version, scenario version, and scale. If needed, they can be retrieved from the
             # result entries.
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                 INSERT INTO feature_benchmark_discarded_result
                 (
                     build_job_id,
                     scenario_name,
                     cycle,
+                    is_regression,
                     wallclock,
                     messages,
                     memory_mz,
-                    memory_clusterd
+                    memory_clusterd,
+                    wallclock_min,
+                    wallclock_max,
+                    wallclock_mean,
+                    wallclock_variance
                 )
                 SELECT
-                    '{job_id}',
-                    '{discarded_entry.scenario_name}',
+                    {as_sanitized_literal(job_id)},
+                    {as_sanitized_literal(discarded_entry.scenario_name)},
                     {discarded_entry.cycle},
-                    {discarded_entry.wallclock or 'NULL::DOUBLE'},
-                    {discarded_entry.messages or 'NULL::INT'},
-                    {discarded_entry.memory_mz or 'NULL::DOUBLE'},
-                    {discarded_entry.memory_clusterd or 'NULL::DOUBLE'}
+                    {discarded_entry.is_regression},
+                    {discarded_entry.wallclock.result or 'NULL::DOUBLE'},
+                    NULL::INT,  -- to be removed when we remove the "messages" column
+                    {discarded_entry.memory_mz.result or 'NULL::DOUBLE'},
+                    {discarded_entry.memory_clusterd.result or 'NULL::DOUBLE'},
+                    {discarded_entry.wallclock.min or 'NULL::DOUBLE'},
+                    {discarded_entry.wallclock.max or 'NULL::DOUBLE'},
+                    {discarded_entry.wallclock.mean or 'NULL::DOUBLE'},
+                    {discarded_entry.wallclock.variance or 'NULL::DOUBLE'}
                 ;
-                """
-            )
+                """)
 
         self.database_connector.add_update_statements(sql_statements)

@@ -9,7 +9,7 @@
 
 MZFROM ubuntu-base
 
-RUN apt-get update && apt-get install -qy wait-for-it
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -qy wait-for-it && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY metabase-smoketest /usr/local/bin
 

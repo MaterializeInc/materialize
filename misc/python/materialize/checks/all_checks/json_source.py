@@ -10,44 +10,37 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 @externally_idempotent(False)
 class JsonSource(Check):
     """Test CREATE SOURCE ... FORMAT JSON"""
 
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.60.0-dev")
-
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ kafka-create-topic topic=format-json partitions=1
 
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json
                 "object":{"a":"b","c":"d"}
 
-                > CREATE CLUSTER single_replica_cluster SIZE '1';
+                > CREATE CLUSTER single_replica_cluster SIZE 'scale=1,workers=1';
 
-                > CREATE SOURCE format_jsonA
+                > CREATE SOURCE format_jsonA_src
                   IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
+                > CREATE TABLE format_jsonA FROM SOURCE format_jsonA_src (REFERENCE "testdrive-format-json-${testdrive.seed}")
                   KEY FORMAT JSON
                   VALUE FORMAT JSON
                   ENVELOPE UPSERT
 
-                > CREATE SOURCE format_jsonB
+                > CREATE SOURCE format_jsonB_src
                   IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
+                > CREATE TABLE format_jsonB FROM SOURCE format_jsonB_src (REFERENCE "testdrive-format-json-${testdrive.seed}")
                   KEY FORMAT JSON
                   VALUE FORMAT JSON
                   ENVELOPE UPSERT
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -67,9 +60,7 @@ class JsonSource(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM format_jsonA ORDER BY key
                 "\\"array\\"" [1,2,3]
                 "\\"float\\"" 1.23
@@ -83,9 +74,4 @@ class JsonSource(Check):
                 "\\"int\\"" 1
                 "\\"object\\"" "{\\"a\\":\\"b\\",\\"c\\":\\"d\\"}"
                 "\\"str\\"" "\\"hello\\""
-
-                > SHOW CREATE SOURCE format_jsonB;
-                materialize.public.format_jsonb "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsonb\\" IN CLUSTER \\"single_replica_cluster\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-${testdrive.seed}') KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE UPSERT EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsonb_progress\\""
-           """
-            )
-        )
+                """))

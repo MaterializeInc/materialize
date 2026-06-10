@@ -26,7 +26,7 @@ banana
     BROKER 'kafka:9093',
     SECURITY PROTOCOL PLAINTEXT
   )
-contains:Disconnected during handshake; broker might require SSL encryption
+contains:Disconnected: connection closed by peer: receive 0 after POLLIN
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9093'
@@ -44,7 +44,7 @@ contains:Invalid CA certificate
     BROKER 'kafka:9093',
     SSL CERTIFICATE AUTHORITY = 'this is garbage'
   )
-contains:ssl.ca.pem failed: not in PEM format?
+contains:failed to read certificate #0 from ssl.ca.pem: not in PEM format?:
 
 # ==> Test without an SSH tunnel. <==
 
@@ -53,11 +53,15 @@ contains:ssl.ca.pem failed: not in PEM format?
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
-> CREATE SOURCE text_data (a) FROM KAFKA CONNECTION kafka (
+> CREATE SOURCE text_data FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data
+> CREATE TABLE text_data_tbl (a)
+  FROM SOURCE text_data (REFERENCE "testdrive-text-data-${testdrive.seed}")
+  FORMAT TEXT
+
+> SELECT * FROM text_data_tbl
 banana
 
 # ==> Test with an SSH tunnel. <==
@@ -67,11 +71,15 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE text_data_ssh FROM KAFKA CONNECTION kafka_ssh (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data_ssh
+> CREATE TABLE text_data_ssh_tbl FROM SOURCE text_data_ssh (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+> COMMIT
+
+> SELECT * FROM text_data_ssh_tbl
 banana
 
 # ALTER CONNECTION
@@ -194,6 +202,6 @@ papaya
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
 running
 
-> SELECT * FROM text_data
+> SELECT * FROM text_data_tbl
 banana
 papaya

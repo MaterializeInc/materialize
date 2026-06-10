@@ -16,9 +16,7 @@ from materialize.checks.checks import Check, externally_idempotent
 @externally_idempotent(False)
 class DebeziumPostgres(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE TABLE debezium_table (f1 TEXT, f2 INTEGER, f3 INTEGER, f4 TEXT, PRIMARY KEY (f1, f2));
                 ALTER TABLE debezium_table REPLICA IDENTITY FULL;
@@ -52,23 +50,22 @@ class DebeziumPostgres(Check):
 
                 $ kafka-wait-topic topic=postgres.public.debezium_table
 
-                # UPSERT is requred due to https://github.com/MaterializeInc/materialize/issues/14211
+                # UPSERT is required due to https://github.com/MaterializeInc/database-issues/issues/4064
                 > CREATE SOURCE debezium_source1
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table');
+                > CREATE TABLE debezium_source1_tbl FROM SOURCE debezium_source1 (REFERENCE "postgres.public.debezium_table")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO debezium_table SELECT 'B', generate_series, 1, REPEAT('X', 16) FROM generate_series(1,1000);
 
-                > CREATE MATERIALIZED VIEW debezium_view1 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source1 GROUP BY f1, f3;
+                > CREATE MATERIALIZED VIEW debezium_view1 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source1_tbl GROUP BY f1, f3;
 
                 > SELECT * FROM debezium_view1;
                 A 1 16000
                 B 1 16000
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -82,7 +79,8 @@ class DebeziumPostgres(Check):
                 COMMIT;
 
                 > CREATE SOURCE debezium_source2
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table');
+                > CREATE TABLE debezium_source2_tbl FROM SOURCE debezium_source2 (REFERENCE "postgres.public.debezium_table")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM;
 
@@ -92,7 +90,7 @@ class DebeziumPostgres(Check):
                 UPDATE debezium_table SET f3 = f3 + 1;
                 COMMIT;
 
-                > CREATE MATERIALIZED VIEW debezium_view2 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source2 GROUP BY f1, f3;
+                > CREATE MATERIALIZED VIEW debezium_view2 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source2_tbl GROUP BY f1, f3;
                 """,
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -102,7 +100,8 @@ class DebeziumPostgres(Check):
                 COMMIT;
 
                 > CREATE SOURCE debezium_source3
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table');
+                > CREATE TABLE debezium_source3_tbl FROM SOURCE debezium_source3 (REFERENCE "postgres.public.debezium_table")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM;
 
@@ -112,15 +111,13 @@ class DebeziumPostgres(Check):
                 UPDATE debezium_table SET f3 = f3 + 1;
                 COMMIT;
 
-                > CREATE MATERIALIZED VIEW debezium_view3 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source3 GROUP BY f1, f3;
+                > CREATE MATERIALIZED VIEW debezium_view3 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source3_tbl GROUP BY f1, f3;
                 """,
             ]
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM debezium_view1;
                 A 5 16000
                 B 5 16000
@@ -144,17 +141,4 @@ class DebeziumPostgres(Check):
                 D 4 16000
                 E 3 16000
                 F 2 16000
-
-                $ set-regex match=",[^,.]*?name[^,]*?:[^,.]*?(ConnectDefault|block)[^,.]*?," replacement=,<CONNECT-NAME-ENTRY>,
-
-                > SHOW CREATE SOURCE debezium_source1;
-                materialize.public.debezium_source1 "CREATE SOURCE \\"materialize\\".\\"public\\".\\"debezium_source1\\" IN CLUSTER \\"quickstart\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'postgres.public.debezium_table') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \\"materialize\\".\\"public\\".\\"csr_conn\\" SEED KEY SCHEMA '{\\"type\\":\\"record\\",\\"name\\":\\"Key\\",\\"namespace\\":\\"postgres.public.debezium_table\\",\\"fields\\":[{\\"name\\":\\"f1\\",\\"type\\":\\"string\\"},{\\"name\\":\\"f2\\",\\"type\\":\\"int\\"}],\\"connect.name\\":\\"postgres.public.debezium_table.Key\\"}' VALUE SCHEMA '{\\"type\\":\\"record\\",\\"name\\":\\"Envelope\\",\\"namespace\\":\\"postgres.public.debezium_table\\",\\"fields\\":[{\\"name\\":\\"before\\",\\"type\\":[\\"null\\",{\\"type\\":\\"record\\",\\"name\\":\\"Value\\",\\"fields\\":[{\\"name\\":\\"f1\\",\\"type\\":\\"string\\"},{\\"name\\":\\"f2\\",\\"type\\":\\"int\\"},{\\"name\\":\\"f3\\",\\"type\\":[\\"null\\",\\"int\\"],\\"default\\":null},{\\"name\\":\\"f4\\",\\"type\\":[\\"null\\",\\"string\\"],\\"default\\":null}],\\"connect.name\\":\\"postgres.public.debezium_table.Value\\"}],\\"default\\":null},{\\"name\\":\\"after\\",\\"type\\":[\\"null\\",\\"Value\\"],\\"default\\":null},{\\"name\\":\\"source\\",\\"type\\":{\\"type\\":\\"record\\",\\"name\\":\\"Source\\",\\"namespace\\":\\"io.debezium.connector.postgresql\\",\\"fields\\":[{\\"name\\":\\"version\\",\\"type\\":\\"string\\"},{\\"name\\":\\"connector\\",\\"type\\":\\"string\\"},{\\"name\\":\\"name\\",\\"type\\":\\"string\\"},{\\"name\\":\\"ts_ms\\",\\"type\\":\\"long\\"},{\\"name\\":\\"snapshot\\",\\"type\\":[{\\"type\\":\\"string\\",\\"connect.version\\":1,\\"connect.parameters\\":{\\"allowed\\":\\"true,last,false,incremental\\"},\\"connect.default\\":\\"false\\",\\"connect.name\\":\\"io.debezium.data.Enum\\"},\\"null\\"],\\"default\\":\\"false\\"},{\\"name\\":\\"db\\",\\"type\\":\\"string\\"},{\\"name\\":\\"sequence\\",\\"type\\":[\\"null\\",\\"string\\"],\\"default\\":null},{\\"name\\":\\"schema\\",\\"type\\":\\"string\\"},{\\"name\\":\\"table\\",\\"type\\":\\"string\\"},{\\"name\\":\\"txId\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null},{\\"name\\":\\"lsn\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null},{\\"name\\":\\"xmin\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null}],\\"connect.name\\":\\"io.debezium.connector.postgresql.Source\\"}},{\\"name\\":\\"op\\",\\"type\\":\\"string\\"},{\\"name\\":\\"ts_ms\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null},{\\"name\\":\\"transaction\\",\\"type\\":[\\"null\\",{\\"type\\":\\"record\\",<CONNECT-NAME-ENTRY>,\\"namespace\\":\\"event\\",\\"fields\\":[{\\"name\\":\\"id\\",\\"type\\":\\"string\\"},{\\"name\\":\\"total_order\\",\\"type\\":\\"long\\"},{\\"name\\":\\"data_collection_order\\",\\"type\\":\\"long\\"}],\\"connect.version\\":1,\\"connect.name\\":\\"event.block\\"}],\\"default\\":null}],\\"connect.version\\":1,\\"connect.name\\":\\"postgres.public.debezium_table.Envelope\\"}' ENVELOPE DEBEZIUM EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"debezium_source1_progress\\""
-
-                > SHOW CREATE SOURCE debezium_source2;
-                materialize.public.debezium_source2 "CREATE SOURCE \\"materialize\\".\\"public\\".\\"debezium_source2\\" IN CLUSTER \\"quickstart\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'postgres.public.debezium_table') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \\"materialize\\".\\"public\\".\\"csr_conn\\" SEED KEY SCHEMA '{\\"type\\":\\"record\\",\\"name\\":\\"Key\\",\\"namespace\\":\\"postgres.public.debezium_table\\",\\"fields\\":[{\\"name\\":\\"f1\\",\\"type\\":\\"string\\"},{\\"name\\":\\"f2\\",\\"type\\":\\"int\\"}],\\"connect.name\\":\\"postgres.public.debezium_table.Key\\"}' VALUE SCHEMA '{\\"type\\":\\"record\\",\\"name\\":\\"Envelope\\",\\"namespace\\":\\"postgres.public.debezium_table\\",\\"fields\\":[{\\"name\\":\\"before\\",\\"type\\":[\\"null\\",{\\"type\\":\\"record\\",\\"name\\":\\"Value\\",\\"fields\\":[{\\"name\\":\\"f1\\",\\"type\\":\\"string\\"},{\\"name\\":\\"f2\\",\\"type\\":\\"int\\"},{\\"name\\":\\"f3\\",\\"type\\":[\\"null\\",\\"int\\"],\\"default\\":null},{\\"name\\":\\"f4\\",\\"type\\":[\\"null\\",\\"string\\"],\\"default\\":null}],\\"connect.name\\":\\"postgres.public.debezium_table.Value\\"}],\\"default\\":null},{\\"name\\":\\"after\\",\\"type\\":[\\"null\\",\\"Value\\"],\\"default\\":null},{\\"name\\":\\"source\\",\\"type\\":{\\"type\\":\\"record\\",\\"name\\":\\"Source\\",\\"namespace\\":\\"io.debezium.connector.postgresql\\",\\"fields\\":[{\\"name\\":\\"version\\",\\"type\\":\\"string\\"},{\\"name\\":\\"connector\\",\\"type\\":\\"string\\"},{\\"name\\":\\"name\\",\\"type\\":\\"string\\"},{\\"name\\":\\"ts_ms\\",\\"type\\":\\"long\\"},{\\"name\\":\\"snapshot\\",\\"type\\":[{\\"type\\":\\"string\\",\\"connect.version\\":1,\\"connect.parameters\\":{\\"allowed\\":\\"true,last,false,incremental\\"},\\"connect.default\\":\\"false\\",\\"connect.name\\":\\"io.debezium.data.Enum\\"},\\"null\\"],\\"default\\":\\"false\\"},{\\"name\\":\\"db\\",\\"type\\":\\"string\\"},{\\"name\\":\\"sequence\\",\\"type\\":[\\"null\\",\\"string\\"],\\"default\\":null},{\\"name\\":\\"schema\\",\\"type\\":\\"string\\"},{\\"name\\":\\"table\\",\\"type\\":\\"string\\"},{\\"name\\":\\"txId\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null},{\\"name\\":\\"lsn\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null},{\\"name\\":\\"xmin\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null}],\\"connect.name\\":\\"io.debezium.connector.postgresql.Source\\"}},{\\"name\\":\\"op\\",\\"type\\":\\"string\\"},{\\"name\\":\\"ts_ms\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null},{\\"name\\":\\"transaction\\",\\"type\\":[\\"null\\",{\\"type\\":\\"record\\",<CONNECT-NAME-ENTRY>,\\"namespace\\":\\"event\\",\\"fields\\":[{\\"name\\":\\"id\\",\\"type\\":\\"string\\"},{\\"name\\":\\"total_order\\",\\"type\\":\\"long\\"},{\\"name\\":\\"data_collection_order\\",\\"type\\":\\"long\\"}],\\"connect.version\\":1,\\"connect.name\\":\\"event.block\\"}],\\"default\\":null}],\\"connect.version\\":1,\\"connect.name\\":\\"postgres.public.debezium_table.Envelope\\"}' ENVELOPE DEBEZIUM EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"debezium_source2_progress\\""
-
-                > SHOW CREATE SOURCE debezium_source3;
-                materialize.public.debezium_source3 "CREATE SOURCE \\"materialize\\".\\"public\\".\\"debezium_source3\\" IN CLUSTER \\"quickstart\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'postgres.public.debezium_table') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \\"materialize\\".\\"public\\".\\"csr_conn\\" SEED KEY SCHEMA '{\\"type\\":\\"record\\",\\"name\\":\\"Key\\",\\"namespace\\":\\"postgres.public.debezium_table\\",\\"fields\\":[{\\"name\\":\\"f1\\",\\"type\\":\\"string\\"},{\\"name\\":\\"f2\\",\\"type\\":\\"int\\"}],\\"connect.name\\":\\"postgres.public.debezium_table.Key\\"}' VALUE SCHEMA '{\\"type\\":\\"record\\",\\"name\\":\\"Envelope\\",\\"namespace\\":\\"postgres.public.debezium_table\\",\\"fields\\":[{\\"name\\":\\"before\\",\\"type\\":[\\"null\\",{\\"type\\":\\"record\\",\\"name\\":\\"Value\\",\\"fields\\":[{\\"name\\":\\"f1\\",\\"type\\":\\"string\\"},{\\"name\\":\\"f2\\",\\"type\\":\\"int\\"},{\\"name\\":\\"f3\\",\\"type\\":[\\"null\\",\\"int\\"],\\"default\\":null},{\\"name\\":\\"f4\\",\\"type\\":[\\"null\\",\\"string\\"],\\"default\\":null}],\\"connect.name\\":\\"postgres.public.debezium_table.Value\\"}],\\"default\\":null},{\\"name\\":\\"after\\",\\"type\\":[\\"null\\",\\"Value\\"],\\"default\\":null},{\\"name\\":\\"source\\",\\"type\\":{\\"type\\":\\"record\\",\\"name\\":\\"Source\\",\\"namespace\\":\\"io.debezium.connector.postgresql\\",\\"fields\\":[{\\"name\\":\\"version\\",\\"type\\":\\"string\\"},{\\"name\\":\\"connector\\",\\"type\\":\\"string\\"},{\\"name\\":\\"name\\",\\"type\\":\\"string\\"},{\\"name\\":\\"ts_ms\\",\\"type\\":\\"long\\"},{\\"name\\":\\"snapshot\\",\\"type\\":[{\\"type\\":\\"string\\",\\"connect.version\\":1,\\"connect.parameters\\":{\\"allowed\\":\\"true,last,false,incremental\\"},\\"connect.default\\":\\"false\\",\\"connect.name\\":\\"io.debezium.data.Enum\\"},\\"null\\"],\\"default\\":\\"false\\"},{\\"name\\":\\"db\\",\\"type\\":\\"string\\"},{\\"name\\":\\"sequence\\",\\"type\\":[\\"null\\",\\"string\\"],\\"default\\":null},{\\"name\\":\\"schema\\",\\"type\\":\\"string\\"},{\\"name\\":\\"table\\",\\"type\\":\\"string\\"},{\\"name\\":\\"txId\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null},{\\"name\\":\\"lsn\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null},{\\"name\\":\\"xmin\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null}],\\"connect.name\\":\\"io.debezium.connector.postgresql.Source\\"}},{\\"name\\":\\"op\\",\\"type\\":\\"string\\"},{\\"name\\":\\"ts_ms\\",\\"type\\":[\\"null\\",\\"long\\"],\\"default\\":null},{\\"name\\":\\"transaction\\",\\"type\\":[\\"null\\",{\\"type\\":\\"record\\",<CONNECT-NAME-ENTRY>,\\"namespace\\":\\"event\\",\\"fields\\":[{\\"name\\":\\"id\\",\\"type\\":\\"string\\"},{\\"name\\":\\"total_order\\",\\"type\\":\\"long\\"},{\\"name\\":\\"data_collection_order\\",\\"type\\":\\"long\\"}],\\"connect.version\\":1,\\"connect.name\\":\\"event.block\\"}],\\"default\\":null}],\\"connect.version\\":1,\\"connect.name\\":\\"postgres.public.debezium_table.Envelope\\"}' ENVELOPE DEBEZIUM EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"debezium_source3_progress\\""
-           """
-            )
-        )
+                """))

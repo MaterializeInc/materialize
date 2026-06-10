@@ -14,19 +14,15 @@ from materialize.cloudtest.util.wait import wait
 
 
 def test_ssh_tunnels(mz: MaterializeApplication) -> None:
-    mz.testdrive.run(
-        input=dedent(
-            """
+    mz.testdrive.run(input=dedent("""
             > CREATE CONNECTION IF NOT EXISTS ssh_conn TO SSH TUNNEL (
                 HOST 'ssh-bastion-host',
                 USER 'mz',
                 PORT 22
               );
-            """
-        )
-    )
+            """))
 
-    (id, public_key) = mz.environmentd.sql_query(
+    id, public_key = mz.environmentd.sql_query(
         "SELECT id, public_key_1 FROM mz_ssh_tunnel_connections"
     )[0]
     assert id is not None
@@ -47,8 +43,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
     )
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
         > CREATE SECRET pgpass AS 'postgres'
         > CREATE CONNECTION pg TO POSTGRES (
             HOST 'postgres',
@@ -73,8 +68,9 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
 
         > CREATE SOURCE mz_source
           FROM POSTGRES CONNECTION pg
-          (PUBLICATION 'mz_source')
-          FOR ALL TABLES;
+          (PUBLICATION 'mz_source');
+
+        > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
         > SELECT COUNT(*) = 1 FROM t1;
         true
@@ -89,8 +85,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         1
         1
         2
-        """
-        ),
+        """),
         no_reset=True,
     )
 
@@ -107,8 +102,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
     )
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
         > SELECT f1 FROM t1 ORDER BY f1 ASC;
         1
         1
@@ -123,8 +117,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         2
         3
         4
-        """
-        ),
+        """),
         no_reset=True,
     )
 

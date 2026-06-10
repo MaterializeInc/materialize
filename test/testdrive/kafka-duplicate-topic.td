@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 $ set schema={"type" : "record", "name" : "test", "fields": [ { "name": "f2", "type": "long" } ] }
 
@@ -29,23 +31,31 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema} repeat=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER source0_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE source0
   IN CLUSTER source0_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic0-${testdrive.seed}')
+
+> CREATE TABLE source0_tbl FROM SOURCE source0 (REFERENCE "testdrive-topic0-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 > CREATE CLUSTER source1_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE source1
   IN CLUSTER source1_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
+
+> CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-topic1-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 > CREATE CLUSTER sink0_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK sink0
   IN CLUSTER sink0_cluster
-  FROM source0
+  FROM source0_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -54,7 +64,7 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema} repeat=1
 > CREATE CLUSTER sink1_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK sink1
   IN CLUSTER sink1_cluster
-  FROM source1
+  FROM source1_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

@@ -32,9 +32,7 @@ def test_testdrive(mz: MaterializeApplication) -> None:
     mz.testdrive.copy("test/testdrive", "/workdir")
     mz.testdrive.run("testdrive/testdrive.td")
 
-    mz.testdrive.run(
-        input=dedent(
-            """
+    mz.testdrive.run(input=dedent("""
                 $ kafka-create-topic topic=test
 
                 $ kafka-ingest format=bytes topic=test
@@ -44,8 +42,8 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > CREATE DEFAULT INDEX ON t1;
                 > INSERT INTO t1 VALUES (1);
 
-                > CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '2-2'));
-                > CREATE CLUSTER c2 SIZE '1', REPLICATION FACTOR 1;
+                > CREATE CLUSTER c1 REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=2,workers=2'));
+                > CREATE CLUSTER c2 SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
                 > SET cluster=c1
 
                 > CREATE CONNECTION kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
@@ -53,7 +51,9 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > CREATE SOURCE s1
                   IN CLUSTER c2
                   FROM KAFKA CONNECTION kafka
-                  (TOPIC 'testdrive-test-${testdrive.seed}')
+                  (TOPIC 'testdrive-test-${testdrive.seed}');
+
+                > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-test-${testdrive.seed}")
                   FORMAT BYTES
                   ENVELOPE NONE;
 
@@ -61,11 +61,9 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > SELECT * FROM v1;
                 1
 
-                > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM s1;
+                > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM s1_tbl;
                 > SELECT * FROM v2;
                 1
 
                 > DROP CLUSTER c1 CASCADE;
-                """
-        )
-    )
+                """))

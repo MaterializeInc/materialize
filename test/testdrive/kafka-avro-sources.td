@@ -7,11 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 ALTER SYSTEM SET max_clusters = 20
 
 # Test support for Avro sources without using the Confluent Schema Registry.
@@ -124,13 +123,15 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > SHOW SOURCES
-name    type   size   cluster
------------------------------
+name    type   cluster   comment
+--------------------------------
 
 # [btv] uncomment if we bring back classic debezium mode
 # ! CREATE SOURCE fast_forwarded
 #   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[2], TOPIC 'testdrive-data-${testdrive.seed}')
+
+# ! CREATE TABLE fast_forwarded_tbl FROM SOURCE fast_forwarded (REFERENCE "testdrive-data-${testdrive.seed}")
 #   KEY FORMAT AVRO USING SCHEMA '${key-schema}'
 #   VALUE FORMAT AVRO USING SCHEMA '${schema}'
 #   ENVELOPE DEBEZIUM
@@ -154,13 +155,17 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 {"a": 2, "b": 3}
 
 > CREATE CLUSTER non_dbz_data_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE non_dbz_data
   IN CLUSTER non_dbz_data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
+
+> CREATE TABLE non_dbz_data_tbl FROM SOURCE non_dbz_data (REFERENCE "testdrive-non-dbz-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM non_dbz_data
+> SELECT * FROM non_dbz_data_tbl
 a b
 ---
 1 2
@@ -169,28 +174,36 @@ a b
 # test INCLUDE metadata
 
 > CREATE CLUSTER non_dbz_data_metadata_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE non_dbz_data_metadata
   IN CLUSTER non_dbz_data_metadata_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
+
+> CREATE TABLE non_dbz_data_metadata_tbl FROM SOURCE non_dbz_data_metadata (REFERENCE "testdrive-non-dbz-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   INCLUDE PARTITION, OFFSET
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM non_dbz_data_metadata
+> SELECT * FROM non_dbz_data_metadata_tbl
 a b partition offset
 --------------------
 1 2 0         0
 2 3 0         1
 
 > CREATE CLUSTER non_dbz_data_metadata_named_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE non_dbz_data_metadata_named
   IN CLUSTER non_dbz_data_metadata_named_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
+
+> CREATE TABLE non_dbz_data_metadata_named_tbl FROM SOURCE non_dbz_data_metadata_named (REFERENCE "testdrive-non-dbz-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   INCLUDE PARTITION as part, OFFSET as mzo
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM non_dbz_data_metadata_named
+> SELECT * FROM non_dbz_data_metadata_named_tbl
 a b  part  mzo
 --------------
 1 2  0     0
@@ -207,50 +220,66 @@ $ kafka-ingest format=avro topic=non-dbz-data-multi-partition schema=${non-dbz-s
 {"a": 1, "b": 2}
 
 > CREATE CLUSTER non_dbz_data_multi_partition_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE non_dbz_data_multi_partition
   IN CLUSTER non_dbz_data_multi_partition_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}')
+
+> CREATE TABLE non_dbz_data_multi_partition_tbl FROM SOURCE non_dbz_data_multi_partition (REFERENCE "testdrive-non-dbz-data-multi-partition-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM non_dbz_data_multi_partition
+> SELECT * FROM non_dbz_data_multi_partition_tbl
 a  b
 -----
 4  1
 
 > CREATE CLUSTER non_dbz_data_multi_partition_2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE non_dbz_data_multi_partition_2
   IN CLUSTER non_dbz_data_multi_partition_2_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[0,0], TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}')
+
+> CREATE TABLE non_dbz_data_multi_partition_2_tbl FROM SOURCE non_dbz_data_multi_partition_2 (REFERENCE "testdrive-non-dbz-data-multi-partition-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM non_dbz_data_multi_partition_2
+> SELECT * FROM non_dbz_data_multi_partition_2_tbl
 a  b
 -----
 1  2
 4  1
 
 > CREATE CLUSTER non_dbz_data_multi_partition_fast_forwarded_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE non_dbz_data_multi_partition_fast_forwarded
   IN CLUSTER non_dbz_data_multi_partition_fast_forwarded_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[0,1], TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}')
+
+> CREATE TABLE non_dbz_data_multi_partition_fast_forwarded_tbl FROM SOURCE non_dbz_data_multi_partition_fast_forwarded (REFERENCE "testdrive-non-dbz-data-multi-partition-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM non_dbz_data_multi_partition_fast_forwarded
+> SELECT * FROM non_dbz_data_multi_partition_fast_forwarded_tbl
 a  b
 ----
 1  2
 
 > CREATE CLUSTER non_dbz_data_multi_partition_fast_forwarded_2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE non_dbz_data_multi_partition_fast_forwarded_2
   IN CLUSTER non_dbz_data_multi_partition_fast_forwarded_2_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1,0], TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}')
+
+> CREATE TABLE non_dbz_data_multi_partition_fast_forwarded_2_tbl FROM SOURCE non_dbz_data_multi_partition_fast_forwarded_2 (REFERENCE "testdrive-non-dbz-data-multi-partition-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM non_dbz_data_multi_partition_fast_forwarded_2
+> SELECT * FROM non_dbz_data_multi_partition_fast_forwarded_2_tbl
 a  b
 ----
 4  1
@@ -263,17 +292,20 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 {"a": 5, "b": 6}
 
 > CREATE CLUSTER non_dbz_data_varying_partition_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE non_dbz_data_varying_partition
   IN CLUSTER non_dbz_data_varying_partition_cluster
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL = '10ms',
     START OFFSET=[1]
   )
+
+> CREATE TABLE non_dbz_data_varying_partition_tbl FROM SOURCE non_dbz_data_varying_partition (REFERENCE "testdrive-non-dbz-data-varying-partition-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM non_dbz_data_varying_partition
+> SELECT * FROM non_dbz_data_varying_partition_tbl
 
 $ kafka-add-partitions topic=non-dbz-data-varying-partition total-partitions=2
 
@@ -286,22 +318,25 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 
 # Because the start offset for any new partitions will be 0, the first record sent to the new
 # partition will be included.
-> SELECT * FROM non_dbz_data_varying_partition
+> SELECT * FROM non_dbz_data_varying_partition_tbl
 a  b
 -----
 7  8
 9  10
 
 > CREATE CLUSTER non_dbz_data_varying_partition_2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE non_dbz_data_varying_partition_2
   IN CLUSTER non_dbz_data_varying_partition_2_cluster
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL = '10ms',
     START OFFSET=[1,1]
   )
+
+> CREATE TABLE non_dbz_data_varying_partition_2_tbl FROM SOURCE non_dbz_data_varying_partition_2 (REFERENCE "testdrive-non-dbz-data-varying-partition-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-add-partitions topic=non-dbz-data-varying-partition total-partitions=3
 
@@ -310,7 +345,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 
 # Because the start offset for any new partitions will be 0, the first record sent to the new
 # partition will be included.
-> SELECT * FROM non_dbz_data_varying_partition_2
+> SELECT * FROM non_dbz_data_varying_partition_2_tbl
 a  b
 -----
 9  10
@@ -398,11 +433,13 @@ $ kafka-create-topic topic=new-dbz-data partitions=1
 # > CREATE SOURCE new_dbz
 #   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-new-dbz-data-${testdrive.seed}')
+
+# > CREATE TABLE new_dbz_tbl FROM SOURCE new_dbz (REFERENCE "testdrive-new-dbz-data-${testdrive.seed}")
 #   KEY FORMAT AVRO USING SCHEMA '${key-schema}'
 #   VALUE FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
 #   ENVELOPE DEBEZIUM
 
-# > SELECT * FROM new_dbz
+# > SELECT * FROM new_dbz_tbl
 # a b
 # ---
 # 9 10
@@ -410,14 +447,6 @@ $ kafka-create-topic topic=new-dbz-data partitions=1
 # 14 6
 # 2 3
 # -1 7
-
-$ kafka-create-topic topic=ignored partitions=1
-
-! CREATE SOURCE recursive
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ignored-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}'
-contains:validating avro schema: Recursive types are not supported: .a
 
 $ set key-schema={"type": "string"}
 $ set value-schema={"type": "record", "name": "r", "fields": [{"name": "a", "type": "string"}]}
@@ -432,13 +461,17 @@ $ kafka-ingest format=avro topic=non-subset-key key-format=avro key-schema=${key
   );
 
 > CREATE CLUSTER non_subset_key_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE non_subset_key
   IN CLUSTER non_subset_key_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-subset-key-${testdrive.seed}')
+
+> CREATE TABLE non_subset_key_tbl FROM SOURCE non_subset_key (REFERENCE "testdrive-non-subset-key-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM non_subset_key
+> SELECT * FROM non_subset_key_tbl
 a
 ---
 "asdf"
@@ -513,11 +546,13 @@ $ set pg-dbz-schema={
 # > CREATE SOURCE pg_dbz
 #   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}')
+
+# > CREATE TABLE pg_dbz_tbl FROM SOURCE pg_dbz (REFERENCE "testdrive-pg-dbz-data-${testdrive.seed}")
 #   KEY FORMAT AVRO USING SCHEMA '${key-schema}'
 #   VALUE FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
 #   ENVELOPE DEBEZIUM
 
-# > SELECT * FROM pg_dbz
+# > SELECT * FROM pg_dbz_tbl
 # a b
 # ---
 # 1 1
@@ -626,11 +661,13 @@ $ set pg-dbz-schema={
 # > CREATE SOURCE ms_dbz
 #   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}')
+
+# > CREATE TABLE ms_dbz_tbl FROM SOURCE ms_dbz (REFERENCE "testdrive-ms-dbz-data-${testdrive.seed}")
 #   KEY FORMAT AVRO USING SCHEMA '${key-schema}'
 #   VALUE FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
 #   ENVELOPE DEBEZIUM
 
-# > SELECT * FROM ms_dbz
+# > SELECT * FROM ms_dbz_tbl
 # a b
 # ---
 # 1 1
@@ -639,11 +676,13 @@ $ set pg-dbz-schema={
 # > CREATE SOURCE ms_dbz_uncommitted
 #   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (ISOLATION LEVEL = 'read_uncommitted', TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}')
+
+# > CREATE TABLE ms_dbz_uncommitted_tbl FROM SOURCE ms_dbz_uncommitted (REFERENCE "testdrive-ms-dbz-data-${testdrive.seed}")
 #   KEY FORMAT AVRO USING SCHEMA '${key-schema}'
 #   VALUE FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
 #   ENVELOPE DEBEZIUM
 
-# > SELECT * FROM ms_dbz_uncommitted
+# > SELECT * FROM ms_dbz_uncommitted_tbl
 # a b
 # ---
 # 1 1

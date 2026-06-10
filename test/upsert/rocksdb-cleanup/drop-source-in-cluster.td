@@ -14,31 +14,39 @@ $ kafka-create-topic topic=upsert
 
 > DROP CLUSTER IF EXISTS c1 CASCADE;
 
-> CREATE CLUSTER c1 REPLICAS (replica1 (SIZE '1'));
+> CREATE CLUSTER c1 REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
+> BEGIN
 > CREATE SOURCE kept_upsert
   IN CLUSTER c1
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE kept_upsert_tbl FROM SOURCE kept_upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE dropped_upsert
   IN CLUSTER c1
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE dropped_upsert_tbl FROM SOURCE dropped_upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
+> COMMIT
 
 $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
 fish:fish
 bird:goose
 animal:whale
 
-> SELECT count(*) from dropped_upsert;
+> SELECT count(*) from dropped_upsert_tbl;
 3
 
-> SELECT count(*) from dropped_upsert;
+> SELECT count(*) from dropped_upsert_tbl;
 3

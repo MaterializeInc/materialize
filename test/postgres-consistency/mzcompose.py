@@ -7,8 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test the consistency of Materialize against Postgres as an oracle.
+"""
+
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
@@ -22,17 +25,13 @@ from materialize.postgres_consistency.postgres_consistency_test import (
 )
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
-    Materialized(propagate_crashes=True, external_cockroach=True),
+    Materialized(propagate_crashes=True, external_metadata_store=True),
     Postgres(),
     Mz(app_password=""),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """
-    Test the consistency with Postgres.
-    """
 
     c.down(destroy_volumes=True)
 
@@ -46,6 +45,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         service="postgres",
         user="postgres",
         password="postgres",
+        database="postgres",
     )
 
     test_summary = test.run_output_consistency_tests(

@@ -10,6 +10,7 @@
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 class OutputConsistencyStatsStorage(BaseDataStorage):
@@ -51,8 +52,8 @@ class OutputConsistencyStatsStorage(BaseDataStorage):
                 count_used_ops
             )
             SELECT
-                '{job_id}',
-                '{step_key}',
+                {as_sanitized_literal(job_id)},
+                {as_sanitized_literal(step_key)},
                 {count_generated_select_expressions},
                 {count_ignored_select_expressions},
                 {count_executed_queries},

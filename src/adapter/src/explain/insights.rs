@@ -14,13 +14,10 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
-use mz_expr::{
-    AccessStrategy, AggregateExpr, AggregateFunc, Id, MirRelationExpr, OptimizedMirRelationExpr,
-    RowSetFinishing,
-};
+use mz_expr::{AccessStrategy, Id, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
+use mz_repr::GlobalId;
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::Statement;
 use mz_sql::names::Aug;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -29,12 +26,12 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
 use serde::Serialize;
 
+use crate::TimestampContext;
 use crate::catalog::Catalog;
 use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::optimize::{self, Optimize, OptimizerConfig, OptimizerError};
 use crate::session::SessionMeta;
-use crate::TimestampContext;
 
 /// Information needed to compute PlanInsights.
 #[derive(Debug)]
@@ -52,7 +49,7 @@ pub struct PlanInsightsContext {
     pub finishing: RowSetFinishing,
     pub optimizer_config: OptimizerConfig,
     pub session: SessionMeta,
-    pub timestamp_context: TimestampContext<Timestamp>,
+    pub timestamp_context: TimestampContext,
     pub view_id: GlobalId,
     pub index_id: GlobalId,
     pub enable_re_optimize: bool,
@@ -70,7 +67,8 @@ pub struct PlanInsights {
     /// this as fast path. That is: if this query were run on the cluster of the key, it would be
     /// fast because it would use the index of the value.
     pub fast_path_clusters: BTreeMap<String, Option<FastPathCluster>>,
-    /// For the current cluster, whether adding a LIMIT <= this will result in a fast path.
+    /// For the current cluster, adding a `LIMIT n` such that `n + OFFSET < this` will result in a
+    /// fast path. (If the query has no `OFFSET`, the condition simplifies to `LIMIT < this`.)
     pub fast_path_limit: Option<usize>,
     /// Names of persist sources over which a count(*) is done.
     pub persist_count: Vec<Name>,
@@ -86,8 +84,14 @@ impl PlanInsights {
     pub async fn compute_fast_path_clusters(
         &mut self,
         humanizer: &dyn ExprHumanizer,
-        ctx: PlanInsightsContext,
+        ctx: Box<PlanInsightsContext>,
     ) {
+        // Warning: This function is currently dangerous, because it does optimizer work
+        // proportional to the number of clusters, and does so on the main coordinator task.
+        // see https://github.com/MaterializeInc/database-issues/issues/9492
+        if !ctx.optimizer_config.features.enable_fast_path_plan_insights {
+            return;
+        }
         let session: Arc<dyn SessionMetadata + Send> = Arc::new(ctx.session);
         let tasks = ctx
             .compute_instances
@@ -129,7 +133,7 @@ impl PlanInsights {
             });
         for task in tasks {
             let res = task.await;
-            let Ok(Ok((name, plan))) = res else {
+            let Ok((name, plan)) = res else {
                 continue;
             };
             let (plan, _, _) = plan.unapply();
@@ -141,7 +145,7 @@ impl PlanInsights {
                     continue;
                 }
                 let idx_name = if let FastPathPlan::PeekExisting(_, idx_id, _, _) = plan {
-                    let idx_entry = ctx.catalog.get_entry(&idx_id);
+                    let idx_entry = ctx.catalog.get_entry_by_global_id(&idx_id);
                     Some(FastPathCluster {
                         index: structured_name(humanizer, idx_id),
                         on: structured_name(
@@ -216,7 +220,7 @@ fn fast_path_insights(humanizer: &dyn ExprHumanizer, plan: FastPathPlan) -> Plan
         FastPathPlan::PeekExisting(_, id, _, _) => {
             add_import_insights(&mut insights, humanizer, id, ImportType::Compute)
         }
-        FastPathPlan::PeekPersist(id, _) => {
+        FastPathPlan::PeekPersist(id, _, _) => {
             add_import_insights(&mut insights, humanizer, id, ImportType::Storage)
         }
     }
@@ -266,15 +270,7 @@ fn global_insights(
             let [aggregate] = aggregates.as_slice() else {
                 return;
             };
-            let AggregateExpr {
-                func: AggregateFunc::Count,
-                distinct: false,
-                expr,
-            } = aggregate
-            else {
-                return;
-            };
-            if !expr.is_literal_true() {
+            if !aggregate.is_count_asterisk() {
                 return;
             }
             let name = structured_name(humanizer, *id);

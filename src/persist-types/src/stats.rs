@@ -13,7 +13,11 @@
 
 use std::fmt::Debug;
 
-use arrow::array::Array;
+use anyhow::Context;
+use arrow::array::{
+    BinaryArray, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int64Array, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use mz_ore::{assert_none, metric};
@@ -23,9 +27,7 @@ use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use prost::Message;
 
-use crate::columnar::Data;
-use crate::dyn_col::DynColumnRef;
-use crate::dyn_struct::ValidityRef;
+use crate::columnar::{ColumnDecoder, Schema};
 use crate::part::Part;
 use crate::stats::bytes::any_bytes_stats;
 use crate::stats::primitive::any_primitive_stats;
@@ -38,7 +40,8 @@ pub mod structured;
 pub use bytes::{AtomicBytesStats, BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
 pub use json::{JsonMapElementStats, JsonStats};
 pub use primitive::{
-    truncate_bytes, PrimitiveStats, PrimitiveStatsVariants, TruncateBound, TRUNCATE_LEN,
+    PrimitiveStats, PrimitiveStatsVariants, TRUNCATE_LEN, TruncateBound, truncate_bytes,
+    truncate_string,
 };
 pub use structured::StructStats;
 
@@ -54,10 +57,16 @@ pub struct ColumnarStats {
 }
 
 impl ColumnarStats {
-    /// Downcast this instasnce of [`ColumnarStats`] into `T::Stats`, if the
-    /// inner type is a `T::Stats`.
-    pub fn downcast<T: Data>(&self) -> Option<T::Stats> {
-        T::Stats::downcast(self)
+    /// Returns a `[StructStats]` with a single non-nullable column.
+    pub fn one_column_struct(len: usize, col: ColumnStatKinds) -> StructStats {
+        let col = ColumnarStats {
+            nulls: None,
+            values: col,
+        };
+        StructStats {
+            len,
+            cols: [("".to_owned(), col)].into_iter().collect(),
+        }
     }
 
     /// Returns the inner [`ColumnStatKinds`] if `nulls` is [`None`].
@@ -83,6 +92,64 @@ impl ColumnarStats {
             ColumnStatKinds::Struct(stats) => Some(stats),
             _ => None,
         }
+    }
+
+    /// Helper method to "downcast" to stats of type `T`.
+    fn try_as_stats<'a, T, F>(&'a self, map: F) -> Result<T, anyhow::Error>
+    where
+        F: FnOnce(&'a ColumnStatKinds) -> Result<T, anyhow::Error>,
+    {
+        let inner = map(&self.values)?;
+        match self.nulls {
+            Some(nulls) => Err(anyhow::anyhow!(
+                "expected non-nullable stats, found nullable {nulls:?}"
+            )),
+            None => Ok(inner),
+        }
+    }
+
+    /// Helper method to "downcast" [`OptionStats<T>`].
+    fn try_as_option_stats<'a, T, F>(&'a self, map: F) -> Result<OptionStats<T>, anyhow::Error>
+    where
+        F: FnOnce(&'a ColumnStatKinds) -> Result<T, anyhow::Error>,
+    {
+        let inner = map(&self.values)?;
+        match self.nulls {
+            Some(nulls) => Ok(OptionStats {
+                none: nulls.count,
+                some: inner,
+            }),
+            None => Err(anyhow::anyhow!(
+                "expected nullable stats, found non-nullable"
+            )),
+        }
+    }
+
+    /// Tries to "downcast" this instance of [`ColumnarStats`] to an [`OptionStats<StructStats>`]
+    /// if the inner statistics are nullable and for a structured column.
+    pub fn try_as_optional_struct(&self) -> Result<OptionStats<&StructStats>, anyhow::Error> {
+        self.try_as_option_stats(|values| match values {
+            ColumnStatKinds::Struct(inner) => Ok(inner),
+            other => anyhow::bail!("expected StructStats found {other:?}"),
+        })
+    }
+
+    /// Tries to "downcast" this instance of [`ColumnarStats`] to an [`OptionStats<BytesStats>`]
+    /// if the inner statistics are nullable and for a column of bytes.
+    pub fn try_as_optional_bytes(&self) -> Result<OptionStats<&BytesStats>, anyhow::Error> {
+        self.try_as_option_stats(|values| match values {
+            ColumnStatKinds::Bytes(inner) => Ok(inner),
+            other => anyhow::bail!("expected BytesStats found {other:?}"),
+        })
+    }
+
+    /// Tries to "downcast" this instance of [`ColumnarStats`] to a [`PrimitiveStats<String>`]
+    /// if the inner statistics are nullable and for a structured column.
+    pub fn try_as_string(&self) -> Result<&PrimitiveStats<String>, anyhow::Error> {
+        self.try_as_stats(|values| match values {
+            ColumnStatKinds::Primitive(PrimitiveStatsVariants::String(inner)) => Ok(inner),
+            other => anyhow::bail!("expected PrimitiveStats<String> found {other:?}"),
+        })
     }
 }
 
@@ -227,45 +294,13 @@ impl PartStatsMetrics {
     }
 }
 
-/// The logic to use when computing stats for a column of `T: Data`.
-///
-/// If Custom is used, the DynStats returned must be a`<T as Data>::Stats`.
-pub enum StatsFn {
-    Default,
-    Custom(fn(&DynColumnRef, ValidityRef) -> Result<ColumnarStats, String>),
-}
-
-#[cfg(debug_assertions)]
-impl PartialEq for StatsFn {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (StatsFn::Default, StatsFn::Default) => true,
-            (StatsFn::Custom(s), StatsFn::Custom(o)) => {
-                let s: fn(&'static DynColumnRef, ValidityRef) -> Result<ColumnarStats, String> = *s;
-                let o: fn(&'static DynColumnRef, ValidityRef) -> Result<ColumnarStats, String> = *o;
-                // I think this is not always correct, but it's only used in
-                // debug_assertions so as long as CI is happy with it, probably
-                // good enough.
-                s == o
-            }
-            (StatsFn::Default, StatsFn::Custom(_)) | (StatsFn::Custom(_), StatsFn::Default) => {
-                false
-            }
-        }
-    }
-}
-
-impl std::fmt::Debug for StatsFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Default => write!(f, "Default"),
-            Self::Custom(_) => f.debug_struct("Custom").finish_non_exhaustive(),
-        }
-    }
-}
-
 /// Aggregate statistics about a column of type `T`.
-pub trait ColumnStats<T: Data>: DynStats {
+pub trait ColumnStats: DynStats {
+    /// Type returned as the stat bounds.
+    type Ref<'a>
+    where
+        Self: 'a;
+
     /// An inclusive lower bound on the data contained in the column, if known.
     ///
     /// This will often be a tight bound, but it's not guaranteed. Persist
@@ -276,18 +311,20 @@ pub trait ColumnStats<T: Data>: DynStats {
     /// Similarly, if the column is empty, this will contain `T: Default`.
     /// Emptiness will be indicated in statistics higher up (i.e.
     /// [StructStats]).
-    fn lower<'a>(&'a self) -> Option<T::Ref<'a>>;
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>>;
     /// Same as [Self::lower] but an (also inclusive) upper bound.
-    fn upper<'a>(&'a self) -> Option<T::Ref<'a>>;
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>>;
     /// The number of `None`s if this column is optional or 0 if it isn't.
     fn none_count(&self) -> usize;
+}
 
-    /// Downcast an instance of [`ColumnarStats`] into `Self`, if
-    /// [`ColumnarStats`] contains `Self`.
-    ///
-    /// Note: This method is intended to help bridge the gap between [`Data`]
-    /// and [`crate::columnar::Schema2`].
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
+/// A type that can incrementally collect stats from a sequence of values.
+pub trait ColumnarStatsBuilder<T>: Debug + DynStats {
+    /// Type of [`arrow`] column these statistics can be derived from.
+    type ArrowColumn: arrow::array::Array + 'static;
+
+    /// Derive statistics from a column of data.
+    fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized;
 }
@@ -308,18 +345,6 @@ pub trait DynStats: Debug + Send + Sync + 'static {
 
     /// Return `self` as [`ColumnarStats`].
     fn into_columnar_stats(self) -> ColumnarStats;
-}
-
-/// A source of aggregate statistics about a column of data.
-pub trait StatsFrom<T> {
-    /// Computes statistics from a column of data.
-    ///
-    /// The validity, if given, indicates which values in the columns are and
-    /// are not used for stats. This allows us to model non-nullable columns in
-    /// a nullable struct. For optional columns (i.e. ones with their own
-    /// validity) it _must be a subset_ of the column's validity, otherwise this
-    /// panics.
-    fn stats_from(col: &T, validity: ValidityRef) -> Self;
 }
 
 /// Trim, possibly in a lossy way, statistics to reduce the serialization costs.
@@ -347,10 +372,14 @@ impl serde::Serialize for PartStats {
 }
 
 impl PartStats {
-    /// Calculates and returns stats for the given [Part].
-    pub fn new(part: &Part) -> Result<Self, String> {
-        let key = part.key_stats()?;
-        Ok(PartStats { key })
+    /// Calculates and returns stats for the given [`Part`].
+    pub fn new<T, K>(part: &Part, desc: &K) -> Result<Self, anyhow::Error>
+    where
+        K: Schema<T, Statistics = StructStats>,
+    {
+        let decoder = K::decoder_any(desc, &part.key).context("decoder_any")?;
+        let stats = decoder.stats();
+        Ok(PartStats { key: stats })
     }
 }
 
@@ -412,80 +441,35 @@ impl DynStats for NoneStats {
     }
 }
 
-impl<T: Data> ColumnStats<T> for NoneStats {
-    fn lower<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+impl ColumnStats for NoneStats {
+    type Ref<'a> = ();
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
-    fn upper<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
     fn none_count(&self) -> usize {
         0
     }
-
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        match stats.as_non_null_values()? {
-            ColumnStatKinds::None => Some(NoneStats),
-            _ => None,
-        }
-    }
 }
 
-impl<T> ColumnStats<Option<T>> for OptionStats<NoneStats>
-where
-    Option<T>: Data,
-{
-    fn lower<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
+impl ColumnStats for OptionStats<NoneStats> {
+    type Ref<'a> = Option<()>;
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
-    fn upper<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
     fn none_count(&self) -> usize {
         self.none
-    }
-
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let inner = match &stats.values {
-            ColumnStatKinds::None => NoneStats,
-            _ => return None,
-        };
-        Some(OptionStats {
-            some: inner,
-            none: stats.nulls.as_ref().map_or(0, |n| n.count),
-        })
-    }
-}
-
-impl<T: Array> StatsFrom<T> for NoneStats {
-    fn stats_from(col: &T, _validity: ValidityRef) -> Self {
-        assert_none!(col.logical_nulls());
-        NoneStats
-    }
-}
-
-impl<T: Array> StatsFrom<T> for OptionStats<NoneStats> {
-    fn stats_from(col: &T, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-        let none = col
-            .logical_nulls()
-            .as_ref()
-            .map_or(0, |nulls| nulls.null_count());
-
-        OptionStats {
-            none,
-            some: NoneStats,
-        }
     }
 }
 
@@ -496,6 +480,86 @@ impl RustType<()> for NoneStats {
 
     fn from_proto(_proto: ()) -> Result<Self, TryFromProtoError> {
         Ok(NoneStats)
+    }
+}
+
+/// We collect stats for all primitive types in exactly the same way. This
+/// macro de-duplicates some of that logic.
+///
+/// Note: If at any point someone finds this macro too complex, they should
+/// feel free to refactor it away!
+macro_rules! primitive_stats {
+    ($native:ty, $arrow_col:ty, $min_fn:path, $max_fn:path) => {
+        impl ColumnarStatsBuilder<$native> for PrimitiveStats<$native> {
+            type ArrowColumn = $arrow_col;
+
+            fn from_column(col: &Self::ArrowColumn) -> Self
+            where
+                Self: Sized,
+            {
+                let lower = $min_fn(col).unwrap_or_default();
+                let upper = $max_fn(col).unwrap_or_default();
+
+                PrimitiveStats { lower, upper }
+            }
+        }
+    };
+}
+
+primitive_stats!(
+    bool,
+    BooleanArray,
+    arrow::compute::min_boolean,
+    arrow::compute::max_boolean
+);
+primitive_stats!(u8, UInt8Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(u16, UInt16Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(u32, UInt32Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(u64, UInt64Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i8, Int8Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i16, Int16Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i32, Int32Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i64, Int64Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(f32, Float32Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(f64, Float64Array, arrow::compute::min, arrow::compute::max);
+
+impl ColumnarStatsBuilder<&str> for PrimitiveStats<String> {
+    type ArrowColumn = StringArray;
+    fn from_column(col: &Self::ArrowColumn) -> Self
+    where
+        Self: Sized,
+    {
+        let lower = arrow::compute::min_string(col).unwrap_or_default();
+        let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
+            .expect("lower bound should always truncate");
+        let upper = arrow::compute::max_string(col).unwrap_or_default();
+        let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
+            // NB: The cost+trim stuff will remove the column entirely if
+            // it's still too big (also this should be extremely rare in
+            // practice).
+            .unwrap_or_else(|| upper.to_owned());
+
+        PrimitiveStats { lower, upper }
+    }
+}
+
+impl ColumnarStatsBuilder<&[u8]> for PrimitiveStats<Vec<u8>> {
+    type ArrowColumn = BinaryArray;
+    fn from_column(col: &Self::ArrowColumn) -> Self
+    where
+        Self: Sized,
+    {
+        let lower = arrow::compute::min_binary(col).unwrap_or_default();
+        let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
+            .expect("lower bound should always truncate");
+        let upper = arrow::compute::max_binary(col).unwrap_or_default();
+        let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
+            // NB: The cost+trim stuff will remove the column entirely if
+            // it's still too big (also this should be extremely rare in
+            // practice).
+            .unwrap_or_else(|| upper.to_owned());
+
+        PrimitiveStats { lower, upper }
     }
 }
 

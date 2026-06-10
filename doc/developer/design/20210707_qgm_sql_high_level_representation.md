@@ -32,16 +32,16 @@ and the one proposed in this document, which adds normalization at the SQL level
     * be easy to use,
     * be normalization-friendly,
     * allow supporting complex features such as recursion in CTEs,
-* Proper support of `LATERAL` joins ([#6875](https://github.com/MaterializeInc/materialize/issues/6875))
+* Proper support of `LATERAL` joins ([#6875](https://github.com/MaterializeInc/database-issues/issues/2143))
 * Support for functional dependency analysis during name resolution
-([#7647](https://github.com/MaterializeInc/materialize/issues/7647)).
+([#7647](https://github.com/MaterializeInc/database-issues/issues/2369)).
 
 Existing issues that should be addressed sooner rather than later:
-* [sql: handle aggregates that refer exclusively to outer columns #3720](https://github.com/MaterializeInc/materialize/issues/3720)
+* [sql: handle aggregates that refer exclusively to outer columns #3720](https://github.com/MaterializeInc/database-issues/issues/1163)
 * [sql: make SQL responsible for its equality semantics #7597](https://github.com/MaterializeInc/materialize/pull/7597)
-* [sql: wrong results with outer join due to incorrect name resolution  #7618](https://github.com/MaterializeInc/materialize/issues/7618)
-* [sql: ambiguous column name error reported for equivalent expressions in the selection list](https://github.com/MaterializeInc/materialize/issues/7549)
-* [Ignore the selection list in EXISTS subqueries](https://github.com/MaterializeInc/materialize/issues/6490)
+* [sql: wrong results with outer join due to incorrect name resolution  #7618](https://github.com/MaterializeInc/database-issues/issues/2364)
+* [sql: ambiguous column name error reported for equivalent expressions in the selection list](https://github.com/MaterializeInc/database-issues/issues/2340)
+* [Ignore the selection list in EXISTS subqueries](https://github.com/MaterializeInc/database-issues/issues/2020)
 
 ## Non-Goals
 
@@ -168,7 +168,7 @@ the query or discovered via some query transformation.
 
 As shown above, there aren't many different types of operators, since QGM is meant to be a representation for
 query normalization. The set of operators listed above is very close to the one suggested in
-[#692](https://github.com/MaterializeInc/materialize/issues/692).
+[#692](https://github.com/MaterializeInc/database-issues/issues/224).
 
 The core operator is represented by the `Select` box, which represents a whole query block (sub-block).
 
@@ -405,7 +405,7 @@ A `SELECT` query is a grouping query if any of the following conditions is met:
 * the projection of the query contains any aggregate which parameters are constant,
 * the projection of the query contains any aggregate where all columns referenced within it come from the tables
   in the `FROM` clause, either directly in the projection or within a subquery
-  (see [#3720](https://github.com/MaterializeInc/materialize/issues/3720))
+  (see [#3720](https://github.com/MaterializeInc/database-issues/issues/1163))
 
 That means that in order to determine whether a query is a grouping query or not, we must inspect the projection
 of the query first. For this reason, after having processed the `FROM` clause and the `WHERE` clause, we will
@@ -502,9 +502,9 @@ the nested `Select` box would not be guaranteed and hence, it could not be merge
 
 Some normalization transformations are better/easier done with a representation at a higher level than our current
 `MirRelationExpr` representation. Specially those around SQL-specific concepts such as outer joins that are
-lost during lowering. Several examples of this are [#6932](https://github.com/MaterializeInc/materialize/issues/6932),
-[#6987](https://github.com/MaterializeInc/materialize/issues/6987) or
-[#6988](https://github.com/MaterializeInc/materialize/issues/6988), but the list of unsupported cases that are
+lost during lowering. Several examples of this are [#6932](https://github.com/MaterializeInc/database-issues/issues/2155),
+[#6987](https://github.com/MaterializeInc/database-issues/issues/2174) or
+[#6988](https://github.com/MaterializeInc/database-issues/issues/2175), but the list of unsupported cases that are
 hard to support at the moment is much longer.
 
 ### Query decorrelation during normalization

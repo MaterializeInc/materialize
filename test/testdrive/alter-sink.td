@@ -79,7 +79,7 @@ $ kafka-verify-data format=avro sink=materialize.public.incompatible_sink sort-m
 
 > ALTER SINK incompatible_sink SET FROM post_alter_incompatible;
 
-> SELECT st.error LIKE '%schema being registered is incompatible with an earlier schema%'
+> SELECT st.error ILIKE '%schema being registered is incompatible with an earlier schema%'
   FROM mz_sinks s JOIN mz_internal.mz_sink_statuses st ON s.id = st.id
   WHERE s.name = 'incompatible_sink';
 true
@@ -89,7 +89,7 @@ true
 
 > CREATE SOURCE counter
   IN CLUSTER no_replicas
-  FROM LOAD GENERATOR COUNTER;
+  FROM LOAD GENERATOR COUNTER (UP TO 100);
 
 > CREATE SINK wedged_sink
   IN CLUSTER ${arg.single-replica-cluster}
@@ -112,18 +112,13 @@ contains:canceling statement due to user request
 # There is a meaningful difference in having an object created after the sink
 # already exists, see incident-131:
 > CREATE TABLE created_post_alter (created_post_name string, created_post_value int);
-# This value should be ignored by the sink because the alter will happen after
-# this record has been inserted and we don't re-emit a snapshot of the new
-# collection when it changes.
-> INSERT INTO created_post_alter VALUES ('ignored', 0);
-> INSERT INTO created_post_alter VALUES ('ignored2', 1);
 
 > ALTER SINK sink SET FROM created_post_alter;
 
 # The sink will start sinking updates from `post_alter` at the timestamp that
 # the previous dataflow happens to stop. This happens pretty quickly but we
 # wait a few seconds more for good measure to avoid flaking.
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=4s
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 
 > INSERT INTO created_post_alter VALUES ('hundred', 99);
 

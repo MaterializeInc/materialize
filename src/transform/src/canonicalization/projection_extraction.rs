@@ -10,7 +10,7 @@
 //! Transform column references in a `Map` into a `Project`.
 
 use mz_expr::visit::Visit;
-use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_expr::{Columns, MirRelationExpr, MirScalarExpr};
 
 use crate::TransformCtx;
 
@@ -20,17 +20,21 @@ use crate::TransformCtx;
 pub struct ProjectionExtraction;
 
 impl crate::Transform for ProjectionExtraction {
+    fn name(&self) -> &'static str {
+        "ProjectionExtraction"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "projection_extraction")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_post(&mut Self::action)?;
+        relation.visit_mut_post(&mut Self::action);
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
@@ -42,13 +46,13 @@ impl ProjectionExtraction {
         if let MirRelationExpr::Map { input, scalars } = relation {
             if scalars
                 .iter()
-                .any(|s| matches!(s, MirScalarExpr::Column(_)))
+                .any(|s| matches!(s, MirScalarExpr::Column(_, _)))
             {
                 let input_arity = input.arity();
                 let mut outputs: Vec<_> = (0..input_arity).collect();
                 let mut dropped = 0;
                 scalars.retain(|scalar| {
-                    if let MirScalarExpr::Column(col) = scalar {
+                    if let MirScalarExpr::Column(col, _) = scalar {
                         dropped += 1;
                         // We may need to chase down a few levels of indirection;
                         // find the original input column in `outputs[*col]`.

@@ -49,13 +49,11 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 
 # Test that an OOMing cluster replica generates expected entries in
 # `mz_cluster_replica_statuses`
-@pytest.mark.skip(reason="Now fails after a Buildkite upgrade #20948")
+@pytest.mark.skip(reason="Now fails after a Buildkite upgrade database-issues#6307")
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
     def verify_cluster_oomed() -> None:
         with mz.environmentd.sql_cursor(autocommit=False) as cur:
-            cur.execute(
-                dedent(
-                    """
+            cur.execute(dedent("""
                     SET CLUSTER=mz_catalog_server;
                     DECLARE c CURSOR FOR SUBSCRIBE TO (
                        SELECT status, reason
@@ -64,31 +62,25 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
                        JOIN mz_clusters mc ON mcr.cluster_id = mc.id
                        WHERE mc.name = 'oom'
                     )
-                    """
-                )
-            )
+                    """))
             while True:
                 cur.execute("FETCH ALL c")
                 for _, diff, status, reason in cur.fetchall():
                     if diff < 1:
                         continue
-                    if status == "not-ready" and reason == "oom-killed":
+                    if status == "offline" and reason == "oom-killed":
                         return
 
     # Once we create an index on this view in a cluster limited to 2Gb, it is practically guaranteed to OOM
-    mz.environmentd.sql(
-        dedent(
-            """
-            CREATE CLUSTER oom REPLICAS (oom (size 'mem-2'));
+    mz.environmentd.sql(dedent("""
+            CREATE CLUSTER oom REPLICAS (oom (size 'scale=1,workers=2,mem=2GiB'));
             SET cluster=oom;
             CREATE VIEW oom AS
               SELECT repeat('abc' || x || y, 1000000) FROM
               (SELECT * FROM generate_series(1, 1000000)) a(x),
               (SELECT * FROM generate_series(1, 1000000)) b(y);
             CREATE DEFAULT INDEX oom_idx ON oom
-            """
-        )
-    )
+            """))
 
     # Wait for the cluster pod to OOM
     verify_cluster_oomed()
@@ -98,7 +90,6 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
 
 # Test that a crashed (and restarted) cluster replica generates expected notice
 # events.
-@pytest.mark.skip(reason="Hangs occasionally, see #28235")
 def test_crash_clusterd(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP TABLE IF EXISTS t1 CASCADE")
     mz.environmentd.sql("CREATE TABLE t1 (f1 TEXT)")
@@ -161,7 +152,7 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     assert podcount > 0
 
     # Wait for expected notices on all connections.
-    msg = b'cluster replica quickstart.r1 changed status to "not-ready"'
+    msg = b'cluster replica quickstart.r1 changed status to "offline"'
     assert_notice(c_select, msg)
     assert_notice(c_subscribe, msg)
     assert_notice(c_copy, msg)

@@ -11,13 +11,19 @@
 
 //! Materialize's compute layer.
 
-pub(crate) mod arrangement;
-pub mod compute_state;
-pub(crate) mod extensions;
-pub(crate) mod logging;
-pub(crate) mod metrics;
-pub(crate) mod render;
-pub(crate) mod row_spine;
+pub mod memory_limiter;
 pub mod server;
-pub(crate) mod sink;
+
+mod arrangement;
+mod command_channel;
+mod compute_state;
+mod extensions;
+mod logging;
+mod metrics;
+mod render;
+/// MV sink machinery, exposed for benchmarks.
+#[cfg(feature = "bench")]
+pub mod sink;
+#[cfg(not(feature = "bench"))]
+mod sink;
 mod typedefs;

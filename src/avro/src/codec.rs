@@ -26,9 +26,9 @@ use std::io::{Read, Write};
 use std::str::FromStr;
 
 use anyhow::Error;
+use flate2::Compression;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
-use flate2::Compression;
 
 use crate::error::{DecodeError, Error as AvroError};
 use crate::types::{ToAvro, Value};

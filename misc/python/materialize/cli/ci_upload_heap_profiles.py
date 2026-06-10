@@ -18,7 +18,7 @@ import time
 from threading import Thread
 
 CLUSTERD_COMMAND_RE = re.compile(
-    r"--internal-http-listen-addr=(?P<socket>[^ ]*).*--opentelemetry-resource=cluster_id=(?P<cluster_id>[^ ]*).*--opentelemetry-resource=replica_id=(?P<replica_id>[^ ]*).*/(?P<process>[0-9]+)\.pid"
+    r"--internal-http-listen-addr=(?P<socket>[^ ]*).*--log-prefix=(?P<logprefix>[^ ]*)"
 )
 
 
@@ -69,14 +69,18 @@ def main() -> int:
         ).stdout
     )
     for service in services:
-        if service["Image"].startswith("materialize/clusterd:"):
+        image = service["Image"].rsplit(":", 1)[0]
+        ghcr_prefix = "ghcr.io/materializeinc/"
+        if image.startswith(ghcr_prefix):
+            image.removeprefix(ghcr_prefix)
+        if image == "materialize/clusterd":
             threads.append(
                 Thread(
                     target=run,
                     args=(service["Service"], ["http://127.0.0.1:6878/heap"]),
                 )
             )
-        elif service["Image"].startswith("materialize/materialized:"):
+        elif image == "materialize/materialized":
             threads.append(
                 Thread(
                     target=run,
@@ -100,7 +104,7 @@ def main() -> int:
                                     match.group("socket"),
                                     "http:/prof/heap",
                                 ],
-                                f"-cluster-{match.group('cluster_id')}-replica-{match.group('replica_id')}-process-{match.group('process')}",
+                                f"-{match.group('logprefix')}",
                             ),
                         )
                     )

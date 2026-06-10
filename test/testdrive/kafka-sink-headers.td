@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 $ set-arg-default single-replica-cluster=quickstart
 
 # Test the HEADER option for Kafka sinks, which allows attaching user-specified
@@ -80,8 +82,13 @@ b         d         {"k": 5, "h": {"a": "b", "c": "d"}}
 
 > INSERT INTO text_tbl VALUES (6, '{"a" => "b", "c" => null}')
 
-$ kafka-verify-data headers=a,c format=json sink=materialize.public.text_snk key=false sort-messages=true
-b         <null>    {"k": 6, "h": {"a": "b", "c": null}}
+$ kafka-verify-data headers=a,c format=json sink=materialize.public.text_snk key=true sort-messages=true
+b         <null>    {"k": 6} {"k": 6, "h": {"a": "b", "c": null}}
+
+> DELETE FROM text_tbl WHERE k = 6
+
+$ kafka-verify-data headers=a,c format=json sink=materialize.public.text_snk key=true sort-messages=true
+b         <null>    {"k": 6}
 
 # Test successful use with `map[text => bytea]`.
 

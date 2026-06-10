@@ -10,14 +10,9 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class RenameReplica(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.58.0-dev")
-
     def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -33,9 +28,9 @@ class RenameReplica(Check):
                 > CREATE MATERIALIZED VIEW rename_replica_view AS SELECT COUNT(f1) FROM rename_replica_table;
 
                 > INSERT INTO rename_replica_table VALUES (2);
-                > CREATE CLUSTER REPLICA rename_replica.replica1 SIZE '2-2';
+                > CREATE CLUSTER REPLICA rename_replica.replica1 SIZE 'scale=2,workers=2';
                 > INSERT INTO rename_replica_table VALUES (3);
-                > CREATE CLUSTER REPLICA rename_replica.replica2 SIZE '2-2';
+                > CREATE CLUSTER REPLICA rename_replica.replica2 SIZE 'scale=2,workers=2';
                 > INSERT INTO rename_replica_table VALUES (4);
                 > ALTER CLUSTER REPLICA rename_replica.replica1 RENAME TO replica_new1
                 """,
@@ -48,9 +43,7 @@ class RenameReplica(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=rename_replica
 
                 > SELECT * FROM rename_replica_table;
@@ -63,6 +56,4 @@ class RenameReplica(Check):
 
                 > SELECT * FROM rename_replica_view;
                 6
-           """
-            )
-        )
+           """))

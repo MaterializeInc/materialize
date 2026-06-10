@@ -13,12 +13,18 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+builder=${BUILDKITE_PLUGIN_MZCOMPOSE_CI_BUILDER:-min}
+
+if is_truthy "${CI_HEAP_PROFILES:-}"; then
+  builder=stable
+fi
+
 mzcompose() {
-    stdbuf --output=L --error=L bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+    stdbuf --output=L --error=L bin/ci-builder run "$builder" bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
-faketty() {
-    script -qfc "$(printf "%q " "$@")" /dev/null
+kubectl() {
+    bin/ci-builder run stable kubectl --context="$K8S_CONTEXT" "$@"
 }
 
 service=${BUILDKITE_PLUGIN_MZCOMPOSE_RUN:-default}
@@ -29,75 +35,348 @@ if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
     done
 fi
 
-date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
+# Export environment variables passed via the env parameter
+# Buildkite creates vars like BUILDKITE_PLUGIN_MZCOMPOSE_ENV_0_VARNAME=value
+# We need to strip the prefix and the index number (0_, 1_, etc.)
+while IFS='=' read -r name value; do
+    # Strip the BUILDKITE_PLUGIN_MZCOMPOSE_ENV_ prefix
+    env_name="${name#BUILDKITE_PLUGIN_MZCOMPOSE_ENV_}"
+    # Strip the index number and underscore (e.g., "0_VARNAME" -> "VARNAME")
+    env_name="${env_name#*_}"
+    export "$env_name=$value"
+done < <(env | grep "^BUILDKITE_PLUGIN_MZCOMPOSE_ENV_" || true)
 
-# Sometimes build cancellations prevent us from properly cleaning up the last
-# Docker Compose run, which can leave old containers or volumes around that will
-# interfere with this build.
-ci_collapsed_heading ":docker: Purging containers and volumes from previous builds"
-sudo systemctl restart docker
-mzcompose --mz-quiet kill
-mzcompose --mz-quiet rm --force -v
-mzcompose --mz-quiet down --volumes
-killall -9 clusterd || true # There might be remaining processes from a previous cargo-test run
-if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
-  find . -name '*.profraw' -delete # Remove remaining profraw files from coverage runs
-fi
-
-ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
-docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
-rm -f services.log
-
-ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
-mzcompose --mz-quiet build
+STEP_START_TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
 
 # Clean up cores here so that just killed processes' core files are ignored
 cores="$HOME"/cores
 rm -rf "$cores" parallel-workload-queries.log parallel-workload-queries.log.zst
 mkdir -m 777 "$cores"
 # Max 128 characters, so don't use $PWD which will make it too long
-sudo sysctl -w kernel.core_pattern="|/usr/bin/env tee $cores/core.%E.%t"
-echo -n "Core pattern: "
-cat /proc/sys/kernel/core_pattern
+# Ignore SIGABRT
+sudo sysctl -w kernel.core_pattern="|/usr/bin/ci-filter-core.sh %s $cores/core.%E.%t"
 
 # Start dependencies under a different heading so that the main heading is less
 # noisy. But not if the service is actually a workflow, in which case it will
 # do its own dependency management.
-if ! mzcompose --mz-quiet list-workflows | grep -q "$service"; then
+
+# Don't use `grep -q`! It will stop the `grep` process before mzcompose might
+# be finished, thus mzcompose can fail with `write /dev/stdout: broken pipe`.
+# Since we have `pipefail` set in this script, this would lead to a failure and
+# we would attempt to bring up the workflow, which will fail with `no such
+# service: default`.
+# Store list-workflows output so we can distinguish "not a workflow" from
+# "command failed" (e.g. due to a network error pulling ci-builder).
+workflows=$(mzcompose --mz-quiet list-workflows)
+if ! echo "$workflows" | grep "$service" > /dev/null; then
     ci_collapsed_heading ":docker: Starting dependencies"
     mzcompose up -d --scale "$service=0" "$service"
 fi
 
 if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
-    ci_uncollapsed_heading ":docker: Fetching binaries for coverage"
-    mzcompose create
     mkdir -p coverage/
     chmod 777 coverage/
-    # Not all tests contain all of these containers:
-    mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/sqllogictest coverage/ || true
-    mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/clusterd coverage/ || true
-    mzcompose --mz-quiet cp materialized:/usr/local/bin/environmentd coverage/ || true
-    mzcompose --mz-quiet cp materialized:/usr/local/bin/clusterd coverage/ || true
-    mzcompose --mz-quiet cp testdrive:/usr/local/bin/testdrive coverage/ || true
-    mzcompose --mz-quiet cp balancerd:/usr/local/bin/balancerd coverage/ || true
 fi
 
+STOP_RUNNING=false
+
 if is_truthy "${CI_HEAP_PROFILES:-}"; then
-    (while true; do
-        sleep 5
-        # faketty because otherwise docker will complain about not being inside
-        # of a TTY when run in a background job
-        faketty bin/ci-builder run stable bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
-    done
+    (while [ "$STOP_RUNNING" != "true" ]; do
+         sleep 30
+         bin/ci-builder run stable --detach bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
+     done
     ) &
 fi
 
-ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}\`"
+EXTRA_ARGS=$(echo "${CI_EXTRA_ARGS:-}" | jq -r ".[\"$BUILDKITE_STEP_KEY\"] // \"\"")
 
-mzcompose run "${run_args[@]}" |& tee run.log
-RESULT=$?
-if [ "$RESULT" != "0" ]; then
-    # Give the logs some time to log panics, otherwise they might be missing later
-    sleep 10
+TEST_CMD=""
+if [ "${BUILDKITE_PARALLEL_JOB_COUNT:-1}" -gt 1 ]; then
+    TEST_CMD+="BUILDKITE_PARALLEL_JOB=$BUILDKITE_PARALLEL_JOB BUILDKITE_PARALLEL_JOB_COUNT=$BUILDKITE_PARALLEL_JOB_COUNT "
 fi
-exit $RESULT
+if [ "${CI_SYSTEM_PARAMETERS:-}" = "random" ]; then
+    TEST_CMD+="CI_SYSTEM_PARAMETERS=$CI_SYSTEM_PARAMETERS CI_SYSTEM_PARAMETERS_SEED=${CI_SYSTEM_PARAMETERS_SEED:-$BUILDKITE_JOB_ID} "
+elif [ "${CI_SYSTEM_PARAMETERS:-}" = "minimal" ]; then
+    TEST_CMD+="CI_SYSTEM_PARAMETERS=$CI_SYSTEM_PARAMETERS "
+fi
+TEST_CMD+="bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]} $EXTRA_ARGS"
+TEST_DESC="$(mzcompose description)"
+
+ci_uncollapsed_heading ":docker: Running \`$TEST_CMD\`"
+echo "$TEST_DESC"
+
+cleanup() {
+  # Keep running, even on failures
+  set +e
+  # Don't run the cleanup function twice
+  trap - EXIT
+  # Keep running cleanup, even if we get cancelled
+  trap '' SIGTERM SIGINT
+
+  # Buildkite exposes no way to check if a test timed out (and wasn't cancelled manually), so we have to calculate it ourselves
+  START_TIME=$(date -d "$STEP_START_TIMESTAMP" +%s)
+  END_TIME=$(date +%s)
+  ELAPSED=$((END_TIME - START_TIME))
+  if [ $ELAPSED -ge $((BUILDKITE_TIMEOUT * 60)) ]; then
+    printf "\n%s" "$BUILDKITE_LABEL: test timed out" >> run.log
+  fi
+
+  ci_unimportant_heading "Post command steps"
+  # Run before potential "run down" in coverage
+  docker ps --all --quiet | xargs --no-run-if-empty docker inspect | jq '
+    .[]
+    | .Config.Env = ["[REDACTED]"]
+    | .Config.Cmd = ["[REDACTED]"]
+    | .Config.Entrypoint = ["[REDACTED]"]
+    | .Args = ["[REDACTED]"]' > docker-inspect.log
+  # services.log might already exist and contain logs from before composition was downed
+  time=0
+  if [ -f services.log ]; then
+      # Don't capture log lines we received already
+      time=$(date +%s -r services.log)
+  fi
+  mzcompose logs --no-color --timestamps --since "$time" >> services.log
+  # Sort services.log and remove the timestamps we added to prevent having duplicate timestamps in output. For reference:
+  # https://github.com/moby/moby/issues/33673
+  # https://github.com/moby/moby/issues/31706
+  sort -t"|" -k2 < services.log | sed -E "s/ \| [0-9]{4}-[01][0-9]-[0-3][0-9]T[0-2][0-9]\:[0-5][0-9]:[0-6][0-9]\.[0-9]{9}Z / \| /" | sed "s/^/$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION-/" > services-sorted.log
+  mv services-sorted.log services.log
+  # shellcheck disable=SC2024
+  sudo journalctl --merge --since "$STEP_START_TIMESTAMP" > journalctl-merge.log
+  netstat -ant > netstat-ant.log
+  netstat -panelot > netstat-panelot.log
+  ps aux | sed -E "s/\S*mzp_\S*/[REDACTED]/g" > ps-aux.log
+  docker stats --all --no-stream > docker-stats.log
+
+  if [ "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" = "orchestratord" ]; then
+      ci_unimportant_heading "orchestratord test: Uploading logs..."
+      K8S_CLUSTER_NAME=kind
+      K8S_CONTEXT="kind-$K8S_CLUSTER_NAME"
+      for pod in $(kubectl get pods -o name -n materialize | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
+          kubectl logs --prefix=true "$pod" -n materialize &>> kubectl-get-logs.log
+          kubectl logs --previous --prefix=true "$pod" -n materialize &>> kubectl-get-logs-previous.log
+      done
+      kubectl get events -n materialize > kubectl-get-events.log
+      kubectl get all -n materialize > kubectl-get-all.log
+      kubectl describe all -n materialize | awk '
+        BEGIN { redact=0 }
+        /^[[:space:]]*Environment:/ {
+          indent = match($0, /[^ ]/) - 1
+          print substr($0, 1, indent) "Environment: [REDACTED]"
+          redact = 1
+          next
+        }
+        redact {
+          current_indent = match($0, /[^ ]/) - 1
+          if (current_indent <= indent || NF == 0) {
+            redact = 0
+          } else {
+            next
+          }
+        }
+        { print }
+      ' > kubectl-describe-all.log
+      kubectl get pods -o wide -n materialize > kubectl-pods-with-nodes.log
+
+      for pod in $(kubectl get pods -o name -n materialize-environment | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
+          kubectl logs --prefix=true "$pod" -n materialize-environment &>> kubectl-get-logs-environment.log
+          kubectl logs --previous --prefix=true "$pod" -n materialize-environment &>> kubectl-get-logs-previous-environment.log
+      done
+      kubectl get events -n materialize-environment > kubectl-get-events-environment.log
+      kubectl get all -n materialize-environment > kubectl-get-all-environment.log
+      kubectl describe all -n materialize-environment | awk '
+        BEGIN { redact=0 }
+        /^[[:space:]]*Environment:/ {
+          indent = match($0, /[^ ]/) - 1
+          print substr($0, 1, indent) "Environment: [REDACTED]"
+          redact = 1
+          next
+        }
+        redact {
+          current_indent = match($0, /[^ ]/) - 1
+          if (current_indent <= indent || NF == 0) {
+            redact = 0
+          } else {
+            next
+          }
+        }
+        { print }
+      ' > kubectl-describe-all-environment.log
+      kubectl get pods -o wide -n materialize-environment > kubectl-pods-with-nodes-environment.log
+
+      mapfile -t artifacts < <(printf "kubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-logs-environment.log\nkubectl-get-logs-previous-environment.log\nkubectl-get-events-environment.log\nkubectl-get-all-environment.log\nkubectl-describe-all-environment.log\nkubectl-pods-with-nodes-environment.log\n")
+      artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+      buildkite-agent artifact upload "$artifacts_str"
+      unset artifacts
+  fi
+
+  mv "$cores" .
+
+  if find cores -name 'core.*' | grep -q .; then
+      # Best effort attempt to fetch interesting executables to get backtrace of core files
+      mzcompose cp slt_1:/usr/local/bin/sqllogictest cores/
+      mzcompose cp slt_1:/usr/local/bin/clusterd cores/
+      mzcompose cp materialized:/usr/local/bin/environmentd cores/
+      mzcompose cp materialized:/usr/local/bin/clusterd cores/
+      mzcompose cp materialized:/usr/local/bin/materialized cores/
+      mzcompose cp balancerd:/usr/local/bin/balancerd cores/
+      mzcompose cp testdrive:/usr/local/bin/testdrive cores/
+  fi
+
+  if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+      ci_uncollapsed_heading ":docker: Fetching binaries for coverage"
+      # Not all tests contain all of these containers:
+      mzcompose --mz-quiet cp slt_1:/usr/local/bin/sqllogictest coverage/
+      mzcompose --mz-quiet cp slt_1:/usr/local/bin/clusterd coverage/
+      mzcompose --mz-quiet cp materialized:/usr/local/bin/materialized coverage/
+      mzcompose --mz-quiet cp mz_1:/usr/local/bin/materialized coverage/
+      mzcompose --mz-quiet cp mz_this:/usr/local/bin/materialized coverage/
+      mzcompose --mz-quiet cp testdrive:/usr/local/bin/testdrive coverage/
+      mzcompose --mz-quiet cp balancerd:/usr/local/bin/balancerd coverage/
+  fi
+
+  echo "Downing docker containers"
+  if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+    mzcompose down --volumes
+  else
+    # Ignore failures, we still want the rest of the cleanup
+    bin/ci-builder run "$builder" timeout 60s bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" down --timeout=1 --volumes || {
+        sudo systemctl restart docker
+        bin/ci-builder run "$builder" timeout 60s bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" down --timeout=1 --volumes
+    }
+  fi
+
+  echo "Finding core files"
+  find cores -name 'core.*' | while read -r core; do
+      exe=$(echo "$core" | sed -e "s/core\.\(.*\)\.[0-9]*/\1/" -e "s/.*\!//")
+      # Core dumps can take a while to be written, so if extracting the info fails, try again later
+      bin/ci-builder run "$builder" gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || (sleep 2m; bin/ci-builder run "$builder" gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt)
+      buildkite-agent artifact upload "$core".txt
+  done
+  # can be huge, clean up
+  rm -rf cores
+
+  echo "Compressing parallel-workload-queries.log"
+  bin/ci-builder run "$builder" zstd --rm parallel-workload-queries.log
+
+  mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml' -printf '%P\n'; find . -maxdepth 1 -name 'mz_debug_*.log' -printf '%P\n'; find . -maxdepth 1 -name 'slt*.diff' -printf '%P\n')
+  artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+
+  if is_truthy "${CI_HEAP_PROFILES:-}"; then
+      STOP_RUNNING=true
+  else
+      ci_unimportant_heading "Running trufflehog to scan artifacts for secrets & uploading artifacts"
+      {
+        bin/ci-builder run "$builder" trufflehog --no-update --no-verification --filter-entropy 5.0 --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro,fmfw,logzio,qase,cannyio,uplead,tatumio filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
+      } &
+  fi
+
+  unset CI_EXTRA_ARGS # We don't want extra args for the annotation
+  # Continue even if ci-annotate-errors fails
+  CI_ANNOTATE_ERRORS_RESULT=0
+  # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
+  {
+    buildkite-agent artifact upload "$artifacts_str"
+  } &
+  wait
+  ci_unimportant_heading "Annotating errors"
+  bin/ci-builder run "$builder" bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
+  buildkite-agent artifact upload "ci-annotate-errors.log" &
+
+  export_cov() {
+      bin/ci-builder run stable rust-cov export \
+        --ignore-filename-regex=.cargo/ \
+        --ignore-filename-regex=target/release/ \
+        --ignore-filename-regex=/cargo/ \
+        --ignore-filename-regex=/mnt/build/ \
+        --ignore-filename-regex=/rustc/ \
+        --format=lcov "$1" --instr-profile=coverage/"$BUILDKITE_JOB_ID".profdata src/ \
+        > coverage/"$BUILDKITE_JOB_ID"-"$(basename "$1")".lcov
+  }
+
+  if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE:-}" ];  then
+      echo "Generating coverage information"
+      if [ -n "$(find . -name '*.profraw')" ]; then
+          rm -f coverage/"$BUILDKITE_JOB_ID".profdata
+          rm -f coverage/"$BUILDKITE_JOB_ID"-*.lcov || true
+          bin/ci-builder run stable bin/ci-validate-profraws coverage/"$BUILDKITE_JOB_ID".profdata
+
+          ARGS=()
+          for program in materialized balancerd sqllogictest testdrive; do
+              if [ -f coverage/"$program" ]; then
+                  export_cov coverage/"$program"
+                  ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
+              fi
+          done
+          if [ "${#ARGS[@]}" != 0 ]; then
+              bin/ci-builder run stable lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
+              bin/ci-builder run stable zstd coverage/"$BUILDKITE_JOB_ID".lcov
+              buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.zst
+          fi
+      fi
+  fi
+
+  if [ "$BUILDKITE_STEP_KEY" = "terraform-aws" ]; then
+      if ! mzcompose run aws-temporary --no-setup --no-test --no-run-mz-debug; then
+          CI_ANNOTATE_ERRORS_RESULT=1
+      fi
+  elif [ "$BUILDKITE_STEP_KEY" = "terraform-aws-upgrade" ]; then
+      if ! mzcompose run aws-upgrade --no-setup --no-test --no-run-mz-debug; then
+          CI_ANNOTATE_ERRORS_RESULT=1
+      fi
+  elif [ "$BUILDKITE_STEP_KEY" = "terraform-gcp" ]; then
+      if ! mzcompose run gcp-temporary --no-setup --no-test --no-run-mz-debug; then
+          CI_ANNOTATE_ERRORS_RESULT=1
+      fi
+  elif [ "$BUILDKITE_STEP_KEY" = "terraform-azure" ]; then
+      if ! mzcompose run azure-temporary --no-setup --no-test --no-run-mz-debug; then
+          CI_ANNOTATE_ERRORS_RESULT=1
+      fi
+  fi
+  rm -rf ~/.kube # Remove potential state from E2E Terraform tests
+
+  ci_unimportant_heading ":docker: Cleaning up after mzcompose"
+  # docker-compose kill may fail attempting to kill containers
+  # that have just exited on their own because of the
+  # "shared-fate" mechanism employed by Mz clusters
+  sudo systemctl restart docker; docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
+  killall -9 -q clusterd || true # There might be remaining processes from a cargo-test run
+
+  if [ ! -s services.log ] \
+    && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] \
+    && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] \
+    && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] \
+    && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] \
+    && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] \
+    && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] \
+    && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] \
+    && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] \
+    && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] \
+    && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]] \
+    && [[ ! "$BUILDKITE_LABEL" =~ Orchestratord\ .* ]] \
+    && [[ ! "$BUILDKITE_LABEL" =~ Cluster\ spec\ sheet.* ]]; then
+      echo "+++ services.log is empty, failing"
+      exit 1
+  fi
+
+  if [[ $CI_ANNOTATE_ERRORS_RESULT -ne 0 ]]; then
+    bin/clear-corrupted-cargo-target-dir run.log
+  fi
+
+  exit "$CI_ANNOTATE_ERRORS_RESULT"
+}
+
+trap cleanup EXIT SIGTERM SIGINT
+
+# When cancelled, always count as failed!
+TEST_RESULT=1
+# sed command to filter out ANSI command codes in run.log, while keeping them in Buildkite's view
+{
+  set -o pipefail
+  mzcompose run "${run_args[@]}" \
+    |& tee >(sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' > run.log)
+} &
+pid=$!
+
+wait "$pid"
+TEST_RESULT=$?

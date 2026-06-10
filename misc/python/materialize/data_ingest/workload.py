@@ -13,7 +13,7 @@ import traceback
 from collections.abc import Iterator
 from typing import Any
 
-import pg8000
+import psycopg
 
 from materialize.data_ingest.data_type import DATA_TYPES_FOR_AVRO, DATA_TYPES_FOR_KEY
 from materialize.data_ingest.definition import (
@@ -25,6 +25,7 @@ from materialize.data_ingest.definition import (
     Upsert,
 )
 from materialize.data_ingest.executor import (
+    KafkaExecutor,
     PgExecutor,
     PrintExecutor,
 )
@@ -46,8 +47,13 @@ class Workload:
     deploy_generation: int
 
     def __init__(
-        self, mz_service: str = "materailized", deploy_generation: int = 0
+        self,
+        azurite: bool,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
     ) -> None:
+        self.azurite = azurite
         self.mz_service = mz_service
         self.deploy_generation = deploy_generation
 
@@ -62,11 +68,12 @@ class Workload:
 class SingleSensorUpdating(Workload):
     def __init__(
         self,
+        azurite: bool,
         composition: Composition | None = None,
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(mz_service, deploy_generation)
+        super().__init__(azurite, composition, mz_service, deploy_generation)
         self.cycle = [
             TransactionDef(
                 [
@@ -83,34 +90,12 @@ class SingleSensorUpdating(Workload):
 class SingleSensorUpdatingDisruptions(Workload):
     def __init__(
         self,
+        azurite: bool,
         composition: Composition | None = None,
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(mz_service, deploy_generation)
-        self.cycle = [
-            TransactionDef(
-                [
-                    Upsert(
-                        keyspace=Keyspace.SINGLE_VALUE,
-                        count=Records.ONE,
-                        record_size=RecordSize.SMALL,
-                    ),
-                ]
-            ),
-        ]
-        if composition:
-            self.cycle.append(RestartMz(composition, probability=0.1, workload=self))
-
-
-class SingleSensorUpdating0dtDeploy(Workload):
-    def __init__(
-        self,
-        composition: Composition | None = None,
-        mz_service: str = "materialized",
-        deploy_generation: int = 0,
-    ) -> None:
-        super().__init__(mz_service, deploy_generation)
+        super().__init__(azurite, composition, mz_service, deploy_generation)
         self.cycle = [
             TransactionDef(
                 [
@@ -124,18 +109,49 @@ class SingleSensorUpdating0dtDeploy(Workload):
         ]
         if composition:
             self.cycle.append(
-                ZeroDowntimeDeploy(composition, probability=0.1, workload=self)
+                RestartMz(
+                    composition, probability=0.1, workload=self, azurite=self.azurite
+                )
+            )
+
+
+class SingleSensorUpdating0dtDeploy(Workload):
+    def __init__(
+        self,
+        azurite: bool,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
+    ) -> None:
+        super().__init__(azurite, composition, mz_service, deploy_generation)
+        self.cycle = [
+            TransactionDef(
+                [
+                    Upsert(
+                        keyspace=Keyspace.SINGLE_VALUE,
+                        count=Records.ONE,
+                        record_size=RecordSize.SMALL,
+                    ),
+                ]
+            ),
+        ]
+        if composition:
+            self.cycle.append(
+                ZeroDowntimeDeploy(
+                    composition, probability=0.1, workload=self, azurite=self.azurite
+                )
             )
 
 
 class DeleteDataAtEndOfDay(Workload):
     def __init__(
         self,
+        azurite: bool,
         composition: Composition | None = None,
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(mz_service, deploy_generation)
+        super().__init__(azurite, composition, mz_service, deploy_generation)
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -163,46 +179,12 @@ class DeleteDataAtEndOfDay(Workload):
 class DeleteDataAtEndOfDayDisruptions(Workload):
     def __init__(
         self,
+        azurite: bool,
         composition: Composition | None = None,
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(mz_service, deploy_generation)
-        insert = Insert(
-            count=Records.SOME,
-            record_size=RecordSize.SMALL,
-        )
-        insert_phase = TransactionDef(
-            size=TransactionSize.HUGE,
-            operations=[insert],
-        )
-        # Delete all records in a single transaction
-        delete_phase = TransactionDef(
-            [
-                Delete(
-                    number_of_records=Records.ALL,
-                    record_size=RecordSize.SMALL,
-                    num=insert.max_key(),
-                )
-            ]
-        )
-        self.cycle = [
-            insert_phase,
-            delete_phase,
-        ]
-
-        if composition:
-            self.cycle.append(RestartMz(composition, probability=0.1, workload=self))
-
-
-class DeleteDataAtEndOfDay0dtDeploys(Workload):
-    def __init__(
-        self,
-        composition: Composition | None = None,
-        mz_service: str = "materialized",
-        deploy_generation: int = 0,
-    ) -> None:
-        super().__init__(mz_service, deploy_generation)
+        super().__init__(azurite, composition, mz_service, deploy_generation)
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -228,16 +210,58 @@ class DeleteDataAtEndOfDay0dtDeploys(Workload):
 
         if composition:
             self.cycle.append(
-                ZeroDowntimeDeploy(composition, probability=0.1, workload=self)
+                RestartMz(
+                    composition, probability=0.1, workload=self, azurite=self.azurite
+                )
+            )
+
+
+class DeleteDataAtEndOfDay0dtDeploys(Workload):
+    def __init__(
+        self,
+        azurite: bool,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
+    ) -> None:
+        super().__init__(azurite, composition, mz_service, deploy_generation)
+        insert = Insert(
+            count=Records.SOME,
+            record_size=RecordSize.SMALL,
+        )
+        insert_phase = TransactionDef(
+            size=TransactionSize.HUGE,
+            operations=[insert],
+        )
+        # Delete all records in a single transaction
+        delete_phase = TransactionDef(
+            [
+                Delete(
+                    number_of_records=Records.ALL,
+                    record_size=RecordSize.SMALL,
+                    num=insert.max_key(),
+                )
+            ]
+        )
+        self.cycle = [
+            insert_phase,
+            delete_phase,
+        ]
+
+        if composition:
+            self.cycle.append(
+                ZeroDowntimeDeploy(
+                    composition, probability=0.1, workload=self, azurite=self.azurite
+                )
             )
 
 
 # TODO: Implement
 # class ProgressivelyEnrichRecords(Workload):
 #    def __init__(
-#        self, composition: Composition | None = None, mz_service: str = "materialized", deploy_generation: int = 0
+#        self, azurite: bool, composition: Composition | None = None, mz_service: str = "materialized", deploy_generation: int = 0
 #    ) -> None:
-#        super().__init__(mz_service, deploy_generation)
+#        super().__init__(azurite, composition, mz_service, deploy_generation)
 #        self.cycle: list[Definition] = [
 #        ]
 
@@ -252,6 +276,7 @@ def execute_workload(
     ports: dict[str, int],
     runtime: int,
     verbose: bool,
+    composition: Composition,
 ) -> None:
     fields = []
 
@@ -263,7 +288,15 @@ def execute_workload(
 
     executors = [
         executor_class(
-            num, ports, fields, "materialize", mz_service=workload.mz_service
+            num,
+            ports,
+            fields,
+            "materialize",
+            mz_service=workload.mz_service,
+            composition=composition,
+            cluster=(
+                "quickstart" if executor_class == KafkaExecutor else "singlereplica"
+            ),
         )
         for executor_class in [PgExecutor] + executor_classes
     ]
@@ -287,16 +320,16 @@ def execute_workload(
     order_str = ", ".join(str(i + 1) for i in range(len(fields)))
 
     with pg_executor.pg_conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM {pg_executor.table} ORDER BY {order_str}")
+        cur.execute(f"SELECT * FROM {pg_executor.table} ORDER BY {order_str}".encode())
         expected_result = cur.fetchall()
         print(f"Expected (via Postgres): {expected_result}")
 
     # Reconnect as Mz disruptions may have destroyed the previous connection
-    conn = pg8000.connect(
-        host="localhost",
+    conn = psycopg.connect(
+        host="127.0.0.1",
         port=ports[workload.mz_service],
         user="materialize",
-        database="materialize",
+        dbname="materialize",
     )
 
     for executor in executors:
@@ -305,7 +338,9 @@ def execute_workload(
         with conn.cursor() as cur:
             try:
                 cur.execute("SET REAL_TIME_RECENCY TO TRUE")
-                cur.execute(f"SELECT * FROM {executor.table} ORDER BY {order_str}")
+                cur.execute(
+                    f"SELECT * FROM {executor.table} ORDER BY {order_str}".encode()
+                )
                 actual_result = cur.fetchall()
                 cur.execute("SET REAL_TIME_RECENCY TO FALSE")
             except Exception as e:

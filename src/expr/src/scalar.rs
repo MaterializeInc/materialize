@@ -7,53 +7,71 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::ops::BitOrAssign;
+use std::sync::Arc;
 use std::{fmt, mem};
 
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
+use mz_ore::soft_assert_or_log;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
-use mz_pgtz::timezone::TimezoneSpec;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::date::DateError;
-use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::range::InvalidRangeError;
-use mz_repr::adt::regex::Regex;
+use mz_repr::adt::regex::RegexCompilationError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{arb_datum, ColumnType, Datum, Row, RowArena, ScalarType};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlColumnType};
+
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::*;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::{
-    parse_timezone, regexp_replace_parse_flags, BinaryFunc, UnaryFunc, UnmaterializableFunc,
-    VariadicFunc,
-};
+use crate::explain::{HumanizedExplain, HumanizerMode};
+pub use crate::scalar::columns::Columns;
+pub use crate::scalar::eval::Eval;
+use crate::scalar::func::variadic::{And, Or};
+use crate::scalar::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
+pub use crate::scalar::optimizable::OptimizableExpr;
 use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
-use crate::scalar::proto_mir_scalar_expr::*;
 use crate::visit::{Visit, VisitChildren};
 
+pub mod columns;
+pub mod eval;
 pub mod func;
 pub mod like_pattern;
+pub mod optimizable;
+mod reduce;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 pub enum MirScalarExpr {
     /// A column of the input row
-    Column(usize),
+    Column(usize, TreatAsEqual<Option<Arc<str>>>),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
-    Literal(Result<Row, EvalError>, ColumnType),
+    Literal(Result<Row, EvalError>, ReprColumnType),
     /// A call to an unmaterializable function.
     ///
     /// These functions cannot be evaluated by `MirScalarExpr::eval`. They must
@@ -88,202 +106,110 @@ pub enum MirScalarExpr {
     },
 }
 
-impl Arbitrary for MirScalarExpr {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<MirScalarExpr>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let leaf = prop::strategy::Union::new(vec![
-            (0..10_usize).prop_map(MirScalarExpr::Column).boxed(),
-            (arb_datum(), any::<ScalarType>())
-                .prop_map(|(datum, typ)| MirScalarExpr::literal(Ok((&datum).into()), typ))
-                .boxed(),
-            (any::<EvalError>(), any::<ScalarType>())
-                .prop_map(|(err, typ)| MirScalarExpr::literal(Err(err), typ))
-                .boxed(),
-            any::<UnmaterializableFunc>()
-                .prop_map(MirScalarExpr::CallUnmaterializable)
-                .boxed(),
-        ]);
-        leaf.prop_recursive(3, 6, 7, |inner| {
-            prop::strategy::Union::new(vec![
-                (
-                    any::<VariadicFunc>(),
-                    prop::collection::vec(inner.clone(), 1..5),
-                )
-                    .prop_map(|(func, exprs)| MirScalarExpr::CallVariadic { func, exprs })
-                    .boxed(),
-                (any::<BinaryFunc>(), inner.clone(), inner.clone())
-                    .prop_map(|(func, expr1, expr2)| MirScalarExpr::CallBinary {
-                        func,
-                        expr1: Box::new(expr1),
-                        expr2: Box::new(expr2),
-                    })
-                    .boxed(),
-                (inner.clone(), inner.clone(), inner.clone())
-                    .prop_map(|(cond, then, els)| MirScalarExpr::If {
-                        cond: Box::new(cond),
-                        then: Box::new(then),
-                        els: Box::new(els),
-                    })
-                    .boxed(),
-                (any::<UnaryFunc>(), inner)
-                    .prop_map(|(func, expr)| MirScalarExpr::CallUnary {
-                        func,
-                        expr: Box::new(expr),
-                    })
-                    .boxed(),
-            ])
-        })
-        .boxed()
-    }
-}
-
-impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
-    fn into_proto(&self) -> ProtoMirScalarExpr {
-        use proto_mir_scalar_expr::Kind::*;
-        ProtoMirScalarExpr {
-            kind: Some(match self {
-                MirScalarExpr::Column(i) => Column(i.into_proto()),
-                MirScalarExpr::Literal(lit, typ) => Literal(ProtoLiteral {
-                    lit: Some(lit.into_proto()),
-                    typ: Some(typ.into_proto()),
-                }),
-                MirScalarExpr::CallUnmaterializable(func) => {
-                    CallUnmaterializable(func.into_proto())
-                }
-                MirScalarExpr::CallUnary { func, expr } => CallUnary(Box::new(ProtoCallUnary {
-                    func: Some(Box::new(func.into_proto())),
-                    expr: Some(expr.into_proto()),
-                })),
-                MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                    CallBinary(Box::new(ProtoCallBinary {
-                        func: Some(func.into_proto()),
-                        expr1: Some(expr1.into_proto()),
-                        expr2: Some(expr2.into_proto()),
-                    }))
-                }
-                MirScalarExpr::CallVariadic { func, exprs } => CallVariadic(ProtoCallVariadic {
-                    func: Some(func.into_proto()),
-                    exprs: exprs.into_proto(),
-                }),
-                MirScalarExpr::If { cond, then, els } => If(Box::new(ProtoIf {
-                    cond: Some(cond.into_proto()),
-                    then: Some(then.into_proto()),
-                    els: Some(els.into_proto()),
-                })),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoMirScalarExpr) -> Result<Self, TryFromProtoError> {
-        use proto_mir_scalar_expr::Kind::*;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoMirScalarExpr::kind"))?;
-        Ok(match kind {
-            Column(i) => MirScalarExpr::Column(usize::from_proto(i)?),
-            Literal(ProtoLiteral { lit, typ }) => MirScalarExpr::Literal(
-                lit.into_rust_if_some("ProtoLiteral::lit")?,
-                typ.into_rust_if_some("ProtoLiteral::typ")?,
-            ),
-            CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.into_rust()?),
-            CallUnary(call_unary) => MirScalarExpr::CallUnary {
-                func: call_unary.func.into_rust_if_some("ProtoCallUnary::func")?,
-                expr: call_unary.expr.into_rust_if_some("ProtoCallUnary::expr")?,
-            },
-            CallBinary(call_binary) => MirScalarExpr::CallBinary {
-                func: call_binary
-                    .func
-                    .into_rust_if_some("ProtoCallBinary::func")?,
-                expr1: call_binary
-                    .expr1
-                    .into_rust_if_some("ProtoCallBinary::expr1")?,
-                expr2: call_binary
-                    .expr2
-                    .into_rust_if_some("ProtoCallBinary::expr2")?,
-            },
-            CallVariadic(ProtoCallVariadic { func, exprs }) => MirScalarExpr::CallVariadic {
-                func: func.into_rust_if_some("ProtoCallVariadic::func")?,
-                exprs: exprs.into_rust()?,
-            },
-            If(if_struct) => MirScalarExpr::If {
-                cond: if_struct.cond.into_rust_if_some("ProtoIf::cond")?,
-                then: if_struct.then.into_rust_if_some("ProtoIf::then")?,
-                els: if_struct.els.into_rust_if_some("ProtoIf::els")?,
-            },
-        })
-    }
-}
-
-impl RustType<proto_literal::ProtoLiteralData> for Result<Row, EvalError> {
-    fn into_proto(&self) -> proto_literal::ProtoLiteralData {
-        use proto_literal::proto_literal_data::Result::*;
-        proto_literal::ProtoLiteralData {
-            result: Some(match self {
-                Result::Ok(row) => Ok(row.into_proto()),
-                Result::Err(err) => Err(err.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: proto_literal::ProtoLiteralData) -> Result<Self, TryFromProtoError> {
-        use proto_literal::proto_literal_data::Result::*;
-        match proto.result {
-            Some(Ok(row)) => Result::Ok(Result::Ok(
-                (&row)
-                    .try_into()
-                    .map_err(TryFromProtoError::RowConversionError)?,
-            )),
-            Some(Err(err)) => Result::Ok(Result::Err(err.into_rust()?)),
-            None => Result::Err(TryFromProtoError::missing_field("ProtoLiteralData::result")),
+// We need a custom Debug because we don't want to show `None` for name information.
+// Sadly, the `derivative` crate doesn't support this use case.
+impl std::fmt::Debug for MirScalarExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MirScalarExpr::Column(i, TreatAsEqual(Some(name))) => {
+                write!(f, "Column({i}, {name:?})")
+            }
+            MirScalarExpr::Column(i, TreatAsEqual(None)) => write!(f, "Column({i})"),
+            MirScalarExpr::Literal(lit, typ) => write!(f, "Literal({lit:?}, {typ:?})"),
+            MirScalarExpr::CallUnmaterializable(func) => {
+                write!(f, "CallUnmaterializable({func:?})")
+            }
+            MirScalarExpr::CallUnary { func, expr } => {
+                write!(f, "CallUnary({func:?}, {expr:?})")
+            }
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                write!(f, "CallBinary({func:?}, {expr1:?}, {expr2:?})")
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                write!(f, "CallVariadic({func:?}, {exprs:?})")
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                write!(f, "If({cond:?}, {then:?}, {els:?})")
+            }
         }
     }
 }
 
 impl MirScalarExpr {
     pub fn columns(is: &[usize]) -> Vec<MirScalarExpr> {
-        is.iter().map(|i| MirScalarExpr::Column(*i)).collect()
+        is.iter().map(|i| MirScalarExpr::column(*i)).collect()
     }
 
     pub fn column(column: usize) -> Self {
-        MirScalarExpr::Column(column)
+        MirScalarExpr::Column(column, TreatAsEqual(None))
     }
 
-    pub fn literal(res: Result<Datum, EvalError>, typ: ScalarType) -> Self {
-        let typ = typ.nullable(matches!(res, Ok(Datum::Null)));
+    pub fn named_column(column: usize, name: Arc<str>) -> Self {
+        MirScalarExpr::Column(column, TreatAsEqual(Some(name)))
+    }
+
+    pub fn literal(res: Result<Datum, EvalError>, typ: ReprScalarType) -> Self {
+        let typ = ReprColumnType {
+            scalar_type: typ,
+            nullable: matches!(res, Ok(Datum::Null)),
+        };
         let row = res.map(|datum| Row::pack_slice(&[datum]));
         MirScalarExpr::Literal(row, typ)
     }
 
-    pub fn literal_ok(datum: Datum, typ: ScalarType) -> Self {
+    pub fn literal_ok(datum: Datum, typ: ReprScalarType) -> Self {
         MirScalarExpr::literal(Ok(datum), typ)
     }
 
-    pub fn literal_null(typ: ScalarType) -> Self {
+    /// Constructs a `MirScalarExpr::Literal` from a pre-packed `Row`
+    /// containing a single datum and a `ReprScalarType`. Nullability is
+    /// derived by inspecting the first datum in the row.
+    pub fn literal_from_single_element_row(row: Row, typ: ReprScalarType) -> Self {
+        soft_assert_or_log!(
+            row.iter().count() == 1,
+            "literal_from_row called with a Row containing {} datums",
+            row.iter().count()
+        );
+        let nullable = row.unpack_first() == Datum::Null;
+        let typ = ReprColumnType {
+            scalar_type: typ,
+            nullable,
+        };
+        MirScalarExpr::Literal(Ok(row), typ)
+    }
+
+    pub fn literal_null(typ: ReprScalarType) -> Self {
         MirScalarExpr::literal_ok(Datum::Null, typ)
     }
 
     pub fn literal_false() -> Self {
-        MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool)
+        MirScalarExpr::literal_ok(Datum::False, ReprScalarType::Bool)
     }
 
     pub fn literal_true() -> Self {
-        MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool)
+        MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool)
     }
 
-    pub fn call_unary(self, func: UnaryFunc) -> Self {
+    pub fn call_unary<U: Into<UnaryFunc>>(self, func: U) -> Self {
         MirScalarExpr::CallUnary {
-            func,
+            func: func.into(),
             expr: Box::new(self),
         }
     }
 
-    pub fn call_binary(self, other: Self, func: BinaryFunc) -> Self {
+    pub fn call_binary<B: Into<BinaryFunc>>(self, other: Self, func: B) -> Self {
         MirScalarExpr::CallBinary {
-            func,
+            func: func.into(),
             expr1: Box::new(self),
             expr2: Box::new(other),
+        }
+    }
+
+    /// Call function `func` on `exprs`.
+    pub fn call_variadic<V: Into<VariadicFunc>>(func: V, exprs: Vec<Self>) -> Self {
+        MirScalarExpr::CallVariadic {
+            func: func.into(),
+            exprs,
         }
     }
 
@@ -296,17 +222,11 @@ impl MirScalarExpr {
     }
 
     pub fn or(self, other: Self) -> Self {
-        MirScalarExpr::CallVariadic {
-            func: VariadicFunc::Or,
-            exprs: vec![self, other],
-        }
+        MirScalarExpr::call_variadic(Or, vec![self, other])
     }
 
     pub fn and(self, other: Self) -> Self {
-        MirScalarExpr::CallVariadic {
-            func: VariadicFunc::And,
-            exprs: vec![self, other],
-        }
+        MirScalarExpr::call_variadic(And, vec![self, other])
     }
 
     pub fn not(self) -> Self {
@@ -320,7 +240,7 @@ impl MirScalarExpr {
     /// Match AND or OR on self and get the args. If no match, then interpret self as if it were
     /// wrapped in a 1-arg AND/OR.
     pub fn and_or_args(&self, func_to_match: VariadicFunc) -> Vec<MirScalarExpr> {
-        assert!(func_to_match == VariadicFunc::Or || func_to_match == VariadicFunc::And);
+        assert!(func_to_match == Or.into() || func_to_match == And.into());
         match self {
             MirScalarExpr::CallVariadic { func, exprs } if *func == func_to_match => exprs.clone(),
             _ => vec![self.clone()],
@@ -339,7 +259,7 @@ impl MirScalarExpr {
     /// details on the inversion, see `invert_casts_on_expr_eq_literal_inner`.
     pub fn expr_eq_literal(&self, expr: &MirScalarExpr) -> Option<(Row, bool)> {
         if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: BinaryFunc::Eq(_),
             expr1,
             expr2,
         } = self
@@ -383,7 +303,7 @@ impl MirScalarExpr {
     /// `<expr>` before returning it, see `invert_casts_on_expr_eq_literal_inner`.
     pub fn any_expr_eq_literal(&self) -> Option<MirScalarExpr> {
         if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: BinaryFunc::Eq(_),
             expr1,
             expr2,
         } = self
@@ -406,26 +326,18 @@ impl MirScalarExpr {
     /// For more details, see `invert_casts_on_expr_eq_literal_inner`.
     pub fn invert_casts_on_expr_eq_literal(&self) -> MirScalarExpr {
         if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: BinaryFunc::Eq(_),
             expr1,
             expr2,
         } = self
         {
             if expr1.is_literal() {
                 let (expr, literal) = Self::invert_casts_on_expr_eq_literal_inner(expr2, expr1);
-                return MirScalarExpr::CallBinary {
-                    func: BinaryFunc::Eq,
-                    expr1: Box::new(literal),
-                    expr2: Box::new(expr),
-                };
+                return literal.call_binary(expr, func::Eq);
             }
             if expr2.is_literal() {
                 let (expr, literal) = Self::invert_casts_on_expr_eq_literal_inner(expr1, expr2);
-                return MirScalarExpr::CallBinary {
-                    func: BinaryFunc::Eq,
-                    expr1: Box::new(literal),
-                    expr2: Box::new(expr),
-                };
+                return literal.call_binary(expr, func::Eq);
             }
             // Note: The above return statements should be consistent in whether they put the
             // literal in expr1 or expr2, for the deduplication in CanonicalizeMfp to work.
@@ -490,7 +402,7 @@ impl MirScalarExpr {
     /// could have been inserted implicitly).
     pub fn impossible_literal_equality_because_types(&self) -> bool {
         if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: BinaryFunc::Eq(_),
             expr1,
             expr2,
         } = self
@@ -545,7 +457,8 @@ impl MirScalarExpr {
     pub fn any_expr_ineq_literal(&self) -> bool {
         match self {
             MirScalarExpr::CallBinary {
-                func: BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte,
+                func:
+                    BinaryFunc::Lt(_) | BinaryFunc::Lte(_) | BinaryFunc::Gt(_) | BinaryFunc::Gte(_),
                 expr1,
                 expr2,
             } => expr1.is_literal() || expr2.is_literal(),
@@ -553,56 +466,24 @@ impl MirScalarExpr {
         }
     }
 
-    /// Rewrites column indices with their value in `permutation`.
-    ///
-    /// This method is applicable even when `permutation` is not a
-    /// strict permutation, and it only needs to have entries for
-    /// each column referenced in `self`.
-    pub fn permute(&mut self, permutation: &[usize]) {
-        self.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(old_i) = e {
-                *old_i = permutation[*old_i];
-            }
-        });
-    }
-
-    /// Rewrites column indices with their value in `permutation`.
-    ///
-    /// This method is applicable even when `permutation` is not a
-    /// strict permutation, and it only needs to have entries for
-    /// each column referenced in `self`.
-    pub fn permute_map(&mut self, permutation: &BTreeMap<usize, usize>) {
-        self.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(old_i) = e {
-                *old_i = permutation[old_i];
-            }
-        });
-    }
-
-    pub fn support(&self) -> BTreeSet<usize> {
-        let mut support = BTreeSet::new();
-        self.support_into(&mut support);
-        support
-    }
-
-    pub fn support_into(&self, support: &mut BTreeSet<usize>) {
-        self.visit_pre(|e| {
-            if let MirScalarExpr::Column(i) = e {
-                support.insert(*i);
-            }
-        });
-    }
-
     pub fn take(&mut self) -> Self {
-        mem::replace(self, MirScalarExpr::literal_null(ScalarType::String))
+        mem::replace(self, MirScalarExpr::literal_null(ReprScalarType::String))
     }
 
-    pub fn as_literal(&self) -> Option<Result<Datum, &EvalError>> {
+    /// If the expression is a literal, this returns the literal's Datum or the literal's EvalError.
+    /// Otherwise, it returns None.
+    pub fn as_literal(&self) -> Option<Result<Datum<'_>, &EvalError>> {
         if let MirScalarExpr::Literal(lit, _column_type) = self {
             Some(lit.as_ref().map(|row| row.unpack_first()))
         } else {
             None
         }
+    }
+
+    /// Flattens the two failure modes of `as_literal` into one layer of Option: returns the
+    /// literal's Datum only if the expression is a literal, and it's not a literal error.
+    pub fn as_literal_non_error(&self) -> Option<Datum<'_>> {
+        self.as_literal().map(|eval_err| eval_err.ok()).flatten()
     }
 
     pub fn as_literal_owned(&self) -> Option<Result<Row, EvalError>> {
@@ -611,6 +492,16 @@ impl MirScalarExpr {
         } else {
             None
         }
+    }
+
+    /// Returns a reference to the `Row` if the expression is a non-NULL `Ok` literal.
+    pub fn as_literal_non_null_row(&self) -> Option<&Row> {
+        if let MirScalarExpr::Literal(Ok(row), _) = self {
+            if !row.unpack_first().is_null() {
+                return Some(row);
+            }
+        }
+        None
     }
 
     pub fn as_literal_str(&self) -> Option<&str> {
@@ -655,18 +546,73 @@ impl MirScalarExpr {
         matches!(self, MirScalarExpr::Literal(Err(_), _typ))
     }
 
-    pub fn is_column(&self) -> bool {
-        matches!(self, MirScalarExpr::Column(_))
-    }
-
     pub fn is_error_if_null(&self) -> bool {
         matches!(
             self,
             Self::CallVariadic {
-                func: VariadicFunc::ErrorIfNull,
+                func: VariadicFunc::ErrorIfNull(_),
                 ..
             }
         )
+    }
+
+    /// If `self` expresses a temporal filter, normalize it to start with `mz_now()` and return
+    /// references.
+    ///
+    /// A temporal filter is an expression of the form `mz_now() <BINOP> <EXPR>`,
+    /// for a restricted set of `BINOP` and `EXPR` that do not themselves contain `mz_now()`.
+    /// Expressions may conform to this once their expressions are swapped.
+    ///
+    /// If the expression is not a temporal filter, it will be unchanged, and the reason for why
+    /// it's not a temporal filter is returned as a string.
+    pub fn as_mut_temporal_filter(&mut self) -> Result<(&BinaryFunc, &mut MirScalarExpr), String> {
+        if !self.contains_temporal() {
+            return Err("Does not involve mz_now()".to_string());
+        }
+        // Supported temporal predicates are exclusively binary operators.
+        if let MirScalarExpr::CallBinary { func, expr1, expr2 } = self {
+            // Attempt to put `LogicalTimestamp` in the first argument position.
+            if !expr1.contains_temporal()
+                && **expr2 == MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
+            {
+                let new_func = match func {
+                    BinaryFunc::Eq(_) => func::Eq.into(),
+                    BinaryFunc::Lt(_) => func::Gt.into(),
+                    BinaryFunc::Lte(_) => func::Gte.into(),
+                    BinaryFunc::Gt(_) => func::Lt.into(),
+                    BinaryFunc::Gte(_) => func::Lte.into(),
+                    x => {
+                        return Err(format!("Unsupported binary temporal operation: {:?}", x));
+                    }
+                };
+                std::mem::swap(expr1, expr2);
+                *func = new_func;
+            }
+
+            // Error if MLT is referenced in an unsupported position.
+            if expr2.contains_temporal()
+                || **expr1 != MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
+            {
+                let mode = HumanizedExplain::new(false); // no redaction
+                let bad_expr = MirScalarExpr::CallBinary {
+                    func: func.clone(),
+                    expr1: expr1.clone(),
+                    expr2: expr2.clone(),
+                };
+                return Err(format!(
+                    "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mz_timestamp-castable expression. Expression found: {}",
+                    mode.expr(&bad_expr, None),
+                ));
+            }
+
+            Ok((&*func, expr2))
+        } else {
+            let mode = HumanizedExplain::new(false); // no redaction
+            Err(format!(
+                "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: {}",
+                mode.expr(self, None),
+            ))
+        }
     }
 
     #[deprecated = "Use `might_error` instead"]
@@ -674,6 +620,17 @@ impl MirScalarExpr {
         let mut worklist = vec![self];
         while let Some(expr) = worklist.pop() {
             if expr.is_error_if_null() {
+                return true;
+            }
+            worklist.extend(expr.children());
+        }
+        false
+    }
+
+    pub fn contains_err(&self) -> bool {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            if expr.is_literal_err() {
                 return true;
             }
             worklist.extend(expr.children());
@@ -697,15 +654,6 @@ impl MirScalarExpr {
         false
     }
 
-    /// If self is a column, return the column index, otherwise `None`.
-    pub fn as_column(&self) -> Option<usize> {
-        if let MirScalarExpr::Column(c) = self {
-            Some(*c)
-        } else {
-            None
-        }
-    }
-
     /// Reduces a complex expression where possible.
     ///
     /// This function uses nullability information present in `column_types`,
@@ -713,15 +661,19 @@ impl MirScalarExpr {
     /// long as this information continues to hold (nullability may not hold
     /// as expressions migrate around).
     ///
+    /// (If you'd like to not use nullability information here, then you can
+    /// tweak the nullabilities in `column_types` before passing it to this
+    /// function, see e.g. in `EquivalenceClasses::minimize`.)
+    ///
     /// Also performs partial canonicalization on the expression.
     ///
     /// ```rust
     /// use mz_expr::MirScalarExpr;
-    /// use mz_repr::{ColumnType, Datum, ScalarType};
+    /// use mz_repr::{ReprColumnType, Datum, SqlScalarType};
     ///
-    /// let expr_0 = MirScalarExpr::Column(0);
-    /// let expr_t = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
-    /// let expr_f = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
+    /// let expr_0 = MirScalarExpr::column(0);
+    /// let expr_t = MirScalarExpr::literal_true();
+    /// let expr_f = MirScalarExpr::literal_false();
     ///
     /// let mut test =
     /// expr_t
@@ -729,743 +681,13 @@ impl MirScalarExpr {
     ///     .and(expr_f.clone())
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
-    /// let input_type = vec![ScalarType::Int32.nullable(false)];
+    /// let input_type = vec![ReprColumnType::from(&SqlScalarType::Int32.nullable(false))];
     /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```
-    pub fn reduce(&mut self, column_types: &[ColumnType]) {
-        let temp_storage = &RowArena::new();
-        let eval = |e: &MirScalarExpr| {
-            MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type)
-        };
-
-        // Simplifications run in a loop until `self` no longer changes.
-        let mut old_self = MirScalarExpr::column(0);
-        while old_self != *self {
-            old_self = self.clone();
-            #[allow(deprecated)]
-            self.visit_mut_pre_post_nolimit(
-                &mut |e| {
-                    match e {
-                        MirScalarExpr::CallUnary { func, expr } => {
-                            if *func == UnaryFunc::IsNull(func::IsNull) {
-                                if !expr.typ(column_types).nullable {
-                                    *e = MirScalarExpr::literal_false();
-                                } else {
-                                    // Try to at least decompose IsNull into a disjunction
-                                    // of simpler IsNull subexpressions.
-                                    if let Some(expr) = expr.decompose_is_null() {
-                                        *e = expr
-                                    }
-                                }
-                            } else if *func == UnaryFunc::Not(func::Not) {
-                                // Push down not expressions
-                                match &mut **expr {
-                                    // Two negates cancel each other out.
-                                    MirScalarExpr::CallUnary {
-                                        expr: inner_expr,
-                                        func: UnaryFunc::Not(func::Not),
-                                    } => *e = inner_expr.take(),
-                                    // Transforms `NOT(a <op> b)` to `a negate(<op>) b`
-                                    // if a negation exists.
-                                    MirScalarExpr::CallBinary { expr1, expr2, func } => {
-                                        if let Some(negated_func) = func.negate() {
-                                            *e = MirScalarExpr::CallBinary {
-                                                expr1: Box::new(expr1.take()),
-                                                expr2: Box::new(expr2.take()),
-                                                func: negated_func,
-                                            }
-                                        }
-                                    }
-                                    MirScalarExpr::CallVariadic { .. } => {
-                                        e.demorgans();
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        _ => {}
-                    };
-                    None
-                },
-                &mut |e| match e {
-                    // Evaluate and pull up constants
-                    MirScalarExpr::Column(_)
-                    | MirScalarExpr::Literal(_, _)
-                    | MirScalarExpr::CallUnmaterializable(_) => (),
-                    MirScalarExpr::CallUnary { func, expr } => {
-                        if expr.is_literal() && *func != UnaryFunc::Panic(func::Panic) {
-                            *e = eval(e);
-                        } else if let UnaryFunc::RecordGet(func::RecordGet(i)) = *func {
-                            if let MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
-                                exprs,
-                            } = &mut **expr
-                            {
-                                *e = exprs.swap_remove(i);
-                            }
-                        }
-                    }
-                    MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                        if expr1.is_literal() && expr2.is_literal() {
-                            *e = eval(e);
-                        } else if (expr1.is_literal_null() || expr2.is_literal_null())
-                            && func.propagates_nulls()
-                        {
-                            *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
-                        } else if let Some(err) = expr1.as_literal_err() {
-                            *e = MirScalarExpr::literal(
-                                Err(err.clone()),
-                                e.typ(column_types).scalar_type,
-                            );
-                        } else if let Some(err) = expr2.as_literal_err() {
-                            *e = MirScalarExpr::literal(
-                                Err(err.clone()),
-                                e.typ(column_types).scalar_type,
-                            );
-                        } else if let BinaryFunc::IsLikeMatch { case_insensitive } = func {
-                            if expr2.is_literal() {
-                                // We can at least precompile the regex.
-                                let pattern = expr2.as_literal_str().unwrap();
-                                *e = match like_pattern::compile(pattern, *case_insensitive) {
-                                    Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
-                                        func::IsLikeMatch(matcher),
-                                    )),
-                                    Err(err) => MirScalarExpr::literal(
-                                        Err(err),
-                                        e.typ(column_types).scalar_type,
-                                    ),
-                                };
-                            }
-                        } else if let BinaryFunc::IsRegexpMatch { case_insensitive } = func {
-                            if let MirScalarExpr::Literal(Ok(row), _) = &**expr2 {
-                                *e = match Regex::new(
-                                    row.unpack_first().unwrap_str().to_string(),
-                                    *case_insensitive,
-                                ) {
-                                    Ok(regex) => expr1.take().call_unary(UnaryFunc::IsRegexpMatch(
-                                        func::IsRegexpMatch(regex),
-                                    )),
-                                    Err(err) => MirScalarExpr::literal(
-                                        Err(err.into()),
-                                        e.typ(column_types).scalar_type,
-                                    ),
-                                };
-                            }
-                        } else if *func == BinaryFunc::ExtractInterval && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::ExtractInterval(func::ExtractInterval(units)),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::ExtractTime && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::ExtractTime(func::ExtractTime(units)),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::ExtractTimestamp && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::ExtractTimestamp(func::ExtractTimestamp(
-                                        units,
-                                    )),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::ExtractTimestampTz && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::ExtractTimestampTz(func::ExtractTimestampTz(
-                                        units,
-                                    )),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::ExtractDate && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::ExtractDate(func::ExtractDate(units)),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::DatePartInterval && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::DatePartInterval(func::DatePartInterval(
-                                        units,
-                                    )),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::DatePartTime && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::DatePartTime(func::DatePartTime(units)),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::DatePartTimestamp && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::DatePartTimestamp(func::DatePartTimestamp(
-                                        units,
-                                    )),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::DatePartTimestampTz && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::DatePartTimestampTz(
-                                        func::DatePartTimestampTz(units),
-                                    ),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::DateTruncTimestamp && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::DateTruncTimestamp(func::DateTruncTimestamp(
-                                        units,
-                                    )),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::DateTruncTimestampTz && expr1.is_literal() {
-                            let units = expr1.as_literal_str().unwrap();
-                            *e = match units.parse::<DateTimeUnits>() {
-                                Ok(units) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::DateTruncTimestampTz(
-                                        func::DateTruncTimestampTz(units),
-                                    ),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::TimezoneTimestamp && expr1.is_literal() {
-                            // If the timezone argument is a literal, and we're applying the function on many rows at the same
-                            // time we really don't want to parse it again and again, so we parse it once and embed it into the
-                            // UnaryFunc enum. The memory footprint of Timezone is small (8 bytes).
-                            let tz = expr1.as_literal_str().unwrap();
-                            *e = match parse_timezone(tz, TimezoneSpec::Posix) {
-                                Ok(tz) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::TimezoneTimestamp(func::TimezoneTimestamp(tz)),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(err) => MirScalarExpr::literal(
-                                    Err(err),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if *func == BinaryFunc::TimezoneTimestampTz && expr1.is_literal() {
-                            let tz = expr1.as_literal_str().unwrap();
-                            *e = match parse_timezone(tz, TimezoneSpec::Posix) {
-                                Ok(tz) => MirScalarExpr::CallUnary {
-                                    func: UnaryFunc::TimezoneTimestampTz(
-                                        func::TimezoneTimestampTz(tz),
-                                    ),
-                                    expr: Box::new(expr2.take()),
-                                },
-                                Err(err) => MirScalarExpr::literal(
-                                    Err(err),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            }
-                        } else if matches!(*func, BinaryFunc::Eq | BinaryFunc::NotEq)
-                            && expr2 < expr1
-                        {
-                            // Canonically order elements so that deduplication works better.
-                            // Also, the below `Literal([c1, c2]) = record_create(e1, e2)` matching
-                            // relies on this canonical ordering.
-                            mem::swap(expr1, expr2);
-                        } else if let (
-                            BinaryFunc::Eq,
-                            MirScalarExpr::Literal(
-                                Ok(lit_row),
-                                ColumnType {
-                                    scalar_type:
-                                        ScalarType::Record {
-                                            fields: field_types,
-                                            ..
-                                        },
-                                    ..
-                                },
-                            ),
-                            MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
-                                exprs: rec_create_args,
-                            },
-                        ) = (&*func, &**expr1, &**expr2)
-                        {
-                            // Literal([c1, c2]) = record_create(e1, e2)
-                            //  -->
-                            // c1 = e1 AND c2 = e2
-                            //
-                            // (Records are represented as lists.)
-                            //
-                            // `MapFilterProject::literal_constraints` relies on this transform,
-                            // because `(e1,e2) IN ((1,2))` is desugared using `record_create`.
-                            match lit_row.unpack_first() {
-                                Datum::List(datum_list) => {
-                                    *e = MirScalarExpr::CallVariadic {
-                                        func: VariadicFunc::And,
-                                        exprs: itertools::izip!(
-                                            datum_list.iter(),
-                                            field_types,
-                                            rec_create_args
-                                        )
-                                        .map(|(d, (_, typ), a)| MirScalarExpr::CallBinary {
-                                            func: BinaryFunc::Eq,
-                                            expr1: Box::new(MirScalarExpr::Literal(
-                                                Ok(Row::pack_slice(&[d])),
-                                                typ.clone(),
-                                            )),
-                                            expr2: Box::new(a.clone()),
-                                        })
-                                        .collect(),
-                                    };
-                                }
-                                _ => {}
-                            }
-                        } else if let (
-                            BinaryFunc::Eq,
-                            MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
-                                exprs: rec_create_args1,
-                            },
-                            MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
-                                exprs: rec_create_args2,
-                            },
-                        ) = (&*func, &**expr1, &**expr2)
-                        {
-                            // record_create(a1, a2, ...) = record_create(b1, b2, ...)
-                            //  -->
-                            // a1 = b1 AND a2 = b2 AND ...
-                            //
-                            // This is similar to the previous reduction, but this one kicks in also
-                            // when only some (or none) of the record fields are literals. This
-                            // enables the discovery of literal constraints for those fields.
-                            //
-                            // Note that there is a similar decomposition in
-                            // `mz_sql::plan::transform_ast::Desugarer`, but that is earlier in the
-                            // pipeline than the compilation of IN lists to `record_create`.
-                            *e = MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::And,
-                                exprs: rec_create_args1
-                                    .into_iter()
-                                    .zip(rec_create_args2)
-                                    .map(|(a, b)| MirScalarExpr::CallBinary {
-                                        func: BinaryFunc::Eq,
-                                        expr1: Box::new(a.clone()),
-                                        expr2: Box::new(b.clone()),
-                                    })
-                                    .collect(),
-                            }
-                        }
-                    }
-                    MirScalarExpr::CallVariadic { .. } => {
-                        e.flatten_associative();
-                        let (func, exprs) = match e {
-                            MirScalarExpr::CallVariadic { func, exprs } => (func, exprs),
-                            _ => unreachable!("`flatten_associative` shouldn't change node type"),
-                        };
-                        if *func == VariadicFunc::Coalesce {
-                            // If all inputs are null, output is null. This check must
-                            // be done before `exprs.retain...` because `e.typ` requires
-                            // > 0 `exprs` remain.
-                            if exprs.iter().all(|expr| expr.is_literal_null()) {
-                                *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
-                                return;
-                            }
-
-                            // Remove any null values if not all values are null.
-                            exprs.retain(|e| !e.is_literal_null());
-
-                            // Find the first argument that is a literal or non-nullable
-                            // column. All arguments after it get ignored, so throw them
-                            // away. This intentionally throws away errors that can
-                            // never happen.
-                            if let Some(i) = exprs
-                                .iter()
-                                .position(|e| e.is_literal() || !e.typ(column_types).nullable)
-                            {
-                                exprs.truncate(i + 1);
-                            }
-
-                            // Deduplicate arguments in cases like `coalesce(#0, #0)`.
-                            let mut prior_exprs = BTreeSet::new();
-                            exprs.retain(|e| prior_exprs.insert(e.clone()));
-
-                            if let Some(expr) = exprs.iter_mut().find(|e| e.is_literal_err()) {
-                                // One of the remaining arguments is an error, so
-                                // just replace the entire coalesce with that error.
-                                *e = expr.take();
-                            } else if exprs.len() == 1 {
-                                // Only one argument, so the coalesce is a no-op.
-                                *e = exprs[0].take();
-                            }
-                        } else if exprs.iter().all(|e| e.is_literal()) {
-                            *e = eval(e);
-                        } else if func.propagates_nulls()
-                            && exprs.iter().any(|e| e.is_literal_null())
-                        {
-                            *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
-                        } else if let Some(err) = exprs.iter().find_map(|e| e.as_literal_err()) {
-                            *e = MirScalarExpr::literal(
-                                Err(err.clone()),
-                                e.typ(column_types).scalar_type,
-                            );
-                        } else if *func == VariadicFunc::RegexpMatch
-                            && exprs[1].is_literal()
-                            && exprs.get(2).map_or(true, |e| e.is_literal())
-                        {
-                            let needle = exprs[1].as_literal_str().unwrap();
-                            let flags = match exprs.len() {
-                                3 => exprs[2].as_literal_str().unwrap(),
-                                _ => "",
-                            };
-                            *e = match func::build_regex(needle, flags) {
-                                Ok(regex) => mem::take(exprs)
-                                    .into_first()
-                                    .call_unary(UnaryFunc::RegexpMatch(func::RegexpMatch(regex))),
-                                Err(err) => MirScalarExpr::literal(
-                                    Err(err),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            };
-                        } else if *func == VariadicFunc::RegexpReplace
-                            && exprs[1].is_literal()
-                            && exprs.get(3).map_or(true, |e| e.is_literal())
-                        {
-                            let pattern = exprs[1].as_literal_str().unwrap();
-                            let flags = exprs
-                                .get(3)
-                                .map_or("", |expr| expr.as_literal_str().unwrap());
-                            let (limit, flags) = regexp_replace_parse_flags(flags);
-
-                            // Defer errors until evaluation instead of eagerly returning them here
-                            // to match the error behavior of the dynamic function (part of #17189).
-                            let regex = match func::build_regex(pattern, &flags) {
-                                Ok(regex) => Ok((regex, limit)),
-                                Err(err) => Err(err),
-                            };
-                            let mut exprs = mem::take(exprs);
-                            let replacement = exprs.swap_remove(2);
-                            let source = exprs.swap_remove(0);
-                            *e = source
-                                .call_binary(replacement, BinaryFunc::RegexpReplace { regex });
-                        } else if *func == VariadicFunc::RegexpSplitToArray
-                            && exprs[1].is_literal()
-                            && exprs.get(2).map_or(true, |e| e.is_literal())
-                        {
-                            let needle = exprs[1].as_literal_str().unwrap();
-                            let flags = match exprs.len() {
-                                3 => exprs[2].as_literal_str().unwrap(),
-                                _ => "",
-                            };
-                            *e = match func::build_regex(needle, flags) {
-                                Ok(regex) => mem::take(exprs).into_first().call_unary(
-                                    UnaryFunc::RegexpSplitToArray(func::RegexpSplitToArray(regex)),
-                                ),
-                                Err(err) => MirScalarExpr::literal(
-                                    Err(err),
-                                    e.typ(column_types).scalar_type,
-                                ),
-                            };
-                        } else if *func == VariadicFunc::ListIndex && is_list_create_call(&exprs[0])
-                        {
-                            // We are looking for ListIndex(ListCreate, literal), and eliminate
-                            // both the ListIndex and the ListCreate. E.g.: `LIST[f1,f2][2]` --> `f2`
-                            let ind_exprs = exprs.split_off(1);
-                            let top_list_create = exprs.swap_remove(0);
-                            *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
-                        } else if *func == VariadicFunc::Or || *func == VariadicFunc::And {
-                            // Note: It's important that we have called `flatten_associative` above.
-                            e.undistribute_and_or();
-                            e.reduce_and_canonicalize_and_or();
-                        } else if let VariadicFunc::TimezoneTime = func {
-                            if exprs[0].is_literal() && exprs[2].is_literal_ok() {
-                                let tz = exprs[0].as_literal_str().unwrap();
-                                *e = match parse_timezone(tz, TimezoneSpec::Posix) {
-                                    Ok(tz) => MirScalarExpr::CallUnary {
-                                        func: UnaryFunc::TimezoneTime(func::TimezoneTime {
-                                            tz,
-                                            wall_time: exprs[2]
-                                                .as_literal()
-                                                .unwrap()
-                                                .unwrap()
-                                                .unwrap_timestamptz()
-                                                .naive_utc(),
-                                        }),
-                                        expr: Box::new(exprs[1].take()),
-                                    },
-                                    Err(err) => MirScalarExpr::literal(
-                                        Err(err),
-                                        e.typ(column_types).scalar_type,
-                                    ),
-                                }
-                            }
-                        }
-                    }
-                    MirScalarExpr::If { cond, then, els } => {
-                        if let Some(literal) = cond.as_literal() {
-                            match literal {
-                                Ok(Datum::True) => *e = then.take(),
-                                Ok(Datum::False) | Ok(Datum::Null) => *e = els.take(),
-                                Err(err) => {
-                                    *e = MirScalarExpr::Literal(
-                                        Err(err.clone()),
-                                        then.typ(column_types)
-                                            .union(&els.typ(column_types))
-                                            .unwrap(),
-                                    )
-                                }
-                                _ => unreachable!(),
-                            }
-                        } else if then == els {
-                            *e = then.take();
-                        } else if then.is_literal_ok()
-                            && els.is_literal_ok()
-                            && then.typ(column_types).scalar_type == ScalarType::Bool
-                            && els.typ(column_types).scalar_type == ScalarType::Bool
-                        {
-                            match (then.as_literal(), els.as_literal()) {
-                                // Note: NULLs from the condition should not be propagated to the result
-                                // of the expression.
-                                (Some(Ok(Datum::True)), _) => {
-                                    // Rewritten as ((<cond> IS NOT NULL) AND (<cond>)) OR (<els>)
-                                    // NULL <cond> results in: (FALSE AND NULL) OR (<els>) => (<els>)
-                                    *e = cond
-                                        .clone()
-                                        .call_is_null()
-                                        .not()
-                                        .and(cond.take())
-                                        .or(els.take());
-                                }
-                                (Some(Ok(Datum::False)), _) => {
-                                    // Rewritten as ((NOT <cond>) OR (<cond> IS NULL)) AND (<els>)
-                                    // NULL <cond> results in: (NULL OR TRUE) AND (<els>) => TRUE AND (<els>) => (<els>)
-                                    *e = cond
-                                        .clone()
-                                        .not()
-                                        .or(cond.take().call_is_null())
-                                        .and(els.take());
-                                }
-                                (_, Some(Ok(Datum::True))) => {
-                                    // Rewritten as (NOT <cond>) OR (<cond> IS NULL) OR (<then>)
-                                    // NULL <cond> results in: NULL OR TRUE OR (<then>) => TRUE
-                                    *e = cond
-                                        .clone()
-                                        .not()
-                                        .or(cond.take().call_is_null())
-                                        .or(then.take());
-                                }
-                                (_, Some(Ok(Datum::False))) => {
-                                    // Rewritten as (<cond> IS NOT NULL) AND (<cond>) AND (<then>)
-                                    // NULL <cond> results in: FALSE AND NULL AND (<then>) => FALSE
-                                    *e = cond
-                                        .clone()
-                                        .call_is_null()
-                                        .not()
-                                        .and(cond.take())
-                                        .and(then.take());
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                },
-            );
-        }
-
-        /* #region `reduce_list_create_list_index_literal` and helper functions */
-
-        fn list_create_type(list_create: &MirScalarExpr) -> ScalarType {
-            if let MirScalarExpr::CallVariadic {
-                func: VariadicFunc::ListCreate { elem_type: typ },
-                ..
-            } = list_create
-            {
-                (*typ).clone()
-            } else {
-                unreachable!()
-            }
-        }
-
-        fn is_list_create_call(expr: &MirScalarExpr) -> bool {
-            matches!(
-                expr,
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate { .. },
-                    ..
-                }
-            )
-        }
-
-        /// Partial-evaluates a list indexing with a literal directly after a list creation.
-        ///
-        /// Multi-dimensional lists are handled by a single call to this function, with multiple
-        /// elements in index_exprs (of which not all need to be literals), and nested ListCreates
-        /// in list_create_to_reduce.
-        ///
-        /// # Examples
-        ///
-        /// `LIST[f1,f2][2]` --> `f2`.
-        ///
-        /// A multi-dimensional list, with only some of the indexes being literals:
-        /// `LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2]` --> `LIST[f6, f8] [n]`
-        ///
-        /// See more examples in list.slt.
-        fn reduce_list_create_list_index_literal(
-            mut list_create_to_reduce: MirScalarExpr,
-            mut index_exprs: Vec<MirScalarExpr>,
-        ) -> MirScalarExpr {
-            // We iterate over the index_exprs and remove literals, but keep non-literals.
-            // When we encounter a non-literal, we need to dig into the nested ListCreates:
-            // `list_create_mut_refs` will contain all the ListCreates of the current level. If an
-            // element of `list_create_mut_refs` is not actually a ListCreate, then we break out of
-            // the loop. When we remove a literal, we need to partial-evaluate all ListCreates
-            // that are at the current level (except those that disappeared due to
-            // literals at earlier levels), and change each element in `list_create_mut_refs`
-            // to the result of the partial evaluation.
-            let mut list_create_mut_refs = vec![&mut list_create_to_reduce];
-            let mut i = 0;
-            while i < index_exprs.len()
-                && list_create_mut_refs
-                    .iter()
-                    .all(|lc| is_list_create_call(lc))
-            {
-                if index_exprs[i].is_literal_ok() {
-                    // We can remove this index.
-                    let removed_index = index_exprs.remove(i);
-                    let index_i64 = match removed_index.as_literal().unwrap().unwrap() {
-                        Datum::Int64(sql_index_i64) => sql_index_i64 - 1,
-                        _ => unreachable!(), // always an Int64, see plan_index_list
-                    };
-                    // For each list_create referenced by list_create_mut_refs, substitute it by its
-                    // `index`th argument (or null).
-                    for list_create in &mut list_create_mut_refs {
-                        let list_create_args = match list_create {
-                            MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::ListCreate { .. },
-                                exprs,
-                            } => exprs,
-                            _ => unreachable!(), // func cannot be anything else than a ListCreate
-                        };
-                        // ListIndex gives null on an out-of-bounds index
-                        if index_i64 >= 0 && index_i64 < list_create_args.len().try_into().unwrap()
-                        {
-                            let index: usize = index_i64.try_into().unwrap();
-                            **list_create = list_create_args.swap_remove(index);
-                        } else {
-                            let typ = list_create_type(list_create);
-                            **list_create = MirScalarExpr::literal_null(typ);
-                        }
-                    }
-                } else {
-                    // We can't remove this index, so we can't reduce any of the ListCreates at this
-                    // level. So we change list_create_mut_refs to refer to all the arguments of all
-                    // the ListCreates currently referenced by list_create_mut_refs.
-                    list_create_mut_refs = list_create_mut_refs
-                        .into_iter()
-                        .flat_map(|list_create| match list_create {
-                            MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::ListCreate { .. },
-                                exprs: list_create_args,
-                            } => list_create_args,
-                            // func cannot be anything else than a ListCreate
-                            _ => unreachable!(),
-                        })
-                        .collect();
-                    i += 1; // next index_expr
-                }
-            }
-            // If all list indexes have been evaluated, return the reduced expression.
-            // Otherwise, rebuild the ListIndex call with the remaining ListCreates and indexes.
-            if index_exprs.is_empty() {
-                assert_eq!(list_create_mut_refs.len(), 1);
-                list_create_to_reduce
-            } else {
-                let mut exprs: Vec<MirScalarExpr> = vec![list_create_to_reduce];
-                exprs.append(&mut index_exprs);
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListIndex,
-                    exprs,
-                }
-            }
-        }
-
-        /* #endregion */
-    }
-
-    /// Reduces a complex expression where possible.
-    ///
-    /// This function is like `reduce` except that it does not rely on nullability
-    /// information present in `column_types`, and it should only apply reductions
-    /// that are safe in all contexts.
-    pub fn reduce_safely(&mut self, column_types: &[ColumnType]) {
-        let mut column_types = column_types.to_vec();
-        for column in column_types.iter_mut() {
-            column.nullable = true;
-        }
-        self.reduce(&column_types[..])
+    /// Reduce the expression to a simpler form.
+    pub fn reduce(&mut self, column_types: &[ReprColumnType]) {
+        reduce::reduce(self, column_types);
     }
 
     /// Decompose an IsNull expression into a disjunction of
@@ -1488,8 +710,24 @@ impl MirScalarExpr {
                         *self = inner_expr.take();
                         return self.decompose_is_null();
                     } else {
-                        // Different from CallBinary and CallVariadic, because of determinism. See
-                        // https://materializeinc.slack.com/archives/C01BE3RN82F/p1657644478517709
+                        // We can simplify to `false`, because the function simply can't produce
+                        // nulls at all. This is because
+                        // - !propagates_nulls means that the input type of the Rust function is not
+                        //   nullable, so the automatic null propagation won't kick in;
+                        // - !introduces_nulls means that the output type of the Rust function is
+                        //   not nullable, so the Rust function can't produce a null manually either.
+                        //
+                        // Note that we can't do this same optimization for binary and variadic
+                        // functions. This is because for binary and variadic functions the value of
+                        // propagates_nulls and introduces_nulls is not derived solely from the
+                        // input/output type nullabilities, but instead depends on what the Rust
+                        // function does. For example, list concatenation neither introduces nor
+                        // propagates nulls, but it can produce a null:
+                        // - It does not introduce nulls, because if both input lists are not null,
+                        //   then it will produce a list.
+                        // - It does not propagate nulls, because giving a null as just one of the
+                        //   arguments returns the other argument instead of null.
+                        // - It does produce a null if both arguments are null.
                         return Some(MirScalarExpr::literal_false());
                     }
                 }
@@ -1506,10 +744,7 @@ impl MirScalarExpr {
             MirScalarExpr::CallVariadic { func, exprs } => {
                 if func.propagates_nulls() && !func.introduces_nulls() {
                     let exprs = exprs.into_iter().map(|e| e.take().call_is_null()).collect();
-                    return Some(MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::Or,
-                        exprs,
-                    });
+                    return Some(MirScalarExpr::call_variadic(Or, exprs));
                 }
             }
             _ => {}
@@ -1561,7 +796,7 @@ impl MirScalarExpr {
             old_self = self.clone();
             match self {
                 MirScalarExpr::CallVariadic {
-                    func: func @ (VariadicFunc::And | VariadicFunc::Or),
+                    func: func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
                     exprs,
                 } => {
                     // Canonically order elements so that various deduplications work better,
@@ -1602,7 +837,7 @@ impl MirScalarExpr {
             inner.flatten_associative();
             match &mut **inner {
                 MirScalarExpr::CallVariadic {
-                    func: inner_func @ (VariadicFunc::And | VariadicFunc::Or),
+                    func: inner_func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
                     exprs,
                 } => {
                     *inner_func = inner_func.switch_and_or();
@@ -1689,7 +924,7 @@ impl MirScalarExpr {
             self.reduce_and_canonicalize_and_or(); // We don't want to deal with 1-arg AND/OR at the top
             if let MirScalarExpr::CallVariadic {
                 exprs: outer_operands,
-                func: outer_func @ (VariadicFunc::Or | VariadicFunc::And),
+                func: outer_func @ (VariadicFunc::Or(_) | VariadicFunc::And(_)),
             } = self
             {
                 let inner_func = outer_func.switch_and_or();
@@ -1764,7 +999,7 @@ impl MirScalarExpr {
                     // that inner operand occurs.
                     let undistribution_opportunities = all_inner_operands
                         .iter()
-                        .group_by(|(a, _i)| a)
+                        .chunk_by(|(a, _i)| a)
                         .into_iter()
                         .map(|(_a, g)| g.map(|(_a, i)| *i).sorted().dedup().collect_vec())
                         .filter(|g| g.len() > 1)
@@ -1813,7 +1048,7 @@ impl MirScalarExpr {
     /// Adds any columns that *must* be non-Null for `self` to be non-Null.
     pub fn non_null_requirements(&self, columns: &mut BTreeSet<usize>) {
         match self {
-            MirScalarExpr::Column(col) => {
+            MirScalarExpr::Column(col, _name) => {
                 columns.insert(*col);
             }
             MirScalarExpr::Literal(..) => {}
@@ -1840,14 +1075,19 @@ impl MirScalarExpr {
         }
     }
 
-    pub fn typ(&self, column_types: &[ColumnType]) -> ColumnType {
+    pub fn sql_typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
+        let repr_column_types = column_types.iter().map(ReprColumnType::from).collect_vec();
+        SqlColumnType::from_repr(&self.typ(&repr_column_types))
+    }
+
+    pub fn typ(&self, column_types: &[ReprColumnType]) -> ReprColumnType {
         match self {
-            MirScalarExpr::Column(i) => column_types[*i].clone(),
+            MirScalarExpr::Column(i, _name) => column_types[*i].clone(),
             MirScalarExpr::Literal(_, typ) => typ.clone(),
             MirScalarExpr::CallUnmaterializable(func) => func.output_type(),
             MirScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(column_types)),
             MirScalarExpr::CallBinary { expr1, expr2, func } => {
-                func.output_type(expr1.typ(column_types), expr2.typ(column_types))
+                func.output_type(&[expr1.typ(column_types), expr2.typ(column_types)])
             }
             MirScalarExpr::CallVariadic { exprs, func } => {
                 func.output_type(exprs.iter().map(|e| e.typ(column_types)).collect())
@@ -1857,40 +1097,6 @@ impl MirScalarExpr {
                 let else_type = els.typ(column_types);
                 then_type.union(&else_type).unwrap()
             }
-        }
-    }
-
-    pub fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-    ) -> Result<Datum<'a>, EvalError> {
-        match self {
-            MirScalarExpr::Column(index) => Ok(datums[*index].clone()),
-            MirScalarExpr::Literal(res, _column_type) => match res {
-                Ok(row) => Ok(row.unpack_first()),
-                Err(e) => Err(e.clone()),
-            },
-            // Unmaterializable functions must be transformed away before
-            // evaluation. Their purpose is as a placeholder for data that is
-            // not known at plan time but can be inlined before runtime.
-            MirScalarExpr::CallUnmaterializable(x) => Err(EvalError::Internal(format!(
-                "cannot evaluate unmaterializable function: {:?}",
-                x
-            ))),
-            MirScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
-            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                func.eval(datums, temp_storage, expr1, expr2)
-            }
-            MirScalarExpr::CallVariadic { func, exprs } => func.eval(datums, temp_storage, exprs),
-            MirScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {
-                Datum::True => then.eval(datums, temp_storage),
-                Datum::False | Datum::Null => els.eval(datums, temp_storage),
-                d => Err(EvalError::Internal(format!(
-                    "if condition evaluated to non-boolean datum: {:?}",
-                    d
-                ))),
-            },
         }
     }
 
@@ -1932,8 +1138,21 @@ impl MirScalarExpr {
     pub fn contains_column(&self) -> bool {
         let mut contains = false;
         self.visit_pre(|e| {
-            if let MirScalarExpr::Column(_) = e {
+            if let MirScalarExpr::Column(_col, _name) = e {
                 contains = true;
+            }
+        });
+        contains
+    }
+
+    /// True iff the expression contains a `Dummy`.
+    pub fn contains_dummy(&self) -> bool {
+        let mut contains = false;
+        self.visit_pre(|e| {
+            if let MirScalarExpr::Literal(row, _) = e {
+                if let Ok(row) = row {
+                    contains |= row.iter().any(|d| d.contains_dummy());
+                }
             }
         });
         contains
@@ -1949,11 +1168,46 @@ impl MirScalarExpr {
     }
 }
 
-impl MirScalarExpr {
-    /// True iff evaluation could possibly error on non-error input `Datum`.
-    pub fn could_error(&self) -> bool {
+impl Eval for MirScalarExpr {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+    ) -> Result<Datum<'a>, EvalError> {
         match self {
-            MirScalarExpr::Column(_col) => false,
+            MirScalarExpr::Column(index, _name) => Ok(datums[*index]),
+            MirScalarExpr::Literal(res, _column_type) => match res {
+                Ok(row) => Ok(row.unpack_first()),
+                Err(e) => Err(e.clone()),
+            },
+            // Unmaterializable functions must be transformed away before
+            // evaluation. Their purpose is as a placeholder for data that is
+            // not known at plan time but can be inlined before runtime.
+            MirScalarExpr::CallUnmaterializable(x) => Err(EvalError::Internal(
+                format!("cannot evaluate unmaterializable function: {:?}", x).into(),
+            )),
+            MirScalarExpr::CallUnary { func, expr } => {
+                func.eval(datums, temp_storage, expr.as_ref())
+            }
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                func.eval(datums, temp_storage, &[expr1.as_ref(), expr2.as_ref()])
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                func.eval(datums, temp_storage, exprs.as_slice())
+            }
+            MirScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {
+                Datum::True => then.eval(datums, temp_storage),
+                Datum::False | Datum::Null => els.eval(datums, temp_storage),
+                d => Err(EvalError::Internal(
+                    format!("if condition evaluated to non-boolean datum: {:?}", d).into(),
+                )),
+            },
+        }
+    }
+
+    fn could_error(&self) -> bool {
+        match self {
+            MirScalarExpr::Column(_col, _name) => false,
             MirScalarExpr::Literal(row, ..) => row.is_err(),
             MirScalarExpr::CallUnmaterializable(_) => true,
             MirScalarExpr::CallUnary { func, expr } => func.could_error() || expr.could_error(),
@@ -1970,6 +1224,51 @@ impl MirScalarExpr {
     }
 }
 
+impl Columns for MirScalarExpr {
+    fn column(c: usize) -> Self {
+        MirScalarExpr::column(c)
+    }
+
+    fn is_column(&self) -> bool {
+        matches!(self, MirScalarExpr::Column(_col, _name))
+    }
+
+    fn as_column(&self) -> Option<usize> {
+        if let MirScalarExpr::Column(c, _) = self {
+            Some(*c)
+        } else {
+            None
+        }
+    }
+
+    fn as_column_mut(&mut self) -> Option<&mut usize> {
+        if let MirScalarExpr::Column(c, _) = self {
+            Some(c)
+        } else {
+            None
+        }
+    }
+
+    fn support_into(&self, support: &mut BTreeSet<usize>) {
+        self.visit_pre(|e| {
+            if let MirScalarExpr::Column(i, _) = e {
+                support.insert(*i);
+            }
+        });
+    }
+
+    fn visit_columns<F>(&mut self, mut action: F)
+    where
+        F: FnMut(&mut usize),
+    {
+        self.visit_pre_mut(|e| {
+            if let MirScalarExpr::Column(col, _) = e {
+                action(col);
+            }
+        });
+    }
+}
+
 impl VisitChildren<Self> for MirScalarExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -1977,7 +1276,7 @@ impl VisitChildren<Self> for MirScalarExpr {
     {
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 f(expr);
             }
@@ -2004,7 +1303,7 @@ impl VisitChildren<Self> for MirScalarExpr {
     {
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 f(expr);
             }
@@ -2028,11 +1327,10 @@ impl VisitChildren<Self> for MirScalarExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 f(expr)?;
             }
@@ -2057,11 +1355,10 @@ impl VisitChildren<Self> for MirScalarExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 f(expr)?;
             }
@@ -2082,6 +1379,20 @@ impl VisitChildren<Self> for MirScalarExpr {
         }
         Ok(())
     }
+
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a Self>
+    where
+        Self: 'a,
+    {
+        self.children()
+    }
+
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut Self>
+    where
+        Self: 'a,
+    {
+        self.children_mut()
+    }
 }
 
 impl MirScalarExpr {
@@ -2094,7 +1405,7 @@ impl MirScalarExpr {
 
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 first = Some(&**expr);
             }
@@ -2128,7 +1439,7 @@ impl MirScalarExpr {
 
         use MirScalarExpr::*;
         match self {
-            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            Column(_, _) | Literal(_, _) | CallUnmaterializable(_) => (),
             CallUnary { expr, .. } => {
                 first = Some(&mut **expr);
             }
@@ -2181,7 +1492,18 @@ impl MirScalarExpr {
 /// The fields are ordered based on heuristic assumptions about their typical selectivity, so that
 /// Ord gives the right ordering for join inputs. Bigger is better, i.e., will tend to come earlier
 /// than other inputs.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct FilterCharacteristics {
     // `<expr> = <literal>` appears in the filter.
     // Excludes cases where NOT appears anywhere above the literal equality.
@@ -2299,7 +1621,7 @@ impl FilterCharacteristics {
                         }
                     }
                 },
-            )?;
+            );
             if literal_inequality_in_current_filter {
                 literal_inequality += 1;
             }
@@ -2351,7 +1673,6 @@ impl FilterCharacteristics {
 }
 
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Copy,
@@ -2362,8 +1683,9 @@ impl FilterCharacteristics {
     Serialize,
     Deserialize,
     Hash,
-    MzReflect,
+    MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DomainLimit {
     None,
     Inclusive(i64),
@@ -2396,32 +1718,42 @@ impl RustType<ProtoDomainLimit> for DomainLimit {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum EvalError {
     CharacterNotValidForEncoding(i32),
     CharacterTooLargeForEncoding(i32),
-    DateBinOutOfRange(String),
+    DateBinOutOfRange(Box<str>),
     DivisionByZero,
     Unsupported {
-        feature: String,
-        issue_no: Option<usize>,
+        feature: Box<str>,
+        discussion_no: Option<usize>,
     },
     FloatOverflow,
     FloatUnderflow,
     NumericFieldOverflow,
-    Float32OutOfRange(String),
-    Float64OutOfRange(String),
-    Int16OutOfRange(String),
-    Int32OutOfRange(String),
-    Int64OutOfRange(String),
-    UInt16OutOfRange(String),
-    UInt32OutOfRange(String),
-    UInt64OutOfRange(String),
-    MzTimestampOutOfRange(String),
+    Float32OutOfRange(Box<str>),
+    Float64OutOfRange(Box<str>),
+    Int16OutOfRange(Box<str>),
+    Int32OutOfRange(Box<str>),
+    Int64OutOfRange(Box<str>),
+    UInt16OutOfRange(Box<str>),
+    UInt32OutOfRange(Box<str>),
+    UInt64OutOfRange(Box<str>),
+    MzTimestampOutOfRange(Box<str>),
     MzTimestampStepOverflow,
-    OidOutOfRange(String),
-    IntervalOutOfRange(String),
+    OidOutOfRange(Box<str>),
+    IntervalOutOfRange(Box<str>),
     TimestampCannotBeNan,
     TimestampOutOfRange,
     DateOutOfRange,
@@ -2434,82 +1766,85 @@ pub enum EvalError {
     InvalidBase64Equals,
     InvalidBase64Symbol(char),
     InvalidBase64EndSequence,
-    InvalidTimezone(String),
+    InvalidTimezone(Box<str>),
     InvalidTimezoneInterval,
     InvalidTimezoneConversion,
-    InvalidIanaTimezoneId(String),
+    InvalidIanaTimezoneId(Box<str>),
     InvalidLayer {
         max_layer: usize,
         val: i64,
     },
     InvalidArray(InvalidArrayError),
-    InvalidEncodingName(String),
-    InvalidHashAlgorithm(String),
+    InvalidEncodingName(Box<str>),
+    InvalidHashAlgorithm(Box<str>),
     InvalidByteSequence {
-        byte_sequence: String,
-        encoding_name: String,
+        byte_sequence: Box<str>,
+        encoding_name: Box<str>,
     },
     InvalidJsonbCast {
-        from: String,
-        to: String,
+        from: Box<str>,
+        to: Box<str>,
     },
-    InvalidRegex(String),
+    InvalidRegex(Box<str>),
     InvalidRegexFlag(char),
-    InvalidParameterValue(String),
-    InvalidDatePart(String),
+    InvalidParameterValue(Box<str>),
+    InvalidDatePart(Box<str>),
     KeyCannotBeNull,
     NegSqrt,
     NegLimit,
     NullCharacterNotPermitted,
-    UnknownUnits(String),
-    UnsupportedUnits(String, String),
+    UnknownUnits(Box<str>),
+    UnsupportedUnits(Box<str>, Box<str>),
     UnterminatedLikeEscapeSequence,
     Parse(ParseError),
     ParseHex(ParseHexError),
-    Internal(String),
-    InfinityOutOfDomain(String),
-    NegativeOutOfDomain(String),
-    ZeroOutOfDomain(String),
-    OutOfDomain(DomainLimit, DomainLimit, String),
-    ComplexOutOfRange(String),
+    Internal(Box<str>),
+    InfinityOutOfDomain(Box<str>),
+    NegativeOutOfDomain(Box<str>),
+    ZeroOutOfDomain(Box<str>),
+    OutOfDomain(DomainLimit, DomainLimit, Box<str>),
+    ComplexOutOfRange(Box<str>),
     MultipleRowsFromSubquery,
-    Undefined(String),
+    NegativeRowsFromSubquery,
+    Undefined(Box<str>),
     LikePatternTooLong,
     LikeEscapeTooLong,
     StringValueTooLong {
-        target_type: String,
+        target_type: Box<str>,
         length: usize,
     },
     MultidimensionalArrayRemovalNotSupported,
     IncompatibleArrayDimensions {
         dims: Option<(usize, usize)>,
     },
-    TypeFromOid(String),
+    TypeFromOid(Box<str>),
     InvalidRange(InvalidRangeError),
-    InvalidRoleId(String),
-    InvalidPrivileges(String),
-    LetRecLimitExceeded(String),
+    InvalidRoleId(Box<str>),
+    InvalidPrivileges(Box<str>),
+    InvalidCatalogJson(Box<str>),
+    LetRecLimitExceeded(Box<str>),
     MultiDimensionalArraySearch,
-    MustNotBeNull(String),
+    MustNotBeNull(Box<str>),
     InvalidIdentifier {
-        ident: String,
-        detail: Option<String>,
+        ident: Box<str>,
+        detail: Option<Box<str>>,
     },
     ArrayFillWrongArraySubscripts,
     // TODO: propagate this check more widely throughout the expr crate
     MaxArraySizeExceeded(usize),
     DateDiffOverflow {
-        unit: String,
-        a: String,
-        b: String,
+        unit: Box<str>,
+        a: Box<str>,
+        b: Box<str>,
     },
     // The error for ErrorIfNull; this should not be used in other contexts as a generic error
     // printer.
-    IfNullError(String),
+    IfNullError(Box<str>),
     LengthTooLarge,
     AclArrayNullElement,
     MzAclArrayNullElement,
-    PrettyError(String),
+    PrettyError(Box<str>),
+    RedactError(Box<str>),
 }
 
 impl fmt::Display for EvalError {
@@ -2523,10 +1858,17 @@ impl fmt::Display for EvalError {
             }
             EvalError::DateBinOutOfRange(message) => f.write_str(message),
             EvalError::DivisionByZero => f.write_str("division by zero"),
-            EvalError::Unsupported { feature, issue_no } => {
+            EvalError::Unsupported {
+                feature,
+                discussion_no,
+            } => {
                 write!(f, "{} not yet supported", feature)?;
-                if let Some(issue_no) = issue_no {
-                    write!(f, ", see https://github.com/MaterializeInc/materialize/issues/{} for more details", issue_no)?;
+                if let Some(discussion_no) = discussion_no {
+                    write!(
+                        f,
+                        ", see https://github.com/MaterializeInc/materialize/discussions/{} for more details",
+                        discussion_no
+                    )?;
                 }
                 Ok(())
             }
@@ -2612,6 +1954,7 @@ impl fmt::Display for EvalError {
             }
             EvalError::Parse(e) => e.fmt(f),
             EvalError::PrettyError(e) => e.fmt(f),
+            EvalError::RedactError(e) => e.fmt(f),
             EvalError::ParseHex(e) => e.fmt(f),
             EvalError::Internal(s) => write!(f, "internal error: {}", s),
             EvalError::InfinityOutOfDomain(s) => {
@@ -2648,6 +1991,9 @@ impl fmt::Display for EvalError {
             EvalError::MultipleRowsFromSubquery => {
                 write!(f, "more than one record produced in subquery")
             }
+            EvalError::NegativeRowsFromSubquery => {
+                write!(f, "negative number of rows produced in subquery")
+            }
             EvalError::Undefined(s) => {
                 write!(f, "{} is undefined", s)
             }
@@ -2678,9 +2024,15 @@ impl fmt::Display for EvalError {
             EvalError::InvalidPrivileges(privilege) => {
                 write!(f, "unrecognized privilege type: {privilege}")
             }
+            EvalError::InvalidCatalogJson(msg) => {
+                write!(f, "invalid catalog JSON: {msg}")
+            }
             EvalError::LetRecLimitExceeded(max_iters) => {
-                write!(f, "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
-                       max_iters)
+                write!(
+                    f,
+                    "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
+                    max_iters
+                )
             }
             EvalError::MultiDimensionalArraySearch => write!(
                 f,
@@ -2716,8 +2068,7 @@ impl EvalError {
     pub fn detail(&self) -> Option<String> {
         match self {
             EvalError::IncompatibleArrayDimensions { dims: None } => Some(
-                "Arrays with differing dimensions are not compatible for concatenation."
-                    .to_string(),
+                "Arrays with differing dimensions are not compatible for concatenation.".into(),
             ),
             EvalError::IncompatibleArrayDimensions {
                 dims: Some((a_dims, b_dims)),
@@ -2725,9 +2076,9 @@ impl EvalError {
                 "Arrays of {} and {} dimensions are not compatible for concatenation.",
                 a_dims, b_dims
             )),
-            EvalError::InvalidIdentifier { detail, .. } => detail.clone(),
+            EvalError::InvalidIdentifier { detail, .. } => detail.as_deref().map(Into::into),
             EvalError::ArrayFillWrongArraySubscripts => {
-                Some("Low bound array has different size than dimensions array.".to_string())
+                Some("Low bound array has different size than dimensions array.".into())
             }
             _ => None,
         }
@@ -2772,15 +2123,15 @@ impl From<InvalidArrayError> for EvalError {
     }
 }
 
-impl From<regex::Error> for EvalError {
-    fn from(e: regex::Error) -> EvalError {
-        EvalError::InvalidRegex(e.to_string())
+impl From<RegexCompilationError> for EvalError {
+    fn from(e: RegexCompilationError) -> EvalError {
+        EvalError::InvalidRegex(e.to_string().into())
     }
 }
 
 impl From<TypeFromOidError> for EvalError {
     fn from(e: TypeFromOidError) -> EvalError {
-        EvalError::TypeFromOid(e.to_string())
+        EvalError::TypeFromOid(e.to_string().into())
     }
 }
 
@@ -2813,11 +2164,14 @@ impl RustType<ProtoEvalError> for EvalError {
         let kind = match self {
             EvalError::CharacterNotValidForEncoding(v) => CharacterNotValidForEncoding(*v),
             EvalError::CharacterTooLargeForEncoding(v) => CharacterTooLargeForEncoding(*v),
-            EvalError::DateBinOutOfRange(v) => DateBinOutOfRange(v.clone()),
+            EvalError::DateBinOutOfRange(v) => DateBinOutOfRange(v.into_proto()),
             EvalError::DivisionByZero => DivisionByZero(()),
-            EvalError::Unsupported { feature, issue_no } => Unsupported(ProtoUnsupported {
-                feature: feature.clone(),
-                issue_no: issue_no.into_proto(),
+            EvalError::Unsupported {
+                feature,
+                discussion_no,
+            } => Unsupported(ProtoUnsupported {
+                feature: feature.into_proto(),
+                discussion_no: discussion_no.into_proto(),
             }),
             EvalError::FloatOverflow => FloatOverflow(()),
             EvalError::FloatUnderflow => FloatUnderflow(()),
@@ -2870,7 +2224,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidBase64Equals => InvalidBase64Equals(()),
             EvalError::InvalidBase64Symbol(sym) => InvalidBase64Symbol(sym.into_proto()),
             EvalError::InvalidBase64EndSequence => InvalidBase64EndSequence(()),
-            EvalError::InvalidTimezone(tz) => InvalidTimezone(tz.clone()),
+            EvalError::InvalidTimezone(tz) => InvalidTimezone(tz.into_proto()),
             EvalError::InvalidTimezoneInterval => InvalidTimezoneInterval(()),
             EvalError::InvalidTimezoneConversion => InvalidTimezoneConversion(()),
             EvalError::InvalidLayer { max_layer, val } => InvalidLayer(ProtoInvalidLayer {
@@ -2878,55 +2232,57 @@ impl RustType<ProtoEvalError> for EvalError {
                 val: *val,
             }),
             EvalError::InvalidArray(error) => InvalidArray(error.into_proto()),
-            EvalError::InvalidEncodingName(v) => InvalidEncodingName(v.clone()),
-            EvalError::InvalidHashAlgorithm(v) => InvalidHashAlgorithm(v.clone()),
+            EvalError::InvalidEncodingName(v) => InvalidEncodingName(v.into_proto()),
+            EvalError::InvalidHashAlgorithm(v) => InvalidHashAlgorithm(v.into_proto()),
             EvalError::InvalidByteSequence {
                 byte_sequence,
                 encoding_name,
             } => InvalidByteSequence(ProtoInvalidByteSequence {
-                byte_sequence: byte_sequence.clone(),
-                encoding_name: encoding_name.clone(),
+                byte_sequence: byte_sequence.into_proto(),
+                encoding_name: encoding_name.into_proto(),
             }),
             EvalError::InvalidJsonbCast { from, to } => InvalidJsonbCast(ProtoInvalidJsonbCast {
-                from: from.clone(),
-                to: to.clone(),
+                from: from.into_proto(),
+                to: to.into_proto(),
             }),
-            EvalError::InvalidRegex(v) => InvalidRegex(v.clone()),
+            EvalError::InvalidRegex(v) => InvalidRegex(v.into_proto()),
             EvalError::InvalidRegexFlag(v) => InvalidRegexFlag(v.into_proto()),
-            EvalError::InvalidParameterValue(v) => InvalidParameterValue(v.clone()),
-            EvalError::InvalidDatePart(part) => InvalidDatePart(part.to_string()),
+            EvalError::InvalidParameterValue(v) => InvalidParameterValue(v.into_proto()),
+            EvalError::InvalidDatePart(part) => InvalidDatePart(part.into_proto()),
             EvalError::KeyCannotBeNull => KeyCannotBeNull(()),
             EvalError::NegSqrt => NegSqrt(()),
             EvalError::NegLimit => NegLimit(()),
             EvalError::NullCharacterNotPermitted => NullCharacterNotPermitted(()),
-            EvalError::UnknownUnits(v) => UnknownUnits(v.clone()),
+            EvalError::UnknownUnits(v) => UnknownUnits(v.into_proto()),
             EvalError::UnsupportedUnits(units, typ) => UnsupportedUnits(ProtoUnsupportedUnits {
-                units: units.clone(),
-                typ: typ.clone(),
+                units: units.into_proto(),
+                typ: typ.into_proto(),
             }),
             EvalError::UnterminatedLikeEscapeSequence => UnterminatedLikeEscapeSequence(()),
             EvalError::Parse(error) => Parse(error.into_proto()),
             EvalError::PrettyError(error) => PrettyError(error.into_proto()),
+            EvalError::RedactError(error) => RedactError(error.into_proto()),
             EvalError::ParseHex(error) => ParseHex(error.into_proto()),
-            EvalError::Internal(v) => Internal(v.clone()),
-            EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.clone()),
-            EvalError::NegativeOutOfDomain(v) => NegativeOutOfDomain(v.clone()),
-            EvalError::ZeroOutOfDomain(v) => ZeroOutOfDomain(v.clone()),
+            EvalError::Internal(v) => Internal(v.into_proto()),
+            EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.into_proto()),
+            EvalError::NegativeOutOfDomain(v) => NegativeOutOfDomain(v.into_proto()),
+            EvalError::ZeroOutOfDomain(v) => ZeroOutOfDomain(v.into_proto()),
             EvalError::OutOfDomain(lower, upper, id) => OutOfDomain(ProtoOutOfDomain {
                 lower: Some(lower.into_proto()),
                 upper: Some(upper.into_proto()),
-                id: id.clone(),
+                id: id.into_proto(),
             }),
-            EvalError::ComplexOutOfRange(v) => ComplexOutOfRange(v.clone()),
+            EvalError::ComplexOutOfRange(v) => ComplexOutOfRange(v.into_proto()),
             EvalError::MultipleRowsFromSubquery => MultipleRowsFromSubquery(()),
-            EvalError::Undefined(v) => Undefined(v.clone()),
+            EvalError::NegativeRowsFromSubquery => NegativeRowsFromSubquery(()),
+            EvalError::Undefined(v) => Undefined(v.into_proto()),
             EvalError::LikePatternTooLong => LikePatternTooLong(()),
             EvalError::LikeEscapeTooLong => LikeEscapeTooLong(()),
             EvalError::StringValueTooLong {
                 target_type,
                 length,
             } => StringValueTooLong(ProtoStringValueTooLong {
-                target_type: target_type.clone(),
+                target_type: target_type.into_proto(),
                 length: length.into_proto(),
             }),
             EvalError::MultidimensionalArrayRemovalNotSupported => {
@@ -2937,16 +2293,17 @@ impl RustType<ProtoEvalError> for EvalError {
                     dims: dims.into_proto(),
                 })
             }
-            EvalError::TypeFromOid(v) => TypeFromOid(v.clone()),
+            EvalError::TypeFromOid(v) => TypeFromOid(v.into_proto()),
             EvalError::InvalidRange(error) => InvalidRange(error.into_proto()),
-            EvalError::InvalidRoleId(v) => InvalidRoleId(v.clone()),
-            EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.clone()),
-            EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.clone()),
+            EvalError::InvalidRoleId(v) => InvalidRoleId(v.into_proto()),
+            EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.into_proto()),
+            EvalError::InvalidCatalogJson(v) => InvalidCatalogJson(v.into_proto()),
+            EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.into_proto()),
             EvalError::MultiDimensionalArraySearch => MultiDimensionalArraySearch(()),
-            EvalError::MustNotBeNull(v) => MustNotBeNull(v.clone()),
+            EvalError::MustNotBeNull(v) => MustNotBeNull(v.into_proto()),
             EvalError::InvalidIdentifier { ident, detail } => {
                 InvalidIdentifier(ProtoInvalidIdentifier {
-                    ident: ident.clone(),
+                    ident: ident.into_proto(),
                     detail: detail.into_proto(),
                 })
             }
@@ -2955,15 +2312,15 @@ impl RustType<ProtoEvalError> for EvalError {
                 MaxArraySizeExceeded(u64::cast_from(*max_size))
             }
             EvalError::DateDiffOverflow { unit, a, b } => DateDiffOverflow(ProtoDateDiffOverflow {
-                unit: unit.to_owned(),
-                a: a.to_owned(),
-                b: b.to_owned(),
+                unit: unit.into_proto(),
+                a: a.into_proto(),
+                b: b.into_proto(),
             }),
-            EvalError::IfNullError(s) => IfNullError(s.clone()),
+            EvalError::IfNullError(s) => IfNullError(s.into_proto()),
             EvalError::LengthTooLarge => LengthTooLarge(()),
             EvalError::AclArrayNullElement => AclArrayNullElement(()),
             EvalError::MzAclArrayNullElement => MzAclArrayNullElement(()),
-            EvalError::InvalidIanaTimezoneId(s) => InvalidIanaTimezoneId(s.clone()),
+            EvalError::InvalidIanaTimezoneId(s) => InvalidIanaTimezoneId(s.into_proto()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2974,27 +2331,29 @@ impl RustType<ProtoEvalError> for EvalError {
             Some(kind) => match kind {
                 CharacterNotValidForEncoding(v) => Ok(EvalError::CharacterNotValidForEncoding(v)),
                 CharacterTooLargeForEncoding(v) => Ok(EvalError::CharacterTooLargeForEncoding(v)),
-                DateBinOutOfRange(v) => Ok(EvalError::DateBinOutOfRange(v)),
+                DateBinOutOfRange(v) => Ok(EvalError::DateBinOutOfRange(v.into())),
                 DivisionByZero(()) => Ok(EvalError::DivisionByZero),
                 Unsupported(v) => Ok(EvalError::Unsupported {
-                    feature: v.feature,
-                    issue_no: v.issue_no.into_rust()?,
+                    feature: v.feature.into(),
+                    discussion_no: v.discussion_no.into_rust()?,
                 }),
                 FloatOverflow(()) => Ok(EvalError::FloatOverflow),
                 FloatUnderflow(()) => Ok(EvalError::FloatUnderflow),
                 NumericFieldOverflow(()) => Ok(EvalError::NumericFieldOverflow),
-                Float32OutOfRange(val) => Ok(EvalError::Float32OutOfRange(val.value)),
-                Float64OutOfRange(val) => Ok(EvalError::Float64OutOfRange(val.value)),
-                Int16OutOfRange(val) => Ok(EvalError::Int16OutOfRange(val.value)),
-                Int32OutOfRange(val) => Ok(EvalError::Int32OutOfRange(val.value)),
-                Int64OutOfRange(val) => Ok(EvalError::Int64OutOfRange(val.value)),
-                Uint16OutOfRange(val) => Ok(EvalError::UInt16OutOfRange(val.value)),
-                Uint32OutOfRange(val) => Ok(EvalError::UInt32OutOfRange(val.value)),
-                Uint64OutOfRange(val) => Ok(EvalError::UInt64OutOfRange(val.value)),
-                MzTimestampOutOfRange(val) => Ok(EvalError::MzTimestampOutOfRange(val.value)),
+                Float32OutOfRange(val) => Ok(EvalError::Float32OutOfRange(val.value.into())),
+                Float64OutOfRange(val) => Ok(EvalError::Float64OutOfRange(val.value.into())),
+                Int16OutOfRange(val) => Ok(EvalError::Int16OutOfRange(val.value.into())),
+                Int32OutOfRange(val) => Ok(EvalError::Int32OutOfRange(val.value.into())),
+                Int64OutOfRange(val) => Ok(EvalError::Int64OutOfRange(val.value.into())),
+                Uint16OutOfRange(val) => Ok(EvalError::UInt16OutOfRange(val.value.into())),
+                Uint32OutOfRange(val) => Ok(EvalError::UInt32OutOfRange(val.value.into())),
+                Uint64OutOfRange(val) => Ok(EvalError::UInt64OutOfRange(val.value.into())),
+                MzTimestampOutOfRange(val) => {
+                    Ok(EvalError::MzTimestampOutOfRange(val.value.into()))
+                }
                 MzTimestampStepOverflow(()) => Ok(EvalError::MzTimestampStepOverflow),
-                OidOutOfRange(val) => Ok(EvalError::OidOutOfRange(val.value)),
-                IntervalOutOfRange(val) => Ok(EvalError::IntervalOutOfRange(val.value)),
+                OidOutOfRange(val) => Ok(EvalError::OidOutOfRange(val.value.into())),
+                IntervalOutOfRange(val) => Ok(EvalError::IntervalOutOfRange(val.value.into())),
                 TimestampCannotBeNan(()) => Ok(EvalError::TimestampCannotBeNan),
                 TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),
                 DateOutOfRange(()) => Ok(EvalError::DateOutOfRange),
@@ -3006,7 +2365,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidBase64Equals(()) => Ok(EvalError::InvalidBase64Equals),
                 InvalidBase64Symbol(v) => char::from_proto(v).map(EvalError::InvalidBase64Symbol),
                 InvalidBase64EndSequence(()) => Ok(EvalError::InvalidBase64EndSequence),
-                InvalidTimezone(v) => Ok(EvalError::InvalidTimezone(v)),
+                InvalidTimezone(v) => Ok(EvalError::InvalidTimezone(v.into())),
                 InvalidTimezoneInterval(()) => Ok(EvalError::InvalidTimezoneInterval),
                 InvalidTimezoneConversion(()) => Ok(EvalError::InvalidTimezoneConversion),
                 InvalidLayer(v) => Ok(EvalError::InvalidLayer {
@@ -3014,45 +2373,48 @@ impl RustType<ProtoEvalError> for EvalError {
                     val: v.val,
                 }),
                 InvalidArray(error) => Ok(EvalError::InvalidArray(error.into_rust()?)),
-                InvalidEncodingName(v) => Ok(EvalError::InvalidEncodingName(v)),
-                InvalidHashAlgorithm(v) => Ok(EvalError::InvalidHashAlgorithm(v)),
+                InvalidEncodingName(v) => Ok(EvalError::InvalidEncodingName(v.into())),
+                InvalidHashAlgorithm(v) => Ok(EvalError::InvalidHashAlgorithm(v.into())),
                 InvalidByteSequence(v) => Ok(EvalError::InvalidByteSequence {
-                    byte_sequence: v.byte_sequence,
-                    encoding_name: v.encoding_name,
+                    byte_sequence: v.byte_sequence.into(),
+                    encoding_name: v.encoding_name.into(),
                 }),
                 InvalidJsonbCast(v) => Ok(EvalError::InvalidJsonbCast {
-                    from: v.from,
-                    to: v.to,
+                    from: v.from.into(),
+                    to: v.to.into(),
                 }),
-                InvalidRegex(v) => Ok(EvalError::InvalidRegex(v)),
+                InvalidRegex(v) => Ok(EvalError::InvalidRegex(v.into())),
                 InvalidRegexFlag(v) => Ok(EvalError::InvalidRegexFlag(char::from_proto(v)?)),
-                InvalidParameterValue(v) => Ok(EvalError::InvalidParameterValue(v)),
-                InvalidDatePart(part) => Ok(EvalError::InvalidDatePart(part)),
+                InvalidParameterValue(v) => Ok(EvalError::InvalidParameterValue(v.into())),
+                InvalidDatePart(part) => Ok(EvalError::InvalidDatePart(part.into())),
                 KeyCannotBeNull(()) => Ok(EvalError::KeyCannotBeNull),
                 NegSqrt(()) => Ok(EvalError::NegSqrt),
                 NegLimit(()) => Ok(EvalError::NegLimit),
                 NullCharacterNotPermitted(()) => Ok(EvalError::NullCharacterNotPermitted),
-                UnknownUnits(v) => Ok(EvalError::UnknownUnits(v)),
-                UnsupportedUnits(v) => Ok(EvalError::UnsupportedUnits(v.units, v.typ)),
+                UnknownUnits(v) => Ok(EvalError::UnknownUnits(v.into())),
+                UnsupportedUnits(v) => {
+                    Ok(EvalError::UnsupportedUnits(v.units.into(), v.typ.into()))
+                }
                 UnterminatedLikeEscapeSequence(()) => Ok(EvalError::UnterminatedLikeEscapeSequence),
                 Parse(error) => Ok(EvalError::Parse(error.into_rust()?)),
                 ParseHex(error) => Ok(EvalError::ParseHex(error.into_rust()?)),
-                Internal(v) => Ok(EvalError::Internal(v)),
-                InfinityOutOfDomain(v) => Ok(EvalError::InfinityOutOfDomain(v)),
-                NegativeOutOfDomain(v) => Ok(EvalError::NegativeOutOfDomain(v)),
-                ZeroOutOfDomain(v) => Ok(EvalError::ZeroOutOfDomain(v)),
+                Internal(v) => Ok(EvalError::Internal(v.into())),
+                InfinityOutOfDomain(v) => Ok(EvalError::InfinityOutOfDomain(v.into())),
+                NegativeOutOfDomain(v) => Ok(EvalError::NegativeOutOfDomain(v.into())),
+                ZeroOutOfDomain(v) => Ok(EvalError::ZeroOutOfDomain(v.into())),
                 OutOfDomain(v) => Ok(EvalError::OutOfDomain(
                     v.lower.into_rust_if_some("ProtoDomainLimit::lower")?,
                     v.upper.into_rust_if_some("ProtoDomainLimit::upper")?,
-                    v.id,
+                    v.id.into(),
                 )),
-                ComplexOutOfRange(v) => Ok(EvalError::ComplexOutOfRange(v)),
+                ComplexOutOfRange(v) => Ok(EvalError::ComplexOutOfRange(v.into())),
                 MultipleRowsFromSubquery(()) => Ok(EvalError::MultipleRowsFromSubquery),
-                Undefined(v) => Ok(EvalError::Undefined(v)),
+                NegativeRowsFromSubquery(()) => Ok(EvalError::NegativeRowsFromSubquery),
+                Undefined(v) => Ok(EvalError::Undefined(v.into())),
                 LikePatternTooLong(()) => Ok(EvalError::LikePatternTooLong),
                 LikeEscapeTooLong(()) => Ok(EvalError::LikeEscapeTooLong),
                 StringValueTooLong(v) => Ok(EvalError::StringValueTooLong {
-                    target_type: v.target_type,
+                    target_type: v.target_type.into(),
                     length: usize::from_proto(v.length)?,
                 }),
                 MultidimensionalArrayRemovalNotSupported(()) => {
@@ -3061,32 +2423,34 @@ impl RustType<ProtoEvalError> for EvalError {
                 IncompatibleArrayDimensions(v) => Ok(EvalError::IncompatibleArrayDimensions {
                     dims: v.dims.into_rust()?,
                 }),
-                TypeFromOid(v) => Ok(EvalError::TypeFromOid(v)),
+                TypeFromOid(v) => Ok(EvalError::TypeFromOid(v.into())),
                 InvalidRange(e) => Ok(EvalError::InvalidRange(e.into_rust()?)),
-                InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v)),
-                InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v)),
-                WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v)),
+                InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v.into())),
+                InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v.into())),
+                InvalidCatalogJson(v) => Ok(EvalError::InvalidCatalogJson(v.into())),
+                WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v.into())),
                 MultiDimensionalArraySearch(()) => Ok(EvalError::MultiDimensionalArraySearch),
-                MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v)),
+                MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v.into())),
                 InvalidIdentifier(v) => Ok(EvalError::InvalidIdentifier {
-                    ident: v.ident,
-                    detail: v.detail,
+                    ident: v.ident.into(),
+                    detail: v.detail.into_rust()?,
                 }),
                 ArrayFillWrongArraySubscripts(()) => Ok(EvalError::ArrayFillWrongArraySubscripts),
                 MaxArraySizeExceeded(max_size) => {
                     Ok(EvalError::MaxArraySizeExceeded(usize::cast_from(max_size)))
                 }
                 DateDiffOverflow(v) => Ok(EvalError::DateDiffOverflow {
-                    unit: v.unit,
-                    a: v.a,
-                    b: v.b,
+                    unit: v.unit.into(),
+                    a: v.a.into(),
+                    b: v.b.into(),
                 }),
-                IfNullError(v) => Ok(EvalError::IfNullError(v)),
+                IfNullError(v) => Ok(EvalError::IfNullError(v.into())),
                 LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
                 AclArrayNullElement(()) => Ok(EvalError::AclArrayNullElement),
                 MzAclArrayNullElement(()) => Ok(EvalError::MzAclArrayNullElement),
-                InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s)),
-                PrettyError(s) => Ok(EvalError::PrettyError(s)),
+                InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s.into())),
+                PrettyError(s) => Ok(EvalError::PrettyError(s.into())),
+                RedactError(s) => Ok(EvalError::RedactError(s.into())),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
@@ -3108,23 +2472,24 @@ impl RustType<ProtoDims> for (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-
     use super::*;
+    use crate::scalar::func::variadic::Coalesce;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
-        let relation_type = vec![
-            ScalarType::Int64.nullable(true),
-            ScalarType::Int64.nullable(true),
-            ScalarType::Int64.nullable(false),
-        ];
-        let col = MirScalarExpr::Column;
-        let err = |e| MirScalarExpr::literal(Err(e), ScalarType::Int64);
-        let lit = |i| MirScalarExpr::literal_ok(Datum::Int64(i), ScalarType::Int64);
-        let null = || MirScalarExpr::literal_null(ScalarType::Int64);
+        let relation_type: Vec<ReprColumnType> = vec![
+            ReprScalarType::Int64.nullable(true),
+            ReprScalarType::Int64.nullable(true),
+            ReprScalarType::Int64.nullable(false),
+        ]
+        .into_iter()
+        .collect();
+        let col = MirScalarExpr::column;
+        let int64_typ = ReprScalarType::Int64;
+        let err = |e| MirScalarExpr::literal(Err(e), int64_typ.clone());
+        let lit = |i| MirScalarExpr::literal_ok(Datum::Int64(i), int64_typ.clone());
+        let null = || MirScalarExpr::literal_null(int64_typ.clone());
 
         struct TestCase {
             input: MirScalarExpr,
@@ -3133,76 +2498,44 @@ mod tests {
 
         let test_cases = vec![
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![lit(1)],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![lit(1)]),
                 output: lit(1),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![lit(1), lit(2)],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![lit(1), lit(2)]),
                 output: lit(1),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![null(), lit(2), null()],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![null(), lit(2), null()]),
                 output: lit(2),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![null(), col(0), null(), col(1), lit(2), lit(3)],
-                },
-                output: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), col(1), lit(2)],
-                },
+                input: MirScalarExpr::call_variadic(
+                    Coalesce,
+                    vec![null(), col(0), null(), col(1), lit(2), lit(3)],
+                ),
+                output: MirScalarExpr::call_variadic(Coalesce, vec![col(0), col(1), lit(2)]),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), col(2), col(1)],
-                },
-                output: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), col(2)],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![col(0), col(2), col(1)]),
+                output: MirScalarExpr::call_variadic(Coalesce, vec![col(0), col(2)]),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![lit(1), err(EvalError::DivisionByZero)],
-                },
+                input: MirScalarExpr::call_variadic(
+                    Coalesce,
+                    vec![lit(1), err(EvalError::DivisionByZero)],
+                ),
                 output: lit(1),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), err(EvalError::DivisionByZero)],
-                },
-                output: err(EvalError::DivisionByZero),
-            },
-            TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![
+                input: MirScalarExpr::call_variadic(
+                    Coalesce,
+                    vec![
                         null(),
                         err(EvalError::DivisionByZero),
                         err(EvalError::NumericFieldOverflow),
                     ],
-                },
-                output: err(EvalError::DivisionByZero),
-            },
-            TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), err(EvalError::DivisionByZero)],
-                },
+                ),
                 output: err(EvalError::DivisionByZero),
             },
         ];
@@ -3220,32 +2553,70 @@ mod tests {
         }
     }
 
-    proptest! {
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
-            let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
+    /// Exercises the `unsafe` pointer stack in [`Visit::visit_mut_post`] with a
+    /// closure that *replaces subtrees* (`*expr = ...`). Miri's aliasing model
+    /// should shout if the "stack mirrors the call stack" becomes untrue.
+    #[mz_ore::test]
+    fn test_visit_mut_post_replace_subtrees() {
+        let col = MirScalarExpr::column;
+        let mut expr = col(0).if_then_else(col(1).if_then_else(col(2), col(3)), col(4));
+
+        expr.visit_mut_post(&mut |expr: &mut MirScalarExpr| match expr {
+            MirScalarExpr::Column(n, _) => *n += 1,
+            MirScalarExpr::If { then, .. } => {
+                let then = then.take();
+                *expr = then;
+            }
+            _ => {}
+        });
+
+        // collapses to then-most branch
+        assert_eq!(expr, col(3));
     }
 
-    proptest! {
-        #[mz_ore::test]
-        fn domain_limit_protobuf_roundtrip(expect in any::<DomainLimit>()) {
-            let actual = protobuf_roundtrip::<_, ProtoDomainLimit>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
+    /// Exercises the `unsafe` pointer stack in [`Visit::visit_mut_pre_post`] with
+    /// a `pre` that both *replaces the visited node wholesale* (`*expr = ...`)
+    /// and *returns an explicit child set* borrowed from the freshly written
+    /// value. Miri's aliasing model should shout if the "stack mirrors the call
+    /// stack" becomes untrue.
+    #[mz_ore::test]
+    fn test_visit_mut_pre_post_explicit_children() {
+        let col = MirScalarExpr::column;
+        let mut expr = col(5)
+            .if_then_else(col(6), col(7))
+            .if_then_else(col(1).if_then_else(col(2), col(3)), col(4));
 
-    proptest! {
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn eval_error_protobuf_roundtrip(expect in any::<EvalError>()) {
-            let actual = protobuf_roundtrip::<_, ProtoEvalError>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
+        // turns conditions into column 0 in pre
+        // doesn't traverse conditions of ifs
+        // adds 10 to all column refs in post (but not in conditions!)
+        expr.visit_mut_pre_post(
+            &mut |expr: &mut MirScalarExpr| -> Option<Vec<&mut MirScalarExpr>> {
+                if let MirScalarExpr::If { .. } = expr {
+                    let MirScalarExpr::If { then, els, .. } = expr else {
+                        unreachable!()
+                    };
+                    let then = then.take();
+                    let els = els.take();
+                    *expr = MirScalarExpr::column(0).if_then_else(then, els);
+
+                    let MirScalarExpr::If { then, els, .. } = expr else {
+                        unreachable!()
+                    };
+                    Some(vec![then.as_mut(), els.as_mut()])
+                } else {
+                    // Leaves recurse with their default (empty) child set.
+                    None
+                }
+            },
+            &mut |expr: &mut MirScalarExpr| {
+                if let MirScalarExpr::Column(n, _) = expr {
+                    *n += 10;
+                }
+            },
+        );
+
+        // conditions become 0; everyone else += 10
+        let expected = col(0).if_then_else(col(0).if_then_else(col(12), col(13)), col(14));
+        assert_eq!(expr, expected);
     }
 }

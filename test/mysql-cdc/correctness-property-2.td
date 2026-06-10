@@ -8,10 +8,9 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
 $ set count=10000
 
@@ -37,11 +36,14 @@ INSERT INTO t1 (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 
     PASSWORD SECRET mysqlpass
   )
 
+> BEGIN
 > CREATE SOURCE mz_source
   IN CLUSTER storage
   FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES
   WITH (RETAIN HISTORY = FOR '365000 days');
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> COMMIT
 
 # Grab a cursor at timestamp 0
 > BEGIN
@@ -51,7 +53,7 @@ INSERT INTO t1 (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 
 # Start ingestion by adding a replica to the cluster. We must do this from a
 # different connection to not disturb the transaction we're in.
 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
-CREATE CLUSTER REPLICA storage.r1 SIZE = '1';
+CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=1';
 
 # Verify that at timestamp 0 there is only one record whose value is the final value
 > FETCH 1 c WITH (timeout = '1d');

@@ -13,7 +13,7 @@
 #
 # Some of the queries that fail in Materialize will succeed in Postgresql
 #
-# See https://github.com/MaterializeInc/materialize/issues/5670 for a discussion on the remaining
+# See https://github.com/MaterializeInc/database-issues/issues/1745 for a discussion on the remaining
 # differences between the two databases
 #
 

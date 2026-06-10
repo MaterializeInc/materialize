@@ -7,23 +7,31 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Functional test for the native (non-Debezium) MySQL sources, using Toxiproxy to
+simulate bad network as well as checking how Materialize handles binary log
+corruptions.
+"""
+
 import time
 from typing import Any
 
 import pymysql
-from pg8000 import Cursor
+from psycopg import Cursor
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Alpine(),
-    Materialized(),
+    Mz(app_password=""),
+    Materialized(default_replication_factor=2),
     MySql(),
     MySql(
         name="mysql-replica-1",
@@ -44,25 +52,38 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    # Otherwise we are running all workflows
-    sharded_workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
-    print(
-        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
-    )
-    for name in sharded_workflows:
+    def process(name: str) -> None:
+        if name == "default":
+            return
+
+        # TODO(def-): Reenable when database-issues#7775 is fixed
+        if name in ("bin-log-manipulations", "short-bin-log-retention"):
+            return
+
+        # TODO: Reenable when database-issues#7683 is fixed
+        if name == "backup-restore":
+            return
+
         # clear to avoid issues
         c.kill("mysql")
         c.rm("mysql")
 
-        if name == "default":
-            continue
-
-        # TODO(def-): Reenable when #26127 is fixed
-        if name in ("bin-log-manipulations", "short-bin-log-retention"):
-            continue
-
         with c.test_case(name):
             c.workflow(name)
+
+    workflows_with_internal_sharding = [
+        "disruptions",
+        "bin-log-manipulations",
+        "short-bin-log-retention",
+    ]
+    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+        [w for w in c.workflows if w not in workflows_with_internal_sharding],
+        lambda w: w,
+    )
+    print(
+        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+    )
+    c.test_parts(sharded_workflows, process)
 
 
 def workflow_disruptions(c: Composition) -> None:
@@ -83,6 +104,11 @@ def workflow_disruptions(c: Composition) -> None:
         transaction_with_rollback,
     ]
 
+    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
+    print(
+        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+    )
+
     for scenario in scenarios:
         overrides = (
             [MySql(volumes=["sourcedata_512Mb:/var/lib/mysql"])]
@@ -100,7 +126,7 @@ def workflow_disruptions(c: Composition) -> None:
 
 def workflow_backup_restore(c: Composition) -> None:
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
     ):
         scenario = backup_restore_mysql
         print(f"--- Running scenario {scenario.__name__}")
@@ -111,13 +137,19 @@ def workflow_backup_restore(c: Composition) -> None:
 
 def workflow_bin_log_manipulations(c: Composition) -> None:
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
     ):
         scenarios = [
             reset_master_gtid,
             corrupt_bin_log_to_stall_source,
             corrupt_bin_log_and_add_sub_source,
         ]
+
+        scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
+        print(
+            f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+        )
+
         for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
             initialize(c)
@@ -130,8 +162,17 @@ def workflow_short_bin_log_retention(c: Composition) -> None:
     args = MySql.DEFAULT_ADDITIONAL_ARGS.copy()
     args.append(f"--binlog_expire_logs_seconds={bin_log_expiration_in_sec}")
 
-    with c.override(Materialized(sanity_restart=False), MySql(additional_args=args)):
+    with c.override(
+        Materialized(sanity_restart=False, default_replication_factor=2),
+        MySql(additional_args=args),
+    ):
         scenarios = [logs_expiration_while_mz_down, create_source_after_logs_expiration]
+
+        scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
+        print(
+            f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+        )
+
         for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
             initialize(c, create_source=False)
@@ -149,7 +190,7 @@ def workflow_master_changes(c: Composition) -> None:
     """
 
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
@@ -236,7 +277,7 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
     """
 
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
@@ -576,7 +617,7 @@ def backup_restore_mysql(c: Composition) -> None:
 
     run_testdrive_files(c, "verify-mysql-select.td")
 
-    # TODO: #25760: one of the two following commands must succeed
+    # TODO: database-issues#7683: one of the two following commands must succeed
     # run_testdrive_files(c, "verify-rows-after-restore-t1.td")
     # run_testdrive_files(c, "verify-source-failed.td")
 

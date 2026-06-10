@@ -10,18 +10,11 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class RenameSchema(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.75.0-dev")
-
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE SCHEMA rename_me1;
             > CREATE SCHEMA rename_me2;
             > CREATE SCHEMA rename_me3;
@@ -35,9 +28,7 @@ class RenameSchema(Check):
             > INSERT INTO rename_me3.t3 VALUES (3);
 
             > ALTER SCHEMA rename_me1 RENAME TO renamed1;
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -53,13 +44,11 @@ class RenameSchema(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SHOW SCHEMAS LIKE 'rename%';
-                renamed1
-                renamed2
-                renamed3
+                renamed1 ""
+                renamed2 ""
+                renamed3 ""
 
                 > SET SCHEMA = renamed1;
 
@@ -75,6 +64,4 @@ class RenameSchema(Check):
 
                 > SELECT * FROM t3;
                 3
-                """
-            )
-        )
+                """))

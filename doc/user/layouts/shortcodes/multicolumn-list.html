@@ -1,0 +1,11 @@
+<!-- Does not support nested list but shouldn't need to have multicolumn nested lists-->
+{{- $numColumns := .Get "columns" | default "2" -}}
+<ul style="column-count: {{ $numColumns }}">
+    {{- $lines := split .Inner "\n" -}}
+    {{- range $lines -}}
+      {{- $line := trim . " \t" -}}
+      {{- if hasPrefix $line "- " -}}
+        <li>{{ $line | replaceRE "^\\-\\s+" "" | markdownify }}</li>
+      {{- end -}}
+    {{- end -}}
+</ul>

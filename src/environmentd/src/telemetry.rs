@@ -77,17 +77,17 @@
 // environment in real time:
 // https://app.segment.com/materializeinc/sources/cloud_dev/debugger.
 
+use anyhow::bail;
+use futures::StreamExt;
+use mz_adapter::PeekResponseUnary;
 use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
+use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
-use mz_ore::{assert_none, task};
+use mz_ore::{soft_panic_or_log, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_sql::catalog::EnvironmentId;
 use serde_json::json;
 use tokio::time::{self, Duration};
-use tracing::warn;
-
-/// How frequently to send a summary to Segment.
-const REPORT_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// Telemetry configuration.
 #[derive(Clone)]
@@ -98,6 +98,8 @@ pub struct Config {
     pub adapter_client: mz_adapter::Client,
     /// The ID of the environment for which to report data.
     pub environment_id: EnvironmentId,
+    /// How frequently to send a summary to Segment.
+    pub report_interval: Duration,
 }
 
 /// Starts reporting telemetry events to Segment.
@@ -110,6 +112,7 @@ async fn report_loop(
         segment_client,
         adapter_client,
         environment_id,
+        report_interval,
     }: Config,
 ) {
     struct Stats {
@@ -122,7 +125,7 @@ async fn report_loop(
 
     let mut last_stats: Option<Stats> = None;
 
-    let mut interval = time::interval(REPORT_INTERVAL);
+    let mut interval = time::interval(report_interval);
     loop {
         interval.tick().await;
 
@@ -135,7 +138,7 @@ async fn report_loop(
                     .active_subscribes
                     .with_label_values(&["user"])
                     .get();
-                let mut rows = adapter_client.support_execute_one(&format!("
+                let mut rows_stream = adapter_client.support_execute_one(&format!("
                     SELECT jsonb_build_object(
                         'active_aws_privatelink_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'aws-privatelink')::int4,
                         'active_clusters', (SELECT count(*) FROM mz_clusters WHERE id LIKE 'u%')::int4,
@@ -167,8 +170,28 @@ async fn report_loop(
                     )",
                 )).await?;
 
-                let row = rows.next().expect("expected at least one row").to_owned();
-                assert_none!(rows.next(), "introspection query had more than one row?");
+                let mut row_iters = Vec::new();
+
+                while let Some(rows) = rows_stream.next().await {
+                    match rows {
+                        PeekResponseUnary::Rows(rows) => row_iters.push(rows),
+                        PeekResponseUnary::Canceled => bail!("query canceled"),
+                        PeekResponseUnary::Error(e) => bail!(e),
+                        PeekResponseUnary::DependencyDropped(dep) => {
+                            bail!("{}", dep.query_terminated_error())
+                        }
+                    }
+                }
+
+                let mut rows = Vec::new();
+                for mut row_iter in row_iters {
+                    while let Some(row) = row_iter.next() {
+                        rows.push(row.to_owned());
+                    }
+                }
+
+                assert_eq!(1, rows.len(), "expected one row but got: {:?}", rows);
+                let row = rows.into_first();
 
                 let jsonb = Jsonb::from_row(row);
                 Ok::<_, anyhow::Error>(jsonb.as_ref().to_serde_json())
@@ -178,10 +201,12 @@ async fn report_loop(
         let traits = match traits {
             Ok(traits) => traits,
             Err(e) => {
-                warn!("unable to collect telemetry traits: {e}");
+                soft_panic_or_log!("unable to collect telemetry traits: {e}");
                 continue;
             }
         };
+
+        tracing::info!(?traits, "telemetry traits");
 
         segment_client.group(
             // We use the organization ID as the user ID for events

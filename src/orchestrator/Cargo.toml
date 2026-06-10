@@ -10,23 +10,14 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-async-trait = "0.1.68"
-bytesize = "1.1.0"
-chrono = { version = "0.4.35", default-features = false, features = ["serde"] }
-derivative = "2.2.0"
-futures-core = "0.3.21"
-mz-ore = { path = "../ore"}
-prost = { version = "0.13.1", features = ["no-recursion-limit"] }
-serde = "1.0"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
-tonic-build = "0.12.1"
+anyhow.workspace = true
+async-trait.workspace = true
+bytesize.workspace = true
+chrono.workspace = true
+derivative.workspace = true
+futures-core.workspace = true
+mz-ore = { path = "../ore", default-features = false, features = ["assert-no-tracing"] }
+serde.workspace = true
 
 [features]
-default = ["mz-build-tools/default"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

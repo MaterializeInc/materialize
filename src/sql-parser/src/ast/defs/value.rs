@@ -23,8 +23,8 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::Ident;
+use crate::ast::display::{self, AstDisplay, AstFormatter};
 
 #[derive(Debug)]
 pub struct ValueError(pub(crate) String);
@@ -38,7 +38,17 @@ impl fmt::Display for ValueError {
 }
 
 /// Primitive SQL values.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub enum Value {
     /// Numeric value.
     Number(String),
@@ -152,7 +162,18 @@ impl From<Ident> for Value {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum DateTimeField {
     Millennium,
     Century,
@@ -210,7 +231,17 @@ impl FromStr for DateTimeField {
 
 /// An intermediate value for Intervals, which tracks all data from
 /// the user, as well as the computed ParsedDateTime.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub struct IntervalValue {
     /// The raw `[value]` that was present in `INTERVAL '[value]'`
     pub value: String,
@@ -238,3 +269,26 @@ impl Default for IntervalValue {
         }
     }
 }
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Version(pub(crate) u64);
+
+impl Version {
+    pub fn new(val: u64) -> Self {
+        Version(val)
+    }
+
+    pub fn into_inner(self) -> u64 {
+        self.0
+    }
+}
+
+impl AstDisplay for Version {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_node(&self.0);
+    }
+}
+impl_display!(Version);

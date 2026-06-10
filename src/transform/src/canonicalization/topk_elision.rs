@@ -9,8 +9,8 @@
 
 //! Remove TopK operators with both an offset of zero and no limit.
 
-use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+use mz_expr::visit::Visit;
 
 use crate::TransformCtx;
 
@@ -19,17 +19,21 @@ use crate::TransformCtx;
 pub struct TopKElision;
 
 impl crate::Transform for TopKElision {
+    fn name(&self) -> &'static str {
+        "TopKElision"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "topk_elision")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_post(&mut Self::action)?;
+        relation.visit_mut_post(&mut Self::action);
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
@@ -52,7 +56,7 @@ impl TopKElision {
             if limit.as_ref().map_or(true, |l| l.is_literal_null()) && *offset == 0 {
                 *relation = input.take_dangerous();
             } else if limit.as_ref().and_then(|l| l.as_literal_int64()) == Some(0) {
-                relation.take_safely();
+                relation.take_safely(None);
             }
         }
     }

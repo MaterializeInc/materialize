@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 $ set-arg-default single-replica-cluster=quickstart
 
 # Verify commands do not work on kafka.
@@ -18,13 +20,17 @@ one
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT TEXT;
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}');
 
-> SELECT * from data
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
+  FORMAT TEXT;
+> COMMIT
+
+> SELECT * from data_tbl
 one
 
-!ALTER SOURCE data ADD SUBSOURCE t;
-contains:data is a kafka source, which does not support ALTER SOURCE.
+! ALTER SOURCE data ADD SUBSOURCE t;
+contains:source data does not support ALTER SOURCE.

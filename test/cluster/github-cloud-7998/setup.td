@@ -8,21 +8,21 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
 # Create a cluster that we can make unavailable.
 > CREATE CLUSTER compute REPLICAS (
     r1 (
       STORAGECTL ADDRESSES ['clusterd1:2100'],
       COMPUTECTL ADDRESSES ['clusterd1:2101'],
-      STORAGE ADDRESSES ['clusterd1:2102'],
-      COMPUTE ADDRESSES ['clusterd1:2103'],
+      STORAGE ADDRESSES ['clusterd1:2103'],
+      COMPUTE ADDRESSES ['clusterd1:2102'],
       WORKERS 1
     )
   )
 
 # Create a serving cluster that should still respond to queries.
-> CREATE CLUSTER serving SIZE '1'
+> CREATE CLUSTER serving SIZE 'scale=1,workers=1'
 
 # Create an MV maintained on the compute cluster and indexed on the serving
 # cluster. It's important that the MV reads from an index too, to reproduce

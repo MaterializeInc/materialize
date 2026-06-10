@@ -13,61 +13,232 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::SystemTime;
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
+use async_trait::async_trait;
+use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
+use aws_sigv4::http_request::{SignableBody, SignableRequest, SigningSettings, sign};
+use aws_sigv4::sign::v4;
+// Aliased to avoid colliding with `mz_ccsr::tls::Identity`.
+use aws_smithy_runtime_api::client::identity::Identity as AwsIdentity;
+use http::{HeaderName, HeaderValue};
+use iceberg::Catalog;
+use iceberg::CatalogBuilder;
+use iceberg::io::{S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg_catalog_rest::{
+    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RequestAuthenticator, RestCatalogBuilder,
+};
+use iceberg_storage_opendal::{
+    AwsCredential, AwsCredentialLoad, CustomAwsCredentialLoader, OpenDalStorageFactory,
+};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
-use mz_cloud_resources::{vpc_endpoint_host, AwsExternalIdPrefix, CloudResourceReader};
+use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
 use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
-    BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
+    BrokerAddr, BrokerRewrite, HostMappingRules, MzClientContext, MzKafkaError, TunnelConfig,
+    TunnelingClientContext,
 };
+use mz_mysql_util::{MySqlConn, MySqlError};
 use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
-use mz_proto::tokio_postgres::any_ssl_mode;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::url::any_url;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::ConnectionRulePattern;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
-use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
-use proptest::strategy::Strategy;
-use proptest_derive::Arbitrary;
+use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
-use rdkafka::ClientContext;
 use regex::Regex;
+use reqwest::Request;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
 use tokio_postgres::config::SslMode;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
+use crate::AlterCompatible;
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{
-    AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
+    AwsAuth, AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
 };
 use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
 use crate::dyncfgs::{
     ENFORCE_EXTERNAL_ADDRESSES, KAFKA_CLIENT_ID_ENRICHMENT_RULES,
-    KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM,
+    KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM, KAFKA_RECONNECT_BACKOFF,
+    KAFKA_RECONNECT_BACKOFF_MAX, KAFKA_RETRY_BACKOFF, KAFKA_RETRY_BACKOFF_MAX,
 };
 use crate::errors::{ContextCreationError, CsrConnectError};
-use crate::AlterCompatible;
 
 pub mod aws;
+pub mod gcp;
 pub mod inline;
 pub mod string_or_secret;
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage_types.connections.rs"));
+const REST_CATALOG_PROP_SCOPE: &str = "scope";
+const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
+
+/// A credential loader that wraps an aws-sdk-rust credentials provider for use with
+/// iceberg/OpenDAL. This allows us to provide refreshable credentials from the AWS SDK
+/// credential chain (including the full assume role chain) to OpenDAL's S3 implementation.
+///
+/// We use this instead of OpenDAL's built-in assume role support because Materialize
+/// has a runtime-defined credential chain (ambient → jump role → user role with external ID)
+/// that can't be expressed via OpenDAL's static configuration properties.
+struct AwsSdkCredentialLoader {
+    /// The underlying AWS SDK credentials provider. For assume role auth, this provider
+    /// already handles the full chain: ambient creds -> jump role -> user role.
+    provider: SharedCredentialsProvider,
+}
+
+impl AwsSdkCredentialLoader {
+    fn new(provider: SharedCredentialsProvider) -> Self {
+        Self { provider }
+    }
+}
+
+#[async_trait]
+impl AwsCredentialLoad for AwsSdkCredentialLoader {
+    async fn load_credential(
+        &self,
+        _client: reqwest::Client,
+    ) -> anyhow::Result<Option<AwsCredential>> {
+        let creds = self
+            .provider
+            .provide_credentials()
+            .await
+            .map_err(|e| {
+                warn!(
+                    error = %e.display_with_causes(),
+                    "failed to load AWS credentials for Iceberg FileIO from SDK provider"
+                );
+                e
+            })
+            .context(
+                "failed to load AWS credentials from SDK provider for Iceberg FileIO \
+                 (credential source may be temporarily unavailable)",
+            )?;
+
+        Ok(Some(AwsCredential {
+            access_key_id: creds.access_key_id().to_string(),
+            secret_access_key: creds.secret_access_key().to_string(),
+            session_token: creds.session_token().map(|s| s.to_string()),
+            expires_in: creds.expiry().map(|t| t.into()),
+        }))
+    }
+}
+
+/// Signs each outgoing REST-catalog request with AWS SigV4.
+///
+/// Holds a [`SharedCredentialsProvider`] (not static `Credentials`) so each
+/// request signs with refreshable creds from Materialize's chain
+/// (ambient -> jump role -> user role w/ external ID).
+struct Sigv4Authenticator {
+    provider: SharedCredentialsProvider,
+    region: String,
+    /// The AWS signing name. `"s3tables"` for AWS S3 Tables REST catalog.
+    signing_name: String,
+}
+
+impl std::fmt::Debug for Sigv4Authenticator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sigv4Authenticator")
+            .field("region", &self.region)
+            .field("signing_name", &self.signing_name)
+            .finish_non_exhaustive()
+    }
+}
+
+fn sigv4_err(e: impl Into<anyhow::Error>) -> iceberg::Error {
+    iceberg::Error::new(iceberg::ErrorKind::DataInvalid, "AWS SigV4").with_source(e)
+}
+
+#[async_trait]
+impl RequestAuthenticator for Sigv4Authenticator {
+    async fn authenticate_request(&self, req: &mut Request) -> iceberg::Result<()> {
+        let creds = self
+            .provider
+            .provide_credentials()
+            .await
+            .map_err(sigv4_err)?;
+        let identity: AwsIdentity = creds.into();
+        let params = v4::SigningParams::builder()
+            .identity(&identity)
+            .region(&self.region)
+            .name(&self.signing_name)
+            .time(SystemTime::now())
+            .settings(SigningSettings::default())
+            .build()
+            .map_err(sigv4_err)?
+            .into();
+        let body: &[u8] = req
+            .body()
+            .map(|b| match b.as_bytes() {
+                Some(b) => Ok(b),
+                None => Err(iceberg::Error::new(
+                    iceberg::ErrorKind::FeatureUnsupported,
+                    "SigV4 Authenticator cannot sign a streaming request body.",
+                )),
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let headers = req
+            .headers()
+            .iter()
+            .map(|(k, v)| {
+                Ok((
+                    k.as_str(),
+                    v.to_str().map_err(|_| {
+                        iceberg::Error::new(
+                            iceberg::ErrorKind::DataInvalid,
+                            format!("header '{}' value is not all visible ASCII", k),
+                        )
+                    })?,
+                ))
+            })
+            .collect::<iceberg::Result<Vec<(&str, &str)>>>()?;
+        let signable = SignableRequest::new(
+            req.method().as_str(),
+            req.url().as_str(),
+            headers.into_iter(),
+            SignableBody::Bytes(body),
+        )
+        .map_err(sigv4_err)?;
+        let (instructions, _sig) = sign(signable, &params).map_err(sigv4_err)?.into_parts();
+        let (new_headers, new_query) = instructions.into_parts();
+        for header in new_headers {
+            let mut value = HeaderValue::from_str(header.value()).map_err(sigv4_err)?;
+            value.set_sensitive(header.sensitive());
+            req.headers_mut()
+                .insert(HeaderName::from_static(header.name()), value);
+        }
+        if !new_query.is_empty() {
+            let url = req.url_mut();
+            let mut pairs = url.query_pairs_mut();
+            for (name, value) in new_query {
+                pairs.append_pair(name, &value);
+            }
+        }
+        Ok(())
+    }
+
+    // SigV4 is stateless: nothing to cache, invalidate, or refresh.
+    async fn invalidate_cache(&self) -> iceberg::Result<()> {
+        Ok(())
+    }
+    async fn regenerate_cache(&self) -> iceberg::Result<()> {
+        Ok(())
+    }
+}
 
 /// An extension trait for [`SecretsReader`]
 #[async_trait::async_trait]
@@ -76,14 +247,14 @@ trait SecretsReaderExt {
     async fn read_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<Vec<u8>, anyhow::Error>;
 
     /// `SecretsReader::read_string`, but optionally run in a task.
     async fn read_string_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<String, anyhow::Error>;
 }
 
@@ -92,7 +263,7 @@ impl SecretsReaderExt for Arc<dyn SecretsReader> {
     async fn read_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<Vec<u8>, anyhow::Error> {
         let sr = Arc::clone(self);
         async move { sr.read(id).await }
@@ -102,7 +273,7 @@ impl SecretsReaderExt for Arc<dyn SecretsReader> {
     async fn read_string_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<String, anyhow::Error> {
         let sr = Arc::clone(self);
         async move { sr.read_string(id).await }
@@ -174,8 +345,15 @@ impl ConnectionContext {
         ConnectionContext {
             environment_id: "test-environment-id".into(),
             librdkafka_log_level: tracing::Level::INFO,
-            aws_external_id_prefix: None,
-            aws_connection_role_arn: None,
+            aws_external_id_prefix: Some(
+                AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable(
+                    "test-aws-external-id-prefix",
+                )
+                .expect("infallible"),
+            ),
+            aws_connection_role_arn: Some(
+                "arn:aws:iam::123456789000:role/MaterializeConnection".into(),
+            ),
             secrets_reader,
             cloud_resource_reader: None,
             ssh_tunnel_manager: SshTunnelManager::default(),
@@ -183,15 +361,19 @@ impl ConnectionContext {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Connection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaConnection<C>),
     Csr(CsrConnection<C>),
+    GlueSchemaRegistry(GlueSchemaRegistryConnection<C>),
     Postgres(PostgresConnection<C>),
     Ssh(SshConnection),
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
+    Gcp(gcp::GcpConnection),
     MySql(MySqlConnection<C>),
+    SqlServer(SqlServerConnectionDetails<C>),
+    IcebergCatalog(IcebergCatalogConnection<C>),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
@@ -201,11 +383,21 @@ impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
         match self {
             Connection::Kafka(kafka) => Connection::Kafka(kafka.into_inline_connection(r)),
             Connection::Csr(csr) => Connection::Csr(csr.into_inline_connection(r)),
+            Connection::GlueSchemaRegistry(glue) => {
+                Connection::GlueSchemaRegistry(glue.into_inline_connection(r))
+            }
             Connection::Postgres(pg) => Connection::Postgres(pg.into_inline_connection(r)),
             Connection::Ssh(ssh) => Connection::Ssh(ssh),
             Connection::Aws(aws) => Connection::Aws(aws),
             Connection::AwsPrivatelink(awspl) => Connection::AwsPrivatelink(awspl),
+            Connection::Gcp(gcp) => Connection::Gcp(gcp),
             Connection::MySql(mysql) => Connection::MySql(mysql.into_inline_connection(r)),
+            Connection::SqlServer(sql_server) => {
+                Connection::SqlServer(sql_server.into_inline_connection(r))
+            }
+            Connection::IcebergCatalog(iceberg) => {
+                Connection::IcebergCatalog(iceberg.into_inline_connection(r))
+            }
         }
     }
 }
@@ -216,11 +408,15 @@ impl<C: ConnectionAccess> Connection<C> {
         match self {
             Connection::Kafka(conn) => conn.validate_by_default(),
             Connection::Csr(conn) => conn.validate_by_default(),
+            Connection::GlueSchemaRegistry(conn) => conn.validate_by_default(),
             Connection::Postgres(conn) => conn.validate_by_default(),
             Connection::Ssh(conn) => conn.validate_by_default(),
             Connection::Aws(conn) => conn.validate_by_default(),
             Connection::AwsPrivatelink(conn) => conn.validate_by_default(),
+            Connection::Gcp(conn) => conn.validate_by_default(),
             Connection::MySql(conn) => conn.validate_by_default(),
+            Connection::SqlServer(conn) => conn.validate_by_default(),
+            Connection::IcebergCatalog(conn) => conn.validate_by_default(),
         }
     }
 }
@@ -229,17 +425,29 @@ impl Connection<InlinedConnection> {
     /// Validates this connection by attempting to connect to the upstream system.
     pub async fn validate(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), ConnectionValidationError> {
         match self {
             Connection::Kafka(conn) => conn.validate(id, storage_configuration).await?,
             Connection::Csr(conn) => conn.validate(id, storage_configuration).await?,
-            Connection::Postgres(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::GlueSchemaRegistry(conn) => {
+                conn.validate(id, storage_configuration).await?
+            }
+            Connection::Postgres(conn) => {
+                conn.validate(id, storage_configuration).await?;
+            }
             Connection::Ssh(conn) => conn.validate(id, storage_configuration).await?,
             Connection::Aws(conn) => conn.validate(id, storage_configuration).await?,
             Connection::AwsPrivatelink(conn) => conn.validate(id, storage_configuration).await?,
-            Connection::MySql(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::Gcp(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::MySql(conn) => {
+                conn.validate(id, storage_configuration).await?;
+            }
+            Connection::SqlServer(conn) => {
+                conn.validate(id, storage_configuration).await?;
+            }
+            Connection::IcebergCatalog(conn) => conn.validate(id, storage_configuration).await?,
         }
         Ok(())
     }
@@ -265,6 +473,13 @@ impl Connection<InlinedConnection> {
         }
     }
 
+    pub fn unwrap_sql_server(self) -> <InlinedConnection as ConnectionAccess>::SqlServer {
+        match self {
+            Self::SqlServer(conn) => conn,
+            o => unreachable!("{o:?} is not a SQL Server connection"),
+        }
+    }
+
     pub fn unwrap_aws(self) -> <InlinedConnection as ConnectionAccess>::Aws {
         match self {
             Self::Aws(conn) => conn,
@@ -285,13 +500,37 @@ impl Connection<InlinedConnection> {
             o => unreachable!("{o:?} is not a Kafka connection"),
         }
     }
+
+    pub fn unwrap_glue_schema_registry(
+        self,
+    ) -> <InlinedConnection as ConnectionAccess>::GlueSchemaRegistry {
+        match self {
+            Self::GlueSchemaRegistry(conn) => conn,
+            o => unreachable!("{o:?} is not an AWS Glue Schema Registry connection"),
+        }
+    }
+
+    pub fn unwrap_iceberg_catalog(self) -> <InlinedConnection as ConnectionAccess>::IcebergCatalog {
+        match self {
+            Self::IcebergCatalog(conn) => conn,
+            o => unreachable!("{o:?} is not an Iceberg catalog connection"),
+        }
+    }
 }
 
 /// An error returned by [`Connection::validate`].
 #[derive(thiserror::Error, Debug)]
 pub enum ConnectionValidationError {
     #[error(transparent)]
+    Postgres(#[from] PostgresConnectionValidationError),
+    #[error(transparent)]
+    MySql(#[from] MySqlConnectionValidationError),
+    #[error(transparent)]
+    SqlServer(#[from] SqlServerConnectionValidationError),
+    #[error(transparent)]
     Aws(#[from] AwsConnectionValidationError),
+    #[error(transparent)]
+    Gcp(#[from] gcp::GcpConnectionValidationError),
     #[error("{}", .0.display_with_causes())]
     Other(#[from] anyhow::Error),
 }
@@ -300,7 +539,11 @@ impl ConnectionValidationError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
+            ConnectionValidationError::Postgres(e) => e.detail(),
+            ConnectionValidationError::MySql(e) => e.detail(),
+            ConnectionValidationError::SqlServer(e) => e.detail(),
             ConnectionValidationError::Aws(e) => e.detail(),
+            ConnectionValidationError::Gcp(e) => e.detail(),
             ConnectionValidationError::Other(_) => None,
         }
     }
@@ -308,17 +551,22 @@ impl ConnectionValidationError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
+            ConnectionValidationError::Postgres(e) => e.hint(),
+            ConnectionValidationError::MySql(e) => e.hint(),
+            ConnectionValidationError::SqlServer(e) => e.hint(),
             ConnectionValidationError::Aws(e) => e.hint(),
+            ConnectionValidationError::Gcp(e) => e.hint(),
             ConnectionValidationError::Other(_) => None,
         }
     }
 }
 
 impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
-    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         match (self, other) {
             (Self::Aws(s), Self::Aws(o)) => s.alter_compatible(id, o),
             (Self::AwsPrivatelink(s), Self::AwsPrivatelink(o)) => s.alter_compatible(id, o),
+            (Self::Gcp(s), Self::Gcp(o)) => s.alter_compatible(id, o),
             (Self::Ssh(s), Self::Ssh(o)) => s.alter_compatible(id, o),
             (Self::Csr(s), Self::Csr(o)) => s.alter_compatible(id, o),
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
@@ -336,7 +584,300 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct RestIcebergCatalog {
+    /// For REST catalogs, the oauth2 credential in a `CLIENT_ID:CLIENT_SECRET` format
+    pub credential: StringOrSecret,
+    /// The oauth2 scope for REST catalogs
+    pub scope: Option<String>,
+    /// The warehouse for REST catalogs
+    pub warehouse: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct S3TablesRestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
+    /// The AWS connection details, for s3tables
+    pub aws_connection: AwsConnectionReference<C>,
+    /// The warehouse for s3tables
+    pub warehouse: String,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
+    for S3TablesRestIcebergCatalog<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> S3TablesRestIcebergCatalog {
+        S3TablesRestIcebergCatalog {
+            aws_connection: self.aws_connection.into_inline_connection(&r),
+            warehouse: self.warehouse,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum IcebergCatalogType {
+    Rest,
+    S3TablesRest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum IcebergCatalogImpl<C: ConnectionAccess = InlinedConnection> {
+    Rest(RestIcebergCatalog),
+    S3TablesRest(S3TablesRestIcebergCatalog<C>),
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogImpl, R>
+    for IcebergCatalogImpl<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> IcebergCatalogImpl {
+        match self {
+            IcebergCatalogImpl::Rest(rest) => IcebergCatalogImpl::Rest(rest),
+            IcebergCatalogImpl::S3TablesRest(s3tables) => {
+                IcebergCatalogImpl::S3TablesRest(s3tables.into_inline_connection(r))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
+    /// The catalog impl impl of that catalog
+    pub catalog: IcebergCatalogImpl<C>,
+    /// Where the catalog is located
+    pub uri: reqwest::Url,
+}
+
+impl AlterCompatible for IcebergCatalogConnection {
+    fn alter_compatible(&self, id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+        Err(AlterError { id })
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogConnection, R>
+    for IcebergCatalogConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> IcebergCatalogConnection {
+        IcebergCatalogConnection {
+            catalog: self.catalog.into_inline_connection(&r),
+            uri: self.uri,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> IcebergCatalogConnection<C> {
+    fn validate_by_default(&self) -> bool {
+        true
+    }
+}
+
+impl IcebergCatalogConnection<InlinedConnection> {
+    pub async fn connect(
+        &self,
+        storage_configuration: &StorageConfiguration,
+        in_task: InTask,
+    ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        match self.catalog {
+            IcebergCatalogImpl::S3TablesRest(ref s3tables) => {
+                self.connect_s3tables(s3tables, storage_configuration, in_task)
+                    .await
+            }
+            IcebergCatalogImpl::Rest(ref rest) => {
+                self.connect_rest(rest, storage_configuration, in_task)
+                    .await
+            }
+        }
+    }
+
+    pub fn catalog_type(&self) -> IcebergCatalogType {
+        match self.catalog {
+            IcebergCatalogImpl::S3TablesRest(_) => IcebergCatalogType::S3TablesRest,
+            IcebergCatalogImpl::Rest(_) => IcebergCatalogType::Rest,
+        }
+    }
+
+    pub fn s3tables_catalog(&self) -> Option<&S3TablesRestIcebergCatalog> {
+        match &self.catalog {
+            IcebergCatalogImpl::S3TablesRest(s3tables) => Some(s3tables),
+            IcebergCatalogImpl::Rest(_) => None,
+        }
+    }
+
+    pub fn rest_catalog(&self) -> Option<&RestIcebergCatalog> {
+        match &self.catalog {
+            IcebergCatalogImpl::Rest(rest) => Some(rest),
+            IcebergCatalogImpl::S3TablesRest(_) => None,
+        }
+    }
+
+    async fn connect_s3tables(
+        &self,
+        s3tables: &S3TablesRestIcebergCatalog,
+        storage_configuration: &StorageConfiguration,
+        in_task: InTask,
+    ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        let secret_reader = &storage_configuration.connection_context.secrets_reader;
+        let aws_ref = &s3tables.aws_connection;
+        let aws_config = aws_ref
+            .connection
+            .load_sdk_config(
+                &storage_configuration.connection_context,
+                aws_ref.connection_id,
+                in_task,
+                ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to load AWS SDK config for S3 Tables Iceberg catalog \
+                     (connection id: {}, auth method: {}, catalog uri: {}, warehouse: {})",
+                    aws_ref.connection_id,
+                    aws_ref.connection.auth_method(),
+                    self.uri,
+                    s3tables.warehouse
+                )
+            })?;
+
+        let aws_region = aws_ref
+            .connection
+            .region
+            .clone()
+            .unwrap_or_else(|| "us-east-1".to_string());
+
+        let mut props = vec![
+            (S3_REGION.to_string(), aws_region.clone()),
+            (S3_DISABLE_EC2_METADATA.to_string(), "true".to_string()),
+            (
+                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                s3tables.warehouse.clone(),
+            ),
+            (REST_CATALOG_PROP_URI.to_string(), self.uri.to_string()),
+        ];
+
+        let aws_auth = aws_ref.connection.auth.clone();
+
+        if let AwsAuth::Credentials(creds) = &aws_auth {
+            props.push((
+                S3_ACCESS_KEY_ID.to_string(),
+                creds
+                    .access_key_id
+                    .get_string(in_task, secret_reader)
+                    .await?,
+            ));
+            props.push((
+                S3_SECRET_ACCESS_KEY.to_string(),
+                secret_reader.read_string(creds.secret_access_key).await?,
+            ));
+        }
+
+        // Sign REST catalog requests with the Materialize AWS credential chain
+        // via a custom `RequestAuthenticator`. For AssumeRole auth, also feed
+        // the chain to OpenDAL's S3 loader so data-file IO uses the same creds.
+        let credentials_provider = aws_config
+            .credentials_provider()
+            .ok_or_else(|| anyhow!("aws_config missing credentials provider"))?;
+
+        let authenticator = Arc::new(Sigv4Authenticator {
+            provider: credentials_provider.clone(),
+            region: aws_region.clone(),
+            signing_name: "s3tables".to_string(),
+        });
+
+        // N.B. We're using the AWS credentials from the catalog connection for the storage layer
+        //   even though the sink comes with its own (unused) AWS credentials for storage.
+        let customized_credential_load = if matches!(aws_auth, AwsAuth::AssumeRole(_)) {
+            Some(CustomAwsCredentialLoader::new(Arc::new(
+                AwsSdkCredentialLoader::new(credentials_provider),
+            )))
+        } else {
+            None
+        };
+
+        let storage_factory = Arc::new(OpenDalStorageFactory::S3 {
+            configured_scheme: "s3".to_string(),
+            customized_credential_load,
+        });
+
+        let catalog = RestCatalogBuilder::default()
+            .with_storage_factory(storage_factory)
+            .with_authenticator(authenticator)
+            .load("IcebergCatalog", props.into_iter().collect())
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create S3 Tables Iceberg catalog \
+                     (connection id: {}, catalog uri: {}, warehouse: {})",
+                    aws_ref.connection_id, self.uri, s3tables.warehouse
+                )
+            })?;
+
+        Ok(Arc::new(catalog))
+    }
+
+    async fn connect_rest(
+        &self,
+        rest: &RestIcebergCatalog,
+        storage_configuration: &StorageConfiguration,
+        in_task: InTask,
+    ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        let mut props = BTreeMap::from([(
+            REST_CATALOG_PROP_URI.to_string(),
+            self.uri.to_string().clone(),
+        )]);
+
+        if let Some(warehouse) = &rest.warehouse {
+            props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
+        }
+
+        let credential = rest
+            .credential
+            .get_string(
+                in_task,
+                &storage_configuration.connection_context.secrets_reader,
+            )
+            .await
+            .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
+        props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
+
+        if let Some(scope) = &rest.scope {
+            props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
+        }
+
+        let catalog = RestCatalogBuilder::default()
+            .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+                configured_scheme: "s3".to_string(),
+                // Polaris returns a config with:
+                //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
+                // `iceberg-rust` forwards these props to `opendal`.
+                // N.B. This is not confirmed to work with other catalog & storage implementations.
+                customized_credential_load: None,
+            }))
+            .load("IcebergCatalog", props.into_iter().collect())
+            .await
+            .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;
+        Ok(Arc::new(catalog))
+    }
+
+    async fn validate(
+        &self,
+        _id: CatalogItemId,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<(), ConnectionValidationError> {
+        let catalog = self
+            .connect(storage_configuration, InTask::No)
+            .await
+            .map_err(|e| {
+                ConnectionValidationError::Other(anyhow!("failed to connect to catalog: {e}"))
+            })?;
+
+        // If we can list namespaces, the connection is valid.
+        catalog.list_namespaces(None).await.map_err(|e| {
+            ConnectionValidationError::Other(anyhow!("failed to list namespaces: {e}"))
+        })?;
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelinkConnection {
     pub service_name: String,
     pub availability_zones: Vec<String>,
@@ -349,17 +890,17 @@ impl AlterCompatible for AwsPrivatelinkConnection {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaTlsConfig {
     pub identity: Option<TlsIdentity>,
     pub root_cert: Option<StringOrSecret>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaSaslConfig<C: ConnectionAccess = InlinedConnection> {
     pub mechanism: String,
     pub username: StringOrSecret,
-    pub password: Option<GlobalId>,
+    pub password: Option<CatalogItemId>,
     pub aws: Option<AwsConnectionReference<C>>,
 }
 
@@ -377,7 +918,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSaslConfig, R>
 }
 
 /// Specifies a Kafka broker in a [`KafkaConnection`].
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaBroker<C: ConnectionAccess = InlinedConnection> {
     /// The address of the Kafka broker.
     pub address: String,
@@ -397,25 +938,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaBroker, R>
     }
 }
 
-impl RustType<ProtoKafkaBroker> for KafkaBroker {
-    fn into_proto(&self) -> ProtoKafkaBroker {
-        ProtoKafkaBroker {
-            address: self.address.into_proto(),
-            tunnel: Some(self.tunnel.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaBroker) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaBroker {
-            address: proto.address.into_rust()?,
-            tunnel: proto
-                .tunnel
-                .into_rust_if_some("ProtoKafkaConnection::tunnel")?,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
 pub struct KafkaTopicOptions {
     /// The replication factor for the topic.
     /// If `None`, the broker default will be used.
@@ -427,25 +950,7 @@ pub struct KafkaTopicOptions {
     pub topic_config: BTreeMap<String, String>,
 }
 
-impl RustType<ProtoKafkaTopicOptions> for KafkaTopicOptions {
-    fn into_proto(&self) -> ProtoKafkaTopicOptions {
-        ProtoKafkaTopicOptions {
-            replication_factor: self.replication_factor.map(|f| *f),
-            partition_count: self.partition_count.map(|f| *f),
-            topic_config: self.topic_config.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaTopicOptions) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaTopicOptions {
-            replication_factor: proto.replication_factor.map(NonNeg::try_from).transpose()?,
-            partition_count: proto.partition_count.map(NonNeg::try_from).transpose()?,
-            topic_config: proto.topic_config,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     pub brokers: Vec<KafkaBroker<C>>,
     /// A tunnel through which to route traffic,
@@ -498,8 +1003,8 @@ impl<C: ConnectionAccess> KafkaConnection<C> {
     pub fn progress_topic(
         &self,
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
-    ) -> Cow<str> {
+        connection_id: CatalogItemId,
+    ) -> Cow<'_, str> {
         if let Some(progress_topic) = &self.progress_topic {
             Cow::Borrowed(progress_topic)
         } else {
@@ -521,7 +1026,7 @@ impl KafkaConnection {
     /// or sink.
     pub fn id_base(
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
         object_id: GlobalId,
     ) -> String {
         format!(
@@ -614,15 +1119,30 @@ impl KafkaConnection {
                     t.port.unwrap_or(9092)
                 )
             }
+            Tunnel::AwsPrivatelinks(_pl) => {
+                let algo = KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM
+                    .get(storage_configuration.config_set());
+                options.insert("ssl.endpoint.identification.algorithm".into(), algo.into());
+
+                if self.brokers.is_empty() {
+                    return Err(ContextCreationError::Other(anyhow::anyhow!(
+                        "at least one static broker is required when using BROKER or BROKERS"
+                    )));
+                }
+                self.brokers.iter().map(|b| &b.address).join(",")
+            }
             _ => self.brokers.iter().map(|b| &b.address).join(","),
         };
-        options.insert("bootstrap.servers".into(), brokers.into());
+        options.insert("bootstrap.servers".into(), brokers.clone().into());
         let security_protocol = match (self.tls.is_some(), self.sasl.is_some()) {
             (false, false) => "PLAINTEXT",
             (true, false) => "SSL",
             (false, true) => "SASL_PLAINTEXT",
             (true, true) => "SASL_SSL",
         };
+        info!(
+            "kafka: create_with_context bootstrap.servers={brokers}, security_protocol={security_protocol}"
+        );
         options.insert("security.protocol".into(), security_protocol.into());
         if let Some(tls) = &self.tls {
             if let Some(root_cert) = &tls.root_cert {
@@ -640,6 +1160,35 @@ impl KafkaConnection {
                 options.insert("sasl.password".into(), StringOrSecret::Secret(password));
             }
         }
+
+        options.insert(
+            "retry.backoff.ms".into(),
+            KAFKA_RETRY_BACKOFF
+                .get(storage_configuration.config_set())
+                .as_millis()
+                .into(),
+        );
+        options.insert(
+            "retry.backoff.max.ms".into(),
+            KAFKA_RETRY_BACKOFF_MAX
+                .get(storage_configuration.config_set())
+                .as_millis()
+                .into(),
+        );
+        options.insert(
+            "reconnect.backoff.ms".into(),
+            KAFKA_RECONNECT_BACKOFF
+                .get(storage_configuration.config_set())
+                .as_millis()
+                .into(),
+        );
+        options.insert(
+            "reconnect.backoff.max.ms".into(),
+            KAFKA_RECONNECT_BACKOFF_MAX
+                .get(storage_configuration.config_set())
+                .as_millis()
+                .into(),
+        );
 
         let mut config = mz_kafka_util::client::create_new_client_config(
             storage_configuration
@@ -670,6 +1219,7 @@ impl KafkaConnection {
                         &storage_configuration.connection_context,
                         aws.connection_id,
                         in_task,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                     )
                     .await?,
             ),
@@ -695,10 +1245,15 @@ impl KafkaConnection {
                 // By default, don't offer a default override for broker address lookup.
             }
             Tunnel::AwsPrivatelink(pl) => {
-                context.set_default_tunnel(TunnelConfig::StaticHost(vpc_endpoint_host(
-                    pl.connection_id,
-                    None, // Default tunnel does not support availability zones.
-                )));
+                context.set_default_tunnel(TunnelConfig::StaticHost(
+                    // Possible bug: We have been ignoring the configured port.
+                    KafkaConnection::from_default_aws_privatelink(pl).host,
+                ));
+            }
+            Tunnel::AwsPrivatelinks(pl) => {
+                context.set_default_tunnel(TunnelConfig::Rules(
+                    KafkaConnection::from_aws_privatelinks(pl),
+                ));
             }
             Tunnel::Ssh(ssh_tunnel) => {
                 let secret = storage_configuration
@@ -725,7 +1280,19 @@ impl KafkaConnection {
                 }));
             }
         }
+        info!(
+            "kafka: tunnel config set to {}",
+            match &self.default_tunnel {
+                Tunnel::Direct => "Direct".to_string(),
+                Tunnel::AwsPrivatelink(_) => "AwsPrivatelink (static host)".to_string(),
+                Tunnel::AwsPrivatelinks(pl) =>
+                    format!("AwsPrivatelinks ({} rules)", pl.rules.len()),
+                Tunnel::Ssh(_) => "Ssh".to_string(),
+            }
+        );
 
+        // Here, we preemptively rewrite broker addresses.
+        // In concept, this overlaps with 'TunnelingClientContext::resolve_broker_addr'.
         for broker in &self.brokers {
             let mut addr_parts = broker.address.splitn(2, ':');
             let addr = BrokerAddr {
@@ -752,19 +1319,14 @@ impl KafkaConnection {
                     // in the `TunnelingClientContext`.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
-                    let host = mz_cloud_resources::vpc_endpoint_host(
-                        aws_privatelink.connection_id,
-                        aws_privatelink.availability_zone.as_deref(),
-                    );
-                    let port = aws_privatelink.port;
                     context.add_broker_rewrite(
                         addr,
-                        BrokerRewrite {
-                            host: host.clone(),
-                            port,
-                        },
+                        KafkaConnection::from_aws_privatelink(aws_privatelink),
                     );
                 }
+                Tunnel::AwsPrivatelinks(_) => unreachable!(
+                    "Individually predefined brokers do not use rule-based PrivateLinks routing."
+                ),
                 Tunnel::Ssh(ssh_tunnel) => {
                     // Ensure any SSH bastion address we connect to is resolved to an external address.
                     let ssh_host_resolved = resolve_address(
@@ -802,7 +1364,7 @@ impl KafkaConnection {
 
     async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let (context, error_rx) = MzClientContext::with_errors();
@@ -832,11 +1394,16 @@ impl KafkaConnection {
         // The downside of this approach is it produces a generic error message like
         // "metadata fetch error" with no additional details. The real networking
         // error is buried in the librdkafka logs, which are not visible to users.
+        info!("kafka: starting connection validation via fetch_metadata (timeout={timeout:?})");
         let result = mz_ore::task::spawn_blocking(|| "kafka_get_metadata", {
             let consumer = Arc::clone(&consumer);
             move || consumer.fetch_metadata(None, timeout)
         })
-        .await?;
+        .await;
+        info!(
+            "kafka: connection validation result: {}",
+            if result.is_ok() { "success" } else { "failed" },
+        );
         match result {
             Ok(_) => Ok(()),
             // The error returned by `fetch_metadata` does not provide any details which makes for
@@ -854,7 +1421,7 @@ impl KafkaConnection {
 
                 // Don't drop the consumer until after we've drained the errors
                 // channel. Dropping the consumer can introduce spurious errors.
-                // See #24901.
+                // See database-issues#7432.
                 drop(consumer);
 
                 match main_err {
@@ -862,6 +1429,48 @@ impl KafkaConnection {
                     None => Err(err.into()),
                 }
             }
+        }
+    }
+
+    /// The "default" PrivateLink connection is used for bootstrapping Kafka.
+    fn from_default_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(
+                pl.connection_id,
+                None, // Default tunnel does not support availability zones.
+            ),
+            port: pl.port,
+        }
+    }
+
+    /// The "not default" PrivateLink connections are used for routing to specific Kafka brokers.
+    fn from_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(pl.connection_id, pl.availability_zone.as_deref()),
+            port: pl.port,
+        }
+    }
+
+    fn from_aws_privatelink_rule(
+        AwsPrivatelinkRule { pattern, to }: &AwsPrivatelinkRule,
+    ) -> (mz_kafka_util::client::ConnectionRulePattern, BrokerRewrite) {
+        (
+            mz_kafka_util::client::ConnectionRulePattern {
+                prefix_wildcard: pattern.prefix_wildcard,
+                literal_match: pattern.literal_match.clone(),
+                suffix_wildcard: pattern.suffix_wildcard,
+            },
+            KafkaConnection::from_aws_privatelink(to),
+        )
+    }
+
+    fn from_aws_privatelinks(pl: &AwsPrivatelinks) -> HostMappingRules {
+        HostMappingRules {
+            rules: pl
+                .rules
+                .iter()
+                .map(KafkaConnection::from_aws_privatelink_rule)
+                .collect_vec(),
         }
     }
 }
@@ -902,88 +1511,10 @@ impl<C: ConnectionAccess> AlterCompatible for KafkaConnection<C> {
     }
 }
 
-impl RustType<ProtoKafkaConnectionTlsConfig> for KafkaTlsConfig {
-    fn into_proto(&self) -> ProtoKafkaConnectionTlsConfig {
-        ProtoKafkaConnectionTlsConfig {
-            identity: self.identity.into_proto(),
-            root_cert: self.root_cert.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaConnectionTlsConfig) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaTlsConfig {
-            root_cert: proto.root_cert.into_rust()?,
-            identity: proto.identity.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoKafkaConnectionSaslConfig> for KafkaSaslConfig {
-    fn into_proto(&self) -> ProtoKafkaConnectionSaslConfig {
-        ProtoKafkaConnectionSaslConfig {
-            mechanism: self.mechanism.into_proto(),
-            username: Some(self.username.into_proto()),
-            password: self.password.into_proto(),
-            aws: self.aws.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaConnectionSaslConfig) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaSaslConfig {
-            mechanism: proto.mechanism,
-            username: proto
-                .username
-                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::username")?,
-            password: proto.password.into_rust()?,
-            aws: proto.aws.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoKafkaConnection> for KafkaConnection {
-    fn into_proto(&self) -> ProtoKafkaConnection {
-        ProtoKafkaConnection {
-            brokers: self.brokers.into_proto(),
-            default_tunnel: Some(self.default_tunnel.into_proto()),
-            progress_topic: self.progress_topic.into_proto(),
-            progress_topic_options: Some(self.progress_topic_options.into_proto()),
-            options: self
-                .options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.into_proto()))
-                .collect(),
-            tls: self.tls.into_proto(),
-            sasl: self.sasl.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaConnection {
-            brokers: proto.brokers.into_rust()?,
-            default_tunnel: proto
-                .default_tunnel
-                .into_rust_if_some("ProtoKafkaConnection::default_tunnel")?,
-            progress_topic: proto.progress_topic,
-            progress_topic_options: match proto.progress_topic_options {
-                Some(progress_topic_options) => progress_topic_options.into_rust()?,
-                None => Default::default(),
-            },
-            options: proto
-                .options
-                .into_iter()
-                .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
-                .collect::<Result<_, _>>()?,
-            tls: proto.tls.into_rust()?,
-            sasl: proto.sasl.into_rust()?,
-        })
-    }
-}
-
 /// A connection to a Confluent Schema Registry.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CsrConnection<C: ConnectionAccess = InlinedConnection> {
     /// The URL of the schema registry.
-    #[proptest(strategy = "any_url()")]
     pub url: Url,
     /// Trusted root TLS certificate in PEM format.
     pub tls_root_cert: Option<StringOrSecret>,
@@ -1080,12 +1611,6 @@ impl CsrConnection {
             client_config = client_config.auth(username, password);
         }
 
-        // `net::lookup_host` requires a port but the port will be ignored when
-        // passed to `resolve_to_addrs`. We use a dummy port that will be easy
-        // to spot in the logs to make it obvious if some component downstream
-        // incorrectly starts using this port.
-        const DUMMY_PORT: u16 = 11111;
-
         // TODO: use types to enforce that the URL has a string hostname.
         let host = self
             .url
@@ -1103,7 +1628,7 @@ impl CsrConnection {
                     host,
                     &resolved
                         .iter()
-                        .map(|addr| SocketAddr::new(*addr, DUMMY_PORT))
+                        .map(|addr| SocketAddr::new(*addr, 0))
                         .collect::<Vec<_>>(),
                 )
             }
@@ -1112,9 +1637,9 @@ impl CsrConnection {
                     .connect(
                         storage_configuration,
                         host,
-                        // Default to the default http port, but this
-                        // could default to 8081...
-                        self.url.port().unwrap_or(80),
+                        // Honor the URL scheme's default port (443 for https,
+                        // 80 for http) if no explicit port was provided.
+                        self.url.port_or_known_default().unwrap_or(80),
                         in_task,
                     )
                     .await
@@ -1130,11 +1655,9 @@ impl CsrConnection {
                     // at the DNS level, which means the TCP connection is
                     // correctly routed through the tunnel, but TLS verification
                     // is still performed against the remote hostname.
-                    // Unfortunately the port here is ignored...
-                    .resolve_to_addrs(
-                        host,
-                        &[SocketAddr::new(ssh_tunnel.local_addr().ip(), DUMMY_PORT)],
-                    )
+                    // Unfortunately the port here is ignored if the URL also
+                    // specifies a port...
+                    .resolve_to_addrs(host, &[SocketAddr::new(ssh_tunnel.local_addr().ip(), 0)])
                     // ...so we also dynamically rewrite the URL to use the
                     // current port for the SSH tunnel.
                     //
@@ -1162,11 +1685,14 @@ impl CsrConnection {
                     connection.connection_id,
                     connection.availability_zone.as_deref(),
                 );
-                let addrs: Vec<_> = net::lookup_host((privatelink_host, DUMMY_PORT))
+                let addrs: Vec<_> = net::lookup_host((privatelink_host, 0))
                     .await
                     .context("resolving PrivateLink host")?
                     .collect();
                 client_config = client_config.resolve_to_addrs(host, &addrs)
+            }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
             }
         }
 
@@ -1175,7 +1701,7 @@ impl CsrConnection {
 
     async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let client = self
@@ -1187,30 +1713,6 @@ impl CsrConnection {
             .await?;
         client.list_subjects().await?;
         Ok(())
-    }
-}
-
-impl RustType<ProtoCsrConnection> for CsrConnection {
-    fn into_proto(&self) -> ProtoCsrConnection {
-        ProtoCsrConnection {
-            url: Some(self.url.into_proto()),
-            tls_root_cert: self.tls_root_cert.into_proto(),
-            tls_identity: self.tls_identity.into_proto(),
-            http_auth: self.http_auth.into_proto(),
-            tunnel: Some(self.tunnel.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoCsrConnection) -> Result<Self, TryFromProtoError> {
-        Ok(CsrConnection {
-            url: proto.url.into_rust_if_some("ProtoCsrConnection::url")?,
-            tls_root_cert: proto.tls_root_cert.into_rust()?,
-            tls_identity: proto.tls_identity.into_rust()?,
-            http_auth: proto.http_auth.into_rust()?,
-            tunnel: proto
-                .tunnel
-                .into_rust_if_some("ProtoCsrConnection::tunnel")?,
-        })
     }
 }
 
@@ -1242,61 +1744,113 @@ impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
     }
 }
 
+/// A connection to an AWS Glue Schema Registry.
+///
+/// AWS credentials, region, and endpoint are inherited from the referenced
+/// [`AwsConnection`]; this struct only carries the per-registry settings.
+///
+/// NOTE: Stage 1 of the GSR rollout. The client crate
+/// (`mz-aws-glue-schema-registry`) does not exist yet; `validate` is a
+/// no-op until Stage 3 retrofits a real `GetRegistry` ping. The connection
+/// can be created and inspected, but cannot yet be attached to a source or
+/// sink.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct GlueSchemaRegistryConnection<C: ConnectionAccess = InlinedConnection> {
+    /// The referenced AWS connection that supplies credentials, region, and
+    /// (optional) endpoint.
+    pub aws_connection: AwsConnectionReference<C>,
+    /// The Glue Schema Registry name within the AWS account/region.
+    pub registry_name: String,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<GlueSchemaRegistryConnection, R>
+    for GlueSchemaRegistryConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> GlueSchemaRegistryConnection {
+        let GlueSchemaRegistryConnection {
+            aws_connection,
+            registry_name,
+        } = self;
+        GlueSchemaRegistryConnection {
+            aws_connection: aws_connection.into_inline_connection(&r),
+            registry_name,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> GlueSchemaRegistryConnection<C> {
+    fn validate_by_default(&self) -> bool {
+        // Stage 1 of the AWS Glue Schema Registry rollout: the client crate
+        // does not exist yet, and the no-op `validate` below succeeds
+        // unconditionally. Default-validating preserves the API contract so
+        // that Stage 3's real `GetRegistry` ping slots in without
+        // behavioral change.
+        true
+    }
+}
+
+impl GlueSchemaRegistryConnection {
+    async fn validate(
+        &self,
+        _id: CatalogItemId,
+        _storage_configuration: &StorageConfiguration,
+    ) -> Result<(), anyhow::Error> {
+        // Stage 1: no-op. Real validation arrives in Stage 3 when the
+        // Glue client crate exists. Until then a `CREATE CONNECTION`
+        // succeeds even against a registry that doesn't exist; the
+        // failure will surface on first use (which is itself gated until
+        // source/sink integration lands in Stages 4/5).
+        std::future::ready(Ok(())).await
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for GlueSchemaRegistryConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let GlueSchemaRegistryConnection {
+            registry_name,
+            // The referenced AWS connection itself may be swapped; matches
+            // the permissive policy of MySqlConnection / SqlServerConnection.
+            aws_connection: _,
+        } = self;
+
+        let compatibility_checks = [(registry_name == &other.registry_name, "registry_name")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "GlueSchemaRegistryConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A TLS key pair used for client identity.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct TlsIdentity {
     /// The client's TLS public certificate in PEM format.
     pub cert: StringOrSecret,
     /// The ID of the secret containing the client's TLS private key in PEM
     /// format.
-    pub key: GlobalId,
-}
-
-impl RustType<ProtoTlsIdentity> for TlsIdentity {
-    fn into_proto(&self) -> ProtoTlsIdentity {
-        ProtoTlsIdentity {
-            cert: Some(self.cert.into_proto()),
-            key: Some(self.key.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoTlsIdentity) -> Result<Self, TryFromProtoError> {
-        Ok(TlsIdentity {
-            cert: proto.cert.into_rust_if_some("ProtoTlsIdentity::cert")?,
-            key: proto.key.into_rust_if_some("ProtoTlsIdentity::key")?,
-        })
-    }
+    pub key: CatalogItemId,
 }
 
 /// HTTP authentication credentials in a [`CsrConnection`].
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CsrConnectionHttpAuth {
     /// The username.
     pub username: StringOrSecret,
     /// The ID of the secret containing the password, if any.
-    pub password: Option<GlobalId>,
-}
-
-impl RustType<ProtoCsrConnectionHttpAuth> for CsrConnectionHttpAuth {
-    fn into_proto(&self) -> ProtoCsrConnectionHttpAuth {
-        ProtoCsrConnectionHttpAuth {
-            username: Some(self.username.into_proto()),
-            password: self.password.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoCsrConnectionHttpAuth) -> Result<Self, TryFromProtoError> {
-        Ok(CsrConnectionHttpAuth {
-            username: proto
-                .username
-                .into_rust_if_some("ProtoCsrConnectionHttpAuth::username")?,
-            password: proto.password.into_rust()?,
-        })
-    }
+    pub password: Option<CatalogItemId>,
 }
 
 /// A connection to a PostgreSQL server.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     /// The hostname of the server.
     pub host: String,
@@ -1307,11 +1861,10 @@ pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     /// The username to authenticate as.
     pub user: StringOrSecret,
     /// An optional password for authentication.
-    pub password: Option<GlobalId>,
+    pub password: Option<CatalogItemId>,
     /// A tunnel through which to route traffic.
     pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, authentication, or both.
-    #[proptest(strategy = "any_ssl_mode()")]
     pub tls_mode: SslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
     /// identity.
@@ -1485,6 +2038,9 @@ impl PostgresConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
+            }
         };
 
         Ok(mz_postgres_util::Config::new(
@@ -1495,11 +2051,11 @@ impl PostgresConnection<InlinedConnection> {
         )?)
     }
 
-    async fn validate(
+    pub async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<mz_postgres_util::Client, anyhow::Error> {
         let config = self
             .config(
                 &storage_configuration.connection_context.secrets_reader,
@@ -1508,13 +2064,74 @@ impl PostgresConnection<InlinedConnection> {
                 InTask::No,
             )
             .await?;
-        config
+        let client = config
             .connect(
                 "connection validation",
                 &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
-        Ok(())
+
+        let wal_level = mz_postgres_util::get_wal_level(&client).await?;
+
+        if wal_level < mz_postgres_util::replication::WalLevel::Logical {
+            Err(PostgresConnectionValidationError::InsufficientWalLevel { wal_level })?;
+        }
+
+        let max_wal_senders = mz_postgres_util::get_max_wal_senders(&client).await?;
+
+        if max_wal_senders < 1 {
+            Err(PostgresConnectionValidationError::ReplicationDisabled)?;
+        }
+
+        let available_replication_slots =
+            mz_postgres_util::available_replication_slots(&client).await?;
+
+        // We need 1 replication slot for the snapshots and 1 for the continuing replication
+        if available_replication_slots < 2 {
+            Err(
+                PostgresConnectionValidationError::InsufficientReplicationSlotsAvailable {
+                    count: 2,
+                },
+            )?;
+        }
+
+        Ok(client)
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum PostgresConnectionValidationError {
+    #[error("PostgreSQL server has insufficient number of replication slots available")]
+    InsufficientReplicationSlotsAvailable { count: usize },
+    #[error("server must have wal_level >= logical, but has {wal_level}")]
+    InsufficientWalLevel {
+        wal_level: mz_postgres_util::replication::WalLevel,
+    },
+    #[error("replication disabled on server")]
+    ReplicationDisabled,
+}
+
+impl PostgresConnectionValidationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::InsufficientReplicationSlotsAvailable { count } => Some(format!(
+                "executing this statement requires {} replication slot{}",
+                count,
+                if *count == 1 { "" } else { "s" }
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Self::InsufficientReplicationSlotsAvailable { .. } => Some(
+                "you might be able to wait for other sources to finish snapshotting and try again"
+                    .into(),
+            ),
+            Self::ReplicationDisabled => Some("set max_wal_senders to a value > 0".into()),
+            Self::InsufficientWalLevel { .. } => None,
+        }
     }
 }
 
@@ -1550,44 +2167,8 @@ impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
     }
 }
 
-impl RustType<ProtoPostgresConnection> for PostgresConnection {
-    fn into_proto(&self) -> ProtoPostgresConnection {
-        ProtoPostgresConnection {
-            host: self.host.into_proto(),
-            port: self.port.into_proto(),
-            database: self.database.into_proto(),
-            user: Some(self.user.into_proto()),
-            password: self.password.into_proto(),
-            tls_mode: Some(self.tls_mode.into_proto()),
-            tls_root_cert: self.tls_root_cert.into_proto(),
-            tls_identity: self.tls_identity.into_proto(),
-            tunnel: Some(self.tunnel.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoPostgresConnection) -> Result<Self, TryFromProtoError> {
-        Ok(PostgresConnection {
-            host: proto.host,
-            port: proto.port.into_rust()?,
-            database: proto.database,
-            user: proto
-                .user
-                .into_rust_if_some("ProtoPostgresConnection::user")?,
-            password: proto.password.into_rust()?,
-            tunnel: proto
-                .tunnel
-                .into_rust_if_some("ProtoPostgresConnection::tunnel")?,
-            tls_mode: proto
-                .tls_mode
-                .into_rust_if_some("ProtoPostgresConnection::tls_mode")?,
-            tls_root_cert: proto.tls_root_cert.into_rust()?,
-            tls_identity: proto.tls_identity.into_rust()?,
-        })
-    }
-}
-
 /// Specifies how to tunnel a connection.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Tunnel<C: ConnectionAccess = InlinedConnection> {
     /// No tunneling.
     Direct,
@@ -1595,6 +2176,7 @@ pub enum Tunnel<C: ConnectionAccess = InlinedConnection> {
     Ssh(SshTunnel<C>),
     /// Via the specified AWS PrivateLink connection.
     AwsPrivatelink(AwsPrivatelink),
+    AwsPrivatelinks(AwsPrivatelinks),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<ReferencedConnection> {
@@ -1603,30 +2185,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<Reference
             Tunnel::Direct => Tunnel::Direct,
             Tunnel::Ssh(ssh) => Tunnel::Ssh(ssh.into_inline_connection(r)),
             Tunnel::AwsPrivatelink(awspl) => Tunnel::AwsPrivatelink(awspl),
+            Tunnel::AwsPrivatelinks(x) => Tunnel::AwsPrivatelinks(x),
         }
-    }
-}
-
-impl RustType<ProtoTunnel> for Tunnel<InlinedConnection> {
-    fn into_proto(&self) -> ProtoTunnel {
-        use proto_tunnel::Tunnel as ProtoTunnelField;
-        ProtoTunnel {
-            tunnel: Some(match &self {
-                Tunnel::Direct => ProtoTunnelField::Direct(()),
-                Tunnel::Ssh(ssh) => ProtoTunnelField::Ssh(ssh.into_proto()),
-                Tunnel::AwsPrivatelink(aws) => ProtoTunnelField::AwsPrivatelink(aws.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoTunnel) -> Result<Self, TryFromProtoError> {
-        use proto_tunnel::Tunnel as ProtoTunnelField;
-        Ok(match proto.tunnel {
-            None => return Err(TryFromProtoError::missing_field("ProtoTunnel::tunnel")),
-            Some(ProtoTunnelField::Direct(())) => Tunnel::Direct,
-            Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh(ssh.into_rust()?),
-            Some(ProtoTunnelField::AwsPrivatelink(aws)) => Tunnel::AwsPrivatelink(aws.into_rust()?),
-        })
     }
 }
 
@@ -1654,7 +2214,7 @@ impl<C: ConnectionAccess> AlterCompatible for Tunnel<C> {
 /// Specifies which MySQL SSL Mode to use:
 /// <https://dev.mysql.com/doc/refman/8.0/en/connection-options.html#option_general_ssl-mode>
 /// This is not available as an enum in the mysql-async crate, so we define our own.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum MySqlSslMode {
     Disabled,
     Required,
@@ -1662,42 +2222,8 @@ pub enum MySqlSslMode {
     VerifyIdentity,
 }
 
-impl RustType<i32> for MySqlSslMode {
-    fn into_proto(&self) -> i32 {
-        match self {
-            MySqlSslMode::Disabled => ProtoMySqlSslMode::Disabled.into(),
-            MySqlSslMode::Required => ProtoMySqlSslMode::Required.into(),
-            MySqlSslMode::VerifyCa => ProtoMySqlSslMode::VerifyCa.into(),
-            MySqlSslMode::VerifyIdentity => ProtoMySqlSslMode::VerifyIdentity.into(),
-        }
-    }
-
-    fn from_proto(proto: i32) -> Result<Self, TryFromProtoError> {
-        Ok(match ProtoMySqlSslMode::try_from(proto) {
-            Ok(ProtoMySqlSslMode::Disabled) => MySqlSslMode::Disabled,
-            Ok(ProtoMySqlSslMode::Required) => MySqlSslMode::Required,
-            Ok(ProtoMySqlSslMode::VerifyCa) => MySqlSslMode::VerifyCa,
-            Ok(ProtoMySqlSslMode::VerifyIdentity) => MySqlSslMode::VerifyIdentity,
-            Err(_) => {
-                return Err(TryFromProtoError::UnknownEnumVariant(
-                    "tls_mode".to_string(),
-                ))
-            }
-        })
-    }
-}
-
-pub fn any_mysql_ssl_mode() -> impl Strategy<Value = MySqlSslMode> {
-    proptest::sample::select(vec![
-        MySqlSslMode::Disabled,
-        MySqlSslMode::Required,
-        MySqlSslMode::VerifyCa,
-        MySqlSslMode::VerifyIdentity,
-    ])
-}
-
 /// A connection to a MySQL server.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     /// The hostname of the server.
     pub host: String,
@@ -1706,17 +2232,19 @@ pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     /// The username to authenticate as.
     pub user: StringOrSecret,
     /// An optional password for authentication.
-    pub password: Option<GlobalId>,
+    pub password: Option<CatalogItemId>,
     /// A tunnel through which to route traffic.
     pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, verify the server's certificate, and identity.
-    #[proptest(strategy = "any_mysql_ssl_mode()")]
     pub tls_mode: MySqlSslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
     /// identity.
     pub tls_root_cert: Option<StringOrSecret>,
     /// An optional TLS client certificate for authentication.
     pub tls_identity: Option<TlsIdentity>,
+    /// Reference to the AWS connection information to be used for IAM authenitcation and
+    /// assuming AWS roles.
+    pub aws_connection: Option<AwsConnectionReference<C>>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
@@ -1732,6 +2260,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
             tls_mode,
             tls_root_cert,
             tls_identity,
+            aws_connection,
         } = self;
 
         MySqlConnection {
@@ -1739,10 +2268,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
             port,
             user,
             password,
-            tunnel: tunnel.into_inline_connection(r),
+            tunnel: tunnel.into_inline_connection(&r),
             tls_mode,
             tls_root_cert,
             tls_identity,
+            aws_connection: aws_connection.map(|aws| aws.into_inline_connection(&r)),
         }
     }
 }
@@ -1807,8 +2337,8 @@ impl MySqlConnection<InlinedConnection> {
                 .read_string_in_task_if(in_task, identity.key)
                 .await?;
             let cert = identity.cert.get_string(in_task, secrets_reader).await?;
-            let Pkcs12Archive { der, pass } =
-                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?;
+            let (der, pass) =
+                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?.into_parts();
 
             // Add client identity to SSLOpts
             ssl_opts = ssl_opts.map(|opts| {
@@ -1864,26 +2394,44 @@ impl MySqlConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
+            }
         };
 
-        opts = storage_configuration
-            .parameters
-            .mysql_source_timeouts
-            .apply_to_opts(opts)?;
+        let aws_config = match self.aws_connection.as_ref() {
+            None => None,
+            Some(aws_ref) => Some(
+                aws_ref
+                    .connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws_ref.connection_id,
+                        in_task,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                    )
+                    .await?,
+            ),
+        };
 
         Ok(mz_mysql_util::Config::new(
-            opts.into(),
+            opts,
             tunnel,
             storage_configuration.parameters.ssh_timeout_config,
             in_task,
-        ))
+            storage_configuration
+                .parameters
+                .mysql_source_timeouts
+                .clone(),
+            aws_config,
+        )?)
     }
 
-    async fn validate(
+    pub async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<MySqlConn, MySqlConnectionValidationError> {
         let config = self
             .config(
                 &storage_configuration.connection_context.secrets_reader,
@@ -1892,44 +2440,75 @@ impl MySqlConnection<InlinedConnection> {
                 InTask::No,
             )
             .await?;
-        let conn = config
+        let mut conn = config
             .connect(
                 "connection validation",
                 &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
-        conn.disconnect().await?;
-        Ok(())
+
+        // Check if the MySQL database is configured to allow row-based consistent GTID replication
+        let mut setting_errors = vec![];
+        let gtid_res = mz_mysql_util::ensure_gtid_consistency(&mut conn).await;
+        let binlog_res = mz_mysql_util::ensure_full_row_binlog_format(&mut conn).await;
+        let order_res = mz_mysql_util::ensure_replication_commit_order(&mut conn).await;
+        for res in [gtid_res, binlog_res, order_res] {
+            match res {
+                Err(MySqlError::InvalidSystemSetting {
+                    setting,
+                    expected,
+                    actual,
+                }) => {
+                    setting_errors.push((setting, expected, actual));
+                }
+                Err(err) => Err(err)?,
+                Ok(()) => {}
+            }
+        }
+        if !setting_errors.is_empty() {
+            Err(MySqlConnectionValidationError::ReplicationSettingsError(
+                setting_errors,
+            ))?;
+        }
+
+        Ok(conn)
     }
 }
 
-impl RustType<ProtoMySqlConnection> for MySqlConnection {
-    fn into_proto(&self) -> ProtoMySqlConnection {
-        ProtoMySqlConnection {
-            host: self.host.into_proto(),
-            port: self.port.into_proto(),
-            user: Some(self.user.into_proto()),
-            password: self.password.into_proto(),
-            tls_mode: self.tls_mode.into_proto(),
-            tls_root_cert: self.tls_root_cert.into_proto(),
-            tls_identity: self.tls_identity.into_proto(),
-            tunnel: Some(self.tunnel.into_proto()),
+#[derive(Debug, thiserror::Error)]
+pub enum MySqlConnectionValidationError {
+    #[error("Invalid MySQL system replication settings")]
+    ReplicationSettingsError(Vec<(String, String, String)>),
+    #[error(transparent)]
+    Client(#[from] MySqlError),
+    #[error("{}", .0.display_with_causes())]
+    Other(#[from] anyhow::Error),
+}
+
+impl MySqlConnectionValidationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::ReplicationSettingsError(settings) => Some(format!(
+                "Invalid MySQL system replication settings: {}",
+                itertools::join(
+                    settings.iter().map(|(setting, expected, actual)| format!(
+                        "{}: expected {}, got {}",
+                        setting, expected, actual
+                    )),
+                    "; "
+                )
+            )),
+            _ => None,
         }
     }
 
-    fn from_proto(proto: ProtoMySqlConnection) -> Result<Self, TryFromProtoError> {
-        Ok(MySqlConnection {
-            host: proto.host,
-            port: proto.port.into_rust()?,
-            user: proto.user.into_rust_if_some("ProtoMySqlConnection::user")?,
-            password: proto.password.into_rust()?,
-            tunnel: proto
-                .tunnel
-                .into_rust_if_some("ProtoMySqlConnection::tunnel")?,
-            tls_mode: proto.tls_mode.into_rust()?,
-            tls_root_cert: proto.tls_root_cert.into_rust()?,
-            tls_identity: proto.tls_identity.into_rust()?,
-        })
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Self::ReplicationSettingsError(_) => {
+                Some("Set the necessary MySQL database system settings.".into())
+            }
+            _ => None,
+        }
     }
 }
 
@@ -1945,6 +2524,7 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
             tls_mode: _,
             tls_root_cert: _,
             tls_identity: _,
+            aws_connection: _,
         } = self;
 
         let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
@@ -1964,8 +2544,306 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
     }
 }
 
+/// Details how to connect to an instance of Microsoft SQL Server.
+///
+/// For specifics of connecting to SQL Server for purposes of creating a
+/// Materialize Source, see [`SqlServerSourceConnection`] which wraps this type.
+///
+/// [`SqlServerSourceConnection`]: crate::sources::SqlServerSourceConnection
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct SqlServerConnectionDetails<C: ConnectionAccess = InlinedConnection> {
+    /// The hostname of the server.
+    pub host: String,
+    /// The port of the server.
+    pub port: u16,
+    /// Database we should connect to.
+    pub database: String,
+    /// The username to authenticate as.
+    pub user: StringOrSecret,
+    /// Password used for authentication.
+    pub password: CatalogItemId,
+    /// A tunnel through which to route traffic.
+    pub tunnel: Tunnel<C>,
+    /// Level of encryption to use for the connection.
+    pub encryption: mz_sql_server_util::config::EncryptionLevel,
+    /// Certificate validation policy
+    pub certificate_validation_policy: mz_sql_server_util::config::CertificateValidationPolicy,
+    /// TLS CA Certifiecate in PEM format
+    pub tls_root_cert: Option<StringOrSecret>,
+}
+
+impl<C: ConnectionAccess> SqlServerConnectionDetails<C> {
+    fn validate_by_default(&self) -> bool {
+        true
+    }
+}
+
+impl SqlServerConnectionDetails<InlinedConnection> {
+    /// Attempts to open a connection to the upstream SQL Server instance.
+    pub async fn validate(
+        &self,
+        _id: CatalogItemId,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<mz_sql_server_util::Client, anyhow::Error> {
+        let config = self
+            .resolve_config(
+                &storage_configuration.connection_context.secrets_reader,
+                storage_configuration,
+                InTask::No,
+            )
+            .await?;
+        tracing::debug!(?config, "Validating SQL Server connection");
+
+        let mut client = mz_sql_server_util::Client::connect(config).await?;
+
+        // Ensure the upstream SQL Server instance is configured to allow CDC.
+        //
+        // Run all of the checks necessary and collect the errors to provide the best
+        // guidance as to which system settings need to be enabled.
+        let mut replication_errors = vec![];
+        for error in [
+            mz_sql_server_util::inspect::ensure_database_cdc_enabled(&mut client).await,
+            mz_sql_server_util::inspect::ensure_snapshot_isolation_enabled(&mut client).await,
+            mz_sql_server_util::inspect::ensure_sql_server_agent_running(&mut client).await,
+        ] {
+            match error {
+                Err(mz_sql_server_util::SqlServerError::InvalidSystemSetting {
+                    name,
+                    expected,
+                    actual,
+                }) => replication_errors.push((name, expected, actual)),
+                Err(other) => Err(other)?,
+                Ok(()) => (),
+            }
+        }
+        if !replication_errors.is_empty() {
+            Err(SqlServerConnectionValidationError::ReplicationSettingsError(replication_errors))?;
+        }
+
+        Ok(client)
+    }
+
+    /// Resolve all of the connection details (e.g. read from the [`SecretsReader`])
+    /// so the returned [`Config`] can be used to open a connection with the
+    /// upstream system.
+    ///
+    /// The provided [`InTask`] argument determines whether any I/O is run in an
+    /// [`mz_ore::task`] (i.e. a different thread) or directly in the returned
+    /// future. The main goal here is to prevent running I/O in timely threads.
+    ///
+    /// [`Config`]: mz_sql_server_util::Config
+    pub async fn resolve_config(
+        &self,
+        secrets_reader: &Arc<dyn mz_secrets::SecretsReader>,
+        storage_configuration: &StorageConfiguration,
+        in_task: InTask,
+    ) -> Result<mz_sql_server_util::Config, anyhow::Error> {
+        let dyncfg = storage_configuration.config_set();
+        let mut inner_config = tiberius::Config::new();
+
+        // Setup default connection params.
+        inner_config.host(&self.host);
+        inner_config.port(self.port);
+        inner_config.database(self.database.clone());
+        inner_config.encryption(self.encryption.into());
+        match self.certificate_validation_policy {
+            mz_sql_server_util::config::CertificateValidationPolicy::TrustAll => {
+                inner_config.trust_cert()
+            }
+            mz_sql_server_util::config::CertificateValidationPolicy::VerifyCA => {
+                inner_config.trust_cert_ca_pem(
+                    self.tls_root_cert
+                        .as_ref()
+                        .unwrap()
+                        .get_string(in_task, secrets_reader)
+                        .await
+                        .context("ca certificate")?,
+                );
+            }
+            mz_sql_server_util::config::CertificateValidationPolicy::VerifySystem => (), // no-op
+        }
+
+        inner_config.application_name("materialize");
+
+        // Read our auth settings from
+        let user = self
+            .user
+            .get_string(in_task, secrets_reader)
+            .await
+            .context("username")?;
+        let password = secrets_reader
+            .read_string_in_task_if(in_task, self.password)
+            .await
+            .context("password")?;
+        // TODO(sql_server3): Support other methods of authentication besides
+        // username and password.
+        inner_config.authentication(tiberius::AuthMethod::sql_server(user, password));
+
+        // Prevent users from probing our internal network ports by trying to
+        // connect to localhost, or another non-external IP.
+        let enforce_external_addresses = ENFORCE_EXTERNAL_ADDRESSES.get(dyncfg);
+
+        let tunnel = match &self.tunnel {
+            Tunnel::Direct => {
+                let resolved_addresses: Vec<SocketAddr> =
+                    resolve_address(&self.host, enforce_external_addresses)
+                        .await?
+                        .into_iter()
+                        .map(|ip| SocketAddr::new(ip, self.port))
+                        .collect();
+                mz_sql_server_util::config::TunnelConfig::Direct {
+                    resolved_addresses: resolved_addresses.into_boxed_slice(),
+                }
+            }
+            Tunnel::Ssh(SshTunnel {
+                connection_id,
+                connection: ssh_connection,
+            }) => {
+                let secret = secrets_reader
+                    .read_in_task_if(in_task, *connection_id)
+                    .await
+                    .context("ssh secret")?;
+                let key_pair = SshKeyPair::from_bytes(&secret).context("ssh key pair")?;
+                // Ensure any SSH-bastion host we connect to is resolved to an
+                // external address.
+                let addresses = resolve_address(&ssh_connection.host, enforce_external_addresses)
+                    .await
+                    .context("ssh tunnel")?;
+
+                let config = SshTunnelConfig {
+                    host: addresses.into_iter().map(|a| a.to_string()).collect(),
+                    port: ssh_connection.port,
+                    user: ssh_connection.user.clone(),
+                    key_pair,
+                };
+                mz_sql_server_util::config::TunnelConfig::Ssh {
+                    config,
+                    manager: storage_configuration
+                        .connection_context
+                        .ssh_tunnel_manager
+                        .clone(),
+                    timeout: storage_configuration.parameters.ssh_timeout_config.clone(),
+                    host: self.host.clone(),
+                    port: self.port,
+                }
+            }
+            Tunnel::AwsPrivatelink(private_link_connection) => {
+                assert_none!(private_link_connection.port);
+                mz_sql_server_util::config::TunnelConfig::AwsPrivatelink {
+                    connection_id: private_link_connection.connection_id,
+                    port: self.port,
+                }
+            }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
+            }
+        };
+
+        Ok(mz_sql_server_util::Config::new(
+            inner_config,
+            tunnel,
+            in_task,
+        ))
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum SqlServerConnectionValidationError {
+    #[error("Invalid SQL Server system replication settings")]
+    ReplicationSettingsError(Vec<(String, String, String)>),
+}
+
+impl SqlServerConnectionValidationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::ReplicationSettingsError(settings) => Some(format!(
+                "Invalid SQL Server system replication settings: {}",
+                itertools::join(
+                    settings.iter().map(|(setting, expected, actual)| format!(
+                        "{}: expected {}, got {}",
+                        setting, expected, actual
+                    )),
+                    "; "
+                )
+            )),
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            _ => None,
+        }
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<SqlServerConnectionDetails, R>
+    for SqlServerConnectionDetails<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> SqlServerConnectionDetails {
+        let SqlServerConnectionDetails {
+            host,
+            port,
+            database,
+            user,
+            password,
+            tunnel,
+            encryption,
+            certificate_validation_policy,
+            tls_root_cert,
+        } = self;
+
+        SqlServerConnectionDetails {
+            host,
+            port,
+            database,
+            user,
+            password,
+            tunnel: tunnel.into_inline_connection(&r),
+            encryption,
+            certificate_validation_policy,
+            tls_root_cert,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for SqlServerConnectionDetails<C> {
+    fn alter_compatible(
+        &self,
+        id: mz_repr::GlobalId,
+        other: &Self,
+    ) -> Result<(), crate::controller::AlterError> {
+        let SqlServerConnectionDetails {
+            tunnel,
+            // TODO(sql_server2): Figure out how these variables are allowed to change.
+            host: _,
+            port: _,
+            database: _,
+            user: _,
+            password: _,
+            encryption: _,
+            certificate_validation_policy: _,
+            tls_root_cert: _,
+        } = self;
+
+        let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "SqlServerConnectionDetails incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A connection to an SSH tunnel.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshConnection {
     pub host: String,
     pub port: u16,
@@ -1977,24 +2855,6 @@ use self::inline::{
     ReferencedConnection,
 };
 
-impl RustType<ProtoSshConnection> for SshConnection {
-    fn into_proto(&self) -> ProtoSshConnection {
-        ProtoSshConnection {
-            host: self.host.into_proto(),
-            port: self.port.into_proto(),
-            user: self.user.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoSshConnection) -> Result<Self, TryFromProtoError> {
-        Ok(SshConnection {
-            host: proto.host,
-            port: proto.port.into_rust()?,
-            user: proto.user,
-        })
-    }
-}
-
 impl AlterCompatible for SshConnection {
     fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         // Every element of the SSH connection is configurable.
@@ -2003,35 +2863,15 @@ impl AlterCompatible for SshConnection {
 }
 
 /// Specifies an AWS PrivateLink service for a [`Tunnel`].
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelink {
     /// The ID of the connection to the AWS PrivateLink service.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     // The availability zone to use when connecting to the AWS PrivateLink service.
     pub availability_zone: Option<String>,
     /// The port to use when connecting to the AWS PrivateLink service, if
     /// different from the port in [`KafkaBroker::address`].
     pub port: Option<u16>,
-}
-
-impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
-    fn into_proto(&self) -> ProtoAwsPrivatelink {
-        ProtoAwsPrivatelink {
-            connection_id: Some(self.connection_id.into_proto()),
-            availability_zone: self.availability_zone.into_proto(),
-            port: self.port.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAwsPrivatelink) -> Result<Self, TryFromProtoError> {
-        Ok(AwsPrivatelink {
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoAwsPrivatelink::connection_id")?,
-            availability_zone: proto.availability_zone.into_rust()?,
-            port: proto.port.into_rust()?,
-        })
-    }
 }
 
 impl AlterCompatible for AwsPrivatelink {
@@ -2060,11 +2900,27 @@ impl AlterCompatible for AwsPrivatelink {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinks {
+    /// Route to brokers through PrivateLink connections according to these rules.
+    /// Exact-match rules (no wildcards) are used as bootstrap brokers.
+    /// Wildcard rules are applied dynamically to discovered brokers.
+    pub rules: Vec<AwsPrivatelinkRule>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinkRule {
+    /// Given a broker's host:port, should we use this route?
+    pub pattern: ConnectionRulePattern,
+    /// Route to the broker through this PrivateLink connection.
+    pub to: AwsPrivatelink,
+}
+
 /// Specifies an SSH tunnel connection.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshTunnel<C: ConnectionAccess = InlinedConnection> {
     /// id of the ssh connection
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     /// ssh connection object
     pub connection: C::Ssh,
 }
@@ -2080,26 +2936,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<SshTunnel, R> for SshTunnel<Ref
             connection: r.resolve_connection(connection).unwrap_ssh(),
             connection_id,
         }
-    }
-}
-
-impl RustType<ProtoSshTunnel> for SshTunnel<InlinedConnection> {
-    fn into_proto(&self) -> ProtoSshTunnel {
-        ProtoSshTunnel {
-            connection_id: Some(self.connection_id.into_proto()),
-            connection: Some(self.connection.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoSshTunnel) -> Result<Self, TryFromProtoError> {
-        Ok(SshTunnel {
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoSshTunnel::connection_id")?,
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoSshTunnel::connection")?,
-        })
     }
 }
 
@@ -2182,7 +3018,7 @@ impl SshConnection {
     #[allow(clippy::unused_async)]
     async fn validate(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let secret = storage_configuration
@@ -2228,7 +3064,7 @@ impl AwsPrivatelinkConnection {
     #[allow(clippy::unused_async)]
     async fn validate(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let Some(ref cloud_resource_reader) = storage_configuration

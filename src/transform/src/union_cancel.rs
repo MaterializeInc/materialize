@@ -10,8 +10,8 @@
 //! Detects an input being unioned with its negation and cancels them out
 
 use itertools::Itertools;
-use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+use mz_expr::visit::Visit;
 
 use crate::{TransformCtx, TransformError};
 
@@ -29,12 +29,16 @@ use crate::{TransformCtx, TransformError};
 pub struct UnionBranchCancellation;
 
 impl crate::Transform for UnionBranchCancellation {
+    fn name(&self) -> &'static str {
+        "UnionBranchCancellation"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "union_branch_cancellation")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::str;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use rdkafka::admin::{AdminClient, AdminOptions, ResourceSpecifier};
@@ -24,11 +24,7 @@ enum Topic {
     Named(String),
 }
 
-async fn get_topic(
-    sink: &str,
-    topic_field: &str,
-    state: &mut State,
-) -> Result<String, anyhow::Error> {
+async fn get_topic(sink: &str, topic_field: &str, state: &State) -> Result<String, anyhow::Error> {
     let query = format!(
         "SELECT {} FROM mz_sinks JOIN mz_kafka_sinks \
         ON mz_sinks.id = mz_kafka_sinks.id \
@@ -55,7 +51,7 @@ async fn get_topic(
 
 pub async fn run_verify_topic(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let source = match (cmd.args.opt_string("sink"), cmd.args.opt_string("topic")) {
         (Some(sink), None) => Topic::FromSink(sink),
@@ -100,7 +96,7 @@ pub async fn run_verify_topic(
                 .topics()
                 .iter()
                 .find(|t| t.name() == topic)
-                .ok_or(anyhow::anyhow!("topic not found"))?;
+                .ok_or_else(|| anyhow::anyhow!("topic not found"))?;
 
             if let Some(partitions) = partition_count {
                 if topic.partitions().len() != partitions {
@@ -183,7 +179,7 @@ pub async fn run_verify_topic(
                     .await?
                     .iter()
                     .find(|subject| subject == &&schema_subject)
-                    .ok_or(anyhow::anyhow!("schema not found"))
+                    .ok_or_else(|| anyhow::anyhow!("schema not found"))
                     .map(|_| ())
             })
             .await?;

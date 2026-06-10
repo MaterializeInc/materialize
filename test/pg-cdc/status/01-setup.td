@@ -36,9 +36,11 @@ CREATE TABLE t (a int);
 INSERT INTO t VALUES (1);
 ALTER TABLE t REPLICA IDENTITY FULL;
 
+> BEGIN
 > CREATE SOURCE pg_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES ("t");
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+> CREATE TABLE t FROM SOURCE pg_source (REFERENCE "t");
+> COMMIT
 
 > SELECT * FROM t;
 1
@@ -50,7 +52,6 @@ INSERT INTO t VALUES (2);
 
 > SELECT name, status FROM mz_internal.mz_source_statuses;
 pg_source           running
-pg_source_progress  running
 t                   ceased
 
 > SELECT

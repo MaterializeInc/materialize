@@ -14,27 +14,27 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mz_cluster_client::ReplicaId;
+use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec, HistogramVec,
-    IntCounterVec, MetricVecExt, MetricsRegistry,
+    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec,
+    IntCounterVec, MetricVecExt, MetricsRegistry, Rule,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
-use mz_service::codec::StatsCollector;
+use mz_service::transport;
 use prometheus::core::{AtomicF64, AtomicU64};
 
-use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
-use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
+use crate::protocol::command::ComputeCommand;
+use crate::protocol::response::{ComputeResponse, PeekResponse};
 
-type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
-type Gauge = DeleteOnDropGauge<'static, AtomicF64, Vec<String>>;
-/// TODO(#25239): Add documentation.
-pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
-type Histogram = DeleteOnDropHistogram<'static, Vec<String>>;
+pub(crate) type Counter = DeleteOnDropCounter<AtomicF64, Vec<String>>;
+pub(crate) type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
+pub(crate) type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
+type Histogram = DeleteOnDropHistogram<Vec<String>>;
 
 /// Compute controller metrics.
 #[derive(Debug, Clone)]
@@ -53,7 +53,8 @@ pub struct ComputeControllerMetrics {
     subscribe_count: UIntGaugeVec,
     copy_to_count: UIntGaugeVec,
     command_queue_size: UIntGaugeVec,
-    response_queue_size: UIntGaugeVec,
+    response_send_count: IntCounterVec,
+    response_recv_count: IntCounterVec,
     hydration_queue_size: UIntGaugeVec,
 
     // command history
@@ -64,114 +65,166 @@ pub struct ComputeControllerMetrics {
     peeks_total: IntCounterVec,
     peek_duration_seconds: HistogramVec,
 
-    // dataflows
-    dataflow_initial_output_duration_seconds: GaugeVec,
-    dataflow_wallclock_lag_seconds: HistogramVec,
+    // replica connections
+    connected_replica_count: UIntGaugeVec,
+    replica_connects_total: IntCounterVec,
+    replica_connect_wait_time_seconds_total: CounterVec,
+
+    /// Metrics shared with the storage controller.
+    shared: ControllerMetrics,
+}
+
+fn instance_name_rule() -> Rule {
+    Rule::ClusterNameLookup {
+        cluster_id_label: "instance_id".into(),
+        output_label: "instance_name".into(),
+    }
+}
+
+fn replica_name_rule() -> Rule {
+    Rule::ReplicaNameLookup {
+        cluster_id_label: "instance_id".into(),
+        replica_id_label: "replica_id".into(),
+        output_label: "replica_name".into(),
+    }
 }
 
 impl ComputeControllerMetrics {
     /// Create a metrics instance registered into the given registry.
-    pub fn new(metrics_registry: MetricsRegistry) -> Self {
-        ComputeControllerMetrics {
+    pub fn new(metrics_registry: &MetricsRegistry, shared: ControllerMetrics) -> Self {
+        let metrics = ComputeControllerMetrics {
             commands_total: metrics_registry.register(metric!(
                 name: "mz_compute_commands_total",
                 help: "The total number of compute commands sent.",
                 var_labels: ["instance_id", "replica_id", "command_type"],
+                rules: [instance_name_rule(), replica_name_rule()],
             )),
             command_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_command_message_bytes_total",
                 help: "The total number of bytes sent in compute command messages.",
-                var_labels: ["instance_id", "replica_id", "command_type"],
+                var_labels: ["instance_id", "replica_id"],
+                rules: [instance_name_rule(), replica_name_rule()],
             )),
             responses_total: metrics_registry.register(metric!(
                 name: "mz_compute_responses_total",
                 help: "The total number of compute responses sent.",
                 var_labels: ["instance_id", "replica_id", "response_type"],
+                rules: [instance_name_rule(), replica_name_rule()],
             )),
             response_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_response_message_bytes_total",
                 help: "The total number of bytes sent in compute response messages.",
-                var_labels: ["instance_id", "replica_id", "response_type"],
+                var_labels: ["instance_id", "replica_id"],
+                rules: [instance_name_rule(), replica_name_rule()],
             )),
             replica_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_replica_count",
                 help: "The number of replicas.",
                 var_labels: ["instance_id"],
+                rules: [instance_name_rule()],
             )),
             collection_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_collection_count",
                 help: "The number of installed compute collections.",
                 var_labels: ["instance_id"],
+                rules: [instance_name_rule()],
             )),
             collection_unscheduled_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_collection_unscheduled_count",
                 help: "The number of installed but unscheduled compute collections.",
                 var_labels: ["instance_id"],
+                rules: [instance_name_rule()],
             )),
             peek_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_peek_count",
                 help: "The number of pending peeks.",
                 var_labels: ["instance_id"],
+                rules: [instance_name_rule()],
             )),
             subscribe_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_subscribe_count",
                 help: "The number of active subscribes.",
                 var_labels: ["instance_id"],
+                rules: [instance_name_rule()],
             )),
             copy_to_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_copy_to_count",
                 help: "The number of active copy tos.",
                 var_labels: ["instance_id"],
+                rules: [instance_name_rule()],
             )),
             command_queue_size: metrics_registry.register(metric!(
                 name: "mz_compute_controller_command_queue_size",
                 help: "The size of the compute command queue.",
                 var_labels: ["instance_id", "replica_id"],
+                rules: [instance_name_rule(), replica_name_rule()],
             )),
-            response_queue_size: metrics_registry.register(metric!(
-                name: "mz_compute_controller_response_queue_size",
-                help: "The size of the compute response queue.",
-                var_labels: ["instance_id", "replica_id"],
+            response_send_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_response_send_count",
+                help: "The number of sends on the compute response queue.",
+                var_labels: ["instance_id"],
+                rules: [instance_name_rule()],
+            )),
+            response_recv_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_response_recv_count",
+                help: "The number of receives on the compute response queue.",
+                var_labels: ["instance_id"],
+                rules: [instance_name_rule()],
             )),
             hydration_queue_size: metrics_registry.register(metric!(
                 name: "mz_compute_controller_hydration_queue_size",
                 help: "The size of the compute hydration queue.",
                 var_labels: ["instance_id", "replica_id"],
+                rules: [instance_name_rule(), replica_name_rule()],
             )),
             history_command_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_history_command_count",
                 help: "The number of commands in the controller's command history.",
                 var_labels: ["instance_id", "command_type"],
+                rules: [instance_name_rule()],
             )),
             history_dataflow_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_history_dataflow_count",
                 help: "The number of dataflows in the controller's command history.",
                 var_labels: ["instance_id"],
+                rules: [instance_name_rule()],
             )),
             peeks_total: metrics_registry.register(metric!(
                 name: "mz_compute_peeks_total",
                 help: "The total number of peeks served.",
                 var_labels: ["instance_id", "result"],
+                rules: [instance_name_rule()],
             )),
             peek_duration_seconds: metrics_registry.register(metric!(
                 name: "mz_compute_peek_duration_seconds",
                 help: "A histogram of peek durations since restart.",
                 var_labels: ["instance_id", "result"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.),
+                rules: [instance_name_rule()],
             )),
-            dataflow_initial_output_duration_seconds: metrics_registry.register(metric!(
-                name: "mz_dataflow_initial_output_duration_seconds",
-                help: "The time from dataflow creation up to when the first output was produced.",
-                var_labels: ["instance_id", "replica_id", "collection_id"],
+            connected_replica_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_connected_replica_count",
+                help: "The number of replicas successfully connected to the compute controller.",
+                var_labels: ["instance_id"],
+                rules: [instance_name_rule()],
             )),
-            dataflow_wallclock_lag_seconds: metrics_registry.register(metric!(
-                name: "mz_dataflow_wallclock_lag_seconds",
-                help: "A histogram of the second-by-second lag of the dataflow frontier relative to \
-                       wallclock time.",
-                var_labels: ["instance_id", "replica_id", "collection_id"],
-                buckets: vec![1., 2., 5., 10., 30.],
+            replica_connects_total: metrics_registry.register(metric!(
+                name: "mz_compute_controller_replica_connects_total",
+                help: "The total number of replica (re-)connections made by the compute controller.",
+                var_labels: ["instance_id", "replica_id"],
+                rules: [instance_name_rule(), replica_name_rule()],
             )),
-        }
+            replica_connect_wait_time_seconds_total: metrics_registry.register(metric!(
+                name: "mz_compute_controller_replica_connect_wait_time_seconds_total",
+                help: "The total time the compute controller spent waiting for replica (re-)connection.",
+                var_labels: ["instance_id", "replica_id"],
+                rules: [instance_name_rule(), replica_name_rule()],
+            )),
+
+            shared,
+        };
+
+        metrics
     }
 
     /// Return an object suitable for tracking metrics for the given compute instance.
@@ -204,6 +257,15 @@ impl ComputeControllerMetrics {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
             self.peek_duration_seconds.get_delete_on_drop_metric(labels)
         });
+        let response_send_count = self
+            .response_send_count
+            .get_delete_on_drop_metric(labels.clone());
+        let response_recv_count = self
+            .response_recv_count
+            .get_delete_on_drop_metric(labels.clone());
+        let connected_replica_count = self
+            .connected_replica_count
+            .get_delete_on_drop_metric(labels);
 
         InstanceMetrics {
             instance_id,
@@ -218,6 +280,9 @@ impl ComputeControllerMetrics {
             history_dataflow_count,
             peeks_total,
             peek_duration_seconds,
+            response_send_count,
+            response_recv_count,
+            connected_replica_count,
         }
     }
 }
@@ -248,10 +313,16 @@ pub struct InstanceMetrics {
     pub peeks_total: PeekMetrics<IntCounter>,
     /// Histogram tracking peek durations.
     pub peek_duration_seconds: PeekMetrics<Histogram>,
+    /// Counter tracking the number of sends on the compute response queue.
+    pub response_send_count: IntCounter,
+    /// Counter tracking the number of receives on the compute response queue.
+    pub response_recv_count: IntCounter,
+    /// Gauge tracking the number of connected replicas.
+    pub connected_replica_count: UIntGauge,
 }
 
 impl InstanceMetrics {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_replica(&self, replica_id: ReplicaId) -> ReplicaMetrics {
         let labels = vec![self.instance_id.to_string(), replica_id.to_string()];
         let extended_labels = |extra: &str| {
@@ -268,37 +339,39 @@ impl InstanceMetrics {
                 .commands_total
                 .get_delete_on_drop_metric(labels)
         });
-        let command_message_bytes_total = CommandMetrics::build(|typ| {
-            let labels = extended_labels(typ);
-            self.metrics
-                .command_message_bytes_total
-                .get_delete_on_drop_metric(labels)
-        });
         let responses_total = ResponseMetrics::build(|typ| {
             let labels = extended_labels(typ);
             self.metrics
                 .responses_total
                 .get_delete_on_drop_metric(labels)
         });
-        let response_message_bytes_total = ResponseMetrics::build(|typ| {
-            let labels = extended_labels(typ);
-            self.metrics
-                .response_message_bytes_total
-                .get_delete_on_drop_metric(labels)
-        });
+
+        let command_message_bytes_total = self
+            .metrics
+            .command_message_bytes_total
+            .get_delete_on_drop_metric(labels.clone());
+        let response_message_bytes_total = self
+            .metrics
+            .response_message_bytes_total
+            .get_delete_on_drop_metric(labels.clone());
 
         let command_queue_size = self
             .metrics
             .command_queue_size
             .get_delete_on_drop_metric(labels.clone());
-        let response_queue_size = self
-            .metrics
-            .response_queue_size
-            .get_delete_on_drop_metric(labels.clone());
         let hydration_queue_size = self
             .metrics
             .hydration_queue_size
             .get_delete_on_drop_metric(labels.clone());
+
+        let replica_connects_total = self
+            .metrics
+            .replica_connects_total
+            .get_delete_on_drop_metric(labels.clone());
+        let replica_connect_wait_time_seconds_total = self
+            .metrics
+            .replica_connect_wait_time_seconds_total
+            .get_delete_on_drop_metric(labels);
 
         ReplicaMetrics {
             instance_id: self.instance_id,
@@ -310,13 +383,14 @@ impl InstanceMetrics {
                 responses_total,
                 response_message_bytes_total,
                 command_queue_size,
-                response_queue_size,
                 hydration_queue_size,
+                replica_connects_total,
+                replica_connect_wait_time_seconds_total,
             }),
         }
     }
 
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
         let labels = vec![self.instance_id.to_string()];
         let command_counts = CommandMetrics::build(|typ| {
@@ -360,16 +434,19 @@ pub struct ReplicaMetrics {
 #[derive(Debug)]
 pub struct ReplicaMetricsInner {
     commands_total: CommandMetrics<IntCounter>,
-    command_message_bytes_total: CommandMetrics<IntCounter>,
+    command_message_bytes_total: IntCounter,
     responses_total: ResponseMetrics<IntCounter>,
-    response_message_bytes_total: ResponseMetrics<IntCounter>,
+    response_message_bytes_total: IntCounter,
 
     /// Gauge tracking the size of the compute command queue.
     pub command_queue_size: UIntGauge,
-    /// Gauge tracking the size of the compute response queue.
-    pub response_queue_size: UIntGauge,
     /// Gauge tracking the size of the hydration queue.
     pub hydration_queue_size: UIntGauge,
+
+    /// Counter tracking the total number of (re-)connects.
+    replica_connects_total: IntCounter,
+    /// Counter tracking the total time spent waiting for (re-)connects.
+    replica_connect_wait_time_seconds_total: Counter,
 }
 
 impl ReplicaMetrics {
@@ -385,60 +462,62 @@ impl ReplicaMetrics {
             return None;
         }
 
-        let labels = vec![
-            self.instance_id.to_string(),
-            self.replica_id.to_string(),
+        let wallclock_lag = self.metrics.shared.wallclock_lag_metrics(
             collection_id.to_string(),
-        ];
-        let initial_output_duration_seconds = self
-            .metrics
-            .dataflow_initial_output_duration_seconds
-            .get_delete_on_drop_metric(labels.clone());
-        let wallclock_lag_seconds = self
-            .metrics
-            .dataflow_wallclock_lag_seconds
-            .get_delete_on_drop_metric(labels);
+            Some(self.instance_id.to_string()),
+            Some(self.replica_id.to_string()),
+        );
 
-        Some(ReplicaCollectionMetrics {
-            initial_output_duration_seconds,
-            wallclock_lag_seconds,
-        })
+        Some(ReplicaCollectionMetrics { wallclock_lag })
+    }
+
+    /// Observe a successful replica connection.
+    pub(crate) fn observe_connect(&self) {
+        self.inner.replica_connects_total.inc();
+    }
+
+    /// Observe time spent waiting for a replica connection.
+    pub(crate) fn observe_connect_time(&self, wait_time: Duration) {
+        self.inner
+            .replica_connect_wait_time_seconds_total
+            .inc_by(wait_time.as_secs_f64());
     }
 }
 
-/// Make [`ReplicaMetrics`] pluggable into the gRPC connection.
-impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetrics {
-    fn send_event(&self, item: &ProtoComputeCommand, size: usize) {
-        self.inner.commands_total.for_proto_command(item).inc();
+impl transport::Metrics<ComputeCommand, ComputeResponse> for ReplicaMetrics {
+    fn bytes_sent(&mut self, len: usize) {
         self.inner
             .command_message_bytes_total
-            .for_proto_command(item)
-            .inc_by(u64::cast_from(size));
+            .inc_by(u64::cast_from(len));
     }
 
-    fn receive_event(&self, item: &ProtoComputeResponse, size: usize) {
-        self.inner.responses_total.for_proto_response(item).inc();
+    fn bytes_received(&mut self, len: usize) {
         self.inner
             .response_message_bytes_total
-            .for_proto_response(item)
-            .inc_by(u64::cast_from(size));
+            .inc_by(u64::cast_from(len));
+    }
+
+    fn message_sent(&mut self, msg: &ComputeCommand) {
+        self.inner.commands_total.for_command(msg).inc();
+    }
+
+    fn message_received(&mut self, msg: &ComputeResponse) {
+        self.inner.responses_total.for_response(msg).inc();
     }
 }
 
 /// Per-replica-and-collection metrics.
 #[derive(Debug)]
 pub(crate) struct ReplicaCollectionMetrics {
-    /// Gauge tracking dataflow hydration time.
-    pub initial_output_duration_seconds: Gauge,
-    /// Histogram tracking dataflow wallclock lag.
-    pub wallclock_lag_seconds: Histogram,
+    /// Metrics tracking dataflow wallclock lag.
+    pub wallclock_lag: WallclockLagMetrics,
 }
 
 /// Metrics keyed by `ComputeCommand` type.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CommandMetrics<M> {
-    /// Metrics for `CreateTimely`.
-    pub create_timely: M,
+    /// Metrics for `Hello`.
+    pub hello: M,
     /// Metrics for `CreateInstance`.
     pub create_instance: M,
     /// Metrics for `CreateDataflow`.
@@ -460,13 +539,13 @@ pub struct CommandMetrics<M> {
 }
 
 impl<M> CommandMetrics<M> {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn build<F>(build_metric: F) -> Self
     where
         F: Fn(&str) -> M,
     {
         Self {
-            create_timely: build_metric("create_timely"),
+            hello: build_metric("hello"),
             create_instance: build_metric("create_instance"),
             create_dataflow: build_metric("create_dataflow"),
             schedule: build_metric("schedule"),
@@ -483,7 +562,7 @@ impl<M> CommandMetrics<M> {
     where
         F: Fn(&M),
     {
-        f(&self.create_timely);
+        f(&self.hello);
         f(&self.create_instance);
         f(&self.initialization_complete);
         f(&self.update_configuration);
@@ -492,14 +571,15 @@ impl<M> CommandMetrics<M> {
         f(&self.allow_compaction);
         f(&self.peek);
         f(&self.cancel_peek);
+        f(&self.allow_writes);
     }
 
-    /// TODO(#25239): Add documentation.
-    pub fn for_command<T>(&self, command: &ComputeCommand<T>) -> &M {
+    /// TODO(database-issues#7533): Add documentation.
+    pub fn for_command(&self, command: &ComputeCommand) -> &M {
         use ComputeCommand::*;
 
         match command {
-            CreateTimely { .. } => &self.create_timely,
+            Hello { .. } => &self.hello,
             CreateInstance(_) => &self.create_instance,
             InitializationComplete => &self.initialization_complete,
             UpdateConfiguration(_) => &self.update_configuration,
@@ -509,23 +589,6 @@ impl<M> CommandMetrics<M> {
             Peek(_) => &self.peek,
             CancelPeek { .. } => &self.cancel_peek,
             AllowWrites { .. } => &self.allow_writes,
-        }
-    }
-
-    fn for_proto_command(&self, proto: &ProtoComputeCommand) -> &M {
-        use crate::protocol::command::proto_compute_command::Kind::*;
-
-        match proto.kind.as_ref().unwrap() {
-            CreateTimely(_) => &self.create_timely,
-            CreateInstance(_) => &self.create_instance,
-            CreateDataflow(_) => &self.create_dataflow,
-            Schedule(_) => &self.schedule,
-            AllowCompaction(_) => &self.allow_compaction,
-            Peek(_) => &self.peek,
-            CancelPeek(_) => &self.cancel_peek,
-            InitializationComplete(_) => &self.initialization_complete,
-            UpdateConfiguration(_) => &self.update_configuration,
-            AllowWrites(_) => &self.allow_writes,
         }
     }
 }
@@ -554,15 +617,15 @@ impl<M> ResponseMetrics<M> {
         }
     }
 
-    fn for_proto_response(&self, proto: &ProtoComputeResponse) -> &M {
-        use crate::protocol::response::proto_compute_response::Kind::*;
+    fn for_response(&self, response: &ComputeResponse) -> &M {
+        use ComputeResponse::*;
 
-        match proto.kind.as_ref().unwrap() {
-            Frontiers(_) => &self.frontiers,
-            PeekResponse(_) => &self.peek_response,
-            SubscribeResponse(_) => &self.subscribe_response,
-            CopyToResponse(_) => &self.copy_to_response,
-            Status(_) => &self.status,
+        match response {
+            Frontiers(..) => &self.frontiers,
+            PeekResponse(..) => &self.peek_response,
+            SubscribeResponse(..) => &self.subscribe_response,
+            CopyToResponse(..) => &self.copy_to_response,
+            Status(..) => &self.status,
         }
     }
 }
@@ -591,6 +654,7 @@ where
 #[derive(Debug)]
 pub struct PeekMetrics<M> {
     rows: M,
+    rows_stashed: M,
     error: M,
     canceled: M,
 }
@@ -602,6 +666,7 @@ impl<M> PeekMetrics<M> {
     {
         Self {
             rows: build_metric("rows"),
+            rows_stashed: build_metric("rows_stashed"),
             error: build_metric("error"),
             canceled: build_metric("canceled"),
         }
@@ -612,6 +677,7 @@ impl<M> PeekMetrics<M> {
 
         match response {
             Rows(_) => &self.rows,
+            Stashed(_) => &self.rows_stashed,
             Error(_) => &self.error,
             Canceled => &self.canceled,
         }

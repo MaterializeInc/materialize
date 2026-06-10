@@ -14,7 +14,7 @@ To ignore a proto file, add the following comment to the file:
 
 It is possible to add a reason to the comment. For example:
 ```
-// buf breaking: ignore (Ignore because of #99999.)
+// buf breaking: ignore (Ignore because of database-issues#99999.)
 ```
 
 ### Update the configuration

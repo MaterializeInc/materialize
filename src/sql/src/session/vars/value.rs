@@ -10,10 +10,12 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::fmt::{self, Debug};
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use ipnet::IpNet;
 use itertools::Itertools;
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
@@ -22,11 +24,11 @@ use mz_repr::strconv;
 use mz_rocksdb_types::config::{CompactionStyle, CompressionType};
 use mz_sql_parser::ast::{Ident, TransactionIsolationLevel};
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
-use super::errors::VarParseError;
 use super::VarInput;
+use super::errors::VarParseError;
 
 /// Defines a value that get stored as part of a System or Session variable.
 ///
@@ -74,9 +76,14 @@ impl<'a> PartialEq for &'a dyn Value {
 }
 impl<'a> Eq for &'a dyn Value {}
 
-/// Helper trait ...
+/// Helper trait to cast a `&dyn T` to a `&dyn Any`.
 ///
-/// TODO(parkmycar): Document why this exists
+/// In Rust all types that are `'static` implement [`std::any::Any`] and thus can be casted to a
+/// `&dyn Any`. But once you create a trait object, the type is erased and thus so is the
+/// implementation for [`Any`]. This trait essentially adds a types' [`Any`] impl to the vtable
+/// created when casted to trait object, if [`AsAny`] is a supertrait.
+///
+/// See [`Value`] for an example of using [`AsAny`].
 pub trait AsAny {
     fn as_any(&self) -> &dyn Any;
 }
@@ -88,7 +95,7 @@ impl<T: Any> AsAny for T {
 }
 
 /// Helper method to extract a single value from any kind of [`VarInput`].
-fn extract_single_value(input: VarInput) -> Result<&str, VarParseError> {
+fn extract_single_value(input: VarInput<'_>) -> Result<&str, VarParseError> {
     match input {
         VarInput::Flat(value) => Ok(value),
         VarInput::SqlSet([value]) => Ok(value),
@@ -284,11 +291,12 @@ impl Value for Duration {
     {
         let s = extract_single_value(input)?;
         let s = s.trim();
-        // Take all numeric values from [0..]
-        let split_pos = s
-            .chars()
-            .position(|p| !char::is_numeric(p))
-            .unwrap_or_else(|| s.chars().count());
+        // Find where the leading run of ASCII digits ends. `str::find` returns a
+        // byte index, so it is safe to slice with directly. We restrict to ASCII
+        // digits (rather than `char::is_numeric`) because that is exactly what
+        // `u64::parse` accepts; matching broader Unicode numerics such as '²'
+        // would yield a byte offset that can land mid-character and panic.
+        let split_pos = s.find(|p: char| !p.is_ascii_digit()).unwrap_or(s.len());
 
         // Error if the numeric values don't parse, i.e. there aren't any.
         let d = s[..split_pos]
@@ -307,14 +315,14 @@ impl Value for Duration {
             o => {
                 return Err(VarParseError::InvalidParameterValue {
                     invalid_values: vec![o.to_string()],
-                    reason: "expected us, ms, s, min, h, or d but got {o:?}".to_string(),
-                })
+                    reason: format!("expected us, ms, s, min, h, or d but got {o:?}"),
+                });
             }
         };
 
         let d = f(d
             .checked_mul(m)
-            .ok_or(VarParseError::InvalidParameterValue {
+            .ok_or_else(|| VarParseError::InvalidParameterValue {
                 invalid_values: vec![s.to_string()],
                 reason: "expected value to fit in u64".into(),
             })?);
@@ -465,6 +473,40 @@ impl Value for Vec<Ident> {
             .collect::<Result<_, _>>()
             .map_err(|e| VarParseError::InvalidParameterValue {
                 invalid_values: values.to_vec(),
+                reason: e.to_string(),
+            })?;
+        Ok(values)
+    }
+
+    fn box_clone(&self) -> Box<dyn Value> {
+        Box::new(self.clone())
+    }
+
+    fn format(&self) -> String {
+        self.iter().map(|ident| ident.to_string()).join(", ")
+    }
+}
+
+impl Value for Vec<IpNet> {
+    fn type_name() -> Cow<'static, str>
+    where
+        Self: Sized,
+    {
+        "CIDR list".into()
+    }
+
+    fn parse(input: VarInput<'_>) -> Result<Self, VarParseError>
+    where
+        Self: Sized,
+    {
+        let values = input.to_vec();
+        let values: Vec<IpNet> = values
+            .iter()
+            .flat_map(|i| i.split(','))
+            .map(|d| IpNet::from_str(d.trim()))
+            .collect::<Result<_, _>>()
+            .map_err(|e| VarParseError::InvalidParameterValue {
+                invalid_values: values,
                 reason: e.to_string(),
             })?;
         Ok(values)
@@ -820,7 +862,7 @@ impl Value for TimeZone {
 }
 
 /// List of valid isolation levels.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum IsolationLevel {
     ReadUncommitted,
     ReadCommitted,
@@ -868,32 +910,46 @@ pub enum IsolationLevel {
 }
 
 impl IsolationLevel {
-    pub fn as_str(&self) -> &'static str {
+    const READ_UNCOMMITTED: &'static str = "read uncommitted";
+    const READ_COMMITTED: &'static str = "read committed";
+    const REPEATABLE_READ: &'static str = "repeatable read";
+    const SERIALIZABLE: &'static str = "serializable";
+    const STRONG_SESSION_SERIALIZABLE: &'static str = "strong session serializable";
+    const STRICT_SERIALIZABLE: &'static str = "strict serializable";
+
+    /// Unit-cardinality variant identifier, suitable for Prometheus labels,
+    /// equality checks against parsed input, and other contexts where one
+    /// bucket per kind of isolation is wanted.
+    ///
+    /// For the user-facing rendering (which round-trips through
+    /// [`Value::parse`]) use the [`fmt::Display`] impl — that is what
+    /// `SHOW transaction_isolation` returns.
+    pub fn as_variant_str(&self) -> &'static str {
         match self {
-            Self::ReadUncommitted => "read uncommitted",
-            Self::ReadCommitted => "read committed",
-            Self::RepeatableRead => "repeatable read",
-            Self::Serializable => "serializable",
-            Self::StrongSessionSerializable => "strong session serializable",
-            Self::StrictSerializable => "strict serializable",
+            Self::ReadUncommitted => Self::READ_UNCOMMITTED,
+            Self::ReadCommitted => Self::READ_COMMITTED,
+            Self::RepeatableRead => Self::REPEATABLE_READ,
+            Self::Serializable => Self::SERIALIZABLE,
+            Self::StrongSessionSerializable => Self::STRONG_SESSION_SERIALIZABLE,
+            Self::StrictSerializable => Self::STRICT_SERIALIZABLE,
         }
     }
 
     fn valid_values() -> Vec<&'static str> {
         vec![
-            Self::ReadUncommitted.as_str(),
-            Self::ReadCommitted.as_str(),
-            Self::RepeatableRead.as_str(),
-            Self::Serializable.as_str(),
-            // TODO(jkosh44) Add StrongSessionSerializable when it becomes available to users.
-            Self::StrictSerializable.as_str(),
+            Self::READ_UNCOMMITTED,
+            Self::READ_COMMITTED,
+            Self::REPEATABLE_READ,
+            Self::SERIALIZABLE,
+            // TODO(jkosh44) Add STRONG_SESSION_SERIALIZABLE when it becomes available to users.
+            Self::STRICT_SERIALIZABLE,
         ]
     }
 }
 
 impl fmt::Display for IsolationLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.as_variant_str())
     }
 }
 
@@ -914,15 +970,15 @@ impl Value for IsolationLevel {
 
         // We don't have any optimizations for levels below Serializable,
         // so we upgrade them all to Serializable.
-        if s == Self::ReadUncommitted.as_str()
-            || s == Self::ReadCommitted.as_str()
-            || s == Self::RepeatableRead.as_str()
-            || s == Self::Serializable.as_str()
+        if s == Self::READ_UNCOMMITTED
+            || s == Self::READ_COMMITTED
+            || s == Self::REPEATABLE_READ
+            || s == Self::SERIALIZABLE
         {
             Ok(Self::Serializable)
-        } else if s == Self::StrongSessionSerializable.as_str() {
+        } else if s == Self::STRONG_SESSION_SERIALIZABLE {
             Ok(Self::StrongSessionSerializable)
-        } else if s == Self::StrictSerializable.as_str() {
+        } else if s == Self::STRICT_SERIALIZABLE {
             Ok(Self::StrictSerializable)
         } else {
             Err(VarParseError::ConstrainedParameter {
@@ -937,7 +993,7 @@ impl Value for IsolationLevel {
     }
 
     fn format(&self) -> String {
-        self.as_str().into()
+        self.to_string()
     }
 }
 
@@ -1123,6 +1179,8 @@ impl_value_for_simple!(u64, "64-bit unsigned integer");
 impl_value_for_simple!(usize, "unsigned integer");
 impl_value_for_simple!(f64, "double-precision floating-point number");
 
+impl_value_for_simple!(NonZeroU32, "unsigned integer");
+
 impl_value_for_simple!(mz_repr::Timestamp, "mz-timestamp");
 impl_value_for_simple!(mz_repr::bytes::ByteSize, "bytes");
 impl_value_for_simple!(CompactionStyle, "rocksdb_compaction_style");
@@ -1197,6 +1255,13 @@ mod tests {
         errs("x");
         errs("s");
         errs("18446744073709551615 min");
+        // Unicode numerics such as '²' (U+00B2) are multi-byte and must not be
+        // treated as parseable digits: their char index differs from their byte
+        // offset, so slicing on them would land mid-character and panic.
+        errs("²");
+        errs("1²ms");
+        errs("½");
+        errs("１ms");
     }
 
     #[mz_ore::test]

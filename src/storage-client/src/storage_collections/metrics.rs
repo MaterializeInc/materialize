@@ -68,7 +68,7 @@ impl ShardIdSet {
         }
     }
 
-    pub fn lock(&self) -> ShardIdSetGuard {
+    pub fn lock(&self) -> ShardIdSetGuard<'_> {
         ShardIdSetGuard {
             set: self.set.lock().expect("lock poisoned"),
             gauge: &self.gauge,

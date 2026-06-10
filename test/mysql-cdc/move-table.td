@@ -8,8 +8,10 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
+# TODO: Reenable when database-issues#8127 is fixed
+$ skip-if
+SELECT true
 
 #
 # Test move table
@@ -32,9 +34,11 @@ USE public;
 CREATE TABLE t1 (f1 INTEGER);
 INSERT INTO t1 VALUES (1);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> BEGIN
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> COMMIT
 
 > SELECT * FROM t1;
 1

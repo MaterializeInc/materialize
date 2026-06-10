@@ -14,13 +14,13 @@ use mz_aws_util::s3_uploader::{
 };
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
-use mz_ore::task::JoinHandleExt;
-use mz_pgcopy::{encode_copy_format, encode_copy_format_header, CopyFormatParams};
+use mz_pgcopy::{CopyFormatParams, encode_copy_format, encode_copy_format_header};
 use mz_repr::{GlobalId, RelationDesc, Row};
+use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use tracing::info;
 
-use super::{CopyToParameters, CopyToS3Uploader, S3KeyManager};
+use super::{CopyToParameters, CopyToS3Uploader};
 
 /// Required state to upload batches to S3
 pub(super) struct PgCopyUploader {
@@ -68,7 +68,7 @@ impl CopyToS3Uploader for PgCopyUploader {
                 current_file_uploader: None,
                 params,
             }),
-            _ => anyhow::bail!("Expected PgCopy format"),
+            S3SinkFormat::Parquet => anyhow::bail!("Expected PgCopy format"),
         }
     }
 
@@ -83,7 +83,7 @@ impl CopyToS3Uploader for PgCopyUploader {
                 total_bytes_uploaded,
                 bucket,
                 key,
-            } = handle.wait_and_assert_finished().await?;
+            } = handle.await?;
             info!(
                 "finished upload: bucket {}, key {}, bytes_uploaded {}, parts_uploaded {}",
                 bucket, key, total_bytes_uploaded, part_count
@@ -119,6 +119,10 @@ impl CopyToS3Uploader for PgCopyUploader {
             Err(e) => Err(e.into()),
         }
     }
+
+    async fn force_new_file(&mut self) -> Result<(), anyhow::Error> {
+        self.start_new_file_upload().await
+    }
 }
 
 impl PgCopyUploader {
@@ -153,7 +157,7 @@ impl PgCopyUploader {
             .await;
             (uploader, sdk_config)
         });
-        let (uploader, sdk_config) = handle.wait_and_assert_finished().await;
+        let (uploader, sdk_config) = handle.await;
         self.sdk_config = Some(sdk_config);
         let mut uploader = uploader?;
         if self.format.requires_header() {
@@ -185,7 +189,7 @@ impl PgCopyUploader {
 mod tests {
     use bytesize::ByteSize;
     use mz_pgcopy::CopyFormatParams;
-    use mz_repr::{ColumnName, ColumnType, Datum, RelationType};
+    use mz_repr::{ColumnName, Datum, SqlColumnType, SqlRelationType};
     use uuid::Uuid;
 
     use super::*;
@@ -207,8 +211,9 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    #[ignore] // TODO: Reenable against minio so it can run locally
     async fn test_multiple_files() -> Result<(), anyhow::Error> {
         let sdk_config = mz_aws_util::defaults().load().await;
         let (bucket, path) = match s3_bucket_path_for_test() {
@@ -217,8 +222,8 @@ mod tests {
         };
         let sink_id = GlobalId::User(123);
         let batch = 456;
-        let typ: RelationType = RelationType::new(vec![ColumnType {
-            scalar_type: mz_repr::ScalarType::String,
+        let typ: SqlRelationType = SqlRelationType::new(vec![SqlColumnType {
+            scalar_type: mz_repr::SqlScalarType::String,
             nullable: true,
         }]);
         let column_names = vec![ColumnName::from("col1")];

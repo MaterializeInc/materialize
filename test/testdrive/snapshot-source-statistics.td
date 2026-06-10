@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-replica-size=1
+$ set-sql-timeout duration=120s
+$ set-arg-default default-replica-size=scale=1,workers=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
@@ -58,18 +58,22 @@ goofus,gallant
 
 > CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'
 
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER stats_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state
-> SELECT key, f1, f2 FROM upsert
+> SELECT key, f1, f2 FROM upsert_tbl
 key           f1      f2
 ------------------------
 fish          fish    1000
@@ -80,18 +84,19 @@ mammalmore    moose   2
     s.name,
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  FROM mz_internal.mz_source_statuses s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('upsert', 'upsert_tbl')
   GROUP BY s.name
   ORDER BY s.name
 upsert 9 9
+upsert_tbl 9 9
 
 $ set-from-sql var=previous-offset-known
 SELECT
-    (SUM(u.offset_known))::text
+    (MAX(u.offset_known))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 
@@ -101,24 +106,39 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 # Snapshot counts don't move...
 > SELECT
     s.name,
-    SUM(u.offset_known) > ${previous-offset-known},
+    MAX(u.offset_known) > ${previous-offset-known},
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  FROM mz_internal.mz_source_statuses s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('upsert', 'upsert_tbl')
   GROUP BY s.name
   ORDER BY s.name
 upsert true 9 9
+upsert_tbl true 9 9
 
 # ...even if we restart.
 
 $ set-from-sql var=pre-restart-offset-committed
 SELECT
-    (SUM(u.offset_committed))::text
+    (MAX(u.offset_committed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
+
+
+$ set-from-sql var=old_replica_id
+SELECT cr.id
+  FROM
+    mz_clusters c,
+    mz_cluster_replicas cr,
+    mz_internal.mz_source_statistics u,
+    mz_sources s
+  WHERE
+    c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
+    AND s.name IN ('upsert', 'upsert_tbl') AND u.id = s.id
+  ORDER BY cr.id
+  LIMIT 1
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
 
@@ -127,16 +147,90 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 1)
 
+$ set-regex match=u\d+ replacement="<REPLICAID>"
+> SELECT cr.id
+  FROM
+    mz_clusters c,
+    mz_cluster_replicas cr,
+    mz_internal.mz_source_statistics u,
+    mz_sources s
+  WHERE
+    c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
+    AND s.name IN ('upsert', 'upsert_tbl') AND u.id = s.id
+  ORDER BY cr.id
+  LIMIT 1
+<REPLICAID>
+
+
+
+$ set-from-sql var=new_replica_id
+SELECT cr.id
+  FROM
+    mz_clusters c,
+    mz_cluster_replicas cr,
+    mz_internal.mz_source_statistics u,
+    mz_sources s
+  WHERE
+    c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
+    AND s.name IN ('upsert', 'upsert_tbl') AND u.id = s.id
+  ORDER BY cr.id
+  LIMIT 1
+
+$ unset-regex
+
+
+# In a resource constrained environment, changing the replication factor can be delayed
+# and MZ may see the event that should be published while no replica exists, so offset_committed
+# for the previous replica may include that event.
 > SELECT
     s.name,
-    SUM(u.offset_committed) > ${pre-restart-offset-committed},
+    MAX(u.offset_committed) >= ${pre-restart-offset-committed},
     SUM(u.snapshot_records_known),
-    SUM(u.snapshot_records_staged)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
-upsert true 9 9
+    SUM(u.snapshot_records_staged),
+    u.replica_id
+  FROM mz_internal.mz_source_statuses s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('upsert', 'upsert_tbl')
+  GROUP BY s.name, u.replica_id
+  ORDER BY s.name, u.replica_id
+upsert true 9 9 ${old_replica_id}
+upsert_tbl true 9 9 ${old_replica_id}
+upsert true <null> <null> ${new_replica_id}
+upsert_tbl true <null> <null> ${new_replica_id}
 
-> DROP SOURCE upsert CASCADE
+> CREATE TABLE append_tbl FROM SOURCE upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  INCLUDE OFFSET
+  ENVELOPE NONE
+
+> SELECT f1, f2 FROM append_tbl ORDER BY "offset"
+f1     f2
+---------
+fish   1000
+goose  1
+geese  2
+moose  1
+geese  56
+moose  42
+moose  2
+moose  100
+
+
+> SELECT
+    s.name,
+    MAX(u.offset_committed) >= ${pre-restart-offset-committed},
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged),
+    u.replica_id
+  FROM mz_internal.mz_source_statuses s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('upsert', 'upsert_tbl', 'append_tbl')
+  GROUP BY s.name, u.replica_id
+  ORDER BY s.name, u.replica_id
+append_tbl true 11 11 ${new_replica_id}
+upsert true 9 9 ${old_replica_id}
+upsert true 11 11 ${new_replica_id}
+upsert_tbl true 9 9 ${old_replica_id}
+upsert_tbl true 0 0 ${new_replica_id}
+
+> DROP SOURCE upsert CASCADE;

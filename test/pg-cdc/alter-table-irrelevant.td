@@ -32,9 +32,11 @@ INSERT INTO base_table VALUES (1);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+> BEGIN
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE base_table FROM SOURCE mz_source (REFERENCE base_table);
+> COMMIT
 
 > SELECT * FROM base_table;
 1
@@ -64,9 +66,12 @@ INSERT INTO irrelevant_table VALUES ('ab');
 
 # Recreate the source and views to verify the irrelevant_table is part of the publication
 > DROP SOURCE mz_source CASCADE;
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+> BEGIN
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE base_table FROM SOURCE mz_source (REFERENCE base_table);
+> CREATE TABLE irrelevant_table FROM SOURCE mz_source (REFERENCE irrelevant_table);
+> COMMIT
 
 # Check the first view still works
 > SELECT * FROM base_table;
@@ -101,4 +106,4 @@ INSERT INTO irrelevant_table VALUES ('gh');
 1
 2
 
-> DROP SOURCE irrelevant_table CASCADE;
+> DROP TABLE irrelevant_table CASCADE;

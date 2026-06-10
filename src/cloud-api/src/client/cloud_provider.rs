@@ -141,7 +141,7 @@ impl Client {
 
         loop {
             let req = self
-                .build_global_request(Method::GET, ["api", "cloud-regions"])
+                .build_global_request(Method::GET, ["api", "cloud-regions"], None)
                 .await?;
 
             let req = req.query(&[("limit", "50"), ("cursor", &cursor)]);

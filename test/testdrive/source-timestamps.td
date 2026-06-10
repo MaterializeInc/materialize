@@ -1,0 +1,99 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests to verify that source timestamps are rounded to the timestamp interval.
+
+> CREATE CLUSTER test SIZE 'scale=1,workers=1'
+
+$ kafka-create-topic topic=test
+
+> CREATE CONNECTION kafka_conn
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+> CREATE SOURCE kafka_src
+  IN CLUSTER test
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
+
+> CREATE TABLE kafka_tbl FROM SOURCE kafka_src;
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP PUBLICATION IF EXISTS mz_source
+CREATE TABLE t (x int);
+ALTER TABLE t REPLICA IDENTITY FULL;
+CREATE PUBLICATION mz_source FOR ALL TABLES
+
+> CREATE SECRET pg_pass AS 'postgres'
+> CREATE CONNECTION pg_conn TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pg_pass
+  )
+> CREATE SOURCE pg_src
+  IN CLUSTER test
+  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source')
+
+> CREATE TABLE pg_t FROM SOURCE pg_src (REFERENCE t)
+
+$ mysql-connect name=mysql url=mysql://root@mysql password=p@ssw0rd
+
+$ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
+CREATE TABLE t (x int)
+
+> CREATE SECRET mysql_pass AS 'p@ssw0rd';
+> CREATE CONNECTION mysql_conn TO MYSQL (
+    HOST mysql,
+    USER root,
+    PASSWORD SECRET mysql_pass
+  )
+> CREATE SOURCE mysql_src
+  IN CLUSTER test
+  FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE mysql_t FROM SOURCE mysql_src (REFERENCE t)
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET min_timestamp_interval = '500ms'
+ALTER SYSTEM SET max_timestamp_interval = '2s'
+
+> SELECT name, write_frontier::text::uint8 % 1000 = 1
+  FROM mz_internal.mz_frontiers
+  JOIN mz_sources ON object_id = id
+  WHERE id LIKE 'u%'
+kafka_src          true
+pg_src             true
+mysql_src          true
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SOURCE kafka_src SET (TIMESTAMP INTERVAL = '1234ms')
+ALTER SOURCE pg_src SET (TIMESTAMP INTERVAL = '1234ms')
+ALTER SOURCE mysql_src SET (TIMESTAMP INTERVAL = '1234ms')
+
+> SELECT name, write_frontier::text::uint8 % 1234 = 1
+  FROM mz_internal.mz_frontiers
+  JOIN mz_sources ON object_id = id
+  WHERE id LIKE 'u%'
+kafka_src          true
+pg_src             true
+mysql_src          true
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SOURCE kafka_src SET (TIMESTAMP INTERVAL = '500ms')
+ALTER SOURCE pg_src SET (TIMESTAMP INTERVAL = '500ms')
+ALTER SOURCE mysql_src SET (TIMESTAMP INTERVAL = '500ms')
+
+> SELECT name, write_frontier::text::uint8 % 500 = 1
+  FROM mz_internal.mz_frontiers
+  JOIN mz_sources ON object_id = id
+  WHERE id LIKE 'u%'
+kafka_src          true
+pg_src             true
+mysql_src          true

@@ -1,0 +1,14 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`queries > buildAvailableClusterReplicaSizesQuery produces the expected query 1`] = `
+{
+  "parameters": [
+    "mz_%",
+  ],
+  "sql": "select "size" from "mz_cluster_replica_sizes" where "size" not like $1 order by CASE
+          WHEN size ~ '^[0-9]+([a-zA-Z]*cc[xX]?|C)$' THEN '0_legacy'
+          WHEN size LIKE '%-%' THEN '1_' || split_part(size, '-', 1)
+          ELSE '2_tshirt'
+        END, "credits_per_hour"",
+}
+`;

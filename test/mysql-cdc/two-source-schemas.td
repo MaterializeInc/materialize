@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 #
@@ -41,20 +40,18 @@ INSERT INTO schema2.t1 VALUES (2);
 INSERT INTO schema1.t1 SELECT * FROM schema1.t1;
 INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
-contains:multiple subsources would be named t1
+> BEGIN
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
-# TODO: #24797
-# ! CREATE SOURCE mz_source
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (t1);
+> COMMIT
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema1.t1);
+! CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema2.t1);
+contains:catalog item 't1' already exists
+
+
+# TODO: database-issues#7397
+# CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 # contains:table t1 is ambiguous, consider specifying the schema
-
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (schema1.t1);
 
 > SELECT * FROM t1;
 1
@@ -62,9 +59,11 @@ contains:multiple subsources would be named t1
 
 > DROP SOURCE mz_source CASCADE;
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (schema1.t1 AS t1_1, schema2.t1 AS t1_2);
+> BEGIN
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE t1_1 FROM SOURCE mz_source (REFERENCE schema1.t1);
+> CREATE TABLE t1_2 FROM SOURCE mz_source (REFERENCE schema2.t1);
+> COMMIT
 
 > SELECT * FROM t1_1;
 1

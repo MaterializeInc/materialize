@@ -1,0 +1,32 @@
+[package]
+name = "mz-durable-cache"
+description = "A durable cache built on top of a persist shard"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+differential-dataflow.workspace = true
+futures.workspace = true
+itertools.workspace = true
+mz-ore = { path = "../ore", features = ["process"] }
+mz-dyncfg = { path = "../dyncfg" }
+mz-persist-types = { path = "../persist-types" }
+mz-persist-client = { path = "../persist-client" }
+mz-timely-util = { path = "../timely-util" }
+prometheus.workspace = true
+prost.workspace = true
+serde = { workspace = true, features = ["rc"] }
+timely.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[features]
+default = []

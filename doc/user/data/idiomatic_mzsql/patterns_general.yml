@@ -1,0 +1,261 @@
+columns:
+  - column: pattern_title
+    header: " "
+  - column: syntax_idiomatic
+    header: "Idiomatic Materialize SQL Pattern"
+  - column: example_idiomatic
+    header: "Example"
+
+rows:
+
+  - name: any-equi-join
+    pattern_title: |
+      [`ANY()` Equi-join condition](/transform-data/idiomatic-materialize-sql/any/)
+
+    syntax_idiomatic: |
+      **If no duplicates exist in the unnested field:** Use a Common Table
+      Expression (CTE) to [`UNNEST()`](/sql/functions/#unnest) the array of
+      values and perform the equi-join on the unnested values.
+
+      ```mzsql
+      -- array_field contains no duplicates.--
+
+      WITH my_expanded_values AS
+      (SELECT UNNEST(array_field) AS fieldZ FROM tableB)
+      SELECT a.fieldA, ...
+      FROM tableA a
+      JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
+      ;
+      ```
+
+      **Duplicates may exist in the unnested field:** Use a Common Table
+      Expression (CTE) to [`DISTINCT`](/sql/select/#select-distinct)
+      [`UNNEST()`](/sql/functions/#unnest) the array of values and perform the
+      equi-join on the unnested values.
+
+      ```mzsql
+      -- array_field may contain duplicates.--
+
+      WITH my_expanded_values AS
+      (SELECT DISTINCT UNNEST(array_field) AS fieldZ FROM tableB)
+      SELECT a.fieldA, ...
+      FROM tableA a
+      JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
+      ;
+      ```
+
+    syntax_anti_pattern: |
+      <red>Avoid the use of [`ANY(...)` function](/sql/functions/#expression-bool_op-any) for equi-join
+      conditions.</red>
+
+      ```nofmt
+      -- Anti-pattern. Avoid. --
+      SELECT a.fieldA, ...
+      FROM tableA a, tableB b
+      WHERE a.fieldZ = ANY(b.array_field) -- Anti-pattern. Avoid.
+      ;
+      ```
+
+    example_idiomatic: |
+      ***If no duplicates in the unnested field***
+
+      ```mzsql
+      -- sales_items.items contains no duplicates. --
+
+      WITH individual_sales_items AS
+      (SELECT unnest(items) as item, week_of FROM sales_items)
+      SELECT s.week_of, o.order_id, o.item, o.quantity
+      FROM orders o
+      JOIN individual_sales_items s ON o.item = s.item
+      WHERE date_trunc('week', o.order_date) = s.week_of
+      ORDER BY s.week_of, o.order_id, o.item, o.quantity
+      ;
+      ```
+
+      ***To omit duplicates that may exist in the unnested field***
+
+      ```mzsql
+      -- sales_items.items may contains duplicates --
+
+      WITH individual_sales_items AS
+      (SELECT DISTINCT unnest(items) as item, week_of FROM sales_items)
+      SELECT s.week_of, o.order_id, o.item, o.quantity
+      FROM orders o
+      JOIN individual_sales_items s ON o.item = s.item
+      WHERE date_trunc('week', o.order_date) = s.week_of
+      ORDER BY s.week_of, o.order_id, o.item, o.quantity
+      ;
+      ```
+
+    example_anti_pattern: |
+      <red>Avoid the use of [`ANY()`](/sql/functions/#expression-bool_op-any) for the equi-join condition.</red>
+
+      ```nofmt
+      -- Anti-pattern. Avoid. --
+      SELECT s.week_of, o.order_id, o.item, o.quantity
+      FROM orders o
+      JOIN sales_items s ON o.item = ANY(s.items)
+      WHERE date_trunc('week', o.order_date) = s.week_of
+      ORDER BY s.week_of, o.order_id, o.item, o.quantity
+      ;
+      ```
+
+  - name: not-in-subquery
+    pattern_title: |
+      [`NOT IN (<subquery>)` predicate](/transform-data/idiomatic-materialize-sql/not-in/)
+
+    syntax_idiomatic: |
+      **Rewrite to `NOT EXISTS` with a correlated subquery.**
+
+      ```mzsql
+      SELECT t1.*
+      FROM t1
+      WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t2.a = t1.a)
+      ;
+      ```
+
+      **Filter out `NULL`s on both sides of the `NOT IN`.**
+
+      ```mzsql
+      SELECT t1.*
+      FROM t1
+      WHERE t1.a IS NOT NULL
+        AND t1.a NOT IN (SELECT t2.a FROM t2 WHERE t2.a IS NOT NULL)
+      ;
+      ```
+
+    syntax_anti_pattern: |
+      <red>Avoid `NOT IN (<subquery>)` predicates, which force a cross join
+      between the outer relation and the subquery.</red>
+
+      ```nofmt
+      -- Anti-pattern. Avoid. --
+      SELECT t1.*
+      FROM t1
+      WHERE t1.a NOT IN (SELECT t2.a FROM t2) -- Anti-pattern. Avoid.
+      ;
+      ```
+
+    example_idiomatic: |
+      Because the subquery uses [`UNNEST()`](/sql/functions/#unnest) on a column
+      of the outer-correlated row, factor the `UNNEST()` into an uncorrelated
+      [Common Table Expression
+      (CTE)](/sql/select/#common-table-expressions-ctes) first.
+
+      ***Rewrite to `NOT EXISTS` with a CTE for the `UNNEST()`***
+
+      ```mzsql
+      WITH this_weeks_sales AS (
+        SELECT unnest(items) AS sale_item
+        FROM sales_items
+        WHERE week_of = date_trunc('week', current_timestamp)
+      )
+      SELECT i.item, i.price
+      FROM items i
+      WHERE NOT EXISTS (
+        SELECT 1 FROM this_weeks_sales s WHERE s.sale_item = i.item
+      )
+      ORDER BY i.item
+      ;
+      ```
+
+      ***Filter out `NULL`s with a CTE for the `UNNEST()`***
+
+      ```mzsql
+      WITH this_weeks_sales AS (
+        SELECT unnest(items) AS sale_item
+        FROM sales_items
+        WHERE week_of = date_trunc('week', current_timestamp)
+      )
+      SELECT i.item, i.price
+      FROM items i
+      WHERE i.item IS NOT NULL
+        AND i.item NOT IN (
+          SELECT sale_item FROM this_weeks_sales WHERE sale_item IS NOT NULL
+        )
+      ORDER BY i.item
+      ;
+      ```
+
+    example_anti_pattern: |
+      <red>Avoid `NOT IN (<subquery>)`, which forces a cross join.</red>
+
+      ```nofmt
+      -- Anti-pattern. Avoid. --
+      SELECT i.item, i.price
+      FROM items i
+      WHERE i.item NOT IN (
+        SELECT unnest(items) FROM sales_items
+        WHERE week_of = date_trunc('week', current_timestamp)
+      )
+      ORDER BY i.item
+      ;
+      ```
+
+  - name: mz_now-date-time
+    pattern_title: |
+      [`mz_now()` with date/time operators](/transform-data/idiomatic-materialize-sql/mz_now/#mz_now-expressions-to-calculate-past-or-future-timestamp)
+
+    syntax_idiomatic: |
+      Rewrite the query expression; specifically, move the operation to the
+      other side of the comparison.
+
+    example_idiomatic: |
+      ```mzsql
+      SELECT * from orders
+      WHERE mz_now() > order_date + INTERVAL '5min'
+      ;
+      ```
+
+  - name: mz_now-disjunctions
+    pattern_title: |
+      [`mz_now()` with disjunctions (`OR`) in materialized/indexed view
+      definitions and `SUBSCRIBE` statements](/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or)
+
+    syntax_idiomatic: |
+      Rewrite as `UNION ALL` or `UNION`, deduplicating as necessary:
+
+      - In some cases, you may need to modify the conditions to deduplicate
+        results when using `UNION ALL`. For example, you might add the
+        negation of one input's condition to the other as a conjunction.
+
+      - In some cases, using `UNION` instead of `UNION ALL` may suffice if
+        the inputs do not contain other duplicates that need to be retained.
+
+    example_idiomatic: |
+      **Rewrite as `UNION ALL` with possible duplicates**
+
+      ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders_duplicates_possible AS
+      SELECT item, quantity, status from orders
+      WHERE status = 'Shipped'
+      UNION ALL
+      SELECT item, quantity, status from orders
+      WHERE order_date + interval '30' minutes >= mz_now()
+      ;
+      ```
+
+      **Rewrite as `UNION ALL` that avoids duplicates across queries**
+
+      ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders_deduplicated_union_all AS
+      SELECT item, quantity, status from orders
+      WHERE status = 'Shipped'
+      UNION ALL
+      SELECT item, quantity, status from orders
+      WHERE order_date + interval '30' minutes >= mz_now()
+      AND status != 'Shipped' -- Deduplicate by excluding those with status 'Shipped'
+      ;
+      ```
+
+      **Rewrite as `UNION` to deduplicate any and all duplicated results**
+
+      ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders_deduplicated_results AS
+      SELECT item, quantity, status from orders
+      WHERE status = 'Shipped'
+      UNION
+      SELECT item, quantity, status from orders
+      WHERE order_date + interval '30' minutes >= mz_now()
+      ;
+      ```

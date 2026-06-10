@@ -12,6 +12,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+----
+COMPLETE 0
+
 statement ok
 CREATE VIEW objects AS
   SELECT
@@ -19,384 +24,425 @@ CREATE VIEW objects AS
     objects.name AS object,
     columns.position,
     columns.name,
-    columns.type
+    columns.type,
+    comments.comment
   FROM
-    mz_catalog.mz_columns AS columns,
-    mz_catalog.mz_objects AS objects,
-    mz_catalog.mz_schemas AS schema
-  WHERE columns.id = objects.id AND objects.schema_id = schema.id
+    mz_catalog.mz_columns AS columns
+    JOIN mz_catalog.mz_objects AS objects ON columns.id = objects.id
+    JOIN mz_catalog.mz_schemas AS schema ON objects.schema_id = schema.id
+    LEFT JOIN mz_internal.mz_comments AS comments ON columns.id = comments.id AND columns.position = comments.object_sub_id
 
 statement ok
 CREATE INDEX objects_idx ON objects(schema, object)
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_array_types' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_array_types' ORDER BY position
 ----
-1  id  text
-2  element_id  text
+id  text  The␠ID␠of␠the␠array␠type.
+element_id  text  The␠ID␠of␠the␠array's␠element␠type.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_audit_events' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_audit_events' ORDER BY position
 ----
-1  id    uint8
-2  event_type  text
-3  object_type  text
-4  details  jsonb
-5  user  text
-6  occurred_at  timestamp␠with␠time␠zone
+id    uint8  Materialize's␠unique,␠monotonically␠increasing␠ID␠for␠the␠event.
+event_type  text  The␠type␠of␠the␠event:␠`create`,␠`drop`,␠or␠`alter`.
+object_type  text  The␠type␠of␠the␠affected␠object:␠`cluster`,␠`cluster-replica`,␠`connection`,␠`database`,␠`function`,␠`index`,␠`materialized-view`,␠`role`,␠`schema`,␠`secret`,␠`sink`,␠`source`,␠`table`,␠`type`,␠or␠`view`.
+details  jsonb  Additional␠details␠about␠the␠event.␠The␠shape␠of␠the␠details␠varies␠based␠on␠`event_type`␠and␠`object_type`.
+user  text  The␠user␠who␠triggered␠the␠event,␠or␠`NULL`␠if␠triggered␠by␠the␠system.
+occurred_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠event␠occurred.␠Guaranteed␠to␠be␠in␠order␠of␠event␠creation.␠Events␠created␠in␠the␠same␠transaction␠will␠have␠identical␠values.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_aws_privatelink_connections' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_aws_privatelink_connections' ORDER BY position
 ----
-1  id  text
-2  principal  text
+id  text  The␠ID␠of␠the␠connection.
+principal  text  The␠AWS␠Principal␠that␠Materialize␠will␠use␠to␠connect␠to␠the␠VPC␠endpoint.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_base_types' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_base_types' ORDER BY position
 ----
-1  id  text
+id  text  The␠ID␠of␠the␠type.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replica_sizes' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
 ----
-1  size  text
-2  processes  uint8
-3  workers  uint8
-4  cpu_nano_cores  uint8
-5  memory_bytes  uint8
-6  disk_bytes  uint8
-7  credits_per_hour  numeric
+object_id  text  The␠ID␠of␠the␠source,␠sink,␠index,␠materialized␠view,␠or␠subscription.
+replica_id  text  The␠ID␠of␠a␠cluster␠replica.
+write_frontier  mz_timestamp  The␠next␠timestamp␠at␠which␠the␠output␠may␠change.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replicas' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replica_sizes' ORDER BY position
 ----
-1  id  text
-2  name  text
-3  cluster_id  text
-4  size  text
-5  availability_zone  text
-6  owner_id  text
-7  disk  boolean
+size  text  The␠human-readable␠replica␠size.
+processes  uint8  The␠number␠of␠processes␠in␠the␠replica.
+workers  uint8  The␠number␠of␠Timely␠Dataflow␠workers␠per␠process.
+cpu_nano_cores  uint8  The␠CPU␠allocation␠per␠process,␠in␠billionths␠of␠a␠vCPU␠core.
+memory_bytes  uint8  The␠RAM␠allocation␠per␠process,␠in␠billionths␠of␠a␠vCPU␠core.
+disk_bytes  uint8  The␠disk␠allocation␠per␠process.
+credits_per_hour  numeric  The␠number␠of␠compute␠credits␠consumed␠per␠hour.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_clusters' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replicas' ORDER BY position
 ----
-1  id  text
-2  name  text
-3  owner_id  text
-4  privileges  mz_aclitem[]
-5  managed  boolean
-6  size  text
-7  replication_factor  uint4
-8  disk  boolean
-9  availability_zones  list
-10  introspection_debugging  boolean
-11  introspection_interval  interval
+id  text  Materialize's␠unique␠ID␠for␠the␠cluster␠replica.
+name  text  The␠name␠of␠the␠cluster␠replica.
+cluster_id  text  The␠ID␠of␠the␠cluster␠to␠which␠the␠replica␠belongs.␠Corresponds␠to␠`mz_clusters.id`.
+size  text  The␠cluster␠replica's␠size,␠selected␠during␠creation.
+availability_zone  text  The␠availability␠zone␠in␠which␠the␠cluster␠is␠running.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠cluster␠replica.␠Corresponds␠to␠`mz_roles.id`.
+disk  boolean  If␠the␠replica␠has␠a␠local␠disk.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_columns' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_clusters' ORDER BY position
 ----
-1  id  text
-2  name  text
-3  position  uint8
-4  nullable  boolean
-5  type  text
-6  default  text
-7  type_oid  oid
-8  type_mod  integer
+id  text  Materialize's␠unique␠ID␠for␠the␠cluster.
+name  text  The␠name␠of␠the␠cluster.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠cluster.␠Corresponds␠to␠`mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠cluster.
+managed  boolean  Whether␠the␠cluster␠is␠a␠managed␠cluster␠with␠automatically␠managed␠replicas.
+size  text  If␠the␠cluster␠is␠managed,␠the␠desired␠size␠of␠the␠cluster's␠replicas.␠`NULL`␠for␠unmanaged␠clusters.
+replication_factor  uint4  If␠the␠cluster␠is␠managed,␠the␠desired␠number␠of␠replicas␠of␠the␠cluster.␠`NULL`␠for␠unmanaged␠clusters.
+disk  boolean  **Unstable**␠If␠the␠cluster␠is␠managed,␠`true`␠if␠the␠replicas␠have␠the␠`DISK`␠option␠.␠`NULL`␠for␠unmanaged␠clusters.
+availability_zones  list  **Unstable**␠If␠the␠cluster␠is␠managed,␠the␠list␠of␠availability␠zones␠specified␠in␠`AVAILABILITY␠ZONES`.␠`NULL`␠for␠unmanaged␠clusters.
+introspection_debugging  boolean  Whether␠introspection␠of␠the␠gathering␠of␠the␠introspection␠data␠is␠enabled.
+introspection_interval  interval  The␠interval␠at␠which␠to␠collect␠introspection␠data.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_connections' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_columns' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  type  text
-6  owner_id  text
-7  privileges  mz_aclitem[]
-8  create_sql  text
-9  redacted_create_sql  text
+id  text  The␠unique␠ID␠of␠the␠table,␠source,␠or␠view␠containing␠the␠column.
+name  text  The␠name␠of␠the␠column.
+position  uint8  The␠1-indexed␠position␠of␠the␠column␠in␠its␠containing␠table,␠source,␠or␠view.
+nullable  boolean  Can␠the␠column␠contain␠a␠`NULL`␠value?
+type  text  The␠data␠type␠of␠the␠column.
+default  text  The␠default␠expression␠of␠the␠column.
+type_oid  oid  The␠OID␠of␠the␠type␠of␠the␠column␠(references␠`mz_types`).
+type_mod  integer  The␠packed␠type␠identifier␠of␠the␠column.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_databases' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_connections' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  name  text
-4  owner_id  text
-5  privileges  mz_aclitem[]
+id  text  The␠unique␠ID␠of␠the␠connection.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠connection.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠connection␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠connection.
+type  text  The␠type␠of␠the␠connection:␠`confluent-schema-registry`,␠`kafka`,␠`postgres`,␠or␠`ssh-tunnel`.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠connection.␠Corresponds␠to␠`mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠connection.
+create_sql  text  The␠`CREATE`␠SQL␠statement␠for␠the␠connection.
+redacted_create_sql  text  The␠redacted␠`CREATE`␠SQL␠statement␠for␠the␠connection.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_default_privileges' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_databases' ORDER BY position
 ----
-1  role_id  text
-2  database_id  text
-3  schema_id  text
-4  object_type  text
-5  grantee  text
-6  privileges  text
+id  text  Materialize's␠unique␠ID␠for␠the␠database.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠database.
+name  text  The␠name␠of␠the␠database.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠database.␠Corresponds␠to␠`mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠database.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_egress_ips' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_default_privileges' ORDER BY position
 ----
-1  egress_ip  text
+role_id  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠on␠objects␠created␠by␠`role_id`.␠The␠role␠ID␠`p`␠stands␠for␠the␠`PUBLIC`␠pseudo-role␠and␠applies␠to␠all␠roles.
+database_id  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠only␠on␠objects␠in␠the␠database␠identified␠by␠`database_id`␠if␠non-null.
+schema_id  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠only␠on␠objects␠in␠the␠schema␠identified␠by␠`schema_id`␠if␠non-null.
+object_type  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠only␠on␠objects␠of␠type␠`object_type`.
+grantee  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠to␠`grantee`.␠The␠role␠ID␠`p`␠stands␠for␠the␠`PUBLIC`␠pseudo-role␠and␠applies␠to␠all␠roles.
+privileges  text  The␠set␠of␠privileges␠that␠will␠be␠granted.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_functions' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_egress_ips' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  argument_type_ids  text[]
-6  variadic_argument_type_id  text
-7  return_type_id  text
-8  returns_set  boolean
-9  owner_id  text
+egress_ip  text  The␠start␠of␠the␠range␠of␠IP␠addresses.
+prefix_length  integer  The␠number␠of␠leading␠bits␠in␠the␠CIDR␠netmask.
+cidr  text  The␠CIDR␠representation.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_indexes' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_functions' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  name  text
-4  on_id  text
-5  cluster_id  text
-6  owner_id  text
-7  create_sql  text
-8  redacted_create_sql  text
+id  text  Materialize's␠unique␠ID␠for␠the␠function.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠function.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠function␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠function.
+argument_type_ids  text[]  The␠ID␠of␠each␠argument's␠type.␠Each␠entry␠refers␠to␠`mz_types.id`.
+variadic_argument_type_id  text  The␠ID␠of␠the␠variadic␠argument's␠type,␠or␠`NULL`␠if␠the␠function␠does␠not␠have␠a␠variadic␠argument.␠Refers␠to␠`mz_types.id`.
+return_type_id  text  The␠returned␠value's␠type,␠or␠`NULL`␠if␠the␠function␠does␠not␠return␠a␠value.␠Refers␠to␠`mz_types.id`.␠Note␠that␠for␠table␠functions␠with␠>␠1␠column,␠this␠type␠corresponds␠to␠[`record`].
+returns_set  boolean  Whether␠the␠function␠returns␠a␠set,␠i.e.␠the␠function␠is␠a␠table␠function.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠function.␠Corresponds␠to␠`mz_roles.id`.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_index_columns' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_indexes' ORDER BY position
 ----
-1  index_id  text
-2  index_position  uint8
-3  on_position  uint8
-4  on_expression  text
-5  nullable  boolean
+id  text  Materialize's␠unique␠ID␠for␠the␠index.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠index.
+name  text  The␠name␠of␠the␠index.
+on_id  text  The␠ID␠of␠the␠relation␠on␠which␠the␠index␠is␠built.
+cluster_id  text  The␠ID␠of␠the␠cluster␠in␠which␠the␠index␠is␠built.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠index.␠Corresponds␠to␠`mz_roles.id`.
+create_sql  text  The␠`CREATE`␠SQL␠statement␠for␠the␠index.
+redacted_create_sql  text  The␠redacted␠`CREATE`␠SQL␠statement␠for␠the␠index.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_kafka_connections' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_index_columns' ORDER BY position
 ----
-1  id  text
-2  brokers  text[]
-3  sink_progress_topic  text
+index_id  text  The␠ID␠of␠the␠index␠which␠contains␠this␠column.␠Corresponds␠to␠`mz_indexes.id`.
+index_position  uint8  The␠1-indexed␠position␠of␠this␠column␠within␠the␠index.␠(The␠order␠of␠columns␠in␠an␠index␠does␠not␠necessarily␠match␠the␠order␠of␠columns␠in␠the␠relation␠on␠which␠the␠index␠is␠built.)
+on_position  uint8  If␠not␠`NULL`,␠specifies␠the␠1-indexed␠position␠of␠a␠column␠in␠the␠relation␠on␠which␠this␠index␠is␠built␠that␠determines␠the␠value␠of␠this␠index␠column.
+on_expression  text  If␠not␠`NULL`,␠specifies␠a␠SQL␠expression␠that␠is␠evaluated␠to␠compute␠the␠value␠of␠this␠index␠column.␠The␠expression␠may␠contain␠references␠to␠any␠of␠the␠columns␠of␠the␠relation.
+nullable  boolean  Can␠this␠column␠of␠the␠index␠evaluate␠to␠`NULL`?
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_kafka_sinks' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_kafka_connections' ORDER BY position
 ----
-1  id  text
-2  topic  text
+id  text  The␠ID␠of␠the␠connection.
+brokers  text[]  The␠addresses␠of␠the␠Kafka␠brokers␠to␠connect␠to.
+sink_progress_topic  text  The␠name␠of␠the␠Kafka␠topic␠where␠any␠sinks␠associated␠with␠this␠connection␠will␠track␠their␠progress␠information␠and␠other␠metadata.␠The␠contents␠of␠this␠topic␠are␠unspecified.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_list_types' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_kafka_sinks' ORDER BY position
 ----
-1  id  text
-2  element_id  text
-3  element_modifiers  list
+id  text  The␠ID␠of␠the␠sink.
+topic  text  The␠name␠of␠the␠Kafka␠topic␠into␠which␠the␠sink␠is␠writing.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_map_types' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_kafka_sources' ORDER BY position
 ----
-1  id  text
-2  key_id   text
-3  value_id  text
-4  key_modifiers  list
-5  value_modifiers  list
+id  text  The␠ID␠of␠the␠Kafka␠source.␠Corresponds␠to␠`mz_catalog.mz_sources.id`.
+group_id_prefix  text  The␠value␠of␠the␠`GROUP␠ID␠PREFIX`␠connection␠option.
+topic            text  The␠name␠of␠the␠Kafka␠topic␠the␠source␠is␠reading␠from.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_materialized_views' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_iceberg_sinks' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  cluster_id  text
-6  definition  text
-7  owner_id  text
-8  privileges  mz_aclitem[]
-9  create_sql  text
-10  redacted_create_sql  text
+id  text  The␠ID␠of␠the␠sink.
+namespace  text  The␠namespace␠of␠the␠Iceberg␠table␠into␠which␠the␠sink␠is␠writing.
+table  text  The␠Iceberg␠table␠into␠which␠the␠sink␠is␠writing.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_objects' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_list_types' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  type  text
-6  owner_id  text
-7  cluster_id  text
-8  privileges  mz_aclitem[]
+id  text  The␠ID␠of␠the␠list␠type.
+element_id  text  The␠IID␠of␠the␠list's␠element␠type.
+element_modifiers  list  The␠element␠type␠modifiers,␠or␠`NULL`␠if␠none.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_pseudo_types' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_map_types' ORDER BY position
 ----
-1  id  text
+id  text  The␠ID␠of␠the␠map␠type.
+key_id   text  The␠ID␠of␠the␠map's␠key␠type.
+value_id  text  The␠ID␠of␠the␠map's␠value␠type.
+key_modifiers  list  The␠key␠type␠modifiers,␠or␠`NULL`␠if␠none.
+value_modifiers  list  The␠value␠type␠modifiers,␠or␠`NULL`␠if␠none.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_relations' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_materialized_views' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  type  text
-6  owner_id  text
-7  cluster_id  text
-8  privileges  mz_aclitem[]
+id  text  Materialize's␠unique␠ID␠for␠the␠materialized␠view.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠materialized␠view.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠materialized␠view␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠materialized␠view.
+cluster_id  text  The␠ID␠of␠the␠cluster␠maintaining␠the␠materialized␠view.␠Corresponds␠to␠`mz_clusters.id`.
+definition  text  The␠materialized␠view␠definition␠(a␠`SELECT`␠query).
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠materialized␠view.␠Corresponds␠to␠`mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠materialized␠view.
+create_sql  text  The␠`CREATE`␠SQL␠statement␠for␠the␠materialized␠view.
+redacted_create_sql  text  The␠redacted␠`CREATE`␠SQL␠statement␠for␠the␠materialized␠view.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_roles' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_objects' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  name  text
-4  inherit  boolean
+id  text  Materialize's␠unique␠ID␠for␠the␠object.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠object.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠object␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠object.
+type  text  The␠type␠of␠the␠object:␠one␠of␠`table`,␠`source`,␠`view`,␠`materialized-view`,␠`sink`,␠`index`,␠`connection`,␠`secret`,␠`type`,␠or␠`function`.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠object.␠Corresponds␠to␠`mz_roles.id`.
+cluster_id  text  The␠ID␠of␠the␠cluster␠maintaining␠the␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_clusters.id`.␠`NULL`␠for␠other␠object␠types.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠object.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_role_members' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_pseudo_types' ORDER BY position
 ----
-1  role_id  text
-2  member  text
-3  grantor  text
+id  text  The␠ID␠of␠the␠type.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_role_parameters' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_relations' ORDER BY position
 ----
-1  role_id  text
-2  parameter_name  text
-3  parameter_value  text
+id  text  Materialize's␠unique␠ID␠for␠the␠relation.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠relation.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠relation␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠relation.
+type  text  The␠type␠of␠the␠relation:␠either␠`table`,␠`source`,␠`view`,␠or␠`materialized-view`.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠relation.␠Corresponds␠to␠`mz_roles.id`.
+cluster_id  text  The␠ID␠of␠the␠cluster␠maintaining␠the␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_clusters.id`.␠`NULL`␠for␠other␠object␠types.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠relation.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_schemas' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_recent_storage_usage' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  database_id  text
-4  name  text
-5  owner_id  text
-6  privileges  mz_aclitem[]
+object_id  text  The␠ID␠of␠the␠table,␠source,␠or␠materialized␠view.
+size_bytes  uint8  The␠number␠of␠storage␠bytes␠used␠by␠the␠object␠in␠the␠most␠recent␠assessment.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_secrets' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_roles' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  owner_id  text
-6  privileges  mz_aclitem[]
+id  text  Materialize's␠unique␠ID␠for␠the␠role.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠role.
+name  text  The␠name␠of␠the␠role.
+inherit  boolean  Indicates␠whether␠the␠role␠has␠inheritance␠of␠privileges.
+rolcanlogin  boolean  Indicates␠whether␠the␠role␠can␠log␠in.
+rolsuper  boolean  Indicates␠whether␠the␠role␠is␠a␠superuser.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_ssh_tunnel_connections' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_role_members' ORDER BY position
 ----
-1  id  text
-2  public_key_1  text
-3  public_key_2  text
+role_id  text  The␠ID␠of␠the␠role␠the␠`member`␠is␠a␠member␠of.␠Corresponds␠to␠`mz_roles.id`.
+member  text  The␠ID␠of␠the␠role␠that␠is␠a␠member␠of␠`role_id`.␠Corresponds␠to␠`mz_roles.id`.
+grantor  text  The␠ID␠of␠the␠role␠that␠granted␠membership␠of␠`member`␠to␠`role_id`.␠Corresponds␠to␠`mz_roles.id`.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_sinks' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_role_auth' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  type  text
-6  connection_id  text
-7  size  text
-8  envelope_type  text
-9  format  text
-10  key_format  text
-11  value_format  text
-12  cluster_id  text
-13  owner_id  text
-14  create_sql  text
-15  redacted_create_sql  text
+role_id  text  The␠ID␠of␠the␠role.␠Corresponds␠to␠`mz_roles.id`.
+role_oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠role.
+password_hash  text  The␠hashed␠password␠for␠the␠role,␠if␠any.␠Uses␠the␠`SCRAM-SHA-256`␠algorithm.
+updated_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠password␠was␠last␠updated.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_sources' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_role_parameters' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  type  text
-6  connection_id  text
-7  size  text
-8  envelope_type  text
-9  key_format  text
-10  value_format  text
-11  cluster_id  text
-12  owner_id  text
-13  privileges  mz_aclitem[]
-14  create_sql  text
-15  redacted_create_sql  text
+role_id  text  The␠ID␠of␠the␠role␠whose␠configuration␠parameter␠default␠is␠set.␠Corresponds␠to␠`mz_roles.id`.
+parameter_name  text  The␠configuration␠parameter␠name.␠One␠of␠the␠supported␠configuration␠parameters.
+parameter_value  text  The␠default␠value␠of␠the␠parameter␠for␠the␠given␠role.␠Can␠be␠either␠a␠single␠value,␠or␠a␠comma-separated␠list␠of␠values␠for␠configuration␠parameters␠that␠accept␠a␠list.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_storage_usage' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_schemas' ORDER BY position
 ----
-1  object_id  text
-2  size_bytes  uint8
-3  collection_timestamp  timestamp␠with␠time␠zone
+id  text  Materialize's␠unique␠ID␠for␠the␠schema.
+oid  oid  A␠PostgreSQL-compatible␠oid␠for␠the␠schema.
+database_id  text  The␠ID␠of␠the␠database␠containing␠the␠schema.␠Corresponds␠to␠`mz_databases.id`.
+name  text  The␠name␠of␠the␠schema.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠schema.␠Corresponds␠to␠`mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠schema.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_system_privileges' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_secrets' ORDER BY position
 ----
-1  privileges  mz_aclitem
+id  text  The␠unique␠ID␠of␠the␠secret.
+oid  oid  A␠PostgreSQL-compatible␠oid␠for␠the␠secret.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠secret␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠secret.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠secret.␠Corresponds␠to␠`mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠secret.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_tables' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_ssh_tunnel_connections' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  owner_id  text
-6  privileges  mz_aclitem[]
-7  create_sql  text
-8  redacted_create_sql  text
+id  text  The␠ID␠of␠the␠connection.
+public_key_1  text  The␠first␠public␠key␠associated␠with␠the␠SSH␠tunnel.
+public_key_2  text  The␠second␠public␠key␠associated␠with␠the␠SSH␠tunnel.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_timezone_abbreviations' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_sinks' ORDER BY position
 ----
-1  abbreviation  text
-2  utc_offset  interval
-3  dst  boolean
-4  timezone_name  text
+id  text  Materialize's␠unique␠ID␠for␠the␠sink.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠sink.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠sink␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠sink.
+type  text  The␠type␠of␠the␠sink:␠`kafka`.
+connection_id  text  The␠ID␠of␠the␠connection␠associated␠with␠the␠sink,␠if␠any.␠Corresponds␠to␠`mz_connections.id`.
+size  text  The␠size␠of␠the␠sink.
+envelope_type  text  The␠envelope␠of␠the␠sink:␠`upsert`,␠or␠`debezium`.
+format  text  *Deprecated*␠The␠format␠of␠the␠Kafka␠messages␠produced␠by␠the␠sink:␠`avro`,␠`json`,␠`text`,␠or␠`bytes`.
+key_format  text  The␠format␠of␠the␠Kafka␠message␠key␠for␠messages␠produced␠by␠the␠sink:␠`avro`,␠`json`,␠`bytes`,␠`text`,␠or␠`NULL`.
+value_format  text  The␠format␠of␠the␠Kafka␠message␠value␠for␠messages␠produced␠by␠the␠sink:␠`avro`,␠`json`,␠`text`,␠or␠`bytes`.
+cluster_id  text  The␠ID␠of␠the␠cluster␠maintaining␠the␠sink.␠Corresponds␠to␠`mz_clusters.id`.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠sink.␠Corresponds␠to␠`mz_roles.id`.
+create_sql  text  The␠`CREATE`␠SQL␠statement␠for␠the␠sink.
+redacted_create_sql  text  The␠redacted␠`CREATE`␠SQL␠statement␠for␠the␠sink.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_timezone_names' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_sources' ORDER BY position
 ----
-1  name  text
+id  text  Materialize's␠unique␠ID␠for␠the␠source.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠source.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠source␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠source.
+type  text  The␠type␠of␠the␠source:␠`kafka`,␠`mysql`,␠`postgres`,␠`load-generator`,␠`progress`,␠or␠`subsource`.
+connection_id  text  The␠ID␠of␠the␠connection␠associated␠with␠the␠source,␠if␠any.␠Corresponds␠to␠`mz_connections.id`.
+size  text  *Deprecated*␠The␠size␠of␠the␠source.
+envelope_type  text  For␠Kafka␠sources,␠the␠envelope␠type:␠`none`,␠`upsert`,␠or␠`debezium`.␠`NULL`␠for␠other␠source␠types.
+key_format  text  For␠Kafka␠sources,␠the␠format␠of␠the␠Kafka␠message␠key:␠`avro`,␠`csv`,␠`regex`,␠`bytes`,␠`json`,␠`text`,␠or␠`NULL`.
+value_format  text  For␠Kafka␠sources,␠the␠format␠of␠the␠Kafka␠message␠value:␠`avro`,␠`csv`,␠`regex`,␠`bytes`,␠`json`,␠`text`.␠`NULL`␠for␠other␠source␠types.
+cluster_id  text  The␠ID␠of␠the␠cluster␠maintaining␠the␠source.␠Corresponds␠to␠`mz_clusters.id`.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠source.␠Corresponds␠to␠`mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠granted␠on␠the␠source.
+create_sql  text  The␠`CREATE`␠SQL␠statement␠for␠the␠source.
+redacted_create_sql  text  The␠redacted␠`CREATE`␠SQL␠statement␠for␠the␠source.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_types' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_storage_usage' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  category  text
-6  owner_id  text
-7  privileges  mz_aclitem[]
-8  create_sql  text
-9  redacted_create_sql  text
+object_id  text  The␠ID␠of␠the␠table,␠source,␠or␠materialized␠view.
+size_bytes  uint8  The␠number␠of␠storage␠bytes␠used␠by␠the␠object.
+collection_timestamp  timestamp␠with␠time␠zone  The␠time␠at␠which␠storage␠usage␠of␠the␠object␠was␠assessed.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_views' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_system_privileges' ORDER BY position
 ----
-1  id  text
-2  oid  oid
-3  schema_id  text
-4  name  text
-5  definition  text
-6  owner_id  text
-7  privileges  mz_aclitem[]
-8  create_sql  text
-9  redacted_create_sql  text
+privileges  mz_aclitem  The␠privileges␠belonging␠to␠the␠system.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_tables' ORDER BY position
+----
+id  text  Materialize's␠unique␠ID␠for␠the␠table.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠table.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠table␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠table.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠table.␠Corresponds␠to␠`mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠table.
+create_sql  text  The␠`CREATE`␠SQL␠statement␠for␠the␠table.
+redacted_create_sql  text  The␠redacted␠`CREATE`␠SQL␠statement␠for␠the␠table.
+source_id  text  The␠ID␠of␠the␠source␠associated␠with␠the␠table,␠if␠any.␠Corresponds␠to␠`mz_sources.id`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_timezone_abbreviations' ORDER BY position
+----
+abbreviation  text  The␠timezone␠abbreviation.
+utc_offset  interval  The␠UTC␠offset␠of␠the␠timezone␠or␠`NULL`␠if␠fixed.
+dst  boolean  Whether␠the␠timezone␠is␠in␠daylight␠savings␠or␠`NULL`␠if␠fixed.
+timezone_name  text  The␠full␠name␠of␠the␠non-fixed␠timezone␠or␠`NULL`␠if␠not␠fixed.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_timezone_names' ORDER BY position
+----
+name  text  The␠timezone␠name.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_types' ORDER BY position
+----
+id  text  Materialize's␠unique␠ID␠for␠the␠type.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠type.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠type␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠type.
+category  text  The␠category␠of␠the␠type.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠type.␠Corresponds␠to␠`mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠type.
+create_sql  text  The␠`CREATE`␠SQL␠statement␠for␠the␠type.
+redacted_create_sql  text  The␠redacted␠`CREATE`␠SQL␠statement␠for␠the␠type.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_views' ORDER BY position
+----
+id  text  Materialize's␠unique␠ID␠for␠the␠view.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠view.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠view␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+name  text  The␠name␠of␠the␠view.
+definition  text  The␠view␠definition␠(a␠`SELECT`␠query).
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠view.␠Corresponds␠to␠`mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠view.
+create_sql  text  The␠`CREATE`␠SQL␠statement␠for␠the␠view.
+redacted_create_sql  text  The␠redacted␠`CREATE`␠SQL␠statement␠for␠the␠view.
 
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_catalog') ORDER BY object
@@ -405,6 +451,7 @@ mz_array_types
 mz_audit_events
 mz_aws_privatelink_connections
 mz_base_types
+mz_cluster_replica_frontiers
 mz_cluster_replica_sizes
 mz_cluster_replicas
 mz_clusters
@@ -414,17 +461,21 @@ mz_databases
 mz_default_privileges
 mz_egress_ips
 mz_functions
+mz_iceberg_sinks
 mz_index_columns
 mz_indexes
 mz_kafka_connections
 mz_kafka_sinks
+mz_kafka_sources
 mz_list_types
 mz_map_types
 mz_materialized_views
 mz_objects
 mz_operators
 mz_pseudo_types
+mz_recent_storage_usage
 mz_relations
+mz_role_auth
 mz_role_members
 mz_role_parameters
 mz_roles

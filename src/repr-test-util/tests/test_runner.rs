@@ -9,9 +9,10 @@
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use mz_lowertest::{deserialize_optional_generic, tokenize};
     use mz_ore::str::separated;
-    use mz_repr::ScalarType;
+    use mz_repr::SqlScalarType;
     use mz_repr_test_util::*;
 
     fn build_datum(s: &str) -> Result<String, String> {
@@ -43,8 +44,8 @@ mod tests {
                 .next()
                 .ok_or_else(|| "Empty row spec".to_string())?,
         )?;
-        let scalar_types: Option<Vec<ScalarType>> =
-            deserialize_optional_generic(&mut stream_iter, "Vec<ScalarType>")?;
+        let scalar_types: Option<Vec<SqlScalarType>> =
+            deserialize_optional_generic(&mut stream_iter, "Vec<SqlScalarType>")?;
         let scalar_types = if let Some(scalar_types) = scalar_types {
             scalar_types
         } else {
@@ -53,7 +54,7 @@ mod tests {
                 .map(|l| get_scalar_type_or_default(l, &mut std::iter::empty()))
                 .collect::<Result<Vec<_>, String>>()?
         };
-        let row = test_spec_to_row(litvals.iter().map(|s| &s[..]).zip(scalar_types.iter()))?;
+        let row = test_spec_to_row(litvals.iter().map(|s| &s[..]).zip_eq(scalar_types.iter()))?;
         let roundtrip_litvals = row
             .unpack()
             .into_iter()
@@ -73,7 +74,7 @@ mod tests {
         }
     }
 
-    fn build_scalar_type(s: &str) -> Result<ScalarType, String> {
+    fn build_scalar_type(s: &str) -> Result<SqlScalarType, String> {
         get_scalar_type_or_default("", &mut tokenize(s)?.into_iter())
     }
 

@@ -7,25 +7,39 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test cluster isolation by introducing faults of various kinds in cluster1 and
+then making sure that cluster2 continues to operate properly
+"""
+
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import UIError
 from materialize.util import selected_by_name
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
-    Materialized(propagate_crashes=False),
+    Materialized(
+        propagate_crashes=False,
+        additional_system_parameter_defaults={
+            "unsafe_enable_unsafe_functions": "true",
+            "unsafe_enable_unstable_dependencies": "true",
+        },
+        support_external_clusterd=True,
+    ),
     Clusterd(name="clusterd_1_1"),
     Clusterd(name="clusterd_1_2"),
     Clusterd(name="clusterd_2_1"),
@@ -53,9 +67,6 @@ disruptions = [
         name="pause-in-materialized-view",
         disruption=lambda c: c.testdrive(
             """
-$[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unstable_dependencies = true;
-
 > SET cluster=cluster1
 
 > CREATE TABLE sleep_table (sleep INTEGER);
@@ -94,15 +105,12 @@ contains: statement timeout
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Test cluster isolation by introducing faults of various kinds in cluster1
-    and then making sure that cluster2 continues to operate properly
-    """
 
     parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
 
     args = parser.parse_args()
 
-    c.up("zookeeper", "kafka", "schema-registry")
+    c.up("kafka", "schema-registry")
     for id, disruption in enumerate(selected_by_name(args.disruptions, disruptions)):
         run_test(c, disruption, id)
 
@@ -206,22 +214,24 @@ A
 
 > CREATE SOURCE source1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source1-${testdrive.seed}')
+
+> CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-source1-${testdrive.seed}")
   FORMAT BYTES
 
-> SELECT * FROM source1
+> SELECT * FROM source1_tbl
 A
-
-# TODO: This should be made reliable without sleeping, #25479
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
 
 # Sinks
 > CREATE SINK sink1 FROM v1mat
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink1')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
+  KEY (c1) NOT ENFORCED
+  FORMAT JSON
+  ENVELOPE UPSERT
 
-$ kafka-verify-data format=avro sink=materialize.public.sink1 sort-messages=true
-{"before": null, "after": {"row":{"c1": 3}}}
+# Note: nothing constrains Materialize to _start_ the sink from the most recent timestamp, but it should
+# eventually reflect the latest count.
+$ kafka-verify-data format=json key=false sink=materialize.public.sink1 partial-search=10
+{"c1": 3}
 """,
     )
 
@@ -229,46 +239,64 @@ $ kafka-verify-data format=avro sink=materialize.public.sink1 sort-messages=true
 def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     print(f"+++ Running disruption scenario {disruption.name}")
 
-    c.up("testdrive", persistent=True)
-    c.up("materialized", "clusterd_1_1", "clusterd_1_2", "clusterd_2_1", "clusterd_2_2")
-
-    c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-            STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-            COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
-        ));
-        """
-    )
-
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster2 CASCADE;
-        CREATE CLUSTER cluster2 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-            STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-            COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
-        ));
-        """
-    )
-
     with c.override(
         Testdrive(
             no_reset=True,
             materialize_params={"cluster": "cluster2"},
             seed=id,
-        )
+        ),
+        Clusterd(
+            name="clusterd_1_1",
+            process_names=["clusterd_1_1", "clusterd_1_2"],
+        ),
+        Clusterd(
+            name="clusterd_1_2",
+            process_names=["clusterd_1_1", "clusterd_1_2"],
+        ),
+        Clusterd(
+            name="clusterd_2_1",
+            process_names=["clusterd_2_1", "clusterd_2_2"],
+        ),
+        Clusterd(
+            name="clusterd_2_2",
+            process_names=["clusterd_2_1", "clusterd_2_2"],
+        ),
     ):
+        c.up(
+            "materialized",
+            "clusterd_1_1",
+            "clusterd_1_2",
+            "clusterd_2_1",
+            "clusterd_2_2",
+            Service("testdrive", idle=True),
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql("""
+            DROP CLUSTER IF EXISTS cluster1 CASCADE;
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
+                STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+                COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+            ));
+            """)
+
+        c.sql("""
+            DROP CLUSTER IF EXISTS cluster2 CASCADE;
+            CREATE CLUSTER cluster2 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
+                STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+                COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
+            ));
+            """)
+
         populate(c)
 
         # Disrupt cluster1 by some means

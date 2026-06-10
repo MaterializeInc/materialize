@@ -16,10 +16,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use derivative::Derivative;
-use futures::future::Shared;
 use futures::FutureExt;
+use futures::future::Shared;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use lru::LruCache;
+use mz_auth::Authenticated;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -97,6 +98,9 @@ impl Authenticator {
         // See this conversation [0] from the Materialize–Frontegg shared Slack
         // channel on 1 January 2024.
         //
+        // NOTE we do validate that the tenantId claim matches the expected tenant_id
+        // in order to ensure that the JWT was created for the specific environment.
+        //
         // [0]: https://materializeinc.slack.com/archives/C02940WNMRQ/p1704131331041669
         validation.validate_aud = false;
 
@@ -146,7 +150,7 @@ impl Authenticator {
                         return Err(anyhow::anyhow!(
                             "expected exactly one of --frontegg-jwk or --frontegg-jwk-file"
                         )
-                        .into())
+                        .into());
                     }
                 };
                 AuthenticatorConfig {
@@ -174,12 +178,16 @@ impl Authenticator {
         &self,
         expected_user: &str,
         password: &str,
-    ) -> Result<AuthSessionHandle, Error> {
+        group_claim: Option<&str>,
+    ) -> Result<(AuthSessionHandle, Authenticated), Error> {
         let password: AppPassword = password.parse()?;
-        match self.authenticate_inner(expected_user, password).await {
+        match self
+            .authenticate_inner(expected_user, password, group_claim)
+            .await
+        {
             Ok(handle) => {
                 tracing::debug!("authentication successful");
-                Ok(handle)
+                Ok((handle, Authenticated))
             }
             Err(e) => {
                 tracing::debug!(error = ?e, "authentication failed");
@@ -193,6 +201,7 @@ impl Authenticator {
         &self,
         expected_user: &str,
         password: AppPassword,
+        group_claim: Option<&str>,
     ) -> Result<AuthSessionHandle, Error> {
         let request = {
             let mut sessions = self.inner.active_sessions.lock().expect("lock poisoned");
@@ -201,7 +210,7 @@ impl Authenticator {
                 Some(AuthSession::Active {
                     ident,
                     external_metadata_tx,
-                    ..
+                    groups_tx,
                 }) => {
                     tracing::debug!(?password.client_id, "joining active session");
 
@@ -216,6 +225,7 @@ impl Authenticator {
                     return Ok(AuthSessionHandle {
                         ident: Arc::clone(ident),
                         external_metadata_rx: external_metadata_tx.subscribe(),
+                        groups_rx: groups_tx.subscribe(),
                         authenticator: Arc::clone(&self.inner),
                         app_password: password,
                     });
@@ -241,8 +251,11 @@ impl Authenticator {
                     let request: Pin<Box<AuthFuture>> = Box::pin({
                         let inner = Arc::clone(&self.inner);
                         let expected_user = String::from(expected_user);
+                        let group_claim = group_claim.map(String::from);
                         async move {
-                            let result = inner.authenticate(expected_user, password).await;
+                            let result = inner
+                                .authenticate(expected_user, password, group_claim)
+                                .await;
 
                             // Make sure our AuthSession state is correct.
                             //
@@ -313,8 +326,12 @@ impl Authenticator {
         &self,
         token: &str,
         expected_user: Option<&str>,
-    ) -> Result<ValidatedClaims, Error> {
-        self.inner.validate_access_token(token, expected_user)
+        group_claim: Option<&str>,
+    ) -> Result<(ValidatedClaims, Authenticated), Error> {
+        let claims = self
+            .inner
+            .validate_access_token(token, expected_user, group_claim)?;
+        Ok((claims, Authenticated))
     }
 }
 
@@ -338,6 +355,10 @@ impl Authenticator {
 pub struct AuthSessionHandle {
     ident: Arc<AuthSessionIdent>,
     external_metadata_rx: watch::Receiver<ExternalUserMetadata>,
+    /// Receiver for group memberships, updated on every token refresh so
+    /// callers reading via [`AuthSessionHandle::groups`] see at-most-one-refresh
+    /// stale data even when joining a long-lived cached session.
+    groups_rx: watch::Receiver<Option<Vec<String>>>,
     /// Hold a handle to the [`AuthenticatorInner`] so we can record when this session was dropped.
     authenticator: Arc<AuthenticatorInner>,
     /// Used to record when the session linked with this [`AppPassword`] was dropped.
@@ -353,6 +374,15 @@ impl AuthSessionHandle {
     /// Returns the ID of the tenant that created the session.
     pub fn tenant_id(&self) -> Uuid {
         self.ident.tenant_id
+    }
+
+    /// Returns the groups extracted from the most recently refreshed JWT's
+    /// group claim, used for JWT group-to-role sync. `None` if the claim was
+    /// absent; `Some(vec![])` if present but empty; `Some(vec![...])`
+    /// otherwise. Refreshed by the background task on every token renewal so
+    /// cached sessions observe bounded-staleness group membership changes.
+    pub fn groups(&self) -> Option<Vec<String>> {
+        self.groups_rx.borrow().clone()
     }
 
     /// Mints a receiver for updates to the session user's external metadata.
@@ -409,9 +439,12 @@ impl AuthenticatorInner {
         self: &Arc<Self>,
         expected_user: String,
         password: AppPassword,
+        group_claim: Option<String>,
     ) -> Result<AuthSessionHandle, Error> {
         // Attempt initial app password exchange.
-        let mut claims = self.exchange_app_password(&expected_user, password).await?;
+        let mut claims = self
+            .exchange_app_password(&expected_user, password, group_claim.as_deref())
+            .await?;
 
         // Prep session information.
         let ident = Arc::new(AuthSessionIdent {
@@ -421,6 +454,8 @@ impl AuthenticatorInner {
         let external_metadata = claims.to_external_user_metadata();
         let (external_metadata_tx, external_metadata_rx) = watch::channel(external_metadata);
         let external_metadata_tx = Arc::new(external_metadata_tx);
+        let (groups_tx, groups_rx) = watch::channel(claims.groups.clone());
+        let groups_tx = Arc::new(groups_tx);
 
         // Store session to make it available for future requests to latch on
         // to.
@@ -431,6 +466,7 @@ impl AuthenticatorInner {
                 AuthSession::Active {
                     ident: Arc::clone(&ident),
                     external_metadata_tx: Arc::clone(&external_metadata_tx),
+                    groups_tx: Arc::clone(&groups_tx),
                 },
             );
         }
@@ -441,8 +477,7 @@ impl AuthenticatorInner {
             let inner = Arc::clone(self);
             async move {
                 tracing::debug!(?password.client_id, "starting refresh task");
-                let gauge = inner.metrics.refresh_tasks_active.with_label_values(&[]);
-                gauge.inc();
+                inner.metrics.refresh_tasks_active.inc();
 
                 loop {
                     let valid_for = Duration::try_from_secs_i64(claims.exp - inner.now.as_secs())
@@ -503,7 +538,9 @@ impl AuthenticatorInner {
                     );
 
                     // We still have interest, attempt to refresh the session.
-                    let res = inner.exchange_app_password(&expected_user, password).await;
+                    let res = inner
+                        .exchange_app_password(&expected_user, password, group_claim.as_deref())
+                        .await;
                     claims = match res {
                         Ok(claims) => {
                             tracing::debug!("refresh successful");
@@ -518,6 +555,7 @@ impl AuthenticatorInner {
                         admin: claims.is_admin,
                         user_id: claims.user_id,
                     });
+                    groups_tx.send_replace(claims.groups.clone());
                 }
 
                 // The session has expired. Clean up the state.
@@ -531,7 +569,7 @@ impl AuthenticatorInner {
                 }
 
                 tracing::debug!(?password.client_id, "shutting down refresh task");
-                gauge.dec();
+                inner.metrics.refresh_tasks_active.dec();
             }
         });
 
@@ -539,6 +577,7 @@ impl AuthenticatorInner {
         Ok(AuthSessionHandle {
             ident,
             external_metadata_rx,
+            groups_rx,
             authenticator: Arc::clone(self),
             app_password: password,
         })
@@ -549,6 +588,7 @@ impl AuthenticatorInner {
         &self,
         expected_user: &str,
         password: AppPassword,
+        group_claim: Option<&str>,
     ) -> Result<ValidatedClaims, Error> {
         let req = ApiTokenArgs {
             client_id: password.client_id,
@@ -558,13 +598,14 @@ impl AuthenticatorInner {
             .client
             .exchange_client_secret_for_token(req, &self.admin_api_token_url, &self.metrics)
             .await?;
-        self.validate_access_token(&res.access_token, Some(expected_user))
+        self.validate_access_token(&res.access_token, Some(expected_user), group_claim)
     }
 
     fn validate_access_token(
         &self,
         token: &str,
         expected_user: Option<&str>,
+        group_claim: Option<&str>,
     ) -> Result<ValidatedClaims, Error> {
         let msg = jsonwebtoken::decode::<Claims>(token, &self.decoding_key, &self.validation)?;
         if msg.claims.exp < self.now.as_secs() {
@@ -582,6 +623,11 @@ impl AuthenticatorInner {
             validate_user(user, expected_user)?;
         }
 
+        // Resolve the configured group claim path against the JWT for
+        // group-to-role sync. Skip extraction entirely if the caller doesn't
+        // need groups (e.g. balancerd, which only routes by tenant_id).
+        let groups = group_claim.and_then(|p| msg.claims.groups(p));
+
         Ok(ValidatedClaims {
             exp: msg.claims.exp,
             user: user.to_string(),
@@ -589,7 +635,8 @@ impl AuthenticatorInner {
             tenant_id: msg.claims.tenant_id,
             // The user is an administrator if they have the admin role that the
             // `Authenticator` has been configured with.
-            is_admin: msg.claims.roles.iter().any(|r| *r == self.admin_role),
+            is_admin: msg.claims.roles.contains(&self.admin_role),
+            groups,
             _private: (),
         })
     }
@@ -622,6 +669,11 @@ enum AuthSession {
     Active {
         ident: Arc<AuthSessionIdent>,
         external_metadata_tx: Arc<watch::Sender<ExternalUserMetadata>>,
+        /// Groups extracted from the most recent JWT's group claim. Updated
+        /// on every token refresh by the background task, so cached sessions
+        /// see bounded-staleness group membership changes (the staleness
+        /// window is the token refresh cadence).
+        groups_tx: Arc<watch::Sender<Option<Vec<String>>>>,
     },
 }
 
@@ -692,6 +744,12 @@ pub struct Claims {
     pub permissions: Vec<String>,
     /// Metadata embedded in the JWT.
     pub metadata: Option<ClaimMetadata>,
+    /// JWT claims that aren't captured by the strongly-typed fields above.
+    /// The dyncfg-configurable `GROUP_CLAIM` path is resolved against this
+    /// bag (e.g. the default `groups` claim is read from here via
+    /// [`Claims::groups`]).
+    #[serde(flatten)]
+    pub unknown_claims: BTreeMap<String, serde_json::Value>,
 }
 
 impl Claims {
@@ -733,6 +791,13 @@ impl Claims {
             ClaimTokenType::TenantApiToken => Ok(self.sub),
         }
     }
+
+    /// Returns the user's group memberships extracted from the JWT claim at
+    /// `claim_path` for group-to-role sync. See
+    /// [`mz_auth::group_claims::extract_groups`] for semantics.
+    pub fn groups(&self, claim_path: &str) -> Option<Vec<String>> {
+        mz_auth::group_claims::extract_groups(&self.unknown_claims, claim_path)
+    }
 }
 
 /// [`Claims`] that have been validated by
@@ -754,6 +819,10 @@ pub struct ValidatedClaims {
     pub tenant_id: Uuid,
     /// Whether the authenticated user is an administrator.
     pub is_admin: bool,
+    /// Groups extracted from the configured JWT group claim. `None` if the
+    /// claim is absent (skip sync); `Some([])` if present but empty (revoke
+    /// all sync-granted roles); `Some([...])` otherwise.
+    pub groups: Option<Vec<String>>,
     // Prevent construction outside of `Authenticator::validate_access_token`.
     _private: (),
 }
@@ -805,9 +874,54 @@ fn validate_user(user: &str, expected_user: &str) -> Result<(), Error> {
 }
 
 const fn bool_as_str(x: bool) -> &'static str {
-    if x {
-        "true"
-    } else {
-        "false"
+    if x { "true" } else { "false" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn claims_with(unknown: serde_json::Value) -> Claims {
+        let mut claims = Claims {
+            exp: 0,
+            email: None,
+            iss: String::new(),
+            sub: Uuid::nil(),
+            user_id: None,
+            tenant_id: Uuid::nil(),
+            roles: Vec::new(),
+            permissions: Vec::new(),
+            token_type: ClaimTokenType::UserToken,
+            metadata: None,
+            unknown_claims: BTreeMap::new(),
+        };
+        if let serde_json::Value::Object(map) = unknown {
+            for (k, v) in map {
+                claims.unknown_claims.insert(k, v);
+            }
+        }
+        claims
+    }
+
+    #[mz_ore::test]
+    fn groups_absent_returns_none() {
+        let claims = claims_with(json!({}));
+        assert_eq!(claims.groups("groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn groups_empty_returns_some_empty() {
+        let claims = claims_with(json!({"groups": []}));
+        assert_eq!(claims.groups("groups"), Some(vec![]));
+    }
+
+    #[mz_ore::test]
+    fn groups_populated_returns_some_values() {
+        let claims = claims_with(json!({"groups": ["analytics", "engineering"]}));
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["analytics".to_string(), "engineering".to_string()])
+        );
     }
 }

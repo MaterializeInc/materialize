@@ -24,27 +24,12 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-# The crates whose dependency graphs we want to lint.
-entrypoints=(
-    mz-clusterd
-    mz-environmentd
-)
-
 # Explicitly name targets to check dependencies. We support Apple and Linux on ARM64 and x86_64.
 targets=(
     aarch64-apple-darwin
     x86_64-apple-darwin
     aarch64-unknown-linux-gnu
     x86_64-unknown-linux-gnu
-)
-
-# List of crates to include in the dependency lint, including an explanation why they're listed.
-crates=(
-    # Checks that the default allocator is jemalloc on supported platforms, but can
-    # be disabled using --no-default-features or explicitly enabled with --features=jemalloc
-    tikv_jemalloc_ctl
-    tikv_jemallocator
-    tikv_jemalloc_sys
 )
 
 if [[ "$(uname -s)" = Darwin ]]; then
@@ -89,15 +74,40 @@ function deps() {
 
 ci_uncollapsed_heading "Linting dependencies -- if the check fails, consult ci/test/lint-deps/README.md"
 
+################################################
+# Jemalloc lints
+################################################
+
+# List of crates to include in the dependency lint, including an explanation why they're listed.
+crates=(
+    # Checks that the default allocator is jemalloc on supported platforms, but can
+    # be disabled using --no-default-features or explicitly enabled with --features=jemalloc
+    tikv_jemalloc_ctl
+    tikv_jemallocator
+    tikv_jemalloc_sys
+    # Checks that foundationdb is not included unless explicitly enabled, unless on Linux,
+    # here it's enabled by default.
+    foundationdb
+)
+
+# The crates whose dependency graphs we want to lint.
+entrypoints=(
+    mz-clusterd
+    mz-environmentd
+    mz-materialized
+)
+
 for target in "${targets[@]}"; do
     if $rewrite; then
         deps > "$resources/$target-default"
         deps --no-default-features > "$resources/$target-no-default-features"
         deps --features jemalloc > "$resources/$target-jemalloc"
+        deps --features foundationdb > "$resources/$target-foundationdb"
     else
         try diff "$resources/$target-default" <(deps)
         try diff "$resources/$target-no-default-features" <(deps --no-default-features)
         try diff "$resources/$target-jemalloc" <(deps --features jemalloc)
+        try diff "$resources/$target-foundationdb" <(deps --features foundationdb)
     fi
 done
 

@@ -10,13 +10,13 @@
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
-use futures::{sink, SinkExt, TryStreamExt};
+use futures::{SinkExt, TryStreamExt, sink};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
-    parse_frame_len, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, Pgbuf,
-    MAX_REQUEST_SIZE,
+    Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, MAX_REQUEST_SIZE, Pgbuf,
+    parse_frame_len,
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
 use tokio_util::codec::{Decoder, Encoder, Framed};
@@ -50,9 +50,6 @@ where
     /// The underlying connection, `inner`, is expected to be something like a
     /// TCP stream. Anything that implements [`AsyncRead`] and [`AsyncWrite`]
     /// will do.
-    ///
-    /// The supplied `conn_id` is used to identify the connection in logging
-    /// messages.
     pub fn new(inner: Conn<A>) -> FramedConn<A> {
         FramedConn {
             inner: Framed::new(inner, Codec::new()).buffer(32),
@@ -103,7 +100,7 @@ impl<A> FramedConn<A>
 where
     A: AsyncRead + AsyncWrite + Unpin,
 {
-    pub fn inner(&mut self) -> &Conn<A> {
+    pub fn inner(&self) -> &Conn<A> {
         self.inner.get_ref().get_ref()
     }
     pub fn inner_mut(&mut self) -> &mut Conn<A> {
@@ -143,7 +140,27 @@ impl Default for Codec {
 impl Encoder<BackendMessage> for Codec {
     type Error = io::Error;
 
+    /// Encode a backend message into `dst`.
+    /// If this function returns an error result, `dst` is left unmodified.
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // Record the starting position so we can truncate on error.
+        // This prevents partial messages from being left in the buffer,
+        // which could be sent to the client and cause "lost synchronization" errors.
+        let start = dst.len();
+        match self.encode_inner(msg, dst) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                dst.truncate(start);
+                Err(e)
+            }
+        }
+    }
+}
+
+impl Codec {
+    /// This is the meat of the encoding logic. It's a separate function so that errors returned by
+    /// `?` can be handled in the outer `encode` function.
+    fn encode_inner(&self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
         // Write type byte.
         let byte = match &msg {
             BackendMessage::AuthenticationCleartextPassword => b'R',
@@ -201,7 +218,7 @@ impl Encoder<BackendMessage> for Codec {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;

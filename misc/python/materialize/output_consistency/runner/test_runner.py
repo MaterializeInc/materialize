@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -29,7 +28,6 @@ from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
 from materialize.output_consistency.output.output_printer import OutputPrinter
-from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.runner.time_guard import TimeGuard
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.status.test_summary import (
@@ -74,9 +72,16 @@ class ConsistencyTestRunner:
         self.output_printer = output_printer
 
     def setup(self) -> None:
+        self.input_data.assign_columns_to_tables(
+            self.config.vertical_join_tables, self.randomized_picker
+        )
+
         self.execution_manager.setup_database_objects(
             self.input_data, self.evaluation_strategies
         )
+
+        # reset cache after having assigned columns to tables as a precaution
+        self.input_data.types_input.cached_max_value_count_per_table_index.clear()
 
     def start(self) -> ConsistencyTestSummary:
         expression_count = 0
@@ -93,9 +98,11 @@ class ConsistencyTestRunner:
             self.output_printer.start_section("Running predefined queries")
             success = self._run_predefined_queries(test_summary)
 
-            if not success and self.config.fail_fast:
+            if not success and (
+                test_summary.count_failures() >= self.config.max_failures_until_abort
+            ):
                 self.output_printer.print_info(
-                    "Ending test run because the of a comparison mismatch in predefined queries (fail_fast mode)"
+                    f"Ending test run because {test_summary.count_failures()} failures occurred"
                 )
                 return test_summary
         else:
@@ -123,8 +130,8 @@ class ConsistencyTestRunner:
                 expression_count, time_guard
             )
 
-            expression, number_of_args = self.expression_generator.generate_expression(
-                operation
+            expression, number_of_args = (
+                self.expression_generator.generate_expression_for_operation(operation)
             )
             test_summary.accept_expression_generation_statistics(
                 operation, expression, number_of_args
@@ -164,18 +171,22 @@ class ConsistencyTestRunner:
         self, test_summary: ConsistencyTestSummary, time_guard: TimeGuard
     ) -> bool:
         """
-        :return: if a mismatch occurred
+        :return: if the test run should be aborted
         """
         queries = self.query_generator.consume_queries(test_summary)
 
         for query in queries:
             if ENABLE_ADDING_WHERE_CONDITIONS:
-                self._add_random_where_condition(query)
+                self.query_generator.add_random_where_condition_to_query(
+                    query, test_summary
+                )
             success = self.execution_manager.execute_query(query, test_summary)
 
-            if not success and self.config.fail_fast:
+            if not success and (
+                test_summary.count_failures() >= self.config.max_failures_until_abort
+            ):
                 self.output_printer.print_info(
-                    "Ending test run because the first comparison mismatch has occurred (fail_fast mode)"
+                    f"Ending test run because {test_summary.count_failures()} failures occurred"
                 )
                 return True
             if time_guard.shall_abort():
@@ -185,26 +196,6 @@ class ConsistencyTestRunner:
                 return False
 
         return False
-
-    def _add_random_where_condition(self, query: QueryTemplate) -> None:
-        if not self.randomized_picker.random_boolean(
-            probability.GENERATE_WHERE_EXPRESSION
-        ):
-            return
-
-        where_expression = self.expression_generator.generate_boolean_expression(
-            False, query.storage_layout
-        )
-
-        if where_expression is None:
-            return
-
-        ignore_verdict = self.ignore_filter.shall_ignore_expression(
-            where_expression, query.row_selection
-        )
-
-        if not ignore_verdict.ignore:
-            query.where_expression = where_expression
 
     def _shall_abort(self, iteration_count: int, time_guard: TimeGuard) -> bool:
         if (
@@ -237,7 +228,11 @@ class ConsistencyTestRunner:
             )
             all_passed = all_passed and query_succeeded
 
-            if not query_succeeded and self.config.fail_fast:
+            if (
+                not query_succeeded
+                and test_summary.count_failures()
+                >= self.config.max_failures_until_abort
+            ):
                 return False
 
         self.output_printer.print_status(

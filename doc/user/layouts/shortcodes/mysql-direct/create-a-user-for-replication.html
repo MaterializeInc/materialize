@@ -12,6 +12,8 @@ user for Materialize with sufficient privileges to manage replication.
    ALTER USER 'materialize'@'%' REQUIRE SSL;
    ```
 
+   IAM authentication with AWS RDS for MySQL is also supported.  See the [Amazon RDS User Guide](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html) for instructions on enabling IAM database authentication, creating IAM policies, and creating a database account.
+
 1. Grant the user permission to manage replication:
 
    ```mysql

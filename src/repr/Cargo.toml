@@ -26,74 +26,74 @@ name = "data_types"
 harness = false
 
 [dependencies]
-anyhow = "1.0.66"
-arrow = { version = "51.0.0", default-features = false }
-bitflags = "1.3.2"
-bytes = "1.3.0"
-cfg-if = "1.0.0"
-columnation = { git = "https://github.com/frankmcsherry/columnation" }
-chrono = { version = "0.4.35", default-features = false, features = ["serde", "std"] }
-chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
-compact_bytes = "0.1.2"
-dec = "0.4.8"
-differential-dataflow = "0.12.0"
-enum_dispatch = "0.3.11"
-enum-kinds = "0.5.1"
-fast-float = "0.2.0"
-flatcontainer = "0.4.1"
-hex = "0.4.3"
-itertools = "0.10.5"
-once_cell = "1.16.0"
-mz-lowertest = { path = "../lowertest" }
+anyhow.workspace = true
+arrow.workspace = true
+bitflags.workspace = true
+bytemuck.workspace = true
+bytes.workspace = true
+cfg-if.workspace = true
+columnar.workspace = true
+columnation.workspace = true
+chrono.workspace = true
+compact_bytes.workspace = true
+dec = { workspace = true, features = ["serde"] }
+differential-dataflow.workspace = true
+enum-kinds.workspace = true
+hex.workspace = true
+itertools.workspace = true
+mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = [
-    "bytes_",
-    "flatcontainer",
+    "bytes",
     "id_gen",
     "smallvec",
     "region",
     "stack",
     "test",
-    "tracing_",
+    "tracing",
 ], default-features = false }
 mz-persist-types = { path = "../persist-types", default-features = false }
 mz-pgtz = { path = "../pgtz", default-features = false }
 mz-proto = { path = "../proto", features = ["chrono"], default-features = false }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
-num-traits = "0.2.15"
-num_enum = "0.5.7"
-ordered-float = { version = "4.2.0", features = ["serde"] }
-postgres-protocol = { version = "0.6.5" }
-prost = { version = "0.13.1", features = ["no-recursion-limit"] }
-regex = "1.7.0"
-ryu = "1.0.12"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = { version = "1.0.89", features = ["arbitrary_precision", "preserve_order"] }
-smallvec = { version = "1.10.0", features = ["serde", "union"] }
-static_assertions = "1.1"
-strsim = "0.10"
-timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
-tokio-postgres = { version = "0.7.8" }
-tracing-core = "0.1.30"
-url = { version = "2.3.1", features = ["serde"] }
-uuid = { version = "1.7.0", features = ["serde"] }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
-thiserror = "1.0.37"
-tracing = { version = "0.1.37" }
+mz-timely-util = { path = "../timely-util", default-features = false }
+num-traits.workspace = true
+num_enum.workspace = true
+ordered-float.workspace = true
+postgres-protocol.workspace = true
+prost.workspace = true
+regex.workspace = true
+ryu.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["arbitrary_precision", "preserve_order"] }
+smallvec = { workspace = true, features = ["serde", "union"] }
+static_assertions.workspace = true
+strsim.workspace = true
+timely.workspace = true
+tokio-postgres.workspace = true
+tracing-core.workspace = true
+url = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["serde"] }
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
+thiserror.workspace = true
+tracing.workspace = true
 
-# for the tracing_ feature
-tracing-subscriber = { version = "0.3.16", default-features = false, optional = true }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+# for the tracing feature
+tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.4.0" }
-insta = { version = "1.33.0", features = ["json"] }
+bincode.workspace = true
+criterion.workspace = true
+insta.workspace = true
 mz-persist = { path = "../persist" }
-rand = "0.8.5"
+mz-repr = { path = ".", features = ["proptest"] }
+proptest.workspace = true
+proptest-derive.workspace = true
+rand.workspace = true
 
 [build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.1"
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
+prost-build.workspace = true
 
 [features]
 default = [
@@ -101,9 +101,6 @@ default = [
     "mz-persist-types/default",
     "mz-pgtz/default",
     "mz-proto/default",
-    "workspace-hack",
-]
-tracing_ = ["tracing-subscriber"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+    ]
+proptest = ["dep:proptest", "dep:proptest-derive"]
+tracing = ["tracing-subscriber"]

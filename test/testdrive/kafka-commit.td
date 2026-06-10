@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 # Test that the source ingestion pipeline commits offsets back to Kafka with
 # the expected group ID.
@@ -26,14 +28,18 @@ three
 # `materialize-$ENVIRONMENTID-$CONNECTIONID-$SOURCEID`.
 
 > CREATE CLUSTER topic_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE topic
   IN CLUSTER topic_cluster
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}'
   )
-  FORMAT BYTES
 
-> SELECT * from topic
+> CREATE TABLE topic_tbl FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
+  FORMAT BYTES
+> COMMIT
+
+> SELECT * from topic_tbl
 one
 two
 three
@@ -42,7 +48,7 @@ $ set-from-sql var=consumer-group-id
 SELECT
   ks.group_id_prefix
 FROM mz_sources s
-JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
+JOIN mz_catalog.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
 
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0
@@ -52,15 +58,19 @@ $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partiti
 
 # Test than an arbitrary prefix can be prepended to the consumer group.
 
+> BEGIN
 > CREATE SOURCE topic
   IN CLUSTER topic_cluster
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}',
     GROUP ID PREFIX 'OVERRIDE-'
   )
-  FORMAT BYTES
 
-> SELECT * from topic
+> CREATE TABLE topic_tbl FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
+  FORMAT BYTES
+> COMMIT
+
+> SELECT * from topic_tbl
 one
 two
 three
@@ -69,7 +79,7 @@ $ set-from-sql var=consumer-group-id
 SELECT
   ks.group_id_prefix
 FROM mz_sources s
-JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
+JOIN mz_catalog.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
 
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0

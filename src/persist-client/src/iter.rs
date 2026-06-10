@@ -9,200 +9,324 @@
 
 //! Code for iterating through one or more parts, including streaming consolidation.
 
-use anyhow::anyhow;
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use anyhow::anyhow;
+use arrow::array::{Array, Int64Array};
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use mz_dyncfg::Config;
+use futures_util::stream::FuturesUnordered;
+use itertools::Itertools;
+use mz_ore::soft_assert_eq_or_log;
 use mz_ore::task::JoinHandle;
+use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
-use mz_persist_types::Codec64;
+use mz_persist::metrics::ColumnarMetrics;
+use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd};
+use mz_persist_types::columnar::data_type;
+use mz_persist_types::part::Part;
+use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::progress::Timestamp;
-use tracing::{debug_span, Instrument};
+use tracing::{Instrument, debug_span};
 
-use crate::fetch::{Cursor, EncodedPart, FetchBatchFilter};
-use crate::internal::metrics::{ReadMetrics, ShardMetrics};
-use crate::internal::paths::WriterKey;
-use crate::internal::state::BatchPart;
-use crate::metrics::Metrics;
 use crate::ShardId;
+use crate::fetch::{EncodedPart, FetchBatchFilter, FetchConfig};
+use crate::internal::encoding::Schemas;
+use crate::internal::metrics::{ReadMetrics, ShardMetrics};
+use crate::internal::state::{HollowRun, RunMeta, RunOrder, RunPart};
+use crate::metrics::Metrics;
 
 /// Versions prior to this had bugs in consolidation, or used a different sort. However,
 /// we can assume that consolidated parts at this version or higher were consolidated
 /// according to the current definition.
 pub const MINIMUM_CONSOLIDATED_VERSION: Version = Version::new(0, 67, 0);
 
-type Tuple<T, D> = ((Vec<u8>, Vec<u8>), T, D);
-type TupleRef<'a, T, D> = (&'a [u8], &'a [u8], T, D);
-
-fn borrow_tuple<T: Clone, D: Clone>(((k, v), t, d): &Tuple<T, D>) -> TupleRef<T, D> {
-    (k.as_slice(), v.as_slice(), t.clone(), d.clone())
-}
-
-fn clone_tuple<T, D>((k, v, t, d): TupleRef<T, D>) -> Tuple<T, D> {
-    ((k.to_vec(), v.to_vec()), t, d)
-}
-
 /// The data needed to fetch a batch part, bundled up to make it easy
 /// to send between threads.
-#[derive(Debug)]
-pub(crate) enum FetchData<T> {
-    Unfetched {
-        part_desc: Description<T>,
-        part: BatchPart<T>,
-    },
-    AlreadyFetched,
+#[derive(Debug, Clone)]
+pub(crate) struct FetchData<T> {
+    run_meta: RunMeta,
+    part_desc: Description<T>,
+    part: RunPart<T>,
+    structured_lower: Option<ArrayBound>,
 }
 
-impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
-    /// Returns true iff we were using a different ordering for data or timestamps
-    /// when the part was created. This means parts or runs may not be ordered according to
-    /// our modern definition, even if the metadata indicates they've been compacted before.
-    fn wrong_sort(&self) -> bool {
-        let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
-        match self {
-            FetchData::Unfetched { part, .. } => match part.writer_key() {
-                // Old hollow parts may have used a different sort
-                Some(key) => key < min_version,
-                // Inline parts are all recent enough to have been sorted using the latest ordering,
-                // if they're sorted at all.
-                None => false,
+pub(crate) trait RowSort<T, D> {
+    fn updates_from_blob(&self, updates: BlobTraceUpdates) -> StructuredUpdates;
+
+    fn updates_to_blob(&self, updates: StructuredUpdates) -> Part;
+}
+
+fn interleave_updates<T: Codec64, D: Codec64>(
+    updates: &[&Part],
+    elements: impl IntoIterator<Item = (Indices, T, D)>,
+) -> Part {
+    let (indices, timestamps, diffs): (Vec<_>, Vec<_>, Vec<_>) = elements
+        .into_iter()
+        .map(|(idx, t, d)| {
+            (
+                idx,
+                i64::from_le_bytes(T::encode(&t)),
+                i64::from_le_bytes(D::encode(&d)),
+            )
+        })
+        .multiunzip();
+
+    let mut arrays: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+    let mut interleave = |get_array: fn(&Part) -> &dyn Array| {
+        arrays.clear();
+        for part in updates {
+            arrays.push(get_array(part));
+        }
+        ::arrow::compute::interleave(arrays.as_slice(), &indices).expect("type-aligned input")
+    };
+
+    let key = interleave(|p| &*p.key);
+    let val = interleave(|p| &*p.val);
+    Part {
+        key,
+        val,
+        time: Int64Array::from(timestamps),
+        diff: Int64Array::from(diffs),
+    }
+}
+
+/// An opaque update set for use by StructuredSort.
+#[derive(Clone, Debug)]
+pub struct StructuredUpdates {
+    key_ord: ArrayOrd,
+    val_ord: ArrayOrd,
+    data: Part,
+}
+
+impl StructuredUpdates {
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    fn get<T: Codec64, D: Codec64>(&self, index: usize) -> Option<(SortKV<'_>, T, D)> {
+        let t = self.data.time.values().get(index)?.to_le_bytes();
+        let d = self.data.diff.values().get(index)?.to_le_bytes();
+        Some((
+            (self.key_ord.at(index), Some(self.val_ord.at(index))),
+            T::decode(t),
+            D::decode(d),
+        ))
+    }
+
+    fn interleave_updates<'a, T: Codec64, D: Codec64>(
+        updates: &[&'a StructuredUpdates],
+        elements: impl IntoIterator<Item = (Indices, SortKV<'a>, T, D)>,
+    ) -> StructuredUpdates {
+        let updates: Vec<_> = updates.iter().map(|u| &u.data).collect();
+        let interleaved = interleave_updates(
+            &updates,
+            elements.into_iter().map(|(idx, _, t, d)| (idx, t, d)),
+        );
+        let key_ord = ArrayOrd::new(interleaved.key.as_ref());
+        let val_ord = ArrayOrd::new(interleaved.val.as_ref());
+        StructuredUpdates {
+            key_ord,
+            val_ord,
+            data: interleaved,
+        }
+    }
+}
+
+/// Sort parts ordered by the codec-encoded key and value columns.
+#[derive(Debug, Clone)]
+pub struct StructuredSort<K: Codec, V: Codec, T, D> {
+    schemas: Schemas<K, V>,
+    _time_diff: PhantomData<fn(T, D)>,
+}
+
+impl<K: Codec, V: Codec, T, D> StructuredSort<K, V, T, D> {
+    /// A sort for structured data with the given schema.
+    pub fn new(schemas: Schemas<K, V>) -> Self {
+        Self {
+            schemas,
+            _time_diff: Default::default(),
+        }
+    }
+}
+
+type SortKV<'a> = (ArrayIdx<'a>, Option<ArrayIdx<'a>>);
+
+fn kv_lower<T>(data: &FetchData<T>) -> Option<SortKV<'_>> {
+    let key_idx = data.structured_lower.as_ref().map(|l| l.get())?;
+    Some((key_idx, None))
+}
+
+fn kv_size((key, value): SortKV<'_>) -> usize {
+    key.goodbytes() + value.map_or(0, |v| v.goodbytes())
+}
+
+impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSort<K, V, T, D> {
+    fn updates_from_blob(&self, mut updates: BlobTraceUpdates) -> StructuredUpdates {
+        let structured = updates
+            .get_or_make_structured::<K, V>(&*self.schemas.key, &*self.schemas.val)
+            .clone();
+        soft_assert_eq_or_log!(
+            Some(structured.key.data_type()),
+            data_type::<K>(&*self.schemas.key).ok().as_ref(),
+            "migrated key type should match"
+        );
+        soft_assert_eq_or_log!(
+            Some(structured.val.data_type()),
+            data_type::<V>(&*self.schemas.val).ok().as_ref(),
+            "migrated val type should match"
+        );
+        let key_ord = ArrayOrd::new(&structured.key);
+        let val_ord = ArrayOrd::new(&structured.val);
+        StructuredUpdates {
+            key_ord,
+            val_ord,
+            data: Part {
+                key: structured.key,
+                val: structured.val,
+                time: updates.timestamps().clone(),
+                diff: updates.diffs().clone(),
             },
-            FetchData::AlreadyFetched => false,
         }
     }
 
-    fn take(&mut self) -> Self {
-        mem::replace(self, FetchData::AlreadyFetched)
+    fn updates_to_blob(&self, updates: StructuredUpdates) -> Part {
+        updates.data
     }
+}
 
-    fn key_lower(&self) -> &[u8] {
-        match self {
-            FetchData::Unfetched { part, .. } => part.key_lower(),
-            FetchData::AlreadyFetched => &[],
-        }
-    }
+type FetchResult<T> = Result<EncodedPart<T>, HollowRun<T>>;
 
+impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     async fn fetch(
         self,
+        cfg: &FetchConfig,
         shard_id: ShardId,
         blob: &dyn Blob,
         metrics: &Metrics,
         shard_metrics: &ShardMetrics,
         read_metrics: &ReadMetrics,
-    ) -> anyhow::Result<EncodedPart<T>> {
-        match self {
-            FetchData::Unfetched {
-                part_desc, part, ..
-            } => EncodedPart::fetch(
-                &shard_id,
-                &*blob,
-                metrics,
-                shard_metrics,
-                read_metrics,
-                &part_desc,
-                &part,
-            )
-            .await
-            .map_err(|blob_key| anyhow!("missing unleased key {blob_key}")),
-            FetchData::AlreadyFetched => Err(anyhow!("attempt to fetch an already-fetched part")),
+    ) -> anyhow::Result<FetchResult<T>> {
+        match self.part {
+            RunPart::Single(part) => {
+                let part = EncodedPart::fetch(
+                    cfg,
+                    &shard_id,
+                    &*blob,
+                    metrics,
+                    shard_metrics,
+                    read_metrics,
+                    &self.part_desc,
+                    &part,
+                )
+                .await
+                .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"))?;
+                Ok(Ok(part))
+            }
+            RunPart::Many(run_ref) => {
+                let runs = run_ref
+                    .get(shard_id, blob, metrics)
+                    .await
+                    .ok_or_else(|| anyhow!("missing run ref {}", run_ref.key))?;
+                Ok(Err(runs))
+            }
+        }
+    }
+}
+
+/// Indices into a part. For most parts, all we need is a single index to the current entry...
+/// but for parts that have never been consolidated, this would return entries in the "wrong"
+/// order, and it's expensive to re-sort the columnar data. Instead, we sort a list of indices
+/// and then use this helper to hand them out in the correct order.
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Default)]
+struct PartIndices {
+    sorted_indices: VecDeque<usize>,
+    next_index: usize,
+}
+
+impl PartIndices {
+    fn index(&self) -> usize {
+        self.sorted_indices
+            .front()
+            .copied()
+            .unwrap_or(self.next_index)
+    }
+
+    fn inc(&mut self) {
+        if self.sorted_indices.pop_front().is_none() {
+            self.next_index += 1;
         }
     }
 }
 
 #[derive(Debug)]
-pub(crate) enum ConsolidationPart<T, D> {
+enum ConsolidationPart<T, D> {
     Queued {
         data: FetchData<T>,
-    },
-    Prefetched {
-        handle: JoinHandle<anyhow::Result<EncodedPart<T>>>,
-        wrong_sort: bool,
-        key_lower: Vec<u8>,
+        task: Option<JoinHandle<anyhow::Result<FetchResult<T>>>>,
+        _diff: PhantomData<D>,
     },
     Encoded {
-        part: EncodedPart<T>,
-        cursor: Cursor,
-    },
-    /// A part that was not necessarily in sorted order.
-    /// We store the original part along with a bunch of "pointers" into it that _are_ in sorted
-    /// order / in a convenient format for our streaming iterator. (For lifetimey reasons, these
-    /// are stored as [Cursor]s instead of ordinary references.)
-    Sorted {
-        part: EncodedPart<T>,
-        cursors: VecDeque<(Cursor, T, D)>,
+        part: StructuredUpdates,
+        cursor: PartIndices,
     },
 }
 
-impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> ConsolidationPart<T, D> {
+impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
     pub(crate) fn from_encoded(
         part: EncodedPart<T>,
-        filter: &'a FetchBatchFilter<T>,
         force_reconsolidation: bool,
+        metrics: &ColumnarMetrics,
+        sort: &impl RowSort<T, D>,
     ) -> Self {
-        let mut cursor = Cursor::default();
-        if part.maybe_unconsolidated() || force_reconsolidation {
-            let mut cursors = vec![];
+        let reconsolidate = part.maybe_unconsolidated() || force_reconsolidation;
+        let updates = part.normalize(metrics);
+        let updates: StructuredUpdates = sort.updates_from_blob(updates);
+        let cursor = if reconsolidate {
+            let len = updates.len();
+            let mut indices: Vec<_> = (0..len).collect();
 
-            // For every valid entry in the encoded part, keep a cursor and the decoded T/D.
-            while let Some((_, _, mut t, d)) = cursor.peek(&part) {
-                if filter.filter_ts(&mut t) {
-                    cursors.push((cursor.clone(), t, D::decode(d)));
-                }
-                cursor.advance(&part);
-            }
+            indices.sort_by_key(|i| updates.get::<T, D>(*i).map(|(kv, t, _d)| (kv, t)));
 
-            // Sort the cursors by the data that they point to.
-            let kvt = |(cursor, t, _): &(Cursor, T, D)| {
-                cursor.get(&part).map(move |(k, v, _, _)| (k, v, t.clone()))
-            };
-            cursors.sort_by(|a, b| kvt(a).cmp(&kvt(b)));
-
-            ConsolidationPart::Sorted {
-                part,
-                cursors: cursors.into(),
+            PartIndices {
+                sorted_indices: indices.into(),
+                next_index: len,
             }
         } else {
-            ConsolidationPart::Encoded { part, cursor }
+            PartIndices::default()
+        };
+
+        ConsolidationPart::Encoded {
+            part: updates,
+            cursor,
         }
     }
 
-    fn kvt_lower(&mut self) -> Option<(&[u8], &[u8], T)> {
+    fn kvt_lower(&self) -> Option<(SortKV<'_>, T)> {
         match self {
-            ConsolidationPart::Queued { data } => Some((data.key_lower(), &[], T::minimum())),
-            ConsolidationPart::Prefetched { key_lower, .. } => {
-                Some((key_lower.as_slice(), &[], T::minimum()))
-            }
+            ConsolidationPart::Queued { data, .. } => Some((kv_lower(data)?, T::minimum())),
             ConsolidationPart::Encoded { part, cursor } => {
-                let (k, v, t, _) = cursor.peek(part)?;
-                Some((k, v, t))
-            }
-            ConsolidationPart::Sorted { part, cursors } => {
-                let (cursor, t, _) = cursors.front()?;
-                let (k, v, _, _) = cursor.get(part)?;
-                Some((k, v, t.clone()))
+                let (kv, t, _d) = part.get::<T, D>(cursor.index())?;
+                Some((kv, t))
             }
         }
     }
 
     /// This requires a mutable pointer because the cursor may need to scan ahead to find the next
     /// valid record.
-    pub(crate) fn is_empty(&mut self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         match self {
-            ConsolidationPart::Encoded { part, cursor, .. } => cursor.peek(part).is_none(),
-            ConsolidationPart::Sorted { cursors, .. } => cursors.is_empty(),
-            ConsolidationPart::Queued { .. } | ConsolidationPart::Prefetched { .. } => false,
+            ConsolidationPart::Encoded { part, cursor, .. } => cursor.index() >= part.len(),
+            ConsolidationPart::Queued { .. } => false,
         }
     }
 }
@@ -222,9 +346,11 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub(crate) struct Consolidator<T, D> {
+pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     context: String,
+    cfg: FetchConfig,
     shard_id: ShardId,
+    sort: Sort,
     blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
@@ -232,60 +358,82 @@ pub(crate) struct Consolidator<T, D> {
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
-    split_old_runs: bool,
+    /// An optional exclusive lower bound for the KVTs that this consolidator will return.
+    /// This can be used to filter out KVTs that are not strictly larger than the bound
+    /// when "resuming" a consolidation run during incremental compaction.
+    lower_bound: Option<LowerBound<T>>,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
-    // (and thus consolidate) may not have been fetched yet. Let's call such a KVT an "incomplete"
-    // tuple. These two fields are used to "carry over" incomplete tuples between calls
-    // to `next`: `initial_state` is used to pass an incomplete tuple to the next round of
-    // consolidation, and `drop_stash` is used to stow any incomplete tuple when the consolidating
-    // iter is dropped.
-    initial_state: Option<Tuple<T, D>>,
-    drop_stash: Option<Tuple<T, D>>,
+    // may not have been fetched yet. The `drop_stash` gives us somewhere
+    // to store the streaming iterator's work-in-progress state between runs.
+    drop_stash: Option<StructuredUpdates>,
 }
 
-pub(crate) const SPLIT_OLD_RUNS: Config<bool> = Config::new(
-    "persist_split_old_runs",
-    true,
-    "If set, split up runs that were written by older versions of Materialize and may not truly be consolidated."
-);
+#[derive(Debug)]
+/// An owned lower bound type that can be exchanged for a SortKV and a timestamp.
+pub struct LowerBound<T> {
+    pub(crate) key_bound: ArrayBound,
+    pub(crate) val_bound: ArrayBound,
+    pub(crate) t: T,
+}
 
-impl<T, D> Consolidator<T, D>
+impl<T: Clone> LowerBound<T> {
+    /// Get a reference to the key and value bounds, along with the timestamp.
+    pub fn kvt_bound(&self) -> (SortKV<'_>, T) {
+        (
+            (self.key_bound.get(), Some(self.val_bound.get())),
+            self.t.clone(),
+        )
+    }
+}
+
+impl<T, D, Sort> Consolidator<T, D, Sort>
 where
     T: Timestamp + Codec64 + Lattice,
-    D: Codec64 + Semigroup + Ord,
+    D: Codec64 + Monoid + Ord,
+    Sort: RowSort<T, D>,
 {
     /// Create a new [Self] instance with the given prefetch budget. This budget is a "soft limit"
     /// on the size of the parts that the consolidator will fetch... we'll try and stay below the
     /// limit, but may burst above it if that's necessary to make progress.
     pub fn new(
         context: String,
+        cfg: FetchConfig,
         shard_id: ShardId,
+        sort: Sort,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         read_metrics: ReadMetrics,
         filter: FetchBatchFilter<T>,
+        lower_bound: Option<LowerBound<T>>,
         prefetch_budget_bytes: usize,
-        split_old_runs: bool,
     ) -> Self {
         Self {
             context,
+            cfg,
             metrics,
             shard_id,
+            sort,
             blob,
             read_metrics: Arc::new(read_metrics),
             shard_metrics,
             runs: vec![],
             filter,
             budget: prefetch_budget_bytes,
-            split_old_runs,
-            initial_state: None,
             drop_stash: None,
+            lower_bound,
         }
     }
+}
 
+impl<T, D, Sort> Consolidator<T, D, Sort>
+where
+    T: Timestamp + Codec64 + Lattice + Sync,
+    D: Codec64 + Monoid + Ord,
+    Sort: RowSort<T, D>,
+{
     /// Add another run of data to be consolidated.
     ///
     /// To ensure consolidation, every tuple in this run should be larger than any tuple already
@@ -295,33 +443,22 @@ where
     pub fn enqueue_run(
         &mut self,
         desc: &Description<T>,
-        parts: impl IntoIterator<Item = BatchPart<T>>,
+        run_meta: &RunMeta,
+        parts: impl IntoIterator<Item = RunPart<T>>,
     ) {
         let run = parts
             .into_iter()
             .map(|part| {
                 let bytes = part.encoded_size_bytes();
-                let c_part = match part {
-                    BatchPart::Inline {
-                        updates,
-                        ts_rewrite,
-                        ..
-                    } => {
-                        let part = EncodedPart::from_inline(
-                            &*self.metrics,
-                            (*self.read_metrics).clone(),
-                            desc.clone(),
-                            &updates,
-                            ts_rewrite.as_ref(),
-                        );
-                        ConsolidationPart::from_encoded(part, &self.filter, true)
-                    }
-                    part => ConsolidationPart::Queued {
-                        data: FetchData::Unfetched {
-                            part_desc: desc.clone(),
-                            part,
-                        },
+                let c_part = ConsolidationPart::Queued {
+                    data: FetchData {
+                        run_meta: run_meta.clone(),
+                        part_desc: desc.clone(),
+                        structured_lower: part.structured_key_lower(),
+                        part,
                     },
+                    task: None,
+                    _diff: Default::default(),
                 };
                 (c_part, bytes)
             })
@@ -334,18 +471,17 @@ where
         // runs if we change our sort order or have bugs, for example. Defend against this by
         // splitting up a run if it contains possibly-unconsolidated parts.
         let wrong_sort = run.iter().any(|(p, _)| match p {
-            ConsolidationPart::Queued { data } => data.wrong_sort(),
-            ConsolidationPart::Prefetched { wrong_sort, .. } => *wrong_sort,
-            // ConsolidationPart::from_encoded will only keep the original part if the sort is correct.
+            ConsolidationPart::Queued { data, .. } => {
+                data.run_meta.order != Some(RunOrder::Structured)
+            }
             ConsolidationPart::Encoded { .. } => false,
-            ConsolidationPart::Sorted { .. } => false,
         });
 
         if wrong_sort {
             self.metrics.consolidation.wrong_sort.inc();
         }
 
-        if run.len() > 1 && wrong_sort && self.split_old_runs {
+        if run.len() > 1 && wrong_sort {
             for part in run {
                 self.runs.push(VecDeque::from([part]));
             }
@@ -370,36 +506,38 @@ where
     /// Return an iterator over the next consolidated chunk of output, if there's any left.
     ///
     /// Requirement: at least the first part of each run should be fetched and nonempty.
-    fn iter(&mut self) -> Option<ConsolidatingIter<T, D>> {
-        // At this point, the `initial_state` of the previously-returned iterator has either been
-        // fully consolidated and returned, or put back into `drop_stash`. In either case, this is
-        // safe to overwrite.
-        self.initial_state = self.drop_stash.take();
-        if self.initial_state.is_none() && self.runs.is_empty() {
+    fn iter(&mut self) -> Option<ConsolidatingIter<'_, T, D>> {
+        // If an incompletely-consolidated part has been stashed by the last iterator,
+        // push that into state as a new run.
+        // One might worry about the list of runs growing indefinitely, if we're adding a new
+        // run to the list every iteration... but since this part has the smallest tuples
+        // of any run, it should be fully processed by the next consolidation step.
+        if let Some(part) = self.drop_stash.take() {
+            self.runs.push(VecDeque::from_iter([(
+                ConsolidationPart::Encoded {
+                    part,
+                    cursor: PartIndices::default(),
+                },
+                0,
+            )]));
+        }
+
+        if self.runs.is_empty() {
             return None;
         }
 
-        let mut iter = ConsolidatingIter::new(
-            &self.context,
-            self.initial_state.as_ref().map(borrow_tuple),
-            &mut self.drop_stash,
-        );
+        let bound = self.lower_bound.as_ref().map(|b| b.kvt_bound());
+        let mut iter =
+            ConsolidatingIter::new(&self.context, &self.filter, bound, &mut self.drop_stash);
 
         for run in &mut self.runs {
             let last_in_run = run.len() < 2;
             if let Some((part, _)) = run.front_mut() {
                 match part {
                     ConsolidationPart::Encoded { part, cursor } => {
-                        iter.push(
-                            ConsolidationPartIter::encoded(part, cursor, &self.filter),
-                            last_in_run,
-                        );
+                        iter.push(part, cursor, last_in_run);
                     }
-                    ConsolidationPart::Sorted { part, cursors } => {
-                        iter.push(ConsolidationPartIter::Sorted { part, cursors }, last_in_run);
-                    }
-                    other @ ConsolidationPart::Queued { .. }
-                    | other @ ConsolidationPart::Prefetched { .. } => {
+                    other @ ConsolidationPart::Queued { .. } => {
                         // We don't want the iterator to return anything at or above this bound,
                         // since it might require data that we haven't fetched yet.
                         if let Some(bound) = other.kvt_lower() {
@@ -419,64 +557,99 @@ where
     ///
     /// Returns success when we've successfully fetched enough parts to be able to make progress.
     async fn unblock_progress(&mut self) -> anyhow::Result<()> {
-        let global_lower = self
-            .runs
-            .iter_mut()
-            .filter_map(|run| run.front_mut().and_then(|(part, _)| part.kvt_lower()))
-            .min();
-
-        let Some((k, v, t)) = global_lower else {
+        if self.runs.is_empty() {
             return Ok(());
-        };
-        let (k, v) = (k.to_vec(), v.to_vec());
-        let global_lower = (k.as_slice(), v.as_slice(), t);
+        }
+        self.runs
+            .sort_by(|a, b| a[0].0.kvt_lower().cmp(&b[0].0.kvt_lower()));
 
-        let mut ready_futures: FuturesUnordered<_> = self
-            .runs
+        let first_larger = {
+            let run = &self.runs[0];
+            let min_lower = run[0].0.kvt_lower();
+            self.runs
+                .iter()
+                .position(|q| q[0].0.kvt_lower() > min_lower)
+                .unwrap_or(self.runs.len())
+        };
+
+        let mut ready_futures: FuturesUnordered<_> = self.runs[0..first_larger]
             .iter_mut()
             .map(|run| async {
-                let part = &mut run.front_mut().expect("trimmed run should be nonempty").0;
-                match part.kvt_lower() {
-                    Some(lower) if lower > global_lower => return Ok(false),
-                    _ => {}
-                }
-                match part {
-                    ConsolidationPart::Queued { data } => {
-                        self.metrics.compaction.parts_waited.inc();
-                        self.metrics.consolidation.parts_fetched.inc();
-                        let wrong_sort = data.wrong_sort();
-                        *part = ConsolidationPart::from_encoded(
-                            data.take()
+                // It's possible for there to be multiple layers of indirection between us and the first available encoded part:
+                // if the first part is a `HollowRuns`, we'll need to fetch both that and the first part in the run to have data
+                // to consolidate. So: we loop, and bail out of the loop when either the first part in the run is available or we
+                // hit some unrecoverable error.
+                loop {
+                    let (mut part, size) = run.pop_front().expect("trimmed run should be nonempty");
+
+                    let ConsolidationPart::Queued { data, task, .. } = &mut part else {
+                        run.push_front((part, size));
+                        return Ok(true);
+                    };
+
+                    let is_prefetched = task.as_ref().map_or(false, |t| t.is_finished());
+                    if is_prefetched {
+                        self.metrics.compaction.parts_prefetched.inc();
+                    } else {
+                        self.metrics.compaction.parts_waited.inc()
+                    }
+                    self.metrics.consolidation.parts_fetched.inc();
+
+                    let wrong_sort = data.run_meta.order != Some(RunOrder::Structured);
+                    let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
+                        Some(handle) => handle.await,
+                        None => {
+                            data.clone()
                                 .fetch(
+                                    &self.cfg,
                                     self.shard_id,
                                     &*self.blob,
                                     &*self.metrics,
                                     &*self.shard_metrics,
                                     &self.read_metrics,
                                 )
-                                .await?,
-                            &self.filter,
-                            wrong_sort,
-                        );
-                    }
-                    ConsolidationPart::Prefetched {
-                        handle, wrong_sort, ..
-                    } => {
-                        if handle.is_finished() {
-                            self.metrics.compaction.parts_prefetched.inc();
-                        } else {
-                            self.metrics.compaction.parts_waited.inc()
+                                .await
                         }
-                        self.metrics.consolidation.parts_fetched.inc();
-                        *part = ConsolidationPart::from_encoded(
-                            handle.await??,
-                            &self.filter,
-                            *wrong_sort,
-                        );
+                    };
+                    match fetch_result {
+                        Err(err) => {
+                            run.push_front((part, size));
+                            return Err(err);
+                        }
+                        Ok(Err(run_part)) => {
+                            // Since we're pushing these onto the _front_ of the queue, we need to
+                            // iterate in reverse order.
+                            for part in run_part.parts.into_iter().rev() {
+                                let structured_lower = part.structured_key_lower();
+                                let size = part.max_part_bytes();
+                                run.push_front((
+                                    ConsolidationPart::Queued {
+                                        data: FetchData {
+                                            run_meta: data.run_meta.clone(),
+                                            part_desc: data.part_desc.clone(),
+                                            part,
+                                            structured_lower,
+                                        },
+                                        task: None,
+                                        _diff: Default::default(),
+                                    },
+                                    size,
+                                ));
+                            }
+                        }
+                        Ok(Ok(part)) => {
+                            run.push_front((
+                                ConsolidationPart::from_encoded(
+                                    part,
+                                    wrong_sort,
+                                    &self.metrics.columnar,
+                                    &self.sort,
+                                ),
+                                size,
+                            ));
+                        }
                     }
-                    ConsolidationPart::Encoded { .. } | ConsolidationPart::Sorted { .. } => {}
                 }
-                Ok::<_, anyhow::Error>(true)
             })
             .collect();
 
@@ -498,10 +671,54 @@ where
     /// Wait until data is available, then return an iterator over the next
     /// consolidated chunk of output. If this method returns `None`, that all the data has been
     /// exhausted and the full consolidated dataset has been returned.
-    pub(crate) async fn next(&mut self) -> anyhow::Result<Option<ConsolidatingIter<T, D>>> {
+    #[allow(unused)]
+    pub(crate) async fn next(
+        &mut self,
+    ) -> anyhow::Result<Option<impl Iterator<Item = (SortKV<'_>, T, D)>>> {
         self.trim();
         self.unblock_progress().await?;
-        Ok(self.iter())
+        Ok(self.iter().map(|i| i.map(|(_idx, kv, t, d)| (kv, t, d))))
+    }
+
+    fn chunk(&mut self, max_len: usize, max_bytes: usize) -> Option<Part> {
+        let Some(mut iter) = self.iter() else {
+            return None;
+        };
+
+        let parts = iter.parts.clone();
+
+        // Keep a running estimate of the size left in the budget, returning None once
+        // budget is 0.
+        // Note that we can't use take_while here - that method drops the first non-matching
+        // element, but we want to leave any data that we don't return in state for future
+        // calls to `next`/`next_chunk`.
+        let mut budget = max_bytes;
+        let iter = std::iter::from_fn(move || {
+            if budget == 0 {
+                return None;
+            }
+            let update @ (_, kv, _, _) = iter.next()?;
+            // Budget for the K/V size plus two 8-byte Codec64 values.
+            budget = budget.saturating_sub(kv_size(kv) + 16);
+            Some(update)
+        });
+
+        let updates = StructuredUpdates::interleave_updates(&parts, iter.take(max_len));
+        let updates = self.sort.updates_to_blob(updates);
+        Some(updates)
+    }
+
+    /// Wait until data is available, then return an iterator over the next
+    /// consolidated chunk of output. If this method returns `None`, that all the data has been
+    /// exhausted and the full consolidated dataset has been returned.
+    pub(crate) async fn next_chunk(
+        &mut self,
+        max_len: usize,
+        max_bytes: usize,
+    ) -> anyhow::Result<Option<Part>> {
+        self.trim();
+        self.unblock_progress().await?;
+        Ok(self.chunk(max_len, max_bytes))
     }
 
     /// The size of the data that we _might_ be holding concurrently in memory. While this is
@@ -512,10 +729,9 @@ where
             .iter()
             .flat_map(|run| {
                 run.iter().map(|(part, size)| match part {
-                    ConsolidationPart::Queued { .. } => 0,
-                    ConsolidationPart::Prefetched { .. }
-                    | ConsolidationPart::Encoded { .. }
-                    | ConsolidationPart::Sorted { .. } => *size,
+                    ConsolidationPart::Queued { task: None, .. } => 0,
+                    ConsolidationPart::Queued { task: Some(_), .. }
+                    | ConsolidationPart::Encoded { .. } => *size,
                 })
             })
             .sum()
@@ -550,33 +766,36 @@ where
         for idx in 0..max_run_len {
             for run in self.runs.iter_mut() {
                 if let Some((c_part, size)) = run.get_mut(idx) {
-                    let data = match c_part {
-                        ConsolidationPart::Queued { data } => {
+                    let (data, task) = match c_part {
+                        ConsolidationPart::Queued { data, task, .. } if task.is_none() => {
                             check_budget(*size)?;
-                            data.take()
+                            (data, task)
                         }
                         _ => continue,
                     };
-                    let key_lower = data.key_lower().to_vec();
-                    let wrong_sort = data.wrong_sort();
                     let span = debug_span!("compaction::prefetch");
+                    let data = data.clone();
                     let handle = mz_ore::task::spawn(|| "persist::compaction::prefetch", {
                         let shard_id = self.shard_id;
                         let blob = Arc::clone(&self.blob);
                         let metrics = Arc::clone(&self.metrics);
                         let shard_metrics = Arc::clone(&self.shard_metrics);
                         let read_metrics = Arc::clone(&self.read_metrics);
+                        let fetch_config = self.cfg.clone();
                         async move {
-                            data.fetch(shard_id, &*blob, &*metrics, &*shard_metrics, &*read_metrics)
-                                .instrument(span)
-                                .await
+                            data.fetch(
+                                &fetch_config,
+                                shard_id,
+                                &*blob,
+                                &*metrics,
+                                &*shard_metrics,
+                                &*read_metrics,
+                            )
+                            .instrument(span)
+                            .await
                         }
                     });
-                    *c_part = ConsolidationPart::Prefetched {
-                        handle,
-                        wrong_sort,
-                        key_lower,
-                    };
+                    *task = Some(handle);
                 }
             }
         }
@@ -585,15 +804,15 @@ where
     }
 }
 
-impl<T, D> Drop for Consolidator<T, D> {
+impl<T, D, Sort: RowSort<T, D>> Drop for Consolidator<T, D, Sort> {
     fn drop(&mut self) {
         for run in &self.runs {
             for (part, _) in run {
                 match part {
-                    ConsolidationPart::Queued { .. } => {
+                    ConsolidationPart::Queued { task: None, .. } => {
                         self.metrics.consolidation.parts_skipped.inc();
                     }
-                    ConsolidationPart::Prefetched { .. } => {
+                    ConsolidationPart::Queued { task: Some(_), .. } => {
                         self.metrics.consolidation.parts_wasted.inc();
                     }
                     _ => {}
@@ -603,114 +822,10 @@ impl<T, D> Drop for Consolidator<T, D> {
     }
 }
 
-/// The mutable references in this iterator (the [Cursor] for an encoded part, or the set of cursors for a
-/// sorted one) point to state that outlives this iterator, and we take care not to advance them
-/// too eagerly.
-/// In particular, we only advance the cursor past a tuple when that tuple has been returned from
-/// a call to `next`.
-pub(crate) enum ConsolidationPartIter<'a, T: Timestamp, D> {
-    Encoded {
-        part: &'a EncodedPart<T>,
-        cursor: &'a mut Cursor,
-        filter: &'a FetchBatchFilter<T>,
-        // The tuple that would be returned by the next call to `cursor.peek`, with the timestamp
-        // advanced to the as-of.
-        next: Option<TupleRef<'a, T, D>>,
-    },
-    Sorted {
-        part: &'a EncodedPart<T>,
-        cursors: &'a mut VecDeque<(Cursor, T, D)>,
-    },
-}
-
-impl<'a, T: Timestamp, D: Debug> Debug for ConsolidationPartIter<'a, T, D> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConsolidationPartIter::Encoded {
-                part: _,
-                cursor,
-                filter: _,
-                next,
-            } => {
-                let mut f = f.debug_struct("Encoded");
-                f.field("cursor", cursor);
-                f.field("next", next);
-                f.finish()
-            }
-            ConsolidationPartIter::Sorted { part: _, cursors } => {
-                let mut f = f.debug_struct("Sorted");
-                f.field("cursors", &cursors.len());
-                f.finish()
-            }
-        }
-    }
-}
-
-impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPartIter<'a, T, D> {
-    fn encoded(
-        part: &'a EncodedPart<T>,
-        cursor: &'a mut Cursor,
-        filter: &'a FetchBatchFilter<T>,
-    ) -> ConsolidationPartIter<'a, T, D> {
-        let mut iter = Self::Encoded {
-            part,
-            cursor,
-            filter,
-            next: None,
-        };
-        iter.next(); // Advance to the next valid entry in the part
-        iter
-    }
-    fn peek(&self) -> Option<TupleRef<'a, T, D>> {
-        match self {
-            Self::Encoded { next, .. } => next.clone(),
-            Self::Sorted { part, cursors, .. } => {
-                let (cursor, t, d) = cursors.front()?;
-                let (k, v, _, _) = cursor.get(part)?;
-                Some((k, v, t.clone(), d.clone()))
-            }
-        }
-    }
-}
-
-impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> Iterator
-    for ConsolidationPartIter<'a, T, D>
-{
-    type Item = TupleRef<'a, T, D>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            ConsolidationPartIter::Encoded {
-                part,
-                cursor,
-                filter,
-                next,
-            } => {
-                let out = next.take();
-                if out.is_some() {
-                    cursor.advance(part);
-                }
-                *next = loop {
-                    match cursor.peek(part) {
-                        None => break None,
-                        Some((k, v, mut t, d)) => {
-                            if filter.filter_ts(&mut t) {
-                                break Some((k, v, t, D::decode(d)));
-                            }
-                        }
-                    }
-                    cursor.advance(part);
-                };
-                out
-            }
-            ConsolidationPartIter::Sorted { part, cursors, .. } => {
-                let (cursor, t, d) = cursors.pop_front()?;
-                let (k, v, _, _) = cursor.get(part)?;
-                Some((k, v, t, d))
-            }
-        }
-    }
-}
+/// A pair of indices, referencing a specific row in a specific part.
+/// In the consolidating iterator, this is used to track the coordinates of some part that
+/// holds a particular K and V.
+type Indices = (usize, usize);
 
 /// This is used as a max-heap entry: the ordering of the fields is important!
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
@@ -718,74 +833,104 @@ struct PartRef<'a, T: Timestamp, D> {
     /// The smallest KVT that might be emitted from this run in the future.
     /// This is reverse-sorted: Nones will sort largest (and be popped first on the heap)
     /// and smaller keys will be popped before larger keys.
-    next_kvt: Reverse<Option<(&'a [u8], &'a [u8], T)>>,
-    /// The index of the corresponding iterator.
-    index: usize,
+    next_kvt: Reverse<Option<(SortKV<'a>, T, D)>>,
+    /// The index of the corresponding part within the [ConsolidatingIter]'s list of parts.
+    part_index: usize,
+    /// The index of the next row within that part.
+    /// This is a mutable pointer to long-lived state; we must only advance this index once
+    /// we've rolled any rows before this index into our state.
+    row_index: &'a mut PartIndices,
     /// Whether / not the iterator for the part is the last in its run, or whether there may be
     /// iterators for the same part in the future.
     last_in_run: bool,
     _phantom: PhantomData<D>,
 }
 
-impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T, D> {
-    fn update_peek(&mut self, iter: &ConsolidationPartIter<'a, T, D>) {
-        let peek = iter.peek();
-        self.next_kvt = Reverse(peek.map(|(k, v, t, _)| (k, v, t)));
+impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Monoid> PartRef<'a, T, D> {
+    fn update_peek(&mut self, part: &'a StructuredUpdates, filter: &FetchBatchFilter<T>) {
+        let mut peek = part.get(self.row_index.index());
+        while let Some((_kv, t, _d)) = &mut peek {
+            let keep = filter.filter_ts(t);
+            if keep {
+                break;
+            } else {
+                self.row_index.inc();
+                peek = part.get(self.row_index.index());
+            }
+        }
+        self.next_kvt = Reverse(peek);
     }
 
-    fn pop(&mut self, from: &mut [ConsolidationPartIter<'a, T, D>]) -> Option<TupleRef<'a, T, D>> {
-        let iter = &mut from[self.index];
-        let popped = iter.next();
-        self.update_peek(iter);
-        popped
+    fn pop(
+        &mut self,
+        from: &[&'a StructuredUpdates],
+        filter: &FetchBatchFilter<T>,
+    ) -> Option<(Indices, SortKV<'a>, T, D)> {
+        let part = &from[self.part_index];
+        let Reverse(popped) = mem::take(&mut self.next_kvt);
+        let indices = (self.part_index, self.row_index.index());
+        self.row_index.inc();
+        self.update_peek(part, filter);
+        let (kv, t, d) = popped?;
+        Some((indices, kv, t, d))
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
+pub(crate) struct ConsolidatingIter<'a, T, D>
+where
+    T: Timestamp + Codec64,
+    D: Codec64,
+{
     context: &'a str,
-    parts: Vec<ConsolidationPartIter<'a, T, D>>,
+    filter: &'a FetchBatchFilter<T>,
+    parts: Vec<&'a StructuredUpdates>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
-    upper_bound: Option<(&'a [u8], &'a [u8], T)>,
-    state: Option<TupleRef<'a, T, D>>,
-    drop_stash: &'a mut Option<Tuple<T, D>>,
+    upper_bound: Option<(SortKV<'a>, T)>,
+    lower_bound: Option<(SortKV<'a>, T)>,
+    state: Option<(Indices, SortKV<'a>, T, D)>,
+    drop_stash: &'a mut Option<StructuredUpdates>,
 }
 
 impl<'a, T, D> ConsolidatingIter<'a, T, D>
 where
     T: Timestamp + Codec64 + Lattice,
-    D: Codec64 + Semigroup + Ord,
+    D: Codec64 + Monoid + Ord,
 {
-    pub fn new(
+    fn new(
         context: &'a str,
-        init_state: Option<TupleRef<'a, T, D>>,
-        drop_stash: &'a mut Option<Tuple<T, D>>,
+        filter: &'a FetchBatchFilter<T>,
+        lower_bound: Option<(SortKV<'a>, T)>,
+        drop_stash: &'a mut Option<StructuredUpdates>,
     ) -> Self {
         Self {
             context,
+            filter,
             parts: vec![],
             heap: BinaryHeap::new(),
             upper_bound: None,
-            state: init_state,
+            state: None,
             drop_stash,
+            lower_bound,
         }
     }
 
-    fn push(&mut self, iter: ConsolidationPartIter<'a, T, D>, last_in_run: bool) {
+    fn push(&mut self, iter: &'a StructuredUpdates, index: &'a mut PartIndices, last_in_run: bool) {
         let mut part_ref = PartRef {
             next_kvt: Reverse(None),
-            index: self.parts.len(),
+            part_index: self.parts.len(),
+            row_index: index,
             last_in_run,
             _phantom: Default::default(),
         };
-        part_ref.update_peek(&iter);
+        part_ref.update_peek(iter, self.filter);
         self.parts.push(iter);
         self.heap.push(part_ref);
     }
 
     /// Set an upper bound based on the stats from an unfetched part. If there's already
     /// an upper bound set, keep the most conservative / smallest one.
-    fn push_upper(&mut self, upper: (&'a [u8], &'a [u8], T)) {
+    fn push_upper(&mut self, upper: (SortKV<'a>, T)) {
         let update_bound = self
             .upper_bound
             .as_ref()
@@ -796,14 +941,14 @@ where
     }
 
     /// Attempt to consolidate as much into the current state as possible.
-    fn consolidate(&mut self) -> Option<TupleRef<'a, T, D>> {
+    fn consolidate(&mut self) -> Option<(Indices, SortKV<'a>, T, D)> {
         loop {
             let Some(mut part) = self.heap.peek_mut() else {
                 break;
             };
-            if let Some((k1, v1, t1)) = part.next_kvt.0.as_ref() {
-                if let Some((k0, v0, t0, d0)) = &mut self.state {
-                    let consolidates = match (*k0, *v0, &*t0).cmp(&(*k1, *v1, t1)) {
+            if let Some((kv1, t1, _)) = part.next_kvt.0.as_ref() {
+                if let Some((idx0, kv0, t0, d0)) = &mut self.state {
+                    let consolidates = match (*kv0, &*t0).cmp(&(*kv1, t1)) {
                         Ordering::Less => false,
                         Ordering::Equal => true,
                         Ordering::Greater => {
@@ -812,28 +957,41 @@ where
                             panic!(
                                 "data arrived at the consolidator out of order ({}, kvs equal? {}, {t0:?}, {t1:?})",
                                 self.context,
-                                (*k0, *v0) == (*k1, *v1)
+                                (*kv0) == (*kv1)
                             );
                         }
                     };
                     if consolidates {
-                        let (_, _, _, d1) = part
-                            .pop(&mut self.parts)
+                        let (idx1, _, _, d1) = part
+                            .pop(&self.parts, self.filter)
                             .expect("popping from a non-empty iterator");
                         d0.plus_equals(&d1);
+                        *idx0 = idx1;
                     } else {
                         break;
                     }
                 } else {
                     // Don't start consolidating a new KVT that's past our provided upper bound,
                     // since that data may also live in some unfetched part.
-                    if let Some((k0, v0, t0)) = &self.upper_bound {
-                        if (k0, v0, t0) <= (k1, v1, t1) {
+                    if let Some((kv0, t0)) = &self.upper_bound {
+                        if (kv0, t0) <= (kv1, t1) {
                             return None;
                         }
                     }
 
-                    self.state = part.pop(&mut self.parts);
+                    // Discard this KVT if it does not strictly exceed the lower bound.
+
+                    if let Some((kv_lower, t_lower)) = &self.lower_bound {
+                        if (kv_lower, t_lower) >= (kv1, t1) {
+                            // Discard this item from the part, since it's past our lower bound.
+                            let _ = part.pop(&self.parts, self.filter);
+
+                            // Continue to the next part, since it might still be relevant.
+                            continue;
+                        }
+                    }
+
+                    self.state = part.pop(&self.parts, self.filter);
                 }
             } else {
                 if part.last_in_run {
@@ -853,9 +1011,9 @@ where
 impl<'a, T, D> Iterator for ConsolidatingIter<'a, T, D>
 where
     T: Timestamp + Codec64 + Lattice,
-    D: Codec64 + Semigroup + Ord,
+    D: Codec64 + Monoid + Ord,
 {
-    type Item = TupleRef<'a, T, D>;
+    type Item = (Indices, SortKV<'a>, T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -867,11 +1025,18 @@ where
     }
 }
 
-impl<'a, T: Timestamp, D> Drop for ConsolidatingIter<'a, T, D> {
+impl<'a, T, D> Drop for ConsolidatingIter<'a, T, D>
+where
+    T: Timestamp + Codec64,
+    D: Codec64,
+{
     fn drop(&mut self) {
         // Make sure to stash any incomplete state in a place where we'll pick it up on the next run.
         // See the comment on `Consolidator` for more on why this is necessary.
-        *self.drop_stash = self.state.take().map(clone_tuple);
+        if let Some(update) = self.state.take() {
+            let part = StructuredUpdates::interleave_updates(&self.parts, [update]);
+            *self.drop_stash = Some(part);
+        }
     }
 }
 
@@ -881,37 +1046,59 @@ mod tests {
 
     use std::sync::Arc;
 
+    use crate::ShardId;
+    use crate::cfg::PersistConfig;
+    use crate::internal::paths::PartialBatchKey;
+    use crate::internal::state::{BatchPart, HollowBatchPart};
+    use crate::metrics::Metrics;
+    use arrow::array::BinaryArray;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist::indexed::columnar::ColumnarRecordsBuilder;
-    use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
+    use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::location::Blob;
     use mz_persist::mem::{MemBlob, MemBlobConfig};
+    use mz_persist_types::codec_impls::VecU8Schema;
+    use mz_persist_types::part::PartBuilder;
     use proptest::collection::vec;
     use proptest::prelude::*;
     use timely::progress::Antichain;
-
-    use crate::cfg::PersistConfig;
-    use crate::internal::paths::PartialBatchKey;
-    use crate::internal::state::HollowBatchPart;
-    use crate::metrics::Metrics;
-    use crate::ShardId;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn consolidation() {
         // Check that output consolidated via this logic matches output consolidated via timely's!
-        type Part = Vec<((Vec<u8>, Vec<u8>), u64, i64)>;
+        type Rows = Vec<((Vec<u8>, Vec<u8>), u64, i64)>;
 
-        fn check(metrics: &Arc<Metrics>, parts: Vec<(Part, usize)>) {
+        fn check(
+            metrics: &Arc<Metrics>,
+            parts: Vec<(Rows, usize)>,
+            lower_bound: (Vec<u8>, Vec<u8>, u64),
+        ) {
+            let schemas = Schemas {
+                id: None,
+                key: Arc::new(VecU8Schema),
+                val: Arc::new(VecU8Schema),
+            };
             let original = {
                 let mut rows = parts
                     .iter()
                     .flat_map(|(p, _)| p.clone())
+                    .filter(|((k, v), t, _)| {
+                        let (k_lower, v_lower, t_lower) = &lower_bound;
+                        // Discard any row not strictly past the lower bound.
+                        ((k_lower, v_lower), t_lower) < ((k, v), t)
+                    })
                     .collect::<Vec<_>>();
+
                 consolidate_updates(&mut rows);
-                rows
+                let mut builder = PartBuilder::new(&*schemas.key, &*schemas.val);
+                for ((k, v), t, d) in &rows {
+                    builder.push(k, v, *t, *d);
+                }
+                let part = builder.finish();
+                part
             };
             let filter = FetchBatchFilter::Compaction {
                 since: Antichain::from_elem(0),
@@ -921,11 +1108,25 @@ mod tests {
                 Antichain::new(),
                 Antichain::from_elem(0),
             );
+            let key_lower_bound_array = BinaryArray::from_vec(vec![&lower_bound.0]);
+            let val_lower_bound_array = BinaryArray::from_vec(vec![&lower_bound.1]);
+            let lower_bound = LowerBound {
+                key_bound: ArrayBound::new(Arc::new(key_lower_bound_array), 0),
+                val_bound: ArrayBound::new(Arc::new(val_lower_bound_array), 0),
+                t: lower_bound.2,
+            };
+            let sort: StructuredSort<Vec<u8>, Vec<u8>, u64, i64> =
+                StructuredSort::new(schemas.clone());
             let streaming = {
                 // Toy compaction loop!
+                let fetch_cfg = FetchConfig {
+                    validate_bounds_on_read: true,
+                };
                 let mut consolidator = Consolidator {
+                    cfg: fetch_cfg.clone(),
                     context: "test".to_string(),
                     shard_id: ShardId::new(),
+                    sort: sort.clone(),
                     blob: Arc::new(MemBlob::open(MemBlobConfig::default())),
                     metrics: Arc::clone(metrics),
                     shard_metrics: metrics.shards.shard(&ShardId::new(), "test"),
@@ -950,6 +1151,7 @@ mod tests {
                                         )));
                                     }
                                     let part = EncodedPart::new(
+                                        &fetch_cfg,
                                         metrics.read.snapshot.clone(),
                                         desc.clone(),
                                         "part",
@@ -962,30 +1164,39 @@ mod tests {
                                             ),
                                         },
                                     );
-                                    (ConsolidationPart::from_encoded(part, &filter, true), 0)
+                                    (
+                                        ConsolidationPart::from_encoded(
+                                            part,
+                                            true,
+                                            &metrics.columnar,
+                                            &sort,
+                                        ),
+                                        0,
+                                    )
                                 })
                                 .collect::<VecDeque<_>>()
                         })
                         .collect::<Vec<_>>(),
                     filter,
                     budget: 0,
-                    split_old_runs: true,
-                    initial_state: None,
                     drop_stash: None,
+                    lower_bound: Some(lower_bound),
                 };
 
                 let mut out = vec![];
                 loop {
                     consolidator.trim();
-                    let Some(iter) = consolidator.iter() else {
+                    let Some(chunk) = consolidator.chunk(1000, 1000) else {
                         break;
                     };
-                    out.extend(iter.map(clone_tuple));
+                    if chunk.len() > 0 {
+                        out.push(chunk);
+                    }
                 }
-                out
+                Part::concat(&out).expect("same schema")
             };
 
-            assert_eq!(original, streaming);
+            assert_eq!((original.len() > 0).then_some(original), streaming);
         }
 
         let metrics = Arc::new(Metrics::new(
@@ -999,9 +1210,10 @@ mod tests {
             ((key_gen.clone(), key_gen.clone()), 0..10u64, -3..=3i64),
             0..10,
         );
+        let kvt_gen = (key_gen.clone(), key_gen.clone(), 0..10u64);
         let run_gen = vec((part_gen, 0..10usize), 0..5);
-        proptest!(|(state in run_gen)| {
-            check(&metrics, state)
+        proptest!(|(state in run_gen, bound in kvt_gen)| {
+            check(&metrics, state, bound)
         });
     }
 
@@ -1024,40 +1236,55 @@ mod tests {
                 &MetricsRegistry::new(),
             ));
             let shard_metrics = metrics.shards.shard(&shard_id, "");
+            let sort: StructuredSort<Vec<u8>, Vec<u8>, _, _> = StructuredSort::new(Schemas {
+                id: None,
+                key: Arc::new(VecU8Schema),
+                val: Arc::new(VecU8Schema),
+            });
 
-            let mut consolidator: Consolidator<u64, i64> = Consolidator::new(
-                "test".to_string(),
-                shard_id,
-                blob,
-                Arc::clone(&metrics),
-                shard_metrics,
-                metrics.read.batch_fetcher.clone(),
-                FetchBatchFilter::Compaction {
-                    since: desc.since().clone(),
-                },
-                budget,
-                false,
-            );
+            let fetch_cfg = FetchConfig {
+                validate_bounds_on_read: true,
+            };
+
+            let mut consolidator: Consolidator<u64, i64, StructuredSort<_, _, _, _>> =
+                Consolidator::new(
+                    "test".to_string(),
+                    fetch_cfg,
+                    shard_id,
+                    sort,
+                    blob,
+                    Arc::clone(&metrics),
+                    shard_metrics,
+                    metrics.read.batch_fetcher.clone(),
+                    FetchBatchFilter::Compaction {
+                        since: desc.since().clone(),
+                    },
+                    None,
+                    budget,
+                );
 
             for run in runs {
                 let parts: Vec<_> = run
                     .into_iter()
                     .map(|encoded_size_bytes| {
-                        BatchPart::Hollow(HollowBatchPart {
+                        RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                             key: PartialBatchKey(
                                 "n0000000/p00000000-0000-0000-0000-000000000000".into(),
                             ),
+                            meta: Default::default(),
                             encoded_size_bytes,
                             key_lower: vec![],
+                            structured_key_lower: None,
                             stats: None,
                             ts_rewrite: None,
                             diffs_sum: None,
                             format: None,
                             schema_id: None,
-                        })
+                            deprecated_schema_id: None,
+                        }))
                     })
                     .collect();
-                consolidator.enqueue_run(&desc, parts)
+                consolidator.enqueue_run(&desc, &RunMeta::default(), parts)
             }
 
             // No matter what, the budget should be respected.
@@ -1076,7 +1303,7 @@ mod tests {
             if prefetch_all {
                 // If we up the budget to match the total size, we should prefetch everything.
                 consolidator.budget = total_size;
-                assert!(consolidator.start_prefetches() == Some(0));
+                assert_eq!(consolidator.start_prefetches(), Some(0));
             } else {
                 // Let the consolidator drop without fetching everything to check the Drop
                 // impl works when not all parts are prefetched.

@@ -8,13 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Borrow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::mem::{size_of, transmute};
 use std::ops::Deref;
-use std::rc::Rc;
 use std::str;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
@@ -25,7 +26,9 @@ use mz_ore::vec::Vector;
 use mz_persist_types::Codec64;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::*;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -42,12 +45,12 @@ use crate::adt::range::{
     self, InvalidRangeError, Range, RangeBound, RangeInner, RangeLowerBound, RangeUpperBound,
 };
 use crate::adt::timestamp::CheckedTimestamp;
-use crate::scalar::{arb_datum, DatumKind};
+#[cfg(any(test, feature = "proptest"))]
+use crate::scalar::arb_datum;
+use crate::scalar::{DatumKind, SqlScalarType};
 use crate::{Datum, RelationDesc, Timestamp};
 
-pub mod collection;
-pub(crate) mod encoding;
-pub(crate) mod encoding2;
+pub(crate) mod encode;
 pub mod iter;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
@@ -108,7 +111,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 /// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
 /// It is best to re-use a `Row` across multiple `Row` creation calls, as this
 /// avoids the allocations involved in `Row::new()`.
-#[derive(Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Row {
     data: CompactBytes,
 }
@@ -123,30 +126,16 @@ impl Row {
         proto: &ProtoRow,
         desc: &RelationDesc,
     ) -> Result<(), String> {
-        let mut col_idx = 0;
         let mut packer = self.packer();
-        for d in proto.datums.iter() {
+        for (col_idx, _, _) in desc.iter_all() {
+            let d = match proto.datums.get(col_idx.to_raw()) {
+                Some(x) => x,
+                None => {
+                    packer.push(Datum::Null);
+                    continue;
+                }
+            };
             packer.try_push_proto(d)?;
-            col_idx += 1;
-        }
-
-        // TODO(parkmycar): This is where we'll add new default values to Codec
-        // data whose upstream relation has had columns added.
-
-        // HACK(parkmycar): Only validate that the decoded Row matches the RelationDesc if it was
-        // non-empty. We have an optimization for queries like COUNT(*) that returns a fake empty
-        // Part instead of decoding the data, which this assertion will fail on.
-        //
-        // TODO(#28146): Remove the check for if the num_columns is 0.
-        let num_columns = desc.typ().column_types.len();
-        if num_columns != 0 && col_idx != 0 {
-            mz_ore::soft_assert_eq_or_log!(
-                col_idx,
-                num_columns,
-                "wrong number of columns when decoding a Row!, got {row:?}, expected {desc:?}",
-                row = self,
-                desc = desc,
-            );
         }
 
         Ok(())
@@ -157,6 +146,14 @@ impl Row {
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             data: CompactBytes::with_capacity(cap),
+        }
+    }
+
+    /// Create an empty `Row`.
+    #[inline]
+    pub const fn empty() -> Self {
+        Self {
+            data: CompactBytes::empty(),
         }
     }
 
@@ -178,7 +175,7 @@ impl Row {
     /// This method clears the existing contents of the row, but retains the
     /// allocation.
     pub fn packer(&mut self) -> RowPacker<'_> {
-        self.data.clear();
+        self.clear();
         RowPacker { row: self }
     }
 
@@ -248,6 +245,11 @@ impl Row {
         inline_size.saturating_add(heap_size)
     }
 
+    /// The length of the encoded row in bytes. Does not include the size of the `Row` struct itself.
+    pub fn data_len(&self) -> usize {
+        self.data.len()
+    }
+
     /// Returns the total capacity in bytes used by this row.
     pub fn byte_capacity(&self) -> usize {
         self.data.capacity()
@@ -256,7 +258,14 @@ impl Row {
     /// Extracts a Row slice containing the entire [`Row`].
     #[inline]
     pub fn as_row_ref(&self) -> &RowRef {
-        RowRef::from_slice(self.data.as_slice())
+        // SAFETY: `Row` contains valid row data, by construction.
+        unsafe { RowRef::from_slice(self.data.as_slice()) }
+    }
+
+    /// Clear the contents of the [`Row`], leaving any allocation in place.
+    #[inline]
+    fn clear(&mut self) {
+        self.data.clear();
     }
 }
 
@@ -298,12 +307,20 @@ impl Clone for Row {
     }
 }
 
+// Row's `Hash` implementation defers to `RowRef` to ensure they hash equivalently.
+impl std::hash::Hash for Row {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_row_ref().hash(state)
+    }
+}
+
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for Row {
     type Parameters = prop::collection::SizeRange;
     type Strategy = BoxedStrategy<Row>;
 
     fn arbitrary_with(size: Self::Parameters) -> Self::Strategy {
-        prop::collection::vec(arb_datum(), size)
+        prop::collection::vec(arb_datum(true), size)
             .prop_map(|items| {
                 let mut row = Row::default();
                 let mut packer = row.packer();
@@ -413,19 +430,227 @@ mod columnation {
     }
 }
 
+mod columnar {
+    use columnar::common::PushIndexAs;
+    use columnar::{
+        AsBytes, Borrow, Clear, Columnar, Container, FromBytes, Index, IndexAs, Len, Push,
+    };
+    use mz_ore::cast::CastFrom;
+    use std::ops::Range;
+
+    use crate::{Row, RowRef};
+
+    #[derive(
+        Copy,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        serde::Serialize,
+        serde::Deserialize
+    )]
+    pub struct Rows<BC = Vec<u64>, VC = Vec<u8>> {
+        /// Bounds container; provides indexed access to offsets.
+        bounds: BC,
+        /// Values container; provides slice access to bytes.
+        values: VC,
+    }
+
+    impl Columnar for Row {
+        #[inline(always)]
+        fn copy_from(&mut self, other: columnar::Ref<'_, Self>) {
+            self.clear();
+            self.data.extend_from_slice(other.data());
+        }
+        #[inline(always)]
+        fn into_owned(other: columnar::Ref<'_, Self>) -> Self {
+            other.to_owned()
+        }
+        type Container = Rows;
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(thing: columnar::Ref<'a, Self>) -> columnar::Ref<'b, Self>
+        where
+            Self: 'a,
+        {
+            thing
+        }
+    }
+
+    impl<BC: PushIndexAs<u64>> Borrow for Rows<BC, Vec<u8>> {
+        type Ref<'a> = &'a RowRef;
+        type Borrowed<'a>
+            = Rows<BC::Borrowed<'a>, &'a [u8]>
+        where
+            Self: 'a;
+        #[inline(always)]
+        fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
+            Rows {
+                bounds: self.bounds.borrow(),
+                values: self.values.borrow(),
+            }
+        }
+        #[inline(always)]
+        fn reborrow<'c, 'a: 'c>(item: Self::Borrowed<'a>) -> Self::Borrowed<'c>
+        where
+            Self: 'a,
+        {
+            Rows {
+                bounds: BC::reborrow(item.bounds),
+                values: item.values,
+            }
+        }
+
+        fn reborrow_ref<'b, 'a: 'b>(item: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            item
+        }
+    }
+
+    impl<BC: PushIndexAs<u64>> Container for Rows<BC, Vec<u8>> {
+        fn extend_from_self(&mut self, other: Self::Borrowed<'_>, range: Range<usize>) {
+            if !range.is_empty() {
+                // Imported bounds will be relative to this starting offset.
+                let values_len: u64 = self.values.len().try_into().expect("must fit");
+
+                // Push all bytes that we can, all at once.
+                let other_lower = if range.start == 0 {
+                    0
+                } else {
+                    other.bounds.index_as(range.start - 1)
+                };
+                let other_upper = other.bounds.index_as(range.end - 1);
+                self.values.extend_from_self(
+                    other.values,
+                    usize::try_from(other_lower).expect("must fit")
+                        ..usize::try_from(other_upper).expect("must fit"),
+                );
+
+                // Each bound needs to be shifted by `values_len - other_lower`.
+                if values_len == other_lower {
+                    self.bounds.extend_from_self(other.bounds, range);
+                } else {
+                    for index in range {
+                        let shifted = other.bounds.index_as(index) - other_lower + values_len;
+                        self.bounds.push(&shifted)
+                    }
+                }
+            }
+        }
+        fn reserve_for<'a, I>(&mut self, selves: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = Self::Borrowed<'a>> + Clone,
+        {
+            self.bounds.reserve_for(selves.clone().map(|r| r.bounds));
+            self.values.reserve_for(selves.map(|r| r.values));
+        }
+    }
+
+    impl<'a, BC: AsBytes<'a>, VC: AsBytes<'a>> AsBytes<'a> for Rows<BC, VC> {
+        const SLICE_COUNT: usize = BC::SLICE_COUNT + VC::SLICE_COUNT;
+        #[inline(always)]
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            debug_assert!(index < Self::SLICE_COUNT);
+            if index < BC::SLICE_COUNT {
+                self.bounds.get_byte_slice(index)
+            } else {
+                self.values.get_byte_slice(index - BC::SLICE_COUNT)
+            }
+        }
+    }
+    impl<'a, BC: FromBytes<'a>, VC: FromBytes<'a>> FromBytes<'a> for Rows<BC, VC> {
+        const SLICE_COUNT: usize = BC::SLICE_COUNT + VC::SLICE_COUNT;
+        #[inline(always)]
+        fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
+            Self {
+                bounds: FromBytes::from_bytes(bytes),
+                values: FromBytes::from_bytes(bytes),
+            }
+        }
+    }
+
+    impl<BC: Len, VC> Len for Rows<BC, VC> {
+        #[inline(always)]
+        fn len(&self) -> usize {
+            self.bounds.len()
+        }
+    }
+
+    impl<'a, BC: Len + IndexAs<u64>> Index for Rows<BC, &'a [u8]> {
+        type Ref = &'a RowRef;
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            let lower = if index == 0 {
+                0
+            } else {
+                self.bounds.index_as(index - 1)
+            };
+            let upper = self.bounds.index_as(index);
+            let lower = usize::cast_from(lower);
+            let upper = usize::cast_from(upper);
+            // SAFETY: self.values contains only valid row data, and self.metadata delimits only ranges
+            // that correspond to the original rows.
+            unsafe { RowRef::from_slice(&self.values[lower..upper]) }
+        }
+    }
+    impl<'a, BC: Len + IndexAs<u64>> Index for &'a Rows<BC, Vec<u8>> {
+        type Ref = &'a RowRef;
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            let lower = if index == 0 {
+                0
+            } else {
+                self.bounds.index_as(index - 1)
+            };
+            let upper = self.bounds.index_as(index);
+            let lower = usize::cast_from(lower);
+            let upper = usize::cast_from(upper);
+            // SAFETY: self.values contains only valid row data, and self.metadata delimits only ranges
+            // that correspond to the original rows.
+            unsafe { RowRef::from_slice(&self.values[lower..upper]) }
+        }
+    }
+
+    impl<BC: Push<u64>> Push<&Row> for Rows<BC> {
+        #[inline(always)]
+        fn push(&mut self, item: &Row) {
+            self.values.extend_from_slice(item.data.as_slice());
+            self.bounds.push(u64::cast_from(self.values.len()));
+        }
+    }
+    impl<BC: for<'a> Push<&'a u64>> Push<&RowRef> for Rows<BC> {
+        #[inline(always)]
+        fn push(&mut self, item: &RowRef) {
+            self.values.extend_from_slice(item.data());
+            self.bounds.push(&u64::cast_from(self.values.len()));
+        }
+    }
+    impl<BC: Clear, VC: Clear> Clear for Rows<BC, VC> {
+        #[inline(always)]
+        fn clear(&mut self) {
+            self.bounds.clear();
+            self.values.clear();
+        }
+    }
+}
+
 /// A contiguous slice of bytes that are row data.
 ///
 /// A [`RowRef`] is to [`Row`] as [`prim@str`] is to [`String`].
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct RowRef([u8]);
 
 impl RowRef {
     /// Create a [`RowRef`] from a slice of data.
     ///
-    /// We do not check that the provided slice is valid [`Row`] data, will panic on read
-    /// if the data is invalid.
-    pub fn from_slice(row: &[u8]) -> &RowRef {
+    /// # Safety
+    ///
+    /// We do not check that the provided slice is valid [`Row`] data; the caller is required to
+    /// ensure this.
+    pub unsafe fn from_slice(row: &[u8]) -> &RowRef {
         #[allow(clippy::as_conversions)]
         let ptr = row as *const [u8] as *const RowRef;
         // SAFETY: We know `ptr` is non-null and aligned because it came from a &[u8].
@@ -433,7 +658,7 @@ impl RowRef {
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
-    pub fn unpack(&self) -> Vec<Datum> {
+    pub fn unpack(&self) -> Vec<Datum<'_>> {
         // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
         let len = self.iter().count();
         let mut vec = Vec::with_capacity(len);
@@ -444,16 +669,18 @@ impl RowRef {
     /// Return the first [`Datum`] in `self`
     ///
     /// Panics if the [`RowRef`] is empty.
-    pub fn unpack_first(&self) -> Datum {
+    pub fn unpack_first(&self) -> Datum<'_> {
         self.iter().next().unwrap()
     }
 
     /// Iterate the [`Datum`] elements of the [`RowRef`].
-    pub fn iter(&self) -> DatumListIter {
-        DatumListIter {
-            data: &self.0,
-            offset: 0,
-        }
+    pub fn iter(&self) -> DatumListIter<'_> {
+        DatumListIter { data: &self.0 }
+    }
+
+    /// Return the byte length of this [`RowRef`].
+    pub fn byte_len(&self) -> usize {
+        self.0.len()
     }
 
     /// For debugging only.
@@ -481,10 +708,7 @@ impl<'a> IntoIterator for &'a RowRef {
     type IntoIter = DatumListIter<'a>;
 
     fn into_iter(self) -> DatumListIter<'a> {
-        DatumListIter {
-            data: &self.0,
-            offset: 0,
-        }
+        DatumListIter { data: &self.0 }
     }
 }
 
@@ -511,7 +735,7 @@ impl fmt::Debug for RowRef {
     /// Debug representation using the internal datums
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("RowRef{")?;
-        f.debug_list().entries(self.into_iter()).finish()?;
+        f.debug_list().entries(&*self).finish()?;
         f.write_str("}")
     }
 }
@@ -528,17 +752,57 @@ pub struct RowPacker<'a> {
     row: &'a mut Row,
 }
 
+/// Infallible conversion from a [`Datum`] to a typed value.
+///
+/// Used by [`DatumList::typed_iter`] to yield elements as `T` rather than
+/// raw `Datum`s. At runtime, `T` is always `Datum<'a>`, so the conversion
+/// is identity.
+///
+/// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
+/// behind the generic type parameter and type erasure.
+///
+/// This trait is sealed and cannot be implemented outside of this crate.
+pub trait FromDatum<'a>:
+    Sized + PartialEq + std::borrow::Borrow<Datum<'a>> + sealed::Sealed
+{
+    fn from_datum(datum: Datum<'a>) -> Self;
+}
+
+mod sealed {
+    use crate::Datum;
+
+    pub trait Sealed {}
+    impl<'a> Sealed for Datum<'a> {}
+}
+
+impl<'a> FromDatum<'a> for Datum<'a> {
+    #[inline]
+    fn from_datum(datum: Datum<'a>) -> Self {
+        datum
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DatumListIter<'a> {
     data: &'a [u8],
-    offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatumListTypedIter<'a, T> {
+    inner: DatumListIter<'a>,
+    _phantom: PhantomData<fn() -> T>,
 }
 
 #[derive(Debug, Clone)]
 pub struct DatumDictIter<'a> {
     data: &'a [u8],
-    offset: usize,
     prev_key: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatumDictTypedIter<'a, T> {
+    inner: DatumDictIter<'a>,
+    _phantom: PhantomData<fn() -> T>,
 }
 
 /// `RowArena` is used to hold on to temporary `Row`s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
@@ -556,35 +820,169 @@ pub struct RowArena {
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
 
 /// A sequence of Datums
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
-pub struct DatumList<'a> {
+///
+/// The type parameter `T` represents the element type of the list. It is a
+/// phantom parameter that carries no runtime data — the actual elements are
+/// stored as serialized bytes and `T` is not enforced at runtime. It is up
+/// to the caller to ensure `T` matches the actual element type. The default
+/// `T = Datum<'a>` means existing code that writes `DatumList<'a>` continues
+/// to work unchanged.
+///
+/// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
+/// behind the generic type parameter.
+pub struct DatumList<'a, T = Datum<'a>> {
     /// Points at the serialized datums
     data: &'a [u8],
+    _phantom: PhantomData<fn() -> T>,
 }
 
-impl<'a> Debug for DatumList<'a> {
+impl<'a, T> DatumList<'a, T> {
+    /// Private constructor. All `DatumList` values should be created through
+    /// this function to keep the `PhantomData` bookkeeping in one place.
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        DatumList {
+            data,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Clone for DatumList<'a, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> Copy for DatumList<'a, T> {}
+
+impl<'a, T> Debug for DatumList<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
 }
 
-impl Ord for DatumList<'_> {
-    fn cmp(&self, other: &DatumList) -> Ordering {
+impl<'a, T> PartialEq for DatumList<'a, T> {
+    #[inline(always)]
+    fn eq(&self, other: &DatumList<'a, T>) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl<'a, T> Eq for DatumList<'a, T> {}
+
+impl<'a, T> Hash for DatumList<'a, T> {
+    #[inline(always)]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for d in self.iter() {
+            d.hash(state);
+        }
+    }
+}
+
+impl<T> Ord for DatumList<'_, T> {
+    #[inline(always)]
+    fn cmp(&self, other: &DatumList<'_, T>) -> Ordering {
         self.iter().cmp(other.iter())
     }
 }
 
-impl PartialOrd for DatumList<'_> {
-    fn partial_cmp(&self, other: &DatumList) -> Option<Ordering> {
+impl<T> PartialOrd for DatumList<'_, T> {
+    #[inline(always)]
+    fn partial_cmp(&self, other: &DatumList<'_, T>) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 /// A mapping from string keys to Datums
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct DatumMap<'a> {
+///
+/// The type parameter `T` represents the value type of the map. It is a
+/// phantom parameter — the actual values are stored as serialized bytes and
+/// `T` is not enforced at runtime. It is up to the caller to ensure `T`
+/// matches the actual value type. The default `T = Datum<'a>` means existing
+/// code that writes `DatumMap<'a>` continues to work unchanged.
+///
+/// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
+/// behind the generic type parameter.
+pub struct DatumMap<'a, T = Datum<'a>> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],
+    _phantom: PhantomData<fn() -> T>,
+}
+
+impl<'a, T> DatumMap<'a, T> {
+    /// Private constructor. All `DatumMap` values should be created through
+    /// this function to keep the `PhantomData` bookkeeping in one place.
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        DatumMap {
+            data,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Clone for DatumMap<'a, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> Copy for DatumMap<'a, T> {}
+
+impl<'a, T> PartialEq for DatumMap<'a, T> {
+    #[inline(always)]
+    fn eq(&self, other: &DatumMap<'a, T>) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl<'a, T> Eq for DatumMap<'a, T> {}
+
+impl<'a, T> Hash for DatumMap<'a, T> {
+    #[inline(always)]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for (k, v) in self.iter() {
+            k.hash(state);
+            v.hash(state);
+        }
+    }
+}
+
+impl<'a, T> Ord for DatumMap<'a, T> {
+    #[inline(always)]
+    fn cmp(&self, other: &DatumMap<'a, T>) -> Ordering {
+        self.iter().cmp(other.iter())
+    }
+}
+
+impl<'a, T> PartialOrd for DatumMap<'a, T> {
+    #[inline(always)]
+    fn partial_cmp(&self, other: &DatumMap<'a, T>) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> crate::scalar::SqlContainerType for DatumList<'a, Datum<'a>> {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
+        container.unwrap_list_element_type()
+    }
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::List {
+            element_type: Box::new(element),
+            custom_id: None,
+        }
+    }
+}
+
+impl<'a> crate::scalar::SqlContainerType for DatumMap<'a, Datum<'a>> {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
+        container.unwrap_map_value_type()
+    }
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::Map {
+            value_type: Box::new(element),
+            custom_id: None,
+        }
+    }
 }
 
 /// Represents a single `Datum`, appropriate to be nested inside other
@@ -612,17 +1010,18 @@ impl<'a> DatumNested<'a> {
     // Figure out which bytes `read_datum` returns (e.g. including the tag),
     // and then store a reference to those bytes, so we can "replay" this same
     // call later on without storing the datum itself.
-    pub fn extract(data: &'a [u8], offset: &mut usize) -> DatumNested<'a> {
-        let start = *offset;
-        let _ = unsafe { read_datum(data, offset) };
+    pub fn extract(data: &mut &'a [u8]) -> DatumNested<'a> {
+        let prev = *data;
+        let _ = unsafe { read_datum(data) };
         DatumNested {
-            val: &data[start..*offset],
+            val: &prev[..(prev.len() - data.len())],
         }
     }
 
     /// Returns the datum `self` contains.
     pub fn datum(&self) -> Datum<'a> {
-        unsafe { read_datum(self.val, &mut 0) }
+        let mut temp = self.val;
+        unsafe { read_datum(&mut temp) }
     }
 }
 
@@ -669,7 +1068,10 @@ enum Tag {
     StringHuge,
     Uuid,
     Array,
-    List,
+    ListTiny,
+    ListShort,
+    ListLong,
+    ListHuge,
     Dict,
     JsonNull,
     Dummy,
@@ -803,11 +1205,11 @@ impl Tag {
 /// Read a byte slice starting at byte `offset`.
 ///
 /// Updates `offset` to point to the first byte after the end of the read region.
-fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
-    let len = u64::from_le_bytes(read_byte_array(data, offset));
+fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
+    let len = u64::from_le_bytes(read_byte_array(data));
     let len = usize::cast_from(len);
-    let bytes = &data[*offset..(*offset + len)];
-    *offset += len;
+    let (bytes, next) = data.split_at(len);
+    *data = next;
     bytes
 }
 
@@ -819,34 +1221,37 @@ fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
 ///
 /// This function is safe if the datum's length and contents were previously written by `push_lengthed_bytes`,
 /// and it was only written with a `String` tag if it was indeed UTF-8.
-unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) -> Datum<'a> {
+unsafe fn read_lengthed_datum<'a>(data: &mut &'a [u8], tag: Tag) -> Datum<'a> {
     let len = match tag {
-        Tag::BytesTiny | Tag::StringTiny => usize::from(read_byte(data, offset)),
-        Tag::BytesShort | Tag::StringShort => {
-            usize::from(u16::from_le_bytes(read_byte_array(data, offset)))
+        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => usize::from(read_byte(data)),
+        Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
+            usize::from(u16::from_le_bytes(read_byte_array(data)))
         }
-        Tag::BytesLong | Tag::StringLong => {
-            usize::cast_from(u32::from_le_bytes(read_byte_array(data, offset)))
+        Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
+            usize::cast_from(u32::from_le_bytes(read_byte_array(data)))
         }
-        Tag::BytesHuge | Tag::StringHuge => {
-            usize::cast_from(u64::from_le_bytes(read_byte_array(data, offset)))
+        Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
+            usize::cast_from(u64::from_le_bytes(read_byte_array(data)))
         }
         _ => unreachable!(),
     };
-    let bytes = &data[*offset..(*offset + len)];
-    *offset += len;
+    let (bytes, next) = data.split_at(len);
+    *data = next;
     match tag {
         Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => Datum::Bytes(bytes),
         Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
             Datum::String(str::from_utf8_unchecked(bytes))
         }
+        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => {
+            Datum::List(DatumList::new(bytes))
+        }
         _ => unreachable!(),
     }
 }
 
-fn read_byte(data: &[u8], offset: &mut usize) -> u8 {
-    let byte = data[*offset];
-    *offset += 1;
+fn read_byte(data: &mut &[u8]) -> u8 {
+    let byte = data[0];
+    *data = &data[1..];
     byte
 }
 
@@ -857,18 +1262,14 @@ fn read_byte(data: &[u8], offset: &mut usize) -> u8 {
 /// SAFETY:
 ///   * length <= N
 ///   * offset + length <= data.len()
-unsafe fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
-    data: &[u8],
-    offset: &mut usize,
+fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
+    data: &mut &[u8],
     length: usize,
 ) -> [u8; N] {
     let mut raw = [FILL; N];
-    for i in 0..length {
-        debug_assert!(i < raw.len());
-        debug_assert!(*offset + i < data.len());
-        *raw.get_unchecked_mut(i) = *data.get_unchecked(*offset + i);
-    }
-    *offset += length;
+    let (prev, next) = data.split_at(length);
+    (raw[..prev.len()]).copy_from_slice(prev);
+    *data = next;
     raw
 }
 /// Read `length` bytes from `data` at `offset`, updating the
@@ -878,12 +1279,8 @@ unsafe fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
 /// SAFETY:
 ///   * length <= N
 ///   * offset + length <= data.len()
-unsafe fn read_byte_array_extending_negative<const N: usize>(
-    data: &[u8],
-    offset: &mut usize,
-    length: usize,
-) -> [u8; N] {
-    read_byte_array_sign_extending::<N, 255>(data, offset, length)
+fn read_byte_array_extending_negative<const N: usize>(data: &mut &[u8], length: usize) -> [u8; N] {
+    read_byte_array_sign_extending::<N, 255>(data, length)
 }
 
 /// Read `length` bytes from `data` at `offset`, updating the
@@ -893,35 +1290,33 @@ unsafe fn read_byte_array_extending_negative<const N: usize>(
 /// SAFETY:
 ///   * length <= N
 ///   * offset + length <= data.len()
-unsafe fn read_byte_array_extending_nonnegative<const N: usize>(
-    data: &[u8],
-    offset: &mut usize,
+fn read_byte_array_extending_nonnegative<const N: usize>(
+    data: &mut &[u8],
     length: usize,
 ) -> [u8; N] {
-    read_byte_array_sign_extending::<N, 0>(data, offset, length)
+    read_byte_array_sign_extending::<N, 0>(data, length)
 }
 
-pub(super) fn read_byte_array<const N: usize>(data: &[u8], offset: &mut usize) -> [u8; N] {
-    let mut raw = [0; N];
-    raw.copy_from_slice(&data[*offset..*offset + N]);
-    *offset += N;
-    raw
+pub(super) fn read_byte_array<const N: usize>(data: &mut &[u8]) -> [u8; N] {
+    let (prev, next) = data.split_first_chunk().unwrap();
+    *data = next;
+    *prev
 }
 
-pub(super) fn read_date(data: &[u8], offset: &mut usize) -> Date {
-    let days = i32::from_le_bytes(read_byte_array(data, offset));
+pub(super) fn read_date(data: &mut &[u8]) -> Date {
+    let days = i32::from_le_bytes(read_byte_array(data));
     Date::from_pg_epoch(days).expect("unexpected date")
 }
 
-pub(super) fn read_naive_date(data: &[u8], offset: &mut usize) -> NaiveDate {
-    let year = i32::from_le_bytes(read_byte_array(data, offset));
-    let ordinal = u32::from_le_bytes(read_byte_array(data, offset));
+pub(super) fn read_naive_date(data: &mut &[u8]) -> NaiveDate {
+    let year = i32::from_le_bytes(read_byte_array(data));
+    let ordinal = u32::from_le_bytes(read_byte_array(data));
     NaiveDate::from_yo_opt(year, ordinal).unwrap()
 }
 
-pub(super) fn read_time(data: &[u8], offset: &mut usize) -> NaiveTime {
-    let secs = u32::from_le_bytes(read_byte_array(data, offset));
-    let nanos = u32::from_le_bytes(read_byte_array(data, offset));
+pub(super) fn read_time(data: &mut &[u8]) -> NaiveTime {
+    let secs = u32::from_le_bytes(read_byte_array(data));
+    let nanos = u32::from_le_bytes(read_byte_array(data));
     NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos).unwrap()
 }
 
@@ -933,8 +1328,8 @@ pub(super) fn read_time(data: &[u8], offset: &mut usize) -> NaiveTime {
 ///
 /// This function is safe if a `Datum` was previously written at this offset by `push_datum`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
-pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
-    let tag = Tag::try_from_primitive(read_byte(data, offset)).expect("unknown row tag");
+pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
+    let tag = Tag::try_from_primitive(read_byte(data)).expect("unknown row tag");
     match tag {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
@@ -942,14 +1337,13 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::UInt8_0 | Tag::UInt8_8 => {
             let i = u8::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::UInt8(i)
         }
         Tag::Int16 => {
-            let i = i16::from_le_bytes(read_byte_array(data, offset));
+            let i = i16::from_le_bytes(read_byte_array(data));
             Datum::Int16(i)
         }
         Tag::NonNegativeInt16_0 | Tag::NonNegativeInt16_16 | Tag::NonNegativeInt16_8 => {
@@ -958,7 +1352,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             // are checked in debug asserts.
             let i = i16::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -967,14 +1360,13 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::UInt16_0 | Tag::UInt16_8 | Tag::UInt16_16 => {
             let i = u16::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::UInt16(i)
         }
         Tag::Int32 => {
-            let i = i32::from_le_bytes(read_byte_array(data, offset));
+            let i = i32::from_le_bytes(read_byte_array(data));
             Datum::Int32(i)
         }
         Tag::NonNegativeInt32_0
@@ -987,7 +1379,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             // are checked in debug asserts.
             let i = i32::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -996,14 +1387,13 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::UInt32_0 | Tag::UInt32_8 | Tag::UInt32_16 | Tag::UInt32_24 | Tag::UInt32_32 => {
             let i = u32::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::UInt32(i)
         }
         Tag::Int64 => {
-            let i = i64::from_le_bytes(read_byte_array(data, offset));
+            let i = i64::from_le_bytes(read_byte_array(data));
             Datum::Int64(i)
         }
         Tag::NonNegativeInt64_0
@@ -1021,7 +1411,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
 
             let i = i64::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1038,7 +1427,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::UInt64_64 => {
             let i = u64::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1050,7 +1438,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             // are checked in debug asserts.
             let i = i16::from_le_bytes(read_byte_array_extending_negative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1066,7 +1453,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             // are checked in debug asserts.
             let i = i32::from_le_bytes(read_byte_array_extending_negative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1086,7 +1472,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             // are checked in debug asserts.
             let i = i64::from_le_bytes(read_byte_array_extending_negative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1094,33 +1479,33 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
 
         Tag::UInt8 => {
-            let i = u8::from_le_bytes(read_byte_array(data, offset));
+            let i = u8::from_le_bytes(read_byte_array(data));
             Datum::UInt8(i)
         }
         Tag::UInt16 => {
-            let i = u16::from_le_bytes(read_byte_array(data, offset));
+            let i = u16::from_le_bytes(read_byte_array(data));
             Datum::UInt16(i)
         }
         Tag::UInt32 => {
-            let i = u32::from_le_bytes(read_byte_array(data, offset));
+            let i = u32::from_le_bytes(read_byte_array(data));
             Datum::UInt32(i)
         }
         Tag::UInt64 => {
-            let i = u64::from_le_bytes(read_byte_array(data, offset));
+            let i = u64::from_le_bytes(read_byte_array(data));
             Datum::UInt64(i)
         }
         Tag::Float32 => {
-            let f = f32::from_bits(u32::from_le_bytes(read_byte_array(data, offset)));
+            let f = f32::from_bits(u32::from_le_bytes(read_byte_array(data)));
             Datum::Float32(OrderedFloat::from(f))
         }
         Tag::Float64 => {
-            let f = f64::from_bits(u64::from_le_bytes(read_byte_array(data, offset)));
+            let f = f64::from_bits(u64::from_le_bytes(read_byte_array(data)));
             Datum::Float64(OrderedFloat::from(f))
         }
-        Tag::Date => Datum::Date(read_date(data, offset)),
-        Tag::Time => Datum::Time(read_time(data, offset)),
+        Tag::Date => Datum::Date(read_date(data)),
+        Tag::Time => Datum::Time(read_time(data)),
         Tag::CheapTimestamp => {
-            let ts = i64::from_le_bytes(read_byte_array(data, offset));
+            let ts = i64::from_le_bytes(read_byte_array(data));
             let secs = ts.div_euclid(1_000_000_000);
             let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
             let ndt = DateTime::from_timestamp(secs, nsecs)
@@ -1131,7 +1516,7 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             )
         }
         Tag::CheapTimestampTz => {
-            let ts = i64::from_le_bytes(read_byte_array(data, offset));
+            let ts = i64::from_le_bytes(read_byte_array(data));
             let secs = ts.div_euclid(1_000_000_000);
             let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
             let dt = DateTime::from_timestamp(secs, nsecs)
@@ -1141,16 +1526,16 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             )
         }
         Tag::Timestamp => {
-            let date = read_naive_date(data, offset);
-            let time = read_time(data, offset);
+            let date = read_naive_date(data);
+            let time = read_time(data);
             Datum::Timestamp(
                 CheckedTimestamp::from_timestamplike(date.and_time(time))
                     .expect("unexpected timestamp"),
             )
         }
         Tag::TimestampTz => {
-            let date = read_naive_date(data, offset);
-            let time = read_time(data, offset);
+            let date = read_naive_date(data);
+            let time = read_time(data);
             Datum::TimestampTz(
                 CheckedTimestamp::from_timestamplike(DateTime::from_naive_utc_and_offset(
                     date.and_time(time),
@@ -1160,9 +1545,9 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             )
         }
         Tag::Interval => {
-            let months = i32::from_le_bytes(read_byte_array(data, offset));
-            let days = i32::from_le_bytes(read_byte_array(data, offset));
-            let micros = i64::from_le_bytes(read_byte_array(data, offset));
+            let months = i32::from_le_bytes(read_byte_array(data));
+            let days = i32::from_le_bytes(read_byte_array(data));
+            let micros = i64::from_le_bytes(read_byte_array(data));
             Datum::Interval(Interval {
                 months,
                 days,
@@ -1176,40 +1561,40 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::StringTiny
         | Tag::StringShort
         | Tag::StringLong
-        | Tag::StringHuge => read_lengthed_datum(data, offset, tag),
-        Tag::Uuid => Datum::Uuid(Uuid::from_bytes(read_byte_array(data, offset))),
+        | Tag::StringHuge
+        | Tag::ListTiny
+        | Tag::ListShort
+        | Tag::ListLong
+        | Tag::ListHuge => read_lengthed_datum(data, tag),
+        Tag::Uuid => Datum::Uuid(Uuid::from_bytes(read_byte_array(data))),
         Tag::Array => {
             // See the comment in `Row::push_array` for details on the encoding
             // of arrays.
-            let ndims = read_byte(data, offset);
+            let ndims = read_byte(data);
             let dims_size = usize::from(ndims) * size_of::<u64>() * 2;
-            let dims = &data[*offset..*offset + dims_size];
-            *offset += dims_size;
-            let data = read_untagged_bytes(data, offset);
+            let (dims, next) = data.split_at(dims_size);
+            *data = next;
+            let bytes = read_untagged_bytes(data);
             Datum::Array(Array {
                 dims: ArrayDimensions { data: dims },
-                elements: DatumList { data },
+                elements: DatumList::new(bytes),
             })
         }
-        Tag::List => {
-            let bytes = read_untagged_bytes(data, offset);
-            Datum::List(DatumList { data: bytes })
-        }
         Tag::Dict => {
-            let bytes = read_untagged_bytes(data, offset);
-            Datum::Map(DatumMap { data: bytes })
+            let bytes = read_untagged_bytes(data);
+            Datum::Map(DatumMap::new(bytes))
         }
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
         Tag::Numeric => {
-            let digits = read_byte(data, offset).into();
-            let exponent = i8::reinterpret_cast(read_byte(data, offset));
-            let bits = read_byte(data, offset);
+            let digits = read_byte(data).into();
+            let exponent = i8::reinterpret_cast(read_byte(data));
+            let bits = read_byte(data);
 
             let lsu_u16_len = Numeric::digits_to_lsu_elements_len(digits);
             let lsu_u8_len = lsu_u16_len * 2;
-            let lsu_u8 = &data[*offset..(*offset + lsu_u8_len)];
-            *offset += lsu_u8_len;
+            let (lsu_u8, next) = data.split_at(lsu_u8_len);
+            *data = next;
 
             // TODO: if we refactor the decimal library to accept the owned
             // array as a parameter to `from_raw_parts` below, we could likely
@@ -1223,12 +1608,12 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             Datum::from(d)
         }
         Tag::MzTimestamp => {
-            let t = Timestamp::decode(read_byte_array(data, offset));
+            let t = Timestamp::decode(read_byte_array(data));
             Datum::MzTimestamp(t)
         }
         Tag::Range => {
             // See notes on `push_range_with` for details about encoding.
-            let flag_byte = read_byte(data, offset);
+            let flag_byte = read_byte(data);
             let flags = range::InternalFlags::from_bits(flag_byte)
                 .expect("range flags must be encoded validly");
 
@@ -1244,7 +1629,7 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let lower_bound = if flags.contains(range::InternalFlags::LB_INFINITE) {
                 None
             } else {
-                Some(DatumNested::extract(data, offset))
+                Some(DatumNested::extract(data))
             };
 
             let lower = RangeBound {
@@ -1255,7 +1640,7 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let upper_bound = if flags.contains(range::InternalFlags::UB_INFINITE) {
                 None
             } else {
-                Some(DatumNested::extract(data, offset))
+                Some(DatumNested::extract(data))
             };
 
             let upper = RangeBound {
@@ -1269,14 +1654,14 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
         Tag::MzAclItem => {
             const N: usize = MzAclItem::binary_size();
-            let mz_acl_item = MzAclItem::decode_binary(&read_byte_array::<N>(data, offset))
-                .expect("invalid mz_aclitem");
+            let mz_acl_item =
+                MzAclItem::decode_binary(&read_byte_array::<N>(data)).expect("invalid mz_aclitem");
             Datum::MzAclItem(mz_acl_item)
         }
         Tag::AclItem => {
             const N: usize = AclItem::binary_size();
-            let acl_item = AclItem::decode_binary(&read_byte_array::<N>(data, offset))
-                .expect("invalid aclitem");
+            let acl_item =
+                AclItem::decode_binary(&read_byte_array::<N>(data)).expect("invalid aclitem");
             Datum::AclItem(acl_item)
         }
     }
@@ -1299,19 +1684,19 @@ where
     D: Vector<u8>,
 {
     match tag {
-        Tag::BytesTiny | Tag::StringTiny => {
+        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => {
             let len = bytes.len().to_le_bytes();
             data.push(len[0]);
         }
-        Tag::BytesShort | Tag::StringShort => {
+        Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
             let len = bytes.len().to_le_bytes();
             data.extend_from_slice(&len[0..2]);
         }
-        Tag::BytesLong | Tag::StringLong => {
+        Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
             let len = bytes.len().to_le_bytes();
             data.extend_from_slice(&len[0..4]);
         }
-        Tag::BytesHuge | Tag::StringHuge => {
+        Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
             let len = bytes.len().to_le_bytes();
             data.extend_from_slice(&len);
         }
@@ -1375,7 +1760,7 @@ where
 // This function is inspired by `NaiveDateTime::timestamp_nanos`,
 // with extra checking.
 fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
-    let subsec_nanos = dt.timestamp_subsec_nanos();
+    let subsec_nanos = dt.and_utc().timestamp_subsec_nanos();
     if subsec_nanos >= 1_000_000_000 {
         return None;
     }
@@ -1427,6 +1812,10 @@ where
 
     (64 - n_sign_bits + 7) / 8
 }
+
+const TINY: usize = 1 << 8;
+const SHORT: usize = 1 << 16;
+const LONG: usize = 1 << 32;
 
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
@@ -1539,9 +1928,9 @@ where
         }
         Datum::Bytes(bytes) => {
             let tag = match bytes.len() {
-                0..=255 => Tag::BytesTiny,
-                256..=65535 => Tag::BytesShort,
-                65536..=4294967295 => Tag::BytesLong,
+                0..TINY => Tag::BytesTiny,
+                TINY..SHORT => Tag::BytesShort,
+                SHORT..LONG => Tag::BytesLong,
                 _ => Tag::BytesHuge,
             };
             data.push(tag.into());
@@ -1549,13 +1938,23 @@ where
         }
         Datum::String(string) => {
             let tag = match string.len() {
-                0..=255 => Tag::StringTiny,
-                256..=65535 => Tag::StringShort,
-                65536..=4294967295 => Tag::StringLong,
+                0..TINY => Tag::StringTiny,
+                TINY..SHORT => Tag::StringShort,
+                SHORT..LONG => Tag::StringLong,
                 _ => Tag::StringHuge,
             };
             data.push(tag.into());
             push_lengthed_bytes(data, string.as_bytes(), tag);
+        }
+        Datum::List(list) => {
+            let tag = match list.data.len() {
+                0..TINY => Tag::ListTiny,
+                TINY..SHORT => Tag::ListShort,
+                SHORT..LONG => Tag::ListLong,
+                _ => Tag::ListHuge,
+            };
+            data.push(tag.into());
+            push_lengthed_bytes(data, list.data, tag);
         }
         Datum::Uuid(u) => {
             data.push(Tag::Uuid.into());
@@ -1568,10 +1967,6 @@ where
             data.push(array.dims.ndims());
             data.extend_from_slice(array.dims.data);
             push_untagged_bytes(data, array.elements.data);
-        }
-        Datum::List(list) => {
-            data.push(Tag::List.into());
-            push_untagged_bytes(data, list.data);
         }
         Datum::Map(dict) => {
             data.push(Tag::Dict.into());
@@ -1707,9 +2102,9 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Bytes(bytes) => {
             // We use a variable length representation of slice length.
             let bytes_for_length = match bytes.len() {
-                0..=255 => 1,
-                256..=65535 => 2,
-                65536..=4294967295 => 4,
+                0..TINY => 1,
+                TINY..SHORT => 2,
+                SHORT..LONG => 4,
                 _ => 8,
             };
             1 + bytes_for_length + bytes.len()
@@ -1717,9 +2112,9 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::String(string) => {
             // We use a variable length representation of slice length.
             let bytes_for_length = match string.len() {
-                0..=255 => 1,
-                256..=65535 => 2,
-                65536..=4294967295 => 4,
+                0..TINY => 1,
+                TINY..SHORT => 2,
+                SHORT..LONG => 4,
                 _ => 8,
             };
             1 + bytes_for_length + string.len()
@@ -1793,7 +2188,7 @@ impl RowPacker<'_> {
     /// This function is intentionally somewhat inconvenient to call. You
     /// usually want to call [`Row::packer`] instead to start packing from
     /// scratch.
-    pub fn for_existing_row(row: &mut Row) -> RowPacker {
+    pub fn for_existing_row(row: &mut Row) -> RowPacker<'_> {
         RowPacker { row }
     }
 
@@ -1840,6 +2235,11 @@ impl RowPacker<'_> {
         self.row.data.extend_from_slice(row.data.as_slice());
     }
 
+    /// Appends the datums of an entire `Row`.
+    pub fn extend_by_row_ref(&mut self, row: &RowRef) {
+        self.row.data.extend_from_slice(row.data());
+    }
+
     /// Appends the slice of data representing an entire `Row`. The data is not validated.
     ///
     /// # Safety
@@ -1878,16 +2278,73 @@ impl RowPacker<'_> {
     where
         F: FnOnce(&mut RowPacker) -> R,
     {
-        self.row.data.push(Tag::List.into());
+        // First, assume that the list will fit in 255 bytes, and thus the length will fit in
+        // 1 byte. If not, we'll fix it up later.
         let start = self.row.data.len();
-        // write a dummy len, will fix it up later
-        self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
+        self.row.data.push(Tag::ListTiny.into());
+        // Write a dummy len, will fix it up later.
+        self.row.data.push(0);
 
         let out = f(self);
 
-        let len = u64::cast_from(self.row.data.len() - start - size_of::<u64>());
-        // fix up the len
-        self.row.data[start..start + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
+        // The `- 1 - 1` is for the tag and the len.
+        let len = self.row.data.len() - start - 1 - 1;
+        // We now know the real len.
+        if len < TINY {
+            // If the len fits in 1 byte, we just need to fix up the len.
+            self.row.data[start + 1] = len.to_le_bytes()[0];
+        } else {
+            // Note: We move this code path into its own function, so that the common case can be
+            // inlined.
+            long_list(&mut self.row.data, start, len);
+        }
+
+        /// 1. Fix up the tag.
+        /// 2. Move the actual data a bit (for which we also need to make room at the end).
+        /// 3. Fix up the len.
+        /// `data`: The row's backing data.
+        /// `start`: where `push_list_with` started writing in `data`.
+        /// `len`: the length of the data, excluding the tag and the length.
+        #[cold]
+        fn long_list(data: &mut CompactBytes, start: usize, len: usize) {
+            // `len_len`: the length of the length. (Possible values are: 2, 4, 8. 1 is handled
+            // elsewhere.) The other parameters are the same as for `long_list`.
+            let long_list_inner = |data: &mut CompactBytes, len_len| {
+                // We'll need memory for the new, bigger length, so make the `CompactBytes` bigger.
+                // The `- 1` is because the old length was 1 byte.
+                const ZEROS: [u8; 8] = [0; 8];
+                data.extend_from_slice(&ZEROS[0..len_len - 1]);
+                // Move the data to the end of the `CompactBytes`, to make space for the new length.
+                // Originally, it started after the 1-byte tag and the 1-byte length, now it will
+                // start after the 1-byte tag and the len_len-byte length.
+                //
+                // Note that this is the only operation in `long_list` whose cost is proportional
+                // to `len`. Since `len` is at least 256 here, the other operations' cost are
+                // negligible. `copy_within` is a memmove, which is probably a fair bit faster per
+                // Datum than a Datum encoding in the `f` closure.
+                data.copy_within(start + 1 + 1..start + 1 + 1 + len, start + 1 + len_len);
+                // Write the new length.
+                data[start + 1..start + 1 + len_len]
+                    .copy_from_slice(&len.to_le_bytes()[0..len_len]);
+            };
+            match len {
+                0..TINY => {
+                    unreachable!()
+                }
+                TINY..SHORT => {
+                    data[start] = Tag::ListShort.into();
+                    long_list_inner(data, 2);
+                }
+                SHORT..LONG => {
+                    data[start] = Tag::ListLong.into();
+                    long_list_inner(data, 4);
+                }
+                _ => {
+                    data[start] = Tag::ListHuge.into();
+                    long_list_inner(data, 8);
+                }
+            };
+        }
 
         out
     }
@@ -1947,13 +2404,21 @@ impl RowPacker<'_> {
         res
     }
 
+    /// Like [`RowPacker::push_dict_with`], but accepts a fallible closure.
+    pub fn try_push_dict_with<F, E>(&mut self, f: F) -> Result<(), E>
+    where
+        F: FnOnce(&mut RowPacker) -> Result<(), E>,
+    {
+        self.push_dict_with(f)
+    }
+
     /// Convenience function to construct an array from an iter of `Datum`s.
     ///
     /// Returns an error if the number of elements in `iter` does not match
     /// the cardinality of the array as described by `dims`, or if the
     /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`]. If an error
     /// occurs, the packer's state will be unchanged.
-    pub fn push_array<'a, I, D>(
+    pub fn try_push_array<'a, I, D>(
         &mut self,
         dims: &[ArrayDimension],
         iter: I,
@@ -1961,6 +2426,76 @@ impl RowPacker<'_> {
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
+    {
+        // SAFETY: The function returns the exact number of elements pushed into the array.
+        unsafe {
+            self.push_array_with_unchecked(dims, |packer| {
+                let mut nelements = 0;
+                for datum in iter {
+                    packer.push(datum);
+                    nelements += 1;
+                }
+                Ok::<_, InvalidArrayError>(nelements)
+            })
+        }
+    }
+
+    /// Like [`RowPacker::try_push_array`], but accepts a fallible iterator of
+    /// elements.
+    pub fn try_push_array_fallible<'a, I, D, E>(
+        &mut self,
+        dims: &[ArrayDimension],
+        iter: I,
+    ) -> Result<Result<(), E>, InvalidArrayError>
+    where
+        I: IntoIterator<Item = Result<D, E>>,
+        D: Borrow<Datum<'a>>,
+    {
+        enum Error<E> {
+            Usage(InvalidArrayError),
+            Inner(E),
+        }
+
+        impl<E> From<InvalidArrayError> for Error<E> {
+            fn from(e: InvalidArrayError) -> Self {
+                Self::Usage(e)
+            }
+        }
+
+        // SAFETY: The function returns the exact number of elements pushed into the array.
+        let result = unsafe {
+            self.push_array_with_unchecked(dims, |packer| {
+                let mut nelements = 0;
+                for datum in iter {
+                    packer.push(datum.map_err(Error::Inner)?);
+                    nelements += 1;
+                }
+                Ok(nelements)
+            })
+        };
+        match result {
+            Ok(()) => Ok(Ok(())),
+            Err(Error::Usage(e)) => Err(e),
+            Err(Error::Inner(e)) => Ok(Err(e)),
+        }
+    }
+
+    /// Convenience function to construct an array from a function. The function must return the
+    /// number of elements it pushed into the array. It is undefined behavior if the function returns
+    /// a number different to the number of elements it pushed.
+    ///
+    /// Returns an error if the number of elements pushed by `f` does not match
+    /// the cardinality of the array as described by `dims`, or if the
+    /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`], or if `f` errors. If an error
+    /// occurs, the packer's state will be unchanged.
+    pub unsafe fn push_array_with_unchecked<F, E>(
+        &mut self,
+        dims: &[ArrayDimension],
+        f: F,
+    ) -> Result<(), E>
+    where
+        F: FnOnce(&mut RowPacker) -> Result<usize, E>,
+        E: From<InvalidArrayError>,
     {
         // Arrays are encoded as follows.
         //
@@ -1974,7 +2509,7 @@ impl RowPacker<'_> {
         // u8    element data, where elements are encoded in row-major order
 
         if dims.len() > usize::from(MAX_ARRAY_DIMENSIONS) {
-            return Err(InvalidArrayError::TooManyDimensions(dims.len()));
+            return Err(InvalidArrayError::TooManyDimensions(dims.len()).into());
         }
 
         let start = self.row.data.len();
@@ -1996,11 +2531,13 @@ impl RowPacker<'_> {
         // Write elements.
         let off = self.row.data.len();
         self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
-        let mut nelements = 0;
-        for datum in iter {
-            self.push(*datum.borrow());
-            nelements += 1;
-        }
+        let nelements = match f(self) {
+            Ok(nelements) => nelements,
+            Err(e) => {
+                self.row.data.truncate(start);
+                return Err(e);
+            }
+        };
         let len = u64::cast_from(self.row.data.len() - off - size_of::<u64>());
         self.row.data[off..off + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
 
@@ -2015,7 +2552,8 @@ impl RowPacker<'_> {
             return Err(InvalidArrayError::WrongCardinality {
                 actual: nelements,
                 expected: cardinality,
-            });
+            }
+            .into());
         }
 
         Ok(())
@@ -2024,7 +2562,7 @@ impl RowPacker<'_> {
     /// Pushes an [`Array`] that is built from a closure.
     ///
     /// __WARNING__: This is fairly "sharp" tool that is easy to get wrong. You
-    /// should prefer [`RowPacker::push_array`] when possible.
+    /// should prefer [`RowPacker::try_push_array`] when possible.
     ///
     /// Returns an error if the number of elements pushed does not match
     /// the cardinality of the array as described by `dims`, or if the
@@ -2213,7 +2751,7 @@ impl RowPacker<'_> {
 
         self.row.data.push(flags.bits());
 
-        let mut datum_check = self.row.data.len();
+        let datum_check = self.row.data.len();
 
         if let Some(value) = lower.bound {
             let start = self.row.data.len();
@@ -2235,11 +2773,14 @@ impl RowPacker<'_> {
             expected_datums += 1;
         }
 
-        // Validate that what was written maintains the correct invariants.
+        // Validate the invariants that 0, 1, or 2 elements were pushed, none are Null,
+        // and if two are pushed then the second is not less than the first. Panic in
+        // some cases and error in others.
         let mut actual_datums = 0;
         let mut seen = None;
-        while datum_check < self.row.data.len() {
-            let d = unsafe { read_datum(&self.row.data, &mut datum_check) };
+        let mut dataz = &self.row.data[datum_check..];
+        while !dataz.is_empty() {
+            let d = unsafe { read_datum(&mut dataz) };
             assert!(d != Datum::Null, "cannot push Datum::Null into range");
 
             match seen {
@@ -2247,7 +2788,10 @@ impl RowPacker<'_> {
                 Some(seen) => {
                     let seen_kind = DatumKind::from(seen);
                     let d_kind = DatumKind::from(d);
-                    assert!(seen_kind == d_kind, "range contains inconsistent data; expected {seen_kind:?} but got {d_kind:?}");
+                    assert!(
+                        seen_kind == d_kind,
+                        "range contains inconsistent data; expected {seen_kind:?} but got {d_kind:?}"
+                    );
 
                     if seen > d {
                         self.row.data.truncate(start);
@@ -2258,13 +2802,9 @@ impl RowPacker<'_> {
             actual_datums += 1;
         }
 
-        assert!(actual_datums == expected_datums, "finite values must each push exactly one value; expected {expected_datums} but got {actual_datums}");
-
-        // Anything that triggers this check is undefined behavior, so
-        // unnecessary but also trivial to perform the check in our case.
         assert!(
-            datum_check == self.row.data.len(),
-            "non-Datum data packed into row"
+            actual_datums == expected_datums,
+            "finite values must each push exactly one value; expected {expected_datums} but got {actual_datums}"
         );
 
         Ok(())
@@ -2293,11 +2833,12 @@ impl RowPacker<'_> {
 
     /// Truncates the underlying row to contain at most the first `n` datums.
     pub fn truncate_datums(&mut self, n: usize) {
+        let prev_len = self.row.data.len();
         let mut iter = self.row.iter();
         for _ in iter.by_ref().take(n) {}
-        let offset = iter.offset;
+        let next_len = iter.data.len();
         // SAFETY: iterator offsets always lie on a datum boundary.
-        unsafe { self.truncate(offset) }
+        unsafe { self.truncate(prev_len - next_len) }
     }
 
     /// Returns the total amount of bytes used by the underlying row.
@@ -2337,15 +2878,23 @@ impl fmt::Display for Row {
     }
 }
 
-impl<'a> DatumList<'a> {
-    pub fn empty() -> DatumList<'static> {
-        DatumList { data: &[] }
+impl<'a, T> DatumList<'a, T> {
+    pub fn iter(&self) -> DatumListIter<'a> {
+        DatumListIter { data: self.data }
     }
 
-    pub fn iter(&self) -> DatumListIter<'a> {
-        DatumListIter {
-            data: self.data,
-            offset: 0,
+    /// Iterate elements as typed `T` values rather than raw `Datum`s.
+    ///
+    /// Each datum is decoded and converted via [`FromDatum`]. Since generic
+    /// type parameters in `#[sqlfunc]` are erased to `Datum<'a>` before code
+    /// generation, this is monomorphized to an identity conversion at runtime.
+    pub fn typed_iter(&self) -> DatumListTypedIter<'a, T>
+    where
+        T: FromDatum<'a>,
+    {
+        DatumListTypedIter {
+            inner: self.iter(),
+            _phantom: PhantomData,
         }
     }
 
@@ -2355,7 +2904,13 @@ impl<'a> DatumList<'a> {
     }
 }
 
-impl<'a> IntoIterator for &'a DatumList<'a> {
+impl<T> DatumList<'static, T> {
+    pub fn empty() -> Self {
+        DatumList::new(&[])
+    }
+}
+
+impl<'a> IntoIterator for DatumList<'a> {
     type Item = Datum<'a>;
     type IntoIter = DatumListIter<'a>;
     fn into_iter(self) -> DatumListIter<'a> {
@@ -2366,24 +2921,41 @@ impl<'a> IntoIterator for &'a DatumList<'a> {
 impl<'a> Iterator for DatumListIter<'a> {
     type Item = Datum<'a>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.offset >= self.data.len() {
+        if self.data.is_empty() {
             None
         } else {
-            Some(unsafe { read_datum(self.data, &mut self.offset) })
+            Some(unsafe { read_datum(&mut self.data) })
         }
     }
 }
 
-impl<'a> DatumMap<'a> {
-    pub fn empty() -> DatumMap<'static> {
-        DatumMap { data: &[] }
+impl<'a, T: FromDatum<'a>> Iterator for DatumListTypedIter<'a, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(T::from_datum)
     }
+}
 
+impl<'a, T> DatumMap<'a, T> {
     pub fn iter(&self) -> DatumDictIter<'a> {
         DatumDictIter {
             data: self.data,
-            offset: 0,
             prev_key: None,
+        }
+    }
+
+    /// Iterate entries as `(&str, T)` pairs rather than `(&str, Datum)`.
+    ///
+    /// Each value datum is converted via [`FromDatum`]. Since generic type
+    /// parameters in `#[sqlfunc]` are erased to `Datum<'a>` before code
+    /// generation, this is monomorphized to an identity conversion at runtime.
+    pub fn typed_iter(&self) -> DatumDictTypedIter<'a, T>
+    where
+        T: FromDatum<'a>,
+    {
+        DatumDictTypedIter {
+            inner: self.iter(),
+            _phantom: PhantomData,
         }
     }
 
@@ -2393,7 +2965,13 @@ impl<'a> DatumMap<'a> {
     }
 }
 
-impl<'a> Debug for DatumMap<'a> {
+impl<T> DatumMap<'static, T> {
+    pub fn empty() -> Self {
+        DatumMap::new(&[])
+    }
+}
+
+impl<'a, T> Debug for DatumMap<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map().entries(self.iter()).finish()
     }
@@ -2410,11 +2988,11 @@ impl<'a> IntoIterator for &'a DatumMap<'a> {
 impl<'a> Iterator for DatumDictIter<'a> {
     type Item = (&'a str, Datum<'a>);
     fn next(&mut self) -> Option<Self::Item> {
-        if self.offset >= self.data.len() {
+        if self.data.is_empty() {
             None
         } else {
-            let key_tag = Tag::try_from_primitive(read_byte(self.data, &mut self.offset))
-                .expect("unknown row tag");
+            let key_tag =
+                Tag::try_from_primitive(read_byte(&mut self.data)).expect("unknown row tag");
             assert!(
                 key_tag == Tag::StringTiny
                     || key_tag == Tag::StringShort
@@ -2423,9 +3001,8 @@ impl<'a> Iterator for DatumDictIter<'a> {
                 "Dict keys must be strings, got {:?}",
                 key_tag
             );
-            let key =
-                unsafe { read_lengthed_datum(self.data, &mut self.offset, key_tag).unwrap_str() };
-            let val = unsafe { read_datum(self.data, &mut self.offset) };
+            let key = unsafe { read_lengthed_datum(&mut self.data, key_tag).unwrap_str() };
+            let val = unsafe { read_datum(&mut self.data) };
 
             // if in debug mode, sanity check keys
             if cfg!(debug_assertions) {
@@ -2445,11 +3022,32 @@ impl<'a> Iterator for DatumDictIter<'a> {
     }
 }
 
+impl<'a, T: FromDatum<'a>> Iterator for DatumDictTypedIter<'a, T> {
+    type Item = (&'a str, T);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(k, v)| (k, T::from_datum(v)))
+    }
+}
+
 impl RowArena {
     pub fn new() -> Self {
         RowArena {
             inner: RefCell::new(vec![]),
         }
+    }
+
+    /// Creates a `RowArena` with a hint of how many rows will be created in the arena, to avoid
+    /// reallocations of its internal vector.
+    pub fn with_capacity(capacity: usize) -> Self {
+        RowArena {
+            inner: RefCell::new(Vec::with_capacity(capacity)),
+        }
+    }
+
+    /// Does a `reserve` on the underlying `Vec`. Call this when you expect `additional` more datums
+    /// to be created in this arena.
+    pub fn reserve(&self, additional: usize) {
+        self.inner.borrow_mut().reserve(additional);
     }
 
     /// Take ownership of `bytes` for the lifetime of the arena.
@@ -2498,7 +3096,7 @@ impl RowArena {
             //     and moves the row.
             //   * We don't allow access to the byte vector itself, so it will
             //     never reallocate.
-            let datum = read_datum(&inner[inner.len() - 1], &mut 0);
+            let datum = read_datum(&mut &inner[inner.len() - 1][..]);
             transmute::<Datum<'_>, Datum<'a>>(datum)
         }
     }
@@ -2518,7 +3116,7 @@ impl RowArena {
             //     and moves the row.
             //   * We don't allow access to the byte vector itself, so it will
             //     never reallocate.
-            let nested = DatumNested::extract(&inner[inner.len() - 1], &mut 0);
+            let nested = DatumNested::extract(&mut &inner[inner.len() - 1][..]);
             transmute::<DatumNested<'_>, DatumNested<'a>>(nested)
         }
     }
@@ -2543,6 +3141,26 @@ impl RowArena {
         self.push_unary_row(row)
     }
 
+    /// Convenience function to build a list datum from an iterator of typed
+    /// elements and return it as a `DatumList<'a, T>`.
+    ///
+    /// By accepting an iterator of `T: Borrow<Datum>` instead of a raw
+    /// `RowPacker` closure, this guarantees that only elements of type `T`
+    /// are pushed.
+    pub fn make_datum_list<'a, T: std::borrow::Borrow<Datum<'a>>>(
+        &'a self,
+        iter: impl IntoIterator<Item = T>,
+    ) -> DatumList<'a, T> {
+        let datum = self.make_datum(|packer| {
+            packer.push_list_with(|packer| {
+                for elem in iter {
+                    packer.push(*elem.borrow());
+                }
+            });
+        });
+        DatumList::new(datum.unwrap_list().data())
+    }
+
     /// Convenience function identical to `make_datum` but instead returns a
     /// `DatumNested`.
     pub fn make_datum_nested<'a, F>(&'a self, f: F) -> DatumNested<'a>
@@ -2563,6 +3181,11 @@ impl RowArena {
         f(&mut row.packer())?;
         Ok(self.push_unary_row(row))
     }
+
+    /// Clear the contents of the arena.
+    pub fn clear(&mut self) {
+        self.inner.borrow_mut().clear();
+    }
 }
 
 impl Default for RowArena {
@@ -2578,8 +3201,7 @@ impl Default for RowArena {
 /// ```
 /// use mz_repr::SharedRow;
 ///
-/// let binding = SharedRow::get();
-/// let mut row_builder = binding.borrow_mut();
+/// let mut row_builder = SharedRow::get();
 /// ```
 ///
 /// This allows us to reuse an existing row allocation instead of creating a new one or retaining
@@ -2590,11 +3212,15 @@ impl Default for RowArena {
 ///
 /// [`SharedRow::get`] panics when trying to obtain multiple references to the shared row.
 #[derive(Debug)]
-pub struct SharedRow(Rc<RefCell<Row>>);
+pub struct SharedRow(Row);
 
 impl SharedRow {
     thread_local! {
-        static SHARED_ROW: Rc<RefCell<Row>> = Rc::new(RefCell::new(Row::default()));
+        /// A thread-local slot containing a shared Row that can be temporarily used by a function.
+        /// There can be at most one active user of this Row, which is tracked by the state of the
+        /// `Option<_>` wrapper. When it is `Some(..)`, the row is available for using. When it
+        /// is `None`, it is not, and the constructor will panic if a thread attempts to use it.
+        static SHARED_ROW: Cell<Option<Row>> = const { Cell::new(Some(Row::empty())) }
     }
 
     /// Get the shared row.
@@ -2605,9 +3231,11 @@ impl SharedRow {
     ///
     /// Panics when the row is already borrowed elsewhere.
     pub fn get() -> Self {
-        let row = Self::SHARED_ROW.with(Rc::clone);
+        let mut row = Self::SHARED_ROW
+            .take()
+            .expect("attempted to borrow already borrowed SharedRow");
         // Clear row
-        row.borrow_mut().packer();
+        row.packer();
         Self(row)
     }
 
@@ -2617,8 +3245,7 @@ impl SharedRow {
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        let binding = Self::SHARED_ROW.with(Rc::clone);
-        let mut row_builder = binding.borrow_mut();
+        let mut row_builder = Self::get();
         let mut row_packer = row_builder.packer();
         row_packer.extend(iter);
         row_builder.clone()
@@ -2626,20 +3253,47 @@ impl SharedRow {
 }
 
 impl std::ops::Deref for SharedRow {
-    type Target = RefCell<Row>;
+    type Target = Row;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
+impl std::ops::DerefMut for SharedRow {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for SharedRow {
+    fn drop(&mut self) {
+        // Take the Row allocation from this instance and put it back in the thread local slot for
+        // the next user. The Row in `self` is replaced with an empty Row which does not allocate.
+        Self::SHARED_ROW.set(Some(std::mem::take(&mut self.0)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, NaiveDate};
+    use std::cmp::Ordering;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
-    use crate::ScalarType;
+    use chrono::{DateTime, NaiveDate};
+    use itertools::Itertools;
+    use mz_ore::{assert_err, assert_none};
+    use ordered_float::OrderedFloat;
+
+    use crate::SqlScalarType;
 
     use super::*;
+
+    fn hash<T: Hash>(t: &T) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        t.hash(&mut hasher);
+        hasher.finish()
+    }
 
     #[mz_ore::test]
     fn test_assumptions() {
@@ -2694,7 +3348,7 @@ mod tests {
 
         round_trip(vec![]);
         round_trip(
-            ScalarType::enumerate()
+            SqlScalarType::enumerate()
                 .iter()
                 .flat_map(|r#type| r#type.interesting_datums())
                 .collect(),
@@ -2765,7 +3419,7 @@ mod tests {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer
-            .push_array(&[DIM], vec![Datum::Int32(1), Datum::Int32(2)])
+            .try_push_array(&[DIM], vec![Datum::Int32(1), Datum::Int32(2)])
             .unwrap();
         let arr1 = row.unpack_first().unwrap_array();
         assert_eq!(arr1.dims().into_iter().collect::<Vec<_>>(), vec![DIM]);
@@ -2797,7 +3451,7 @@ mod tests {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer
-            .push_array(
+            .try_push_array(
                 &[
                     ArrayDimension {
                         lower_bound: 1,
@@ -2825,7 +3479,7 @@ mod tests {
         let max_dims = usize::from(MAX_ARRAY_DIMENSIONS);
 
         // An array with one too many dimensions should be rejected.
-        let res = row.packer().push_array(
+        let res = row.packer().try_push_array(
             &vec![
                 ArrayDimension {
                     lower_bound: 1,
@@ -2841,7 +3495,7 @@ mod tests {
         // An array with exactly the maximum allowable dimensions should be
         // accepted.
         row.packer()
-            .push_array(
+            .try_push_array(
                 &vec![
                     ArrayDimension {
                         lower_bound: 1,
@@ -2857,7 +3511,7 @@ mod tests {
     #[mz_ore::test]
     fn test_array_wrong_cardinality() {
         let mut row = Row::default();
-        let res = row.packer().push_array(
+        let res = row.packer().try_push_array(
             &[
                 ArrayDimension {
                     lower_bound: 1,
@@ -3060,12 +3714,332 @@ mod tests {
             vec![vec![Datum::Null], vec![Datum::Int32(2)]],
             vec![vec![Datum::Int32(1)], vec![Datum::Null]],
         ] {
-            assert!(
-                mz_ore::panic::catch_unwind(|| test_range_errors_inner(panicking_case)).is_err()
-            );
+            #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+            let result = std::panic::catch_unwind(|| test_range_errors_inner(panicking_case));
+            assert_err!(result);
         }
 
         let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);
         assert_eq!(e, Err(InvalidRangeError::MisorderedRangeBounds));
+    }
+
+    /// Lists have a variable-length encoding for their lengths. We test each case here.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow
+    fn test_list_encoding() {
+        fn test_list_encoding_inner(len: usize) {
+            let list_elem = |i: usize| {
+                if i % 2 == 0 {
+                    Datum::False
+                } else {
+                    Datum::True
+                }
+            };
+            let mut row = Row::default();
+            {
+                // Push some stuff.
+                let mut packer = row.packer();
+                packer.push(Datum::String("start"));
+                packer.push_list_with(|packer| {
+                    for i in 0..len {
+                        packer.push(list_elem(i));
+                    }
+                });
+                packer.push(Datum::String("end"));
+            }
+            // Check that we read back exactly what we pushed.
+            let mut row_it = row.iter();
+            assert_eq!(row_it.next().unwrap(), Datum::String("start"));
+            match row_it.next().unwrap() {
+                Datum::List(list) => {
+                    let mut list_it = list.iter();
+                    for i in 0..len {
+                        assert_eq!(list_it.next().unwrap(), list_elem(i));
+                    }
+                    assert_none!(list_it.next());
+                }
+                _ => panic!("expected Datum::List"),
+            }
+            assert_eq!(row_it.next().unwrap(), Datum::String("end"));
+            assert_none!(row_it.next());
+        }
+
+        test_list_encoding_inner(0);
+        test_list_encoding_inner(1);
+        test_list_encoding_inner(10);
+        test_list_encoding_inner(TINY - 1); // tiny
+        test_list_encoding_inner(TINY + 1); // short
+        test_list_encoding_inner(SHORT + 1); // long
+
+        // The biggest one takes 40 s on my laptop, probably not worth it.
+        //test_list_encoding_inner(LONG + 1); // huge
+    }
+
+    /// Demonstrates that DatumList's Eq (bytewise) and Ord (datum-by-datum) are now consistent.
+    /// A list containing -0.0 and one containing +0.0 have different byte representations
+    /// (IEEE 754 distinguishes them), originally Eq says they are not equal. But after
+    /// using the new Datum::cmp, Eq says they are equal, which matches what Ord
+    /// compares via iter().cmp(other.iter()), and them as equal.
+    #[mz_ore::test]
+    fn test_datum_list_eq_ord_consistency() {
+        // Build list containing +0.0
+        let mut row_pos = Row::default();
+        row_pos.packer().push_list_with(|p| {
+            p.push(Datum::Float64(OrderedFloat::from(0.0)));
+        });
+        let list_pos = row_pos.unpack_first().unwrap_list();
+
+        // Build list containing -0.0 (distinct bit pattern from +0.0)
+        let mut row_neg = Row::default();
+        row_neg.packer().push_list_with(|p| {
+            p.push(Datum::Float64(OrderedFloat::from(-0.0)));
+        });
+        let list_neg = row_neg.unpack_first().unwrap_list();
+
+        // Eq is bytewise: different encodings => not equal
+        // This was a bug in the past, so we test it.
+        assert_eq!(
+            list_pos, list_neg,
+            "Eq should see different encodings as equal"
+        );
+
+        // Ord is datum-by-datum: -0.0 and +0.0 compare equal as Datums
+        assert_eq!(
+            list_pos.cmp(&list_neg),
+            Ordering::Equal,
+            "Ord (datum-by-datum) should see -0.0 and +0.0 as equal"
+        );
+    }
+
+    /// Demonstrates that DatumMap's derived Eq (bytewise) can make maps with equal keys and
+    /// values compare equal when values have different encodings (e.g. -0.0 vs +0.0).
+    #[mz_ore::test]
+    fn test_datum_map_eq_bytewise_consistency() {
+        // Build map {"k": +0.0}
+        let mut row_pos = Row::default();
+        row_pos.packer().push_dict_with(|p| {
+            p.push(Datum::String("k"));
+            p.push(Datum::Float64(OrderedFloat::from(0.0)));
+        });
+        let map_pos = row_pos.unpack_first().unwrap_map();
+
+        // Build map {"k": -0.0}
+        let mut row_neg = Row::default();
+        row_neg.packer().push_dict_with(|p| {
+            p.push(Datum::String("k"));
+            p.push(Datum::Float64(OrderedFloat::from(-0.0)));
+        });
+        let map_neg = row_neg.unpack_first().unwrap_map();
+
+        // Same keys and semantically equal values, but Eq (bytewise) says not equal
+        assert_eq!(
+            map_pos, map_neg,
+            "DatumMap Eq is semantic; -0.0 and +0.0 have different encodings but are equal"
+        );
+        // Verify they have the same logical content
+        let entries_pos: Vec<_> = map_pos.iter().collect();
+        let entries_neg: Vec<_> = map_neg.iter().collect();
+        assert_eq!(entries_pos.len(), entries_neg.len());
+        for ((k1, v1), (k2, v2)) in entries_pos.iter().zip_eq(entries_neg.iter()) {
+            assert_eq!(k1, k2);
+            assert_eq!(
+                v1, v2,
+                "Datum-level comparison treats -0.0 and +0.0 as equal"
+            );
+        }
+    }
+
+    /// Hash must agree with Eq: equal lists must have the same hash.
+    #[mz_ore::test]
+    fn test_datum_list_hash_consistency() {
+        // Equal lists (including -0.0 vs +0.0) must hash the same
+        let mut row_pos = Row::default();
+        row_pos.packer().push_list_with(|p| {
+            p.push(Datum::Float64(OrderedFloat::from(0.0)));
+        });
+        let list_pos = row_pos.unpack_first().unwrap_list();
+
+        let mut row_neg = Row::default();
+        row_neg.packer().push_list_with(|p| {
+            p.push(Datum::Float64(OrderedFloat::from(-0.0)));
+        });
+        let list_neg = row_neg.unpack_first().unwrap_list();
+
+        assert_eq!(list_pos, list_neg);
+        assert_eq!(
+            hash(&list_pos),
+            hash(&list_neg),
+            "equal lists must have same hash"
+        );
+
+        // Unequal lists should have different hashes (with asymptotic probability 1)
+        let mut row_a = Row::default();
+        row_a.packer().push_list_with(|p| {
+            p.push(Datum::Int32(1));
+            p.push(Datum::Int32(2));
+        });
+        let list_a = row_a.unpack_first().unwrap_list();
+
+        let mut row_b = Row::default();
+        row_b.packer().push_list_with(|p| {
+            p.push(Datum::Int32(1));
+            p.push(Datum::Int32(3));
+        });
+        let list_b = row_b.unpack_first().unwrap_list();
+
+        assert_ne!(list_a, list_b);
+        assert_ne!(
+            hash(&list_a),
+            hash(&list_b),
+            "unequal lists must have different hashes"
+        );
+    }
+
+    /// Ord/PartialOrd for DatumList: less, equal, greater.
+    #[mz_ore::test]
+    fn test_datum_list_ordering() {
+        let mut row_12 = Row::default();
+        row_12.packer().push_list_with(|p| {
+            p.push(Datum::Int32(1));
+            p.push(Datum::Int32(2));
+        });
+        let list_12 = row_12.unpack_first().unwrap_list();
+
+        let mut row_13 = Row::default();
+        row_13.packer().push_list_with(|p| {
+            p.push(Datum::Int32(1));
+            p.push(Datum::Int32(3));
+        });
+        let list_13 = row_13.unpack_first().unwrap_list();
+
+        let mut row_123 = Row::default();
+        row_123.packer().push_list_with(|p| {
+            p.push(Datum::Int32(1));
+            p.push(Datum::Int32(2));
+            p.push(Datum::Int32(3));
+        });
+        let list_123 = row_123.unpack_first().unwrap_list();
+
+        // [1, 2] < [1, 3] due to the second element being different
+        assert_eq!(list_12.cmp(&list_13), Ordering::Less);
+        assert_eq!(list_13.cmp(&list_12), Ordering::Greater);
+        assert_eq!(list_12.cmp(&list_12), Ordering::Equal);
+        // shorter prefix compares less
+        assert_eq!(list_12.cmp(&list_123), Ordering::Less);
+    }
+
+    /// Hash must agree with Eq: equal maps must have the same hash.
+    #[mz_ore::test]
+    fn test_datum_map_hash_consistency() {
+        let mut row_pos = Row::default();
+        row_pos.packer().push_dict_with(|p| {
+            p.push(Datum::String("x"));
+            p.push(Datum::Float64(OrderedFloat::from(0.0)));
+        });
+        let map_pos = row_pos.unpack_first().unwrap_map();
+
+        let mut row_neg = Row::default();
+        row_neg.packer().push_dict_with(|p| {
+            p.push(Datum::String("x"));
+            p.push(Datum::Float64(OrderedFloat::from(-0.0)));
+        });
+        let map_neg = row_neg.unpack_first().unwrap_map();
+
+        assert_eq!(map_pos, map_neg);
+        assert_eq!(
+            hash(&map_pos),
+            hash(&map_neg),
+            "equal maps must have same hash"
+        );
+
+        let mut row_a = Row::default();
+        row_a.packer().push_dict_with(|p| {
+            p.push(Datum::String("a"));
+            p.push(Datum::Int32(1));
+        });
+        let map_a = row_a.unpack_first().unwrap_map();
+
+        let mut row_b = Row::default();
+        row_b.packer().push_dict_with(|p| {
+            p.push(Datum::String("a"));
+            p.push(Datum::Int32(2));
+        });
+        let map_b = row_b.unpack_first().unwrap_map();
+
+        assert_ne!(map_a, map_b);
+        assert_ne!(
+            hash(&map_a),
+            hash(&map_b),
+            "unequal maps must have different hashes"
+        );
+    }
+
+    /// Ord/PartialOrd for DatumMap: less, equal, greater (by key then value).
+    #[mz_ore::test]
+    fn test_datum_map_ordering() {
+        let mut row_a1 = Row::default();
+        row_a1.packer().push_dict_with(|p| {
+            p.push(Datum::String("a"));
+            p.push(Datum::Int32(1));
+        });
+        let map_a1 = row_a1.unpack_first().unwrap_map();
+
+        let mut row_a2 = Row::default();
+        row_a2.packer().push_dict_with(|p| {
+            p.push(Datum::String("a"));
+            p.push(Datum::Int32(2));
+        });
+        let map_a2 = row_a2.unpack_first().unwrap_map();
+
+        let mut row_b1 = Row::default();
+        row_b1.packer().push_dict_with(|p| {
+            p.push(Datum::String("b"));
+            p.push(Datum::Int32(1));
+        });
+        let map_b1 = row_b1.unpack_first().unwrap_map();
+
+        assert_eq!(map_a1.cmp(&map_a2), Ordering::Less);
+        assert_eq!(map_a2.cmp(&map_a1), Ordering::Greater);
+        assert_eq!(map_a1.cmp(&map_a1), Ordering::Equal);
+        assert_eq!(map_a1.cmp(&map_b1), Ordering::Less); // "a" < "b"
+    }
+
+    /// Datum puts Null last in the enum so that nulls sort last (PostgreSQL default).
+    /// This ordering is used when comparing DatumList/DatumMap (e.g. jsonb_agg tiebreaker).
+    #[mz_ore::test]
+    fn test_datum_list_and_map_null_sorts_last() {
+        // DatumList: [1] < [null] so non-null sorts before null
+        let mut row_list_1 = Row::default();
+        row_list_1
+            .packer()
+            .push_list_with(|p| p.push(Datum::Int32(1)));
+        let list_1 = row_list_1.unpack_first().unwrap_list();
+
+        let mut row_list_null = Row::default();
+        row_list_null
+            .packer()
+            .push_list_with(|p| p.push(Datum::Null));
+        let list_null = row_list_null.unpack_first().unwrap_list();
+
+        assert_eq!(list_1.cmp(&list_null), Ordering::Less);
+        assert_eq!(list_null.cmp(&list_1), Ordering::Greater);
+
+        // DatumMap: {"k": 1} < {"k": null} so non-null sorts before null (same as jsonb_agg)
+        let mut row_map_1 = Row::default();
+        row_map_1.packer().push_dict_with(|p| {
+            p.push(Datum::String("k"));
+            p.push(Datum::Int32(1));
+        });
+        let map_1 = row_map_1.unpack_first().unwrap_map();
+
+        let mut row_map_null = Row::default();
+        row_map_null.packer().push_dict_with(|p| {
+            p.push(Datum::String("k"));
+            p.push(Datum::Null);
+        });
+        let map_null = row_map_null.unpack_first().unwrap_map();
+
+        assert_eq!(map_1.cmp(&map_null), Ordering::Less);
+        assert_eq!(map_null.cmp(&map_1), Ordering::Greater);
     }
 }

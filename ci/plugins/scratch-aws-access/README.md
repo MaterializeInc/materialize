@@ -7,7 +7,7 @@ scratch AWS account. The following environment variables are set:
 * `AWS_SECRET_ACCESS_KEY`
 * `AWS_SESSION_TOKEN`
 
-The credentials are valid for one hour.
+The credentials are valid for 12 hours.
 
 ## Example
 

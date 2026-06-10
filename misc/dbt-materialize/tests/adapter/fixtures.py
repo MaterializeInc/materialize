@@ -21,6 +21,34 @@ test_materialized_view = """
     SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
 """
 
+test_materialized_view_retain_history = """
+{{ config(
+    materialized='materialized_view',
+    retain_history='1hr'
+) }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
+"""
+
+test_materialized_view_partition_by = """
+{{ config(
+    materialized='materialized_view',
+    partition_by=['a']
+) }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
+"""
+
+test_materialized_view_multiple_with_options = """
+{{ config(
+    materialized='materialized_view',
+    partition_by=['a'],
+    retain_history='1hr'
+) }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
+"""
+
 test_materialized_view_index = """
 {{ config(
     materialized='materialized_view',
@@ -96,6 +124,25 @@ FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
 FORMAT BYTES
 """
 
+test_source_table = """
+{{ config(
+    materialized='source_table',
+    database='materialize'
+) }}
+FROM SOURCE {{ ref('test_subsources') }}
+(REFERENCE "bids")
+"""
+
+test_source_table_index = """
+{{ config(
+    materialized='source_table',
+    database='materialize',
+    indexes=[{'columns': ['amount']}]
+) }}
+FROM SOURCE {{ ref('test_subsources') }}
+(REFERENCE "bids")
+"""
+
 test_subsources = """
 {{ config(
     materialized='source',
@@ -165,6 +212,7 @@ test_source_index,1,1,,test_source_index_data_idx
 test_view_index,1,1,,test_view_index_primary_idx
 test_table_index,1,1,,test_table_index_a_idx
 test_table_index,2,,pg_catalog.length(a),test_table_index_a_idx
+test_source_table_index,1,4,,test_source_table_index_amount_idx
 """.lstrip()
 
 not_null = """
@@ -290,6 +338,27 @@ models:
     config:
       contract:
         enforced: true
+    columns:
+      - name: a
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: b
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: c
+        data_type: string
+"""
+
+partition_by_with_constraints_schema_yml = """
+version: 2
+models:
+  - name: test_partition_by_with_constraints_ddl
+    config:
+      contract:
+        enforced: true
+      partition_by: ['a']
     columns:
       - name: a
         data_type: string

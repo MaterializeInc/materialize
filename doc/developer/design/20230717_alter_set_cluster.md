@@ -1,6 +1,6 @@
 # Moving source and sinks
 
-Issue: [#17417](https://github.com/MaterializeInc/materialize/issues/17417)
+Issue: [#17417](https://github.com/MaterializeInc/database-issues/issues/5050)
 
 ## Context
 

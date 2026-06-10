@@ -44,17 +44,21 @@ banana
 # The default group ID prefix is not usable by the `materialize_lockdown`
 # user.
 
+> BEGIN
 > CREATE SOURCE broken
   FROM KAFKA CONNECTION kafka_good_progress_topic (
     TOPIC 'testdrive-data-${testdrive.seed}'
   )
+
+> CREATE TABLE broken_tbl FROM SOURCE broken (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT TEXT
+> COMMIT
 
 > SELECT EXISTS (
     SELECT 1
-    FROM mz_sources
-    JOIN mz_internal.mz_source_status_history ON mz_sources.id = mz_source_status_history.source_id
-    WHERE name = 'broken'
+    FROM mz_objects
+    JOIN mz_internal.mz_source_status_history ON mz_objects.id = mz_source_status_history.source_id
+    WHERE name = 'broken_tbl'
     AND error ILIKE '%error when polling consumer for source%Group authorization failed%'
   )
 true
@@ -64,14 +68,18 @@ true
 # The default group ID prefix *is* writeable by the `materialize_lockdown` user.
 # Ensure that offsets are committed.
 
+> BEGIN
 > CREATE SOURCE working_source
   FROM KAFKA CONNECTION kafka_good_progress_topic (
     TOPIC 'testdrive-data-${testdrive.seed}',
     GROUP ID PREFIX 'lockdown-'
   )
-  FORMAT TEXT
 
-> SELECT * FROM working_source
+> CREATE TABLE working_source_tbl FROM SOURCE working_source (REFERENCE "testdrive-data-${testdrive.seed}")
+  FORMAT TEXT
+> COMMIT
+
+> SELECT * FROM working_source_tbl
 banana
 
 $ set-from-sql var=conn-id
@@ -139,7 +147,7 @@ true
 # but a bad group ID prefix will fail, but only after restart when the progress
 # topic contains entries.
 
-> CREATE CLUSTER c (SIZE = '1')
+> CREATE CLUSTER c (SIZE = 'scale=1,workers=1')
 
 > CREATE SINK broken4 IN CLUSTER c FROM mv
   INTO KAFKA CONNECTION kafka_good_progress_topic (
@@ -153,7 +161,7 @@ $ kafka-verify-data format=json key=false sink=materialize.public.broken4 sort-m
 {"column1": 2}
 
 # Resize the cluster on which the sink is running to force the sink to restart.
-> ALTER CLUSTER c SET (SIZE = '2')
+> ALTER CLUSTER c SET (SIZE = 'scale=1,workers=2')
 
 > SELECT EXISTS (
     SELECT 1
@@ -184,7 +192,7 @@ $ kafka-verify-data format=json key=false sink=materialize.public.working sort-m
 {"column1": 2}
 
 # Resize the cluster on which the sink is running to force the sink to restart.
-> ALTER CLUSTER c SET (SIZE = '1')
+> ALTER CLUSTER c SET (SIZE = 'scale=1,workers=1')
 
 # Ensure that the sink is emitting new messages.
 > INSERT INTO t VALUES (3)

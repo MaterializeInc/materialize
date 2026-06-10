@@ -11,12 +11,20 @@
 
 > CREATE SECRET pgpass AS 'postgres'
 
-> CREATE CONNECTION pg TO POSTGRES (
+! CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
+contains:replication disabled on server
+
+> CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  ) WITH (VALIDATE = false)
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
@@ -32,6 +40,5 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 INSERT INTO pk_table VALUES (2, 'two');
 
 ! CREATE SOURCE pg_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES ("pk_table");
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 contains:replication disabled on server

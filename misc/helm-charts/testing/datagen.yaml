@@ -1,0 +1,66 @@
+---
+# Source: materialize-environmentd/templates/secret.yaml
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: datagen-schema
+  namespace: materialize
+data:
+  schema.json: |
+    [
+        {
+            "_meta": {
+                "topic": "mz_datagen_test"
+            },
+            "id": "iteration.index",
+            "name": "faker.internet.userName()"
+        }
+    ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datagen
+  namespace: materialize
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datagen
+  template:
+    metadata:
+      labels:
+        app: datagen
+    spec:
+      containers:
+        - name: datagen
+          image: materialize/datagen:latest
+          args:
+            [
+              "datagen",
+              "-s", "/schemas/schema.json",
+              "-f", "json",
+              "-n", "10024",
+              "-w", "2000",
+              "-d"
+            ]
+          env:
+            - name: KAFKA_BROKERS
+              value: "redpanda.materialize.svc.cluster.local:9092"
+          volumeMounts:
+            - name: datagen-schema-volume
+              mountPath: /schemas
+              readOnly: true
+      volumes:
+        - name: datagen-schema-volume
+          configMap:
+            name: datagen-schema

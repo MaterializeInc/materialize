@@ -20,6 +20,7 @@ from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
+    is_table_function,
     matches_fun_by_any_name,
     matches_fun_by_name,
 )
@@ -38,13 +39,12 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
-    DbFunctionWithCustomPattern,
     DbOperation,
     DbOperationOrFunction,
 )
 from materialize.output_consistency.query.query_result import QueryFailure
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.selection.column_selection import (
     ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
 )
 from materialize.output_consistency.validation.validation_message import (
@@ -52,6 +52,7 @@ from materialize.output_consistency.validation.validation_message import (
 )
 
 AGGREGATION_SHORTCUT_FUNCTION_NAMES = {"count", "string_agg"}
+DIFFERENT_EVALUATION_ORDER_FUNCTION_NAMES = {"map_agg"}
 
 
 class InternalOutputInconsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -83,7 +84,7 @@ class PreExecutionInternalOutputInconsistencyIgnoreFilter(
                     isinstance(arg_type_spec, NumericReturnTypeSpec)
                     and not arg_type_spec.only_integer
                 ):
-                    return YesIgnore("#15186")
+                    return YesIgnore("database-issues#4341")
 
         return NoIgnore()
 
@@ -103,20 +104,13 @@ class PreExecutionInternalOutputInconsistencyIgnoreFilter(
             "var_pop",
         }:
             if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
-                return YesIgnore("#15186")
+                return YesIgnore("database-issues#4341")
 
             if (
                 ExpressionCharacteristics.DECIMAL in all_involved_characteristics
                 and ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
             ):
-                return YesIgnore("#15186")
-
-        if db_function.function_name_in_lower_case in {
-            "array_agg",
-            "string_agg",
-        } and not isinstance(db_function, DbFunctionWithCustomPattern):
-            # The unordered variants are to be ignored.
-            return YesIgnore("#19832")
+                return YesIgnore("database-issues#4341")
 
         return NoIgnore()
 
@@ -153,7 +147,7 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         if dfr_fails_but_ctf_succeeds and self._uses_shortcut_optimization(
             query_template.select_expressions, contains_aggregation
         ):
-            return YesIgnore("#19662")
+            return YesIgnore("database-issues#5850")
 
         if (
             dfr_fails_but_ctf_succeeds
@@ -162,17 +156,25 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
                 [query_template.where_expression], contains_aggregation
             )
         ):
-            return YesIgnore("#17189")
+            return YesIgnore("database-issues#4972")
 
-        if (
-            dfr_succeeds_but_ctf_fails or dfr_fails_but_ctf_succeeds
-        ) and query_template.where_expression is not None:
-            # An evaluation strategy may touch further rows than the selected subset and thereby run into evaluation
-            # errors (while the other uses another order).
-            return YesIgnore("#17189")
+        if dfr_succeeds_but_ctf_fails or dfr_fails_but_ctf_succeeds:
+            if query_template.has_where_condition():
+                # An evaluation strategy may touch further rows than the selected subset and thereby run into evaluation
+                # errors (while the other uses another order).
+                return YesIgnore("database-issues#4972")
+
+            if (
+                query_template.has_where_condition()
+                or query_template.has_row_selection()
+            ) or query_template.uses_join():
+                # Where expression, or row filter, or join constraint are set. They might be evaluated in a different
+                # order. Furthermore, constant folding may detect that the join constraint cannot be satisfied without
+                # evaluating it (which will fail).
+                return YesIgnore("database-issues#4972: evaluation order")
 
         if self._uses_eager_evaluation(query_template):
-            return YesIgnore("#17189")
+            return YesIgnore("database-issues#4972")
 
         if dfr_succeeds_but_ctf_fails:
             assert isinstance(ctf_outcome, QueryFailure)
@@ -187,7 +189,9 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
                     True,
                 )
             ):
-                return YesIgnore("#28136: jsonb_object_agg with NULL as key")
+                return YesIgnore(
+                    "database-issues#8246: jsonb_object_agg with NULL as key"
+                )
 
         return NoIgnore()
 
@@ -197,6 +201,16 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
+        dfr_outcome = error.query_execution.get_outcome_by_strategy_key()[
+            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
+        ]
+        ctf_outcome = error.query_execution.get_outcome_by_strategy_key()[
+            EvaluationStrategyKey.MZ_CONSTANT_FOLDING
+        ]
+
+        assert isinstance(dfr_outcome, QueryFailure)
+        assert isinstance(ctf_outcome, QueryFailure)
+
         all_characteristics = query_template.get_involved_characteristics(
             ALL_QUERY_COLUMNS_BY_INDEX_SELECTION
         )
@@ -204,20 +218,37 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         if self._uses_shortcut_optimization(
             query_template.select_expressions, contains_aggregation
         ):
-            return YesIgnore("#17189: evaluation order")
+            return YesIgnore("database-issues#4972: evaluation order")
 
         if self._uses_eager_evaluation(query_template):
-            return YesIgnore("#17189: evaluation order")
+            return YesIgnore("database-issues#4972: evaluation order")
 
-        if query_template.where_expression is not None:
-            # The error message may depend on the evaluation order of the where expression.
-            return YesIgnore("#17189: evaluation order")
+        if query_template.has_where_condition() or query_template.uses_join():
+            # The error message may depend on the evaluation order of the where expression or join constraint.
+            return YesIgnore("database-issues#4972: evaluation order")
 
         if (
             ExpressionCharacteristics.INFINITY in all_characteristics
             and ExpressionCharacteristics.MAX_VALUE in all_characteristics
         ):
-            return YesIgnore("#17189: evaluation order")
+            return YesIgnore("database-issues#4972: evaluation order")
+
+        if query_template.matches_any_expression(
+            is_table_function,
+            True,
+        ):
+            return YesIgnore(
+                "Table function rows executed in different order, resulting in different error messages"
+            )
+
+        if query_template.matches_any_expression(
+            partial(
+                matches_fun_by_any_name,
+                function_names_in_lower_case=DIFFERENT_EVALUATION_ORDER_FUNCTION_NAMES,
+            ),
+            True,
+        ):
+            return YesIgnore("database-issues#4972: evaluation order")
 
         return NoIgnore()
 

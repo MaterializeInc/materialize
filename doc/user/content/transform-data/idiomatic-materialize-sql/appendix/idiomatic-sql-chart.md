@@ -1,0 +1,53 @@
+---
+title: "Idiomatic Materialize SQL chart"
+description: "Cheatsheet of idiomatic Materialize SQL."
+menu:
+  main:
+    parent: idiomatic-materialize-appendix
+    weight: 10
+    identifier: idiomatic-materialize-appendix-idiomatic-materialize-sql-chart
+---
+
+Materialize follows the SQL standard (SQL-92) implementation and strives for
+compatibility with the PostgreSQL dialect. However, for some use cases,
+Materialize provides its own idiomatic query patterns that can provide better
+performance.
+
+## General
+
+### Query Patterns
+
+{{< yaml-table data="idiomatic_mzsql/patterns_general"
+  columns="pattern_title,syntax_idiomatic" >}}
+
+### Examples
+
+{{< yaml-table data="idiomatic_mzsql/patterns_general"
+  columns="pattern_title,example_idiomatic" >}}
+
+## Window Functions
+{{< callout >}}
+
+### Materialize and window functions
+
+{{% include-headless "/headless/materialize-window-functions" %}}
+
+{{</ callout >}}
+
+### Query Patterns
+
+{{< yaml-table data="idiomatic_mzsql/patterns_window_functions"
+  columns="pattern_title,syntax_idiomatic" >}}
+
+### Examples
+
+{{< yaml-table data="idiomatic_mzsql/patterns_window_functions"
+  columns="pattern_title,example_idiomatic" >}}
+
+## See also
+
+- [SQL Functions](/sql/functions/)
+- [SQL Types](/sql/types/)
+- [SELECT](/sql/select/)
+- [DISTINCT](/sql/select/#select-distinct)
+- [DISTINCT ON](/sql/select/#select-distinct-on)

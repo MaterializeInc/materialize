@@ -9,21 +9,29 @@
 
 from pathlib import Path
 
+from ci import tarball_uploader
 from materialize import mzbuild
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
 
-from . import deploy_util
 from .deploy_util import MZ_CLI_VERSION
 
 
 def main() -> None:
     repos = [
         mzbuild.Repository(
-            Path("."), Arch.X86_64, coverage=False, sanitizer=Sanitizer.none
+            Path("."),
+            Arch.X86_64,
+            coverage=False,
+            sanitizer=Sanitizer.none,
+            image_registry="materialize",
         ),
         mzbuild.Repository(
-            Path("."), Arch.AARCH64, coverage=False, sanitizer=Sanitizer.none
+            Path("."),
+            Arch.AARCH64,
+            coverage=False,
+            sanitizer=Sanitizer.none,
+            image_registry="materialize",
         ),
     ]
 
@@ -31,7 +39,7 @@ def main() -> None:
     deps = [[repo.resolve_dependencies([repo.images["mz"]])["mz"]] for repo in repos]
 
     mzbuild.publish_multiarch_images(f"v{MZ_CLI_VERSION.str_without_prefix()}", deps)
-    if deploy_util.is_latest_version():
+    if tarball_uploader.is_latest_version(MZ_CLI_VERSION):
         mzbuild.publish_multiarch_images("latest", deps)
 
 

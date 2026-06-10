@@ -42,7 +42,7 @@ class ResultComparator:
     def __init__(
         self,
         ignore_filter: GenericInconsistencyIgnoreFilter,
-        error_message_normalizer: ErrorMessageNormalizer = ErrorMessageNormalizer(),
+        error_message_normalizer: ErrorMessageNormalizer,
     ):
         self.ignore_filter = ignore_filter
         self.error_message_normalizer = error_message_normalizer
@@ -72,7 +72,10 @@ class ResultComparator:
 
         if validation_outcome.query_execution_succeeded_in_all_strategies:
             self.validate_outcomes_data(query_execution, validation_outcome)
-            if query_execution.query_output_mode:
+            if query_execution.query_output_mode in {
+                QueryOutputMode.EXPLAIN,
+                QueryOutputMode.EXPLAIN_PHYSICAL,
+            }:
                 validation_outcome.success_reason = "explain plan matches"
             else:
                 validation_outcome.success_reason = "result data matches"
@@ -338,10 +341,21 @@ class ResultComparator:
         # both results are known to be not empty and have the same number of rows
         row_length = len(result1.result_rows)
 
+        column_values1 = []
+        column_values2 = []
+        expression = query_execution.query_template.select_expressions[col_index]
+
         for row_index in range(0, row_length):
-            result_value1 = result1.result_rows[row_index][col_index]
-            result_value2 = result2.result_rows[row_index][col_index]
-            expression = query_execution.query_template.select_expressions[col_index]
+            column_values1.append(result1.result_rows[row_index][col_index])
+            column_values2.append(result2.result_rows[row_index][col_index])
+
+        if self.ignore_row_order(expression):
+            column_values1 = self._sort_column_values(column_values1)
+            column_values2 = self._sort_column_values(column_values2)
+
+        for row_index in range(0, row_length):
+            result_value1 = column_values1[row_index]
+            result_value2 = column_values2[row_index]
 
             if not self.is_value_equal(result_value1, result_value2, expression):
                 error_type = ValidationErrorType.CONTENT_MISMATCH
@@ -389,14 +403,26 @@ class ResultComparator:
         explain_plan1 = outcome1.result_rows[0][0]
         explain_plan2 = outcome2.result_rows[0][0]
 
-        explain_plan1 = explain_plan1.replace(
-            query_execution.query_template.get_db_object_name(outcome1.strategy),
-            "<db_object>",
-        )
-        explain_plan2 = explain_plan2.replace(
-            query_execution.query_template.get_db_object_name(outcome2.strategy),
-            "<db_object>",
-        )
+        for data_source in query_execution.query_template.get_all_data_sources():
+            new_source_name = f"<db_object-{data_source.table_index or 1}>"
+            explain_plan1 = explain_plan1.replace(
+                data_source.get_db_object_name(
+                    outcome1.strategy.get_db_object_name(
+                        query_execution.query_template.storage_layout,
+                        data_source=data_source,
+                    ),
+                ),
+                new_source_name,
+            )
+            explain_plan2 = explain_plan2.replace(
+                data_source.get_db_object_name(
+                    outcome2.strategy.get_db_object_name(
+                        query_execution.query_template.storage_layout,
+                        data_source=data_source,
+                    ),
+                ),
+                new_source_name,
+            )
 
         if explain_plan1 == explain_plan2:
             return
@@ -436,10 +462,9 @@ class ResultComparator:
         if value1 == value2:
             return True
 
-        if isinstance(value1, list) and isinstance(value2, list):
-            return self.is_list_or_tuple_equal(value1, value2, expression)
-
-        if isinstance(value1, tuple) and isinstance(value2, tuple):
+        if (isinstance(value1, list) and isinstance(value2, list)) or (
+            isinstance(value1, tuple) and isinstance(value2, tuple)
+        ):
             return self.is_list_or_tuple_equal(value1, value2, expression)
 
         if isinstance(value1, dict) and isinstance(value2, dict):
@@ -468,7 +493,11 @@ class ResultComparator:
         if len(collection1) != len(collection2):
             return False
 
-        if self.ignore_order_when_comparing_collection(expression):
+        if (
+            self.ignore_order_when_comparing_collection(expression)
+            and self._can_be_sorted(collection1)
+            and self._can_be_sorted(collection2)
+        ):
             collection1 = sorted(collection1)
             collection2 = sorted(collection2)
 
@@ -497,8 +526,18 @@ class ResultComparator:
 
         return True
 
+    def ignore_row_order(self, expression: Expression) -> bool:
+        return False
+
     def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
         return False
+
+    def _can_be_sorted(self, collection: list[Any] | tuple[Any]) -> bool:
+        for element in collection:
+            if isinstance(element, dict):
+                return False
+
+        return True
 
     def _expression_if_only_one_in_query(
         self, query_execution: QueryExecution
@@ -507,3 +546,10 @@ class ResultComparator:
             return query_execution.query_template.select_expressions[0]
 
         return None
+
+    def _sort_column_values(self, column_values: list[Any]) -> list[Any]:
+        # needed because, for example, None values have no order
+        def sort_key(value: Any) -> Any:
+            return str(value)
+
+        return sorted(column_values, key=sort_key)

@@ -10,14 +10,9 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class RenameCluster(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.58.0-dev")
-
     def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -29,8 +24,8 @@ class RenameCluster(Check):
                 > INSERT INTO rename_cluster1_table VALUES (123);
                 > INSERT INTO rename_cluster2_table VALUES (234);
 
-                > CREATE CLUSTER rename_cluster1 REPLICAS (replica1 (SIZE '2-2'));
-                > CREATE CLUSTER rename_cluster2 REPLICAS (replica1 (SIZE '2-2'));
+                > CREATE CLUSTER rename_cluster1 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
+                > CREATE CLUSTER rename_cluster2 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
 
                 > SET cluster=rename_cluster1
                 > CREATE DEFAULT INDEX ON rename_cluster1_table;
@@ -50,9 +45,7 @@ class RenameCluster(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=rename_cluster_new1
 
                 > SET cluster=rename_cluster_new2
@@ -70,6 +63,4 @@ class RenameCluster(Check):
 
                 > SELECT * FROM rename_cluster2_view;
                 234
-           """
-            )
-        )
+           """))

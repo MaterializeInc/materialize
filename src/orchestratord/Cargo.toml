@@ -1,0 +1,55 @@
+[package]
+name = "mz-orchestratord"
+description = "Kubernetes operator for Materialize regions"
+version = "26.29.0-dev.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+clap.workspace = true
+futures.workspace = true
+http.workspace = true
+humantime.workspace = true
+k8s-controller.workspace = true
+k8s-openapi.workspace = true
+kube.workspace = true
+maplit.workspace = true
+mz-alloc = { path = "../alloc", default-features = false }
+mz-alloc-default = { path = "../alloc-default", optional = true, default-features = false }
+mz-build-info = { path = "../build-info", default-features = false }
+mz-cloud-provider = { path = "../cloud-provider", default-features = false }
+mz-cloud-resources = { path = "../cloud-resources", default-features = false }
+mz-license-keys = { path = "../license-keys", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["panic"] }
+mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing", default-features = false }
+mz-prof-http = { path = "../prof-http", default-features = false }
+mz-server-core = { path = "../server-core", default-features = false }
+prometheus.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+urlencoding.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
+
+[features]
+default = ["mz-alloc-default"]
+jemalloc = ["mz-alloc/jemalloc"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["mz-alloc", "mz-alloc-default"]

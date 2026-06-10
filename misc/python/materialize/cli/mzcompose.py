@@ -20,9 +20,11 @@ just the right way. This stretches the limit of argparse, but that complexity
 has been carefully managed. If you are tempted to refactor the argument parsing
 code, please talk to me first!
 """
+
 from __future__ import annotations
 
 import argparse
+import enum
 import inspect
 import json
 import os
@@ -35,13 +37,19 @@ from pathlib import Path
 from typing import IO, Any
 
 import junit_xml
+import shtab
 from humanize import naturalsize
 from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
-from materialize.mzcompose.composition import Composition, UnknownCompositionError
+from materialize.mzcompose.composition import (
+    Composition,
+    UnknownCompositionError,
+)
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.test_result import TestResult
 from materialize.ui import UIError
+from materialize.util import redact_secrets
 
 RECOMMENDED_MIN_MEM = 7 * 1024**3  # 7GiB
 RECOMMENDED_MIN_CPUS = 2
@@ -88,9 +96,17 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
         help="Use a different project name than the directory name",
     )
     parser.add_argument(
+        "--host-network",
+        action="store_true",
+        help="Override networking to use host networking",
+    )
+    parser.add_argument(
         "--sanity-restart-mz",
         action="store_true",
-        default=os.getenv("BUILDKITE_TAG", "") != "",
+        # Sanity restarts are rather slow and rarely find a bug, don't run on test pipeline in PRs
+        default=os.getenv("BUILDKITE_PIPELINE_SLUG") != "test"
+        or os.getenv("BUILDKITE_TAG", "") != ""
+        or os.getenv("BUILDKITE_BRANCH") == "main",
         help="Whether to restart Materialized at the end of test cases and tests, enabled by default on release branches",
     )
     parser.add_argument("--ignore-docker-version", action="store_true")
@@ -112,6 +128,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     CpCommand.register(parser, subparsers)
     CreateCommand.register(parser, subparsers)
     DescribeCommand().register(parser, subparsers)
+    DescriptionCommand().register(parser, subparsers)
     DownCommand().register(parser, subparsers)
     EventsCommand.register(parser, subparsers)
     ExecCommand.register(parser, subparsers)
@@ -141,6 +158,16 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     UpCommand.register(parser, subparsers)
     WebCommand().register(parser, subparsers)
 
+    completion_parser = subparsers.add_parser(
+        "completion", help="Generate shell completion script"
+    )
+    shtab.add_argument_to(completion_parser, "shell", parent=parser)
+
+    # shtab can't handle Enum choices (indexes with [0]). Convert to strings.
+    for action in parser._actions:  # noqa: SLF001
+        if isinstance(action.choices, type) and issubclass(action.choices, enum.Enum):
+            action.choices = [e.name for e in action.choices]
+
     args = parser.parse_args(argv)
     if args.file:
         parser.error("-f/--file option not supported")
@@ -152,7 +179,11 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     args.command.invoke(args)
 
 
-def load_composition(args: argparse.Namespace) -> Composition:
+def load_composition(
+    args: argparse.Namespace,
+    munge_services: bool = True,
+    resolve_image_specs: bool = True,
+) -> Composition:
     """Loads the composition specified by the command-line arguments."""
     if not args.ignore_docker_version:
         docker_local_version = Version.parse(
@@ -167,16 +198,19 @@ def load_composition(args: argparse.Namespace) -> Composition:
                 hint="If you believe this is a mistake, contact the QA team. While not recommended, --ignore-docker-version can be used to ignore this version check.",
             )
 
-        compose_local_version = Version.parse(
-            spawn.capture(["docker", "compose", "version", "--short"])
+        compose_local_version_s = spawn.capture(
+            ["docker", "compose", "version", "--short"]
         )
-        compose_ci_version = Version.parse("2.15.1")
-        if compose_local_version < compose_ci_version:
-            raise UIError(
-                f"Your Docker Compose version is {compose_local_version} while the version used in CI is {compose_ci_version}, please upgrade your local Docker Compose version to prevent unexpected breakages.",
-                hint="If you believe this is a mistake, contact the QA team. While not recommended, --ignore-docker-version can be used to ignore this version check.",
-            )
-            sys.exit(1)
+        try:
+            compose_local_version = Version.parse(compose_local_version_s)
+            compose_ci_version = Version.parse("2.15.1")
+            if compose_local_version < compose_ci_version:
+                raise UIError(
+                    f"Your Docker Compose version is {compose_local_version} while the version used in CI is {compose_ci_version}, please upgrade your local Docker Compose version to prevent unexpected breakages.",
+                    hint="If you believe this is a mistake, contact the QA team. While not recommended, --ignore-docker-version can be used to ignore this version check.",
+                )
+        except ValueError:
+            pass
 
     repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
     try:
@@ -186,6 +220,9 @@ def load_composition(args: argparse.Namespace) -> Composition:
             preserve_ports=args.preserve_ports,
             project_name=args.project_name,
             sanity_restart_mz=args.sanity_restart_mz,
+            host_network=args.host_network,
+            munge_services=munge_services,
+            resolve_image_specs=resolve_image_specs,
         )
     except UnknownCompositionError as e:
         if args.find:
@@ -299,16 +336,52 @@ class ListCompositionsCommand(Command):
     help = "list the directories that contain compositions and their summaries"
 
     def run(self, args: argparse.Namespace) -> None:
+        import multiprocessing
+
         repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
-        for name, path in sorted(repo.compositions.items(), key=lambda item: item[1]):
+        items = sorted(repo.compositions.items(), key=lambda item: item[1])
+
+        ctx = multiprocessing.get_context("fork")
+        with ctx.Pool(
+            processes=os.cpu_count(),
+            initializer=_init_list_worker,
+            initargs=(repo.rd, repo.compositions),
+        ) as pool:
+            descriptions = pool.map(
+                _load_composition_description, [name for name, _ in items]
+            )
+
+        for (name, path), description in zip(items, descriptions):
             print(os.path.relpath(path, repo.root))
-            composition = Composition(repo, name, munge_services=False)
-            if composition.description:
+            if description:
                 # Emit the first paragraph of the description.
-                for line in composition.description.split("\n"):
+                for line in description.split("\n"):
                     if line.strip() == "":
                         break
                     print(f"  {line}")
+
+
+_list_worker_repo: mzbuild.Repository | None = None
+
+
+def _init_list_worker(
+    rd: mzbuild.RepositoryDetails, compositions: dict[str, Path]
+) -> None:
+    global _list_worker_repo
+    _list_worker_repo = mzbuild.Repository.__new__(mzbuild.Repository)
+    _list_worker_repo.rd = rd
+    _list_worker_repo.images = {}
+    _list_worker_repo.compositions = compositions
+
+
+def _load_composition_description(name: str) -> str | None:
+    assert _list_worker_repo is not None
+    try:
+        composition = Composition(_list_worker_repo, name, munge_services=False)
+        return composition.description
+    except Exception as e:
+        print(f"warning: failed to load composition {name}: {e}", file=sys.stderr)
+        return None
 
 
 class ListWorkflowsCommand(Command):
@@ -316,7 +389,7 @@ class ListWorkflowsCommand(Command):
     help = "list workflows in the composition"
 
     def run(self, args: argparse.Namespace) -> None:
-        composition = load_composition(args)
+        composition = load_composition(args, munge_services=False)
         for name in sorted(composition.workflows):
             print(name)
 
@@ -327,7 +400,7 @@ class DescribeCommand(Command):
     help = "describe services and workflows in the composition"
 
     def run(self, args: argparse.Namespace) -> None:
-        composition = load_composition(args)
+        composition = load_composition(args, munge_services=False)
 
         workflows = []
         for name, fn in composition.workflows.items():
@@ -335,6 +408,11 @@ class DescribeCommand(Command):
         workflows.sort()
 
         name_width = min(max(len(name) for name, _ in workflows), 16)
+
+        if composition.description:
+            print("Description:")
+            print(composition.description)
+            print()
 
         print("Services:")
         for name in sorted(composition.compose["services"]):
@@ -350,12 +428,19 @@ class DescribeCommand(Command):
                 print(f"    {' ' * name_width}    {description}")
 
         print()
-        print(
-            """For help on a specific workflow, run:
+        print("""For help on a specific workflow, run:
 
     $ ./mzcompose run WORKFLOW --help
-"""
-        )
+""")
+
+
+class DescriptionCommand(Command):
+    name = "description"
+    help = "fetch the Python code description from mzcompose.py"
+
+    def run(self, args: argparse.Namespace) -> None:
+        composition = load_composition(args, munge_services=False)
+        print(composition.description)
 
 
 class SqlCommand(Command):
@@ -363,7 +448,18 @@ class SqlCommand(Command):
     help = "connect a SQL shell to a running materialized service"
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("service", metavar="SERVICE", help="the service to target")
+        parser.add_argument(
+            "--mz_system",
+            action="store_true",
+        )
+
+        parser.add_argument(
+            "service",
+            metavar="SERVICE",
+            nargs="?",
+            default="materialized",
+            help="the service to target",
+        )
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
@@ -376,8 +472,52 @@ class SqlCommand(Command):
         # if the service isn't running or isn't exposing a port.
         composition.default_port(args.service)
 
-        image = service["image"].split(":")[0]
+        image = service["image"].rsplit(":", 1)[0]
+        ghcr_prefix = "ghcr.io/materializeinc/"
+        if image.startswith(ghcr_prefix):
+            image = image.removeprefix(ghcr_prefix)
+
         if image == "materialize/materialized":
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["psql"]]
+            )
+            deps.acquire()
+            if args.mz_system:
+                deps["psql"].run(
+                    [
+                        "-h",
+                        service.get("hostname", args.service),
+                        "-p",
+                        "6877",
+                        "-U",
+                        "mz_system",
+                        "materialize",
+                    ],
+                    docker_args=[
+                        "--interactive",
+                        f"--network={composition.project_name}_default",
+                    ],
+                    env={"PGPASSWORD": "materialize", "PGCLIENTENCODING": "utf-8"},
+                )
+            else:
+                deps["psql"].run(
+                    [
+                        "-h",
+                        service.get("hostname", args.service),
+                        "-p",
+                        "6875",
+                        "-U",
+                        "materialize",
+                        "materialize",
+                    ],
+                    docker_args=[
+                        "--interactive",
+                        f"--network={composition.project_name}_default",
+                    ],
+                    env={"PGCLIENTENCODING": "utf-8"},
+                )
+        elif image == "materialize/balancerd":
+            assert not args.mz_system
             deps = composition.repo.resolve_dependencies(
                 [composition.repo.images["psql"]]
             )
@@ -392,9 +532,55 @@ class SqlCommand(Command):
                     "materialize",
                     "materialize",
                 ],
-                docker_args=["--interactive", f"--network={composition.name}_default"],
+                docker_args=[
+                    "--interactive",
+                    f"--network={composition.project_name}_default",
+                ],
+                env={"PGCLIENTENCODING": "utf-8"},
+            )
+        elif image == "materialize/postgres":
+            assert not args.mz_system
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["psql"]]
+            )
+            deps.acquire()
+            deps["psql"].run(
+                [
+                    "-h",
+                    service.get("hostname", args.service),
+                    "-U",
+                    "postgres",
+                    "postgres",
+                ],
+                docker_args=[
+                    "--interactive",
+                    f"--network={composition.project_name}_default",
+                ],
+                env={"PGPASSWORD": "postgres", "PGCLIENTENCODING": "utf-8"},
+            )
+        elif image == "cockroachdb/cockroach" or args.service == "postgres-metadata":
+            assert not args.mz_system
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["psql"]]
+            )
+            deps.acquire()
+            deps["psql"].run(
+                [
+                    "-h",
+                    service.get("hostname", args.service),
+                    "-p" "26257",
+                    "-U",
+                    "root",
+                    "root",
+                ],
+                docker_args=[
+                    "--interactive",
+                    f"--network={composition.project_name}_default",
+                ],
+                env={"PGCLIENTENCODING": "utf-8"},
             )
         elif image == "mysql":
+            assert not args.mz_system
             deps = composition.repo.resolve_dependencies(
                 [composition.repo.images["mysql-client"]]
             )
@@ -410,13 +596,35 @@ class SqlCommand(Command):
                 ],
                 docker_args=[
                     "--interactive",
-                    f"--network={composition.name}_default",
+                    f"--network={composition.project_name}_default",
                     "-e=MYSQL_PWD=p@ssw0rd",
+                ],
+            )
+        elif image == "materialize/mssql-server":
+            assert not args.mz_system
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["mssql-server"]]
+            )
+            deps.acquire()
+            deps["mssql-server"].run(
+                [
+                    "-C",
+                    "-S",
+                    service.get("hostname", args.service),
+                    "-U",
+                    SqlServer.DEFAULT_USER,
+                    "-P",
+                    SqlServer.DEFAULT_SA_PASSWORD,
+                ],
+                docker_args=[
+                    "--entrypoint=/opt/mssql-tools18/bin/sqlcmd",
+                    "--interactive",
+                    f"--network={composition.project_name}_default",
                 ],
             )
         else:
             raise UIError(
-                f"cannot connect SQL shell to non-materialized service {args.service!r}"
+                f"cannot connect SQL shell to unhandled service {args.service!r} (image {image}"
             )
 
 
@@ -445,11 +653,13 @@ class DockerComposeCommand(Command):
         help: str,
         help_epilog: str | None = None,
         runs_containers: bool = False,
+        resolve_image_specs: bool = True,
     ):
         self.name = name
         self.help = help
         self.help_epilog = help_epilog
         self.runs_containers = runs_containers
+        self.resolve_image_specs = resolve_image_specs
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("-h", "--help", action="store_true")
@@ -467,24 +677,33 @@ class DockerComposeCommand(Command):
             print(output, file=sys.stderr)
             return
 
-        composition = load_composition(args)
-        ui.section("Collecting mzbuild images")
-        for d in composition.dependencies:
-            ui.say(d.spec())
+        composition = load_composition(
+            args, resolve_image_specs=self.resolve_image_specs
+        )
+        if (
+            args.coverage
+            or not ui.env_is_truthy("CI")
+            or ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
+        ):
+            dependencies = list(composition.dependencies)
+            if dependencies:
+                ui.section("Collecting mzbuild images")
+                for d in dependencies:
+                    ui.say(d.spec())
 
-        if self.runs_containers:
-            if args.coverage:
-                # If the user has requested coverage information, create the
-                # coverage directory as the current user, so Docker doesn't create
-                # it as root.
-                (composition.path / "coverage").mkdir(exist_ok=True)
-                # Need materialize user to be able to write to coverage
-                os.chmod(composition.path / "coverage", 0o777)
-            self.check_docker_resource_limits()
-            composition.dependencies.acquire()
+            if self.runs_containers:
+                if args.coverage:
+                    # If the user has requested coverage information, create the
+                    # coverage directory as the current user, so Docker doesn't create
+                    # it as root.
+                    (composition.path / "coverage").mkdir(exist_ok=True)
+                    # Need materialize user to be able to write to coverage
+                    os.chmod(composition.path / "coverage", 0o777)
+                self.check_docker_resource_limits()
+                composition.dependencies.acquire()
 
-            if "services" in composition.compose:
-                composition.pull_if_variable(composition.compose["services"].keys())
+                if "services" in composition.compose:
+                    composition.pull_if_variable(composition.compose["services"].keys())
 
         self.handle_composition(args, composition)
 
@@ -591,7 +810,8 @@ To see the available workflows, run:
     def handle_composition(
         self, args: argparse.Namespace, composition: Composition
     ) -> None:
-        if args.workflow not in composition.workflows:
+        workflow_name = args.workflow.replace("_", "-") if args.workflow else None
+        if workflow_name not in composition.workflows:
             # Restart any dependencies whose definitions have changed. This is
             # Docker Compose's default behavior for `up`, but not for `run`,
             # which is a constant irritation that we paper over here. The trick,
@@ -635,13 +855,12 @@ To see the available workflows, run:
                     else []
                 )
                 composition.workflow(
-                    args.workflow, *args.unknown_subargs[1:], *extra_args
+                    workflow_name, *args.unknown_subargs[1:], *extra_args
                 )
 
-            if self.shall_generate_junit_report(args.find):
+            if self.shall_generate_junit_report(args.find, composition):
                 junit_suite = self.generate_junit_suite(composition)
-                junit_xml_file_path = self.write_junit_report_to_file(junit_suite)
-                ci_util.upload_junit_report("mzcompose", junit_xml_file_path)
+                self.write_junit_report_to_file(junit_suite)
 
             if any(
                 not result.is_successful()
@@ -649,10 +868,18 @@ To see the available workflows, run:
             ):
                 raise UIError("at least one test case failed")
 
-    def shall_generate_junit_report(self, composition: str | None) -> bool:
-        return composition not in {
+    def shall_generate_junit_report(
+        self, composition_name: str | None, composition: Composition
+    ) -> bool:
+        if composition.has_testdrive_junit:
+            # Testdrive already produced a junit.xml with detailed errors;
+            # skip the mzcompose-level junit to avoid duplicate annotations.
+            return False
+        return composition_name not in {
             # sqllogictest already generates a proper junit.xml file
             "sqllogictest",
+            # testdrive already generates a proper junit.xml file
+            "testdrive",
             # not a test, run as post-command, and should not overwrite an existing junit.xml from a previous test
             "get-cloud-hostname",
         }
@@ -714,6 +941,11 @@ To see the available workflows, run:
                 junit_suite.test_cases.append(test_case)
 
     def write_junit_report_to_file(self, junit_suite: junit_xml.TestSuite) -> Path:
+        for test_case in junit_suite.test_cases:
+            for obj in test_case.errors + test_case.failures + test_case.skipped:
+                for typ in ("message", "output"):
+                    if obj[typ]:
+                        obj[typ] = redact_secrets(obj[typ])
         junit_report = ci_util.junit_report_filename("mzcompose")
         with junit_report.open("w") as f:
             junit_xml.to_xml_report_file(f, [junit_suite])
@@ -729,9 +961,14 @@ CreateCommand = DockerComposeCommand("create", "create services", runs_container
 
 class DownCommand(DockerComposeCommand):
     def __init__(self) -> None:
-        super().__init__("down", "Stop and remove containers, networks")
+        super().__init__(
+            "down",
+            "Stop and remove containers, networks",
+            resolve_image_specs=False,
+        )
 
     def run(self, args: argparse.Namespace) -> Any:
+        args.unknown_subargs[0:0] = ["--timeout", "0"]
         args.unknown_subargs.append("--volumes")
         # --remove-orphans needs to be in effect at all times otherwise
         # services added to a composition after the fact will not be cleaned up
@@ -740,24 +977,44 @@ class DownCommand(DockerComposeCommand):
 
 
 EventsCommand = DockerComposeCommand(
-    "events", "receive real time events from containers"
+    "events",
+    "receive real time events from containers",
+    resolve_image_specs=False,
 )
-ExecCommand = DockerComposeCommand("exec", "execute a command in a running container")
-ImagesCommand = DockerComposeCommand("images", "list images")
-KillCommand = DockerComposeCommand("kill", "kill containers")
-LogsCommand = DockerComposeCommand("logs", "view output from containers")
-PauseCommand = DockerComposeCommand("pause", "pause services")
-PortCommand = DockerComposeCommand("port", "print the public port for a port binding")
-PsCommand = DockerComposeCommand("ps", "list containers")
+ExecCommand = DockerComposeCommand(
+    "exec", "execute a command in a running container", resolve_image_specs=False
+)
+ImagesCommand = DockerComposeCommand("images", "list images", resolve_image_specs=False)
+KillCommand = DockerComposeCommand("kill", "kill containers", resolve_image_specs=False)
+LogsCommand = DockerComposeCommand(
+    "logs", "view output from containers", resolve_image_specs=False
+)
+PauseCommand = DockerComposeCommand(
+    "pause", "pause services", resolve_image_specs=False
+)
+PortCommand = DockerComposeCommand(
+    "port",
+    "print the public port for a port binding",
+    resolve_image_specs=False,
+)
+PsCommand = DockerComposeCommand("ps", "list containers", resolve_image_specs=False)
 PullCommand = DockerComposeCommand("pull", "pull service images")
 PushCommand = DockerComposeCommand("push", "push service images")
-RestartCommand = DockerComposeCommand("restart", "restart services")
-RmCommand = DockerComposeCommand("rm", "remove stopped containers")
+RestartCommand = DockerComposeCommand(
+    "restart", "restart services", resolve_image_specs=False
+)
+RmCommand = DockerComposeCommand(
+    "rm", "remove stopped containers", resolve_image_specs=False
+)
 ScaleCommand = DockerComposeCommand("scale", "set number of containers for a service")
 StartCommand = DockerComposeCommand("start", "start services", runs_containers=True)
-StopCommand = DockerComposeCommand("stop", "stop services")
-TopCommand = DockerComposeCommand("top", "display the running processes")
-UnpauseCommand = DockerComposeCommand("unpause", "unpause services")
+StopCommand = DockerComposeCommand("stop", "stop services", resolve_image_specs=False)
+TopCommand = DockerComposeCommand(
+    "top", "display the running processes", resolve_image_specs=False
+)
+UnpauseCommand = DockerComposeCommand(
+    "unpause", "unpause services", resolve_image_specs=False
+)
 UpCommand = DockerComposeCommand(
     "up", "create and start containers", runs_containers=True
 )

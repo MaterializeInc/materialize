@@ -41,6 +41,7 @@ def get_multiple(
     results = []
 
     print(f"Starting to fetch data from Buildkite: {request_path}")
+    params["per_page"] = 100
     params["page"] = str(first_page)
 
     fetch_count = 0

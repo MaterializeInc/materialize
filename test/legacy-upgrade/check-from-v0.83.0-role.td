@@ -11,8 +11,11 @@ $ skip-if
 SELECT mz_version_num() < 8300;
 
 > SELECT name FROM mz_roles;
+anonymous_http_user
 group
 joe
+mz_analytics
+mz_jwt_sync
 mz_monitor
 mz_monitor_redacted
 mz_system

@@ -9,6 +9,9 @@
 
 # Cleans up CI resources that occasionally leak.
 
+# Doesn't hurt to run late
+priority: -50
+
 steps:
   - command: bin/ci-builder run stable bin/pyactivate -m ci.cleanup.aws
     timeout_in_minutes: 10

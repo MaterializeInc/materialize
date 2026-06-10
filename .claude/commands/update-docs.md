@@ -1,0 +1,125 @@
+# Update generated documentation index
+
+Refresh `doc/developer/generated/` to reflect source changes since each doc was last written.
+Do **not** modify any source files.
+
+## Procedure
+
+### 1. Detect stale docs
+
+For each `.md` file under `doc/developer/generated/`, read its YAML front-matter (`source` and `revision` fields).
+Run:
+
+```sh
+git log --oneline <revision>..HEAD -- <source>
+```
+
+If there are commits, the doc is **stale**.
+Collect the full list of stale files.
+
+### 2. Detect deleted sources
+
+For each `.md` file, check whether the `source` path still exists on disk.
+If the source file was deleted, the doc is **orphaned** — delete the `.md` file.
+
+### 3. Detect new sources
+
+Compare all `.rs` files under `src/` against the set of documented files.
+Any `.rs` file without a corresponding `.md` is **new**.
+Group new files by crate.
+
+### 4. Update stale docs
+
+For each stale doc:
+
+1. Re-read the source file.
+2. Rewrite the `.md` with updated content and a new `revision` from `git log -1 --format=%h -- <source>`.
+
+## Editing Existing Documentation
+
+Make surgical edits. Only change text that is:
+  - Factually incorrect
+  - Grammatically broken
+  - Directly related to the task you were given
+
+Do not rephrase, reword, or restructure text that is already correct.
+Treat existing wording as intentional. If a sentence is awkward but
+accurate, leave it alone unless you were specifically asked to improve it.
+
+When updating docs to reflect a code change, touch only the sentences
+that the change invalidates. Everything else stays verbatim.
+
+## Documentation Writing Style
+
+Describe the code's current state, not what changed.
+
+Write as if the reader is seeing the codebase for the first time.
+They have no knowledge of prior implementations, so references to
+what something "used to be" are meaningless to them.
+
+Avoid changelog language:
+  - "now", "added", "new"
+  - "no longer", "has been removed"
+  - "previously", "was replaced"
+  - "changed from", "updated to", "instead of"
+
+Examples:
+  Good: "`MZ_DATABASES` is a `BuiltinMaterializedView` backed by a query over the catalog."
+  Bad:  "`MZ_DATABASES` is now a `BuiltinMaterializedView` (rather than a `BuiltinTable`)."
+
+The "bad" example fails twice: "now" implies a change, and the parenthetical
+references an implementation the reader never saw.
+
+### 5. Create docs for new files
+
+Follow the structure in `doc/developer/generated/`:
+
+1. Document new leaf files first.
+2. If a new directory module appeared, create `_module.md`.
+3. If a new crate appeared, create all its docs including `_crate.md`.
+
+Each `.md` file must include YAML front-matter:
+
+```yaml
+---
+source: src/<crate>/src/<path>.rs
+revision: <short SHA>
+---
+```
+
+### 6. Update parent docs if children changed
+
+When leaf docs change significantly (new types, removed functionality), re-read the parent `_module.md` and `_crate.md` to check if they still accurately describe their children.
+Update them if needed.
+
+### 7. Update flows.md
+
+If any of the stale files are referenced in `doc/developer/generated/flows.md`, re-read the updated docs and verify the flow descriptions are still accurate.
+Update module paths or descriptions that changed.
+
+### 8. Summary
+
+After all updates, print:
+
+```
+Updated: N files
+Deleted: N orphaned docs
+Created: N new docs
+Skipped: N unchanged docs
+```
+
+## Efficiency tips
+
+* Start by running a single batch command to find all stale docs:
+  ```sh
+  find doc/developer/generated -name '*.md' -exec sh -c '
+    rev=$(head -5 "$1" | grep "^revision:" | awk "{print \$2}")
+    src=$(head -5 "$1" | grep "^source:" | awk "{print \$2}")
+    if [ -n "$rev" ] && [ -n "$src" ]; then
+      changes=$(git log --oneline "$rev..HEAD" -- "$src" 2>/dev/null | wc -l)
+      if [ "$changes" -gt 0 ]; then echo "STALE($changes): $1 <- $src"; fi
+    fi
+  ' _ {} \;
+  ```
+* Process stale docs in parallel by crate using subagents.
+* Skip files with 0 commits since their recorded revision — they are up to date.

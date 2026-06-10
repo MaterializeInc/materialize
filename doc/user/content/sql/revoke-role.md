@@ -6,22 +6,19 @@ menu:
     parent: commands
 ---
 
-`REVOKE` revokes membership of one role from another role. Roles can be members
-of other roles, as well as inherit all the privileges of those
-roles. This membership can also be revoked.
+`REVOKE` revokes membership of a role from the target role.
 
 ## Syntax
 
-{{< diagram "revoke-role.svg" >}}
+```mzsql
+REVOKE <role_to_remove> [, ...] FROM <target_role> [, ...];
+```
 
-Field         | Use
---------------|--------------------------------------------------
-_role_name_   | The role name to remove _member_name_ from.
-_member_name_ | The role name to remove from _role_name_.
+Syntax element       | Description
+---------------------|------------------
+`<role_to_remove>`   | The name of the role to remove from the `<target_role>`.
+`<target_role>`      | The name of the role from which the to remove the `<role_to_remove>`.
 
-## Details
-
-You may not set up circular membership loops.
 
 ## Examples
 
@@ -37,21 +34,20 @@ REVOKE data_scientist FROM joe, mike;
 
 The privileges required to execute this statement are:
 
-- `CREATEROLE` privileges on the systems.
+{{% include-headless "/headless/sql-command-privileges/revoke-role" %}}
 
 ## Useful views
 
-- [`mz_internal.mz_show_role_members`](/sql/system-catalog/mz_internal/#mz_show_role_members)
-- [`mz_internal.mz_show_my_role_members`](/sql/system-catalog/mz_internal/#mz_show_my_role_members)
+- [`mz_internal.mz_show_role_members`](/reference/system-catalog/mz_internal/#mz_show_role_members)
+- [`mz_internal.mz_show_my_role_members`](/reference/system-catalog/mz_internal/#mz_show_my_role_members)
 
 ## Related pages
 
-- [SHOW ROLE MEMBERSHIP](../show-role-membership)
-- [CREATE ROLE](../create-role)
-- [ALTER ROLE](../alter-role)
-- [DROP ROLE](../drop-role)
-- [DROP USER](../drop-user)
-- [GRANT ROLE](../grant-role)
-- [ALTER OWNER](../alter-owner)
-- [GRANT PRIVILEGE](../grant-privilege)
-- [REVOKE PRIVILEGE](../revoke-privilege)
+- [`SHOW ROLE MEMBERSHIP`](../show-role-membership)
+- [`CREATE ROLE`](../create-role)
+- [`ALTER ROLE`](../alter-role)
+- [`DROP ROLE`](../drop-role)
+- [`DROP USER`](../drop-user)
+- [`GRANT ROLE`](../grant-role)
+- [`GRANT PRIVILEGE`](../grant-privilege)
+- [`REVOKE PRIVILEGE`](../revoke-privilege)

@@ -98,9 +98,9 @@ use anyhow::{anyhow, bail};
 use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
 use mz_ore::collections::CollectionExt;
+use postgres_protocol::IsNull;
 use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
-use postgres_protocol::IsNull;
 use serde::{Deserialize, Serialize};
 
 struct PgConn {
@@ -227,7 +227,8 @@ impl PgConn {
                                     if err_field_typs.contains(&typ) {
                                         Ok(Some(ErrorField {
                                             typ,
-                                            value: f.value().to_string(),
+                                            value: String::from_utf8_lossy(f.value_bytes())
+                                                .into_owned(),
                                         }))
                                     } else {
                                         Ok(None)
@@ -247,7 +248,8 @@ impl PgConn {
                                     if err_field_typs.contains(&typ) {
                                         Ok(Some(ErrorField {
                                             typ,
-                                            value: f.value().to_string(),
+                                            value: String::from_utf8_lossy(f.value_bytes())
+                                                .into_owned(),
                                         }))
                                     } else {
                                         Ok(None)

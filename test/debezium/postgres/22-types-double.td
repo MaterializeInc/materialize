@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE double_type (f1 DOUBLE PRECISION, f2 INTEGER PRIMARY KEY);
 ALTER TABLE double_type REPLICA IDENTITY FULL;
 INSERT INTO double_type VALUES (NULL, 0), ('Infinity', 1),('-Infinity', 2), ('NaN', 3);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.double_type
 
@@ -24,12 +25,16 @@ $ schema-registry-wait topic=postgres.public.double_type
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE double_type
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.double_type')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.double_type');
+
+> CREATE TABLE double_type_tbl FROM SOURCE double_type (REFERENCE "postgres.public.double_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
-> SELECT f1 FROM double_type;
+> SELECT f1 FROM double_type_tbl;
 <null>
 inf
 -inf
@@ -40,7 +45,7 @@ UPDATE double_type SET f1 = 123 WHERE f1 = 'Infinity';
 UPDATE double_type SET f1 = -123 WHERE f1 = '-Infinity';
 UPDATE double_type SET f1 = NULL WHERE f1 = 'NaN';
 
-> SELECT f1 FROM double_type;
+> SELECT f1 FROM double_type_tbl;
 <null>
 <null>
 123

@@ -24,7 +24,7 @@
 //! Null arguments*.
 use std::collections::{BTreeMap, BTreeSet};
 
-use itertools::{zip_eq, Either, Itertools};
+use itertools::{Either, Itertools, zip_eq};
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::assert_none;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -52,12 +52,16 @@ impl CheckedRecursion for NonNullRequirements {
 }
 
 impl crate::Transform for NonNullRequirements {
+    fn name(&self) -> &'static str {
+        "NonNullRequirements"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "non_null_requirements")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -166,7 +170,7 @@ impl NonNullRequirements {
                     {
                         // A null value was introduced in a marked column;
                         // the entire expression can be zeroed out.
-                        relation.take_safely();
+                        relation.take_safely(None);
                         Ok(())
                     } else {
                         // For each column, if it must be non-null, extract the expression's
@@ -229,7 +233,7 @@ impl NonNullRequirements {
                     // Also, any non-nullable columns impose constraints on their equivalence class.
                     for equivalence in equivalences {
                         let exists_constraint = equivalence.iter().any(|expr| {
-                            if let MirScalarExpr::Column(c) = expr {
+                            if let MirScalarExpr::Column(c, _) = expr {
                                 let (col, rel) = input_mapper.map_column_to_local(*c);
                                 new_columns[rel].contains(&col)
                                     || !input_types[rel].column_types[col].nullable
@@ -240,7 +244,7 @@ impl NonNullRequirements {
 
                         if exists_constraint {
                             for expr in equivalence.iter() {
-                                if let MirScalarExpr::Column(c) = expr {
+                                if let MirScalarExpr::Column(c, _) = expr {
                                     let (col, rel) = input_mapper.map_column_to_local(*c);
                                     new_columns[rel].insert(col);
                                 }
@@ -248,7 +252,7 @@ impl NonNullRequirements {
                         }
                     }
 
-                    for (input, columns) in inputs.iter_mut().zip(new_columns) {
+                    for (input, columns) in inputs.iter_mut().zip_eq(new_columns) {
                         self.action(input, columns, gets)?;
                     }
                     Ok(())

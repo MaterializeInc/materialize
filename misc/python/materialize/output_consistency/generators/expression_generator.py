@@ -17,9 +17,6 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
-from materialize.output_consistency.enum.enum_operation_param import (
-    EnumConstantOperationParam,
-)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -30,8 +27,12 @@ from materialize.output_consistency.expression.expression import (
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
-from materialize.output_consistency.input_data.params.same_operation_param import (
-    SameOperationParam,
+from materialize.output_consistency.generators.arg_context import ArgContext
+from materialize.output_consistency.input_data.operations.equality_operations_provider import (
+    EQUALS_OPERATION,
+)
+from materialize.output_consistency.input_data.params.one_of_operation_param import (
+    OneOf,
 )
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
@@ -40,29 +41,14 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
+from materialize.output_consistency.operation.volatile_data_operation_param import (
+    VolatileDataOperationParam,
+)
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 
 NESTING_LEVEL_ROOT = 0
 NESTING_LEVEL_OUTERMOST_ARG = 1
 FIRST_ARG_INDEX = 0
-
-
-class ArgContext:
-    def __init__(self) -> None:
-        self.args: list[Expression] = []
-        self.contains_aggregation = False
-
-    def append(self, arg: Expression) -> None:
-        self.args.append(arg)
-
-        if arg.is_aggregate:
-            self.contains_aggregation = True
-
-    def has_no_args(self) -> bool:
-        return len(self.args) == 0
-
-    def requires_aggregation(self) -> bool:
-        return self.contains_aggregation
 
 
 class ExpressionGenerator:
@@ -154,21 +140,43 @@ class ExpressionGenerator:
         storage_layout: ValueStorageLayout | None,
         nesting_level: int = NESTING_LEVEL_ROOT,
     ) -> ExpressionWithArgs | None:
-        def accept_op(operation: DbOperationOrFunction) -> bool:
+        return self.generate_expression_for_data_type_category(
+            use_aggregation, storage_layout, DataTypeCategory.BOOLEAN, nesting_level
+        )
+
+    def generate_expression_for_data_type_category(
+        self,
+        use_aggregation: bool,
+        storage_layout: ValueStorageLayout | None,
+        data_type_category: DataTypeCategory,
+        nesting_level: int = NESTING_LEVEL_ROOT,
+    ) -> ExpressionWithArgs | None:
+        def operation_filter(operation: DbOperationOrFunction) -> bool:
             if operation.is_aggregation != use_aggregation:
                 return False
 
-            # Simplification: This will only include operations defined to return a boolean value but not generic
-            # operations that might return a boolean value depending on the input.
-            return operation.return_type_spec.type_category == DataTypeCategory.BOOLEAN
+                # Simplification: This will only include operations defined to return a boolean value but not generic
+                # operations that might return a boolean value depending on the input.
+            return operation.return_type_spec.type_category == data_type_category
 
-        boolean_operation = self.pick_random_operation(use_aggregation, accept_op)
-        expression, _ = self.generate_expression(
-            boolean_operation, storage_layout, nesting_level
+        return self.generate_expression_with_filter(
+            use_aggregation, storage_layout, operation_filter, nesting_level
+        )
+
+    def generate_expression_with_filter(
+        self,
+        use_aggregation: bool,
+        storage_layout: ValueStorageLayout | None,
+        operation_filter: Callable[[DbOperationOrFunction], bool],
+        nesting_level: int = NESTING_LEVEL_ROOT,
+    ) -> ExpressionWithArgs | None:
+        operation = self.pick_random_operation(use_aggregation, operation_filter)
+        expression, _ = self.generate_expression_for_operation(
+            operation, storage_layout, nesting_level
         )
         return expression
 
-    def generate_expression(
+    def generate_expression_for_operation(
         self,
         operation: DbOperationOrFunction,
         storage_layout: ValueStorageLayout | None = None,
@@ -198,6 +206,36 @@ class ExpressionGenerator:
         expression = ExpressionWithArgs(operation, args, is_aggregate, is_expect_error)
 
         return expression, number_of_args
+
+    def generate_equals_expression(
+        self, arg1: Expression, arg2: Expression
+    ) -> ExpressionWithArgs:
+        operation = EQUALS_OPERATION
+        args = [arg1, arg2]
+        is_aggregate = self._contains_aggregate_arg(args)
+        is_expect_error = operation.is_expected_to_cause_db_error(args)
+        return ExpressionWithArgs(operation, args, is_aggregate, is_expect_error)
+
+    def generate_leaf_expression(
+        self,
+        storage_layout: ValueStorageLayout,
+        types_with_values: list[DataTypeWithValues],
+    ) -> LeafExpression:
+        assert len(types_with_values) > 0, "No suitable types with values"
+
+        type_with_values = self.randomized_picker.random_type_with_values(
+            types_with_values
+        )
+
+        if storage_layout == ValueStorageLayout.VERTICAL:
+            return type_with_values.create_unassigned_vertical_storage_column()
+        elif storage_layout == ValueStorageLayout.HORIZONTAL:
+            if len(type_with_values.raw_values) == 0:
+                raise NoSuitableExpressionFound("No value in type")
+
+            return self.randomized_picker.random_value(type_with_values.raw_values)
+        else:
+            raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
 
     def _select_storage_layout(
         self, operation: DbOperationOrFunction
@@ -280,11 +318,12 @@ class ExpressionGenerator:
         arg_context: ArgContext,
         nesting_level: int,
     ) -> Expression:
-        if isinstance(param, EnumConstantOperationParam):
-            return self._pick_enum_constant(param)
+        # this one must be at the top
+        if isinstance(param, OneOf):
+            param = param.pick(self.randomized_picker)
 
-        if isinstance(param, SameOperationParam):
-            return arg_context.args[param.index_of_previous_param]
+        if isinstance(param, VolatileDataOperationParam):
+            return param.generate_expression(arg_context, self.randomized_picker)
 
         create_complex_arg = (
             arg_context.requires_aggregation()
@@ -306,12 +345,6 @@ class ExpressionGenerator:
                 param, arg_context, storage_layout
             )
 
-    def _pick_enum_constant(self, param: EnumConstantOperationParam) -> Expression:
-        enum_constant_index = self.randomized_picker.random_number(
-            0, len(param.values) - 1
-        )
-        return param.get_enum_constant(enum_constant_index)
-
     def _generate_simple_arg_for_param(
         self,
         param: OperationParam,
@@ -326,19 +359,7 @@ class ExpressionGenerator:
         if len(suitable_types_with_values) == 0:
             raise NoSuitableExpressionFound("No suitable type")
 
-        type_with_values = self.randomized_picker.random_type_with_values(
-            suitable_types_with_values
-        )
-
-        if storage_layout == ValueStorageLayout.VERTICAL:
-            return type_with_values.create_vertical_storage_column()
-        elif storage_layout == ValueStorageLayout.HORIZONTAL:
-            if len(type_with_values.raw_values) == 0:
-                raise NoSuitableExpressionFound("No value in type")
-
-            return self.randomized_picker.random_value(type_with_values.raw_values)
-        else:
-            raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
+        return self.generate_leaf_expression(storage_layout, suitable_types_with_values)
 
     def _generate_complex_arg_for_param(
         self,
@@ -378,7 +399,7 @@ class ExpressionGenerator:
             suitable_operations, weights
         )
 
-        nested_expression, _ = self.generate_expression(
+        nested_expression, _ = self.generate_expression_for_operation(
             operation, storage_layout, nesting_level
         )
 
@@ -516,28 +537,6 @@ class ExpressionGenerator:
                 matched_ops.append(op)
 
         return matched_ops
-
-    def find_exactly_one_operation_by_predicate(
-        self, match_op: Callable[[DbOperationOrFunction], bool]
-    ) -> DbOperationOrFunction:
-        operations = self.find_operations_by_predicate(match_op)
-        if len(operations) == 0:
-            raise RuntimeError("No operation matches!")
-        if len(operations) > 1:
-            raise RuntimeError(f"More than one operation matches: {operations}")
-
-        return operations[0]
-
-    def find_data_type_with_values_by_type_identifier(
-        self, type_identifier: str
-    ) -> DataTypeWithValues:
-        for (
-            data_type_with_values
-        ) in self.input_data.types_input.all_data_types_with_values:
-            if data_type_with_values.data_type.internal_identifier == type_identifier:
-                return data_type_with_values
-
-        raise RuntimeError(f"No data type found with identifier {type_identifier}")
 
 
 class NoSuitableExpressionFound(Exception):

@@ -12,8 +12,15 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use mz_ore::metrics::{MetricsRegistry, register_runtime_metrics};
 use mz_ore::task::{JoinHandle, RuntimeExt};
 use tokio::runtime::{Builder, Runtime};
+
+/// A reasonable number of threads to use in tests: enough to reproduce nontrivial
+/// orderings if necessary and avoid blocking, but not too many.
+// This was done as a workaround for https://sourceware.org/bugzilla/show_bug.cgi?id=19951
+// in tests, but seems useful in general.
+pub const TEST_THREADS: usize = 4;
 
 /// An isolated runtime for asynchronous tasks, particularly work
 /// that may be CPU intensive such as encoding/decoding and shard
@@ -41,9 +48,12 @@ pub struct IsolatedRuntime {
 
 impl IsolatedRuntime {
     /// Creates a new isolated runtime.
-    pub fn new(worker_threads: usize) -> IsolatedRuntime {
-        let runtime = Builder::new_multi_thread()
-            .worker_threads(worker_threads)
+    pub fn new(metrics: &MetricsRegistry, worker_threads: Option<usize>) -> IsolatedRuntime {
+        let mut runtime = Builder::new_multi_thread();
+        if let Some(worker_threads) = worker_threads {
+            runtime.worker_threads(worker_threads);
+        }
+        let runtime = runtime
             .thread_name_fn(|| {
                 static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
                 let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
@@ -54,9 +64,24 @@ impl IsolatedRuntime {
             .enable_all()
             .build()
             .expect("known to be valid");
+        register_runtime_metrics("persist", runtime.metrics(), metrics);
         IsolatedRuntime {
             inner: Some(runtime),
         }
+    }
+
+    /// Create an isolated runtime with appropriate values for tests.
+    pub fn new_for_tests() -> Self {
+        IsolatedRuntime::new(&MetricsRegistry::new(), Some(TEST_THREADS))
+    }
+
+    #[cfg(feature = "turmoil")]
+    /// Create a no-op shim that spawns tasks on the current tokio runtime.
+    ///
+    /// This is useful for simulation tests where we don't want to spawn additional threads and/or
+    /// tokio runtimes.
+    pub fn new_disabled() -> Self {
+        IsolatedRuntime { inner: None }
     }
 
     /// Spawns a task onto this runtime.
@@ -70,16 +95,11 @@ impl IsolatedRuntime {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        self.inner
-            .as_ref()
-            .expect("exists until drop")
-            .spawn_named(name, fut)
-    }
-}
-
-impl Default for IsolatedRuntime {
-    fn default() -> Self {
-        IsolatedRuntime::new(num_cpus::get())
+        if let Some(runtime) = &self.inner {
+            runtime.spawn_named(name, fut)
+        } else {
+            mz_ore::task::spawn(name, fut)
+        }
     }
 }
 
@@ -88,9 +108,8 @@ impl Drop for IsolatedRuntime {
         // We don't need to worry about `shutdown_background` leaking
         // blocking tasks (i.e., tasks spawned with `spawn_blocking`) because
         // the `IsolatedRuntime` wrapper prevents access to `spawn_blocking`.
-        self.inner
-            .take()
-            .expect("cannot drop twice")
-            .shutdown_background()
+        if let Some(runtime) = self.inner.take() {
+            runtime.shutdown_background();
+        }
     }
 }

@@ -60,6 +60,9 @@ from materialize.output_consistency.input_data.operations.set_operations_provide
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     STRING_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.table_operations_provider import (
+    TABLE_OPERATION_TYPES,
+)
 from materialize.output_consistency.input_data.operations.trigonometric_operations_provider import (
     TRIGONOMETRIC_OPERATION_TYPES,
 )
@@ -88,6 +91,7 @@ ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
         RANGE_OPERATION_TYPES,
         UUID_OPERATION_TYPES,
         RECORD_OPERATION_TYPES,
+        TABLE_OPERATION_TYPES,
         PG_OPERATIONS,
     )
 )

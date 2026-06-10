@@ -13,23 +13,30 @@ from typing import Any
 
 import numpy as np
 
-from materialize.feature_benchmark.measurement import Measurement, MeasurementUnit
+from materialize.feature_benchmark.measurement import (
+    Measurement,
+    MeasurementType,
+    MeasurementUnit,
+)
 
 
 class Aggregation:
     def __init__(self) -> None:
+        self.measurement_type: MeasurementType | None = None
         self._data: list[float] = []
         self._unit: MeasurementUnit = MeasurementUnit.UNKNOWN
 
-    def append(self, measurement: Measurement) -> None:
+    def append_measurement(self, measurement: Measurement) -> None:
+        assert measurement.unit != MeasurementUnit.UNKNOWN, "Unknown unit"
+        self.measurement_type = measurement.type
         self._unit = measurement.unit
         self._data.append(measurement.value)
 
     def aggregate(self) -> Any:
         if len(self._data) == 0:
             return None
-        else:
-            return self.func()([*self._data])
+
+        return self.func()([*self._data])
 
     def unit(self) -> MeasurementUnit:
         return self._unit

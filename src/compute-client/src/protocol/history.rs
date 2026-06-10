@@ -15,15 +15,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::{assert_none, soft_assert_or_log};
-use timely::progress::Antichain;
 use timely::PartialOrder;
+use timely::progress::Antichain;
 
+use crate::controller::StorageCollections;
 use crate::metrics::HistoryMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeParameters};
 
-/// TODO(#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(Debug)]
-pub struct ComputeCommandHistory<M, T = mz_repr::Timestamp> {
+pub struct ComputeCommandHistory<M> {
     /// The number of commands at the last time we compacted the history.
     reduced_count: usize,
     /// The sequence of commands that should be applied.
@@ -31,17 +32,16 @@ pub struct ComputeCommandHistory<M, T = mz_repr::Timestamp> {
     /// This list may not be "compact" in that there can be commands that could be optimized
     /// or removed given the context of other commands, for example compaction commands that
     /// can be unified, or dataflows that can be dropped due to allowed compaction.
-    commands: Vec<ComputeCommand<T>>,
+    commands: Vec<ComputeCommand>,
     /// Tracked metrics.
     metrics: HistoryMetrics<M>,
 }
 
-impl<M, T> ComputeCommandHistory<M, T>
+impl<M> ComputeCommandHistory<M>
 where
     M: Borrow<UIntGauge>,
-    T: timely::progress::Timestamp,
 {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn new(metrics: HistoryMetrics<M>) -> Self {
         metrics.reset();
 
@@ -55,7 +55,7 @@ where
     /// Add a command to the history.
     ///
     /// This action will reduce the history every time it doubles.
-    pub fn push(&mut self, command: ComputeCommand<T>) {
+    pub fn push(&mut self, command: ComputeCommand) {
         self.commands.push(command);
 
         if self.commands.len() > 2 * self.reduced_count {
@@ -90,8 +90,8 @@ where
         let mut scheduled_collections = Vec::new();
         let mut live_peeks = BTreeMap::new();
 
+        let mut hello_command = None;
         let mut create_inst_command = None;
-        let mut create_timely_command = None;
 
         // Collect only the final configuration.
         // Note that this is only correct as long as all config parameters apply globally. If we
@@ -100,13 +100,13 @@ where
         let mut final_configuration = ComputeParameters::default();
 
         let mut initialization_complete = false;
-        let mut read_only = true;
+        let mut allow_writes = BTreeSet::new();
 
         for command in self.commands.drain(..) {
             match command {
-                create_timely @ ComputeCommand::CreateTimely { .. } => {
-                    assert_none!(create_timely_command);
-                    create_timely_command = Some(create_timely);
+                hello @ ComputeCommand::Hello { .. } => {
+                    assert_none!(hello_command);
+                    hello_command = Some(hello);
                 }
                 // We should be able to handle the Create* commands, should this client need to be restartable.
                 create_inst @ ComputeCommand::CreateInstance(_) => {
@@ -117,7 +117,7 @@ where
                     initialization_complete = true;
                 }
                 ComputeCommand::UpdateConfiguration(params) => {
-                    final_configuration.update(params);
+                    final_configuration.update(*params);
                 }
                 ComputeCommand::CreateDataflow(dataflow) => {
                     created_dataflows.push(dataflow);
@@ -134,8 +134,8 @@ where
                 ComputeCommand::CancelPeek { uuid } => {
                     live_peeks.remove(&uuid);
                 }
-                ComputeCommand::AllowWrites => {
-                    read_only = false;
+                ComputeCommand::AllowWrites(id) => {
+                    allow_writes.insert(id);
                 }
             }
         }
@@ -181,6 +181,8 @@ where
             .flat_map(|d| d.export_ids())
             .collect();
         scheduled_collections.retain(|id| retained_collections.contains(id));
+        // Retain any `AllowWrites` command for dataflows that still exist.
+        allow_writes.retain(|id| retained_collections.contains(id));
 
         // Reconstitute the commands as a compact history.
 
@@ -189,10 +191,10 @@ where
         let command_counts = &self.metrics.command_counts;
         let dataflow_count = &self.metrics.dataflow_count;
 
-        let count = u64::from(create_timely_command.is_some());
-        command_counts.create_timely.borrow().set(count);
-        if let Some(create_timely_command) = create_timely_command {
-            self.commands.push(create_timely_command);
+        let count = u64::from(hello_command.is_some());
+        command_counts.hello.borrow().set(count);
+        if let Some(hello) = hello_command {
+            self.commands.push(hello);
         }
 
         let count = u64::from(create_inst_command.is_some());
@@ -204,8 +206,9 @@ where
         let count = u64::from(!final_configuration.all_unset());
         command_counts.update_configuration.borrow().set(count);
         if !final_configuration.all_unset() {
+            let config = Box::new(final_configuration);
             self.commands
-                .push(ComputeCommand::UpdateConfiguration(final_configuration));
+                .push(ComputeCommand::UpdateConfiguration(config));
         }
 
         let count = u64::cast_from(created_dataflows.len());
@@ -237,14 +240,16 @@ where
                 .push(ComputeCommand::AllowCompaction { id, frontier });
         }
 
+        let count = u64::cast_from(allow_writes.len());
+        command_counts.allow_writes.borrow().set(count);
+        for id in allow_writes {
+            self.commands.push(ComputeCommand::AllowWrites(id));
+        }
+
         let count = u64::from(initialization_complete);
         command_counts.initialization_complete.borrow().set(count);
         if initialization_complete {
             self.commands.push(ComputeCommand::InitializationComplete);
-        }
-
-        if !read_only {
-            self.commands.push(ComputeCommand::AllowWrites);
         }
 
         self.reduced_count = self.commands.len();
@@ -266,8 +271,27 @@ where
         });
     }
 
+    /// Update the source import uppers to reflect the current state of the imported collections.
+    ///
+    /// This method should be called after compacting the history to make sure that the dataflow
+    /// descriptions do not mention storage collections that don't exist anymore. Its main
+    /// purpose is to advance the uppers when connecting a new replica.
+    pub fn update_source_uppers(&mut self, storage_collections: &StorageCollections) {
+        for command in &mut self.commands {
+            if let ComputeCommand::CreateDataflow(dataflow) = command {
+                for (id, import) in dataflow.source_imports.iter_mut() {
+                    let frontiers = storage_collections
+                        .collection_frontiers(*id)
+                        .expect("collection exists");
+
+                    import.upper = frontiers.write_frontier;
+                }
+            }
+        }
+    }
+
     /// Iterate through the contained commands.
-    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
+    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand> {
         self.commands.iter()
     }
 }

@@ -16,6 +16,22 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 id public_key_1 public_key_2
 ----------------------------
 
+! CREATE CONNECTION louisoix TO SSH TUNNEL (
+    HOST 'chaos.example.com',
+    USER 'louisoix',
+    PORT 22,
+    PUBLIC KEY 1 = 'bad'
+  );
+contains:the PUBLIC KEY 1 option cannot be explicitly specified
+
+! CREATE CONNECTION louisoix TO SSH TUNNEL (
+    HOST 'chaos.example.com',
+    USER 'louisoix',
+    PORT 22,
+    PUBLIC KEY 2 = 'bad'
+  );
+contains:the PUBLIC KEY 2 option cannot be explicitly specified
+
 > CREATE CONNECTION louisoix TO SSH TUNNEL (
     HOST 'chaos.example.com',
     USER 'louisoix',
@@ -105,7 +121,7 @@ contains: unknown catalog item 'johto'
   );
 contains: yshtola is not an SSH connection
 
-> SELECT name, type FROM mz_connections;
+> SELECT name, type from mz_connections WHERE id LIKE 'u%';
 name    type
 ----------------
 phoenix ssh-tunnel
@@ -117,7 +133,7 @@ contains: still depended upon
 
 > DROP CONNECTION phoenix CASCADE;
 
-> SELECT name, type FROM mz_connections;
+> SELECT name, type from mz_connections WHERE id LIKE 'u%';
 name    type
 ----------------
 
@@ -141,7 +157,7 @@ contains:failed to
   );
 
 ! VALIDATE CONNECTION local;
-contains:address is not global
+contains:Address resolved to a private IP
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_enforce_external_addresses = false

@@ -4,10 +4,9 @@ description: "Learn more about the SQL functions and operators supported in Mate
 menu:
   main:
     identifier: sql-functions
-    parent: reference
+    parent: sql
     weight: 100
 disable_list: true
-disable_toc: true
 ---
 
 This page details Materialize's supported SQL [functions](#functions) and [operators](#operators).
@@ -44,34 +43,34 @@ clauses to the `SELECT` statement (e.g., `FROM`, `WHERE`).
 
 Side-effecting functions are marked as such in the table below.
 
-{{< fnlist >}}
+{{% fnlist %}}
 
 ## Operators
 
-### Generic
+### Generic operators
 
 Operator | Computes
 ---------|---------
 `val::type` | Cast of `val` as `type` ([docs](cast))
 
-### Boolean
+### Boolean operators
 
 Operator | Computes
 ---------|---------
 `AND` | Boolean "and"
 `OR` | Boolean "or"
-`=` | Equality
-`<>` | Inequality
-`!=` | Inequality
+`=` | Equality. Do not use with `NULL` as `= NULL` always evaluates to `NULL`; instead, use `IS NULL` for null checks.
+`<>` | Inequality. Do not use with `NULL` as `<> NULL` always evaluates to `NULL`; instead, use `IS NOT NULL` for null checks.
+`!=` | Inequality. Do not use with `NULL` as `!= NULL` always evaluates to `NULL`; instead, use `IS NOT NULL` for null checks.
 `<` | Less than
 `>` | Greater than
 `<=` | Less than or equal to
 `>=` | Greater than or equal to
 `a BETWEEN x AND y` | `a >= x AND a <= y`
 `a NOT BETWEEN x AND y` | `a < x OR a > y`
-`a IS NULL` | `a = NULL`
-`a ISNULL` | `a = NULL`
-`a IS NOT NULL` | `a != NULL`
+`a IS NULL` | Evaluates to true if the value of a is `NULL`.
+`a ISNULL` | Evaluates to true if the value of a is `NULL`.
+`a IS NOT NULL` | Evaluates to true if the value of a is **NOT** `NULL`.
 `a IS TRUE` | `a` is true, requiring `a` to be a boolean
 `a IS NOT TRUE` | `a` is not true, requiring `a` to be a boolean
 `a IS FALSE` | `a` is false, requiring `a` to be a boolean
@@ -81,7 +80,7 @@ Operator | Computes
 `a LIKE match_expr [ ESCAPE escape_char ]` | `a` matches `match_expr`, using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 `a ILIKE match_expr [ ESCAPE escape_char ]` | `a` matches `match_expr`, using case-insensitive [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 
-### Numbers
+### Numbers operators
 
 Operator | Computes
 ---------|---------
@@ -97,7 +96,7 @@ Operator | Computes
 `<<`| Bitwise left shift
 `>>`| Bitwise right shift
 
-### String
+### String operators
 
 Operator | Computes
 ---------|---------
@@ -113,20 +112,22 @@ Operator | Computes
 
 The regular expression syntax supported by Materialize is documented by the
 [Rust `regex` crate](https://docs.rs/regex/*/#syntax).
+The maximum length of a regular expression is 1 MiB in its raw form, and 10 MiB
+after compiling it.
 
 {{< warning >}}
 Materialize regular expressions are similar to, but not identical to, PostgreSQL
 regular expressions.
 {{< /warning >}}
 
-### Time-like
+### Time-like operators
 
 Operation | Computes
 ----------|------------
 [`date`](../types/date) `+` [`interval`](../types/interval) | [`timestamp`](../types/timestamp)
 [`date`](../types/date) `-` [`interval`](../types/interval) | [`timestamp`](../types/timestamp)
 [`date`](../types/date) `+` [`time`](../types/time) | [`timestamp`](../types/timestamp)
-[`date`](../types/date) `-` [`date`](../types/date) | [`interval`](../types/interval)
+[`date`](../types/date) `-` [`date`](../types/date) | [`integer`](../types/integer)
 [`timestamp`](../types/timestamp) `+` [`interval`](../types/interval) | [`timestamp`](../types/timestamp)
 [`timestamp`](../types/timestamp) `-` [`interval`](../types/interval) | [`timestamp`](../types/timestamp)
 [`timestamp`](../types/timestamp) `-` [`timestamp`](../types/timestamp) | [`interval`](../types/interval)
@@ -134,15 +135,15 @@ Operation | Computes
 [`time`](../types/time) `-` [`interval`](../types/interval) | `time`
 [`time`](../types/time) `-` [`time`](../types/time) | [`interval`](../types/interval)
 
-### JSON
+### JSON operators
 
 {{% json-operators %}}
 
-### Map
+### Map operators
 
 {{% map-operators %}}
 
-### List
+### List operators
 
 List operators are [polymorphic](../types/list/#polymorphism).
 

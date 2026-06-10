@@ -10,11 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-table.svg" >}}
+```sql
+SHOW [REDACTED] CREATE TABLE <table_name>;
+```
 
-Field | Use
-------|-----
-_table&lowbar;name_ | The table you want use. You can find available table names through [`SHOW TABLES`](../show-tables).
+{{< yaml-table data="show_create_redacted_option" >}}
+
+For available table names, see [`SHOW TABLES`](/sql/show-tables).
 
 ## Examples
 
@@ -35,7 +37,7 @@ SHOW CREATE TABLE t;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the table.
+{{% include-headless "/headless/sql-command-privileges/show-create-table" %}}
 
 ## Related pages
 

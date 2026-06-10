@@ -11,11 +11,11 @@
 
 use std::time::Duration;
 
+use hyper_tls::HttpsConnector;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
 use mz_ore::cast::CastLossy;
-use mz_ore::future::TimeoutError;
 use mz_ore::task;
 use tokio::time;
 
@@ -39,6 +39,7 @@ pub async fn sync_launchdarkly_to_configset<F>(
     launchdarkly_sdk_key: Option<&str>,
     config_sync_timeout: Duration,
     config_sync_loop_interval: Option<Duration>,
+    on_update: impl Fn(&ConfigUpdates, &ConfigSet) + Send + 'static,
 ) -> Result<(), anyhow::Error>
 where
     F: FnOnce(&mut ld::MultiContextBuilder) -> Result<(), anyhow::Error>,
@@ -49,25 +50,40 @@ where
         let _ = dyn_into_flag(entry.val())?;
     }
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
-        let client = ld::Client::build(ld::ConfigBuilder::new(key).build())?;
+        let config = ld::ConfigBuilder::new(key)
+            .event_processor(
+                ld::EventProcessorBuilder::new().https_connector(HttpsConnector::new()),
+            )
+            .data_source(
+                ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()),
+            )
+            .build()
+            .expect("valid config");
+        let client = ld::Client::build(config)?;
+        client.start_with_default_executor();
         let init = async {
             let max_backoff = Duration::from_secs(60);
             let mut backoff = Duration::from_secs(5);
-            while !client.initialized_async().await {
-                tracing::warn!("SyncedConfigSet failed to initialize");
+
+            // TODO(materialize#32030): fix retry logic
+            loop {
+                match client.wait_for_initialization(config_sync_timeout).await {
+                    Some(true) => break,
+                    Some(false) => tracing::warn!("SyncedConfigSet failed to initialize"),
+                    None => {}
+                }
+
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(max_backoff);
             }
-            Ok(())
         };
-        match mz_ore::future::timeout(config_sync_timeout, init).await {
-            Ok(_) => Some(client),
-            Err(TimeoutError::Inner(e)) => return Err(e),
-            Err(TimeoutError::DeadlineElapsed) => {
-                tracing::info!("SyncedConfigSet initialize on boot: initialize has timed out");
-                None
-            }
+        if tokio::time::timeout(config_sync_timeout, init)
+            .await
+            .is_err()
+        {
+            tracing::info!("SyncedConfigSet initialize on boot: initialize has timed out");
         }
+        Some(client)
     } else {
         None
     };
@@ -76,6 +92,7 @@ where
         set,
         ld_client,
         ld_ctx: ld_ctx(build_info, ctx_builder)?,
+        on_update,
     };
     synced.sync()?;
     task::spawn(
@@ -110,13 +127,17 @@ where
     builder.build().map_err(|e| anyhow::anyhow!(e))
 }
 
-struct SyncedConfigSet {
+struct SyncedConfigSet<F>
+where
+    F: Fn(&ConfigUpdates, &ConfigSet) + Send,
+{
     set: ConfigSet,
     ld_client: Option<ld::Client>,
     ld_ctx: ld::Context,
+    on_update: F,
 }
 
-impl SyncedConfigSet {
+impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
     /// Returns a future that periodically polls LaunchDarkly and updates the ConfigSet.
     async fn sync_loop(self, tick_interval: Option<Duration>) {
         let Some(tick_interval) = tick_interval else {
@@ -142,10 +163,11 @@ impl SyncedConfigSet {
     }
 
     /// Reads current values from LaunchDarkly and updates the ConfigSet.
-    fn sync(&self) -> Result<ConfigUpdates, anyhow::Error> {
+    fn sync(&self) -> Result<(), anyhow::Error> {
         let mut updates = ConfigUpdates::default();
         let Some(ld_client) = &self.ld_client else {
-            return Ok(updates);
+            (self.on_update)(&updates, &self.set);
+            return Ok(());
         };
         for entry in self.set.entries() {
             let val = dyn_into_flag(entry.val()).expect("new() verifies all configs can convert");
@@ -161,7 +183,13 @@ impl SyncedConfigSet {
                 (ConfigVal::F64(_), ld::FlagValue::Number(flag)) => ConfigVal::F64(flag),
                 (ConfigVal::String(_), ld::FlagValue::Str(flag)) => ConfigVal::String(flag),
                 (ConfigVal::Duration(_), ld::FlagValue::Str(flag)) => {
-                    ConfigVal::Duration(humantime::parse_duration(&flag)?)
+                    match humantime::parse_duration(&flag) {
+                        Ok(d) => ConfigVal::Duration(d),
+                        Err(e) => {
+                            tracing::warn!("failed to parse Duration for {}: {}", entry.name(), e);
+                            continue;
+                        }
+                    }
                 }
                 (ConfigVal::Json(_), ld::FlagValue::Json(flag)) => ConfigVal::Json(flag),
 
@@ -174,15 +202,23 @@ impl SyncedConfigSet {
                 | (ConfigVal::Duration(_), _)
                 | (ConfigVal::Json(_), _)
                 | (ConfigVal::OptUsize(_), _)
-                | (ConfigVal::String(_), _) => anyhow::bail!(
-                    "LD flag cannot be cast to the ConfigVal for {}",
-                    entry.name()
-                ),
+                | (ConfigVal::String(_), _)
+                | (ConfigVal::OptString(_), _) => {
+                    tracing::warn!("LD flag type mismatch for {}", entry.name());
+                    continue;
+                }
             };
+            tracing::debug!(
+                "updating config value {} from {:?} to {:?}",
+                &entry.name(),
+                &entry.val(),
+                update
+            );
             updates.add_dynamic(entry.name(), update);
         }
         updates.apply(&self.set);
-        Ok(updates)
+        (self.on_update)(&updates, &self.set);
+        Ok(())
     }
 }
 
@@ -199,6 +235,9 @@ fn dyn_into_flag(val: ConfigVal) -> Result<ld::FlagValue, anyhow::Error> {
         ConfigVal::OptUsize(_) => anyhow::bail!("OptUsize None cannot be converted to a FlagValue"),
         ConfigVal::F64(v) => ld::FlagValue::Number(v),
         ConfigVal::String(v) => ld::FlagValue::Str(v),
+        ConfigVal::OptString(_) => {
+            anyhow::bail!("OptString None cannot be converted to a FlagValue")
+        }
         ConfigVal::Duration(v) => ld::FlagValue::Str(humantime::format_duration(v).to_string()),
         ConfigVal::Json(v) => ld::FlagValue::Json(v),
     })

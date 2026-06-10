@@ -1,0 +1,11 @@
+{{ if .Site.Params.bannerMessage }}
+<div class="banner">
+    <span>
+        {{ if .Site.Params.bannerLink }}<a href={{ .Site.Params.bannerLink }}
+        target="_blank" >
+        {{ end }}
+        {{ .Site.Params.bannerMessage | markdownify }}
+        {{ if .Site.Params.bannerLink}} </a> {{ end }}
+    </span>
+</div>
+{{ end }}

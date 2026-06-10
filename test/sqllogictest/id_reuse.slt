@@ -83,6 +83,8 @@ g1  mz_monitor
 g2  mz_monitor_redacted
 s1  mz_system
 s2  mz_support
+s3  mz_analytics
+s4  mz_jwt_sync
 u1  materialize
 u2  foo
 
@@ -102,11 +104,13 @@ g1  mz_monitor
 g2  mz_monitor_redacted
 s1  mz_system
 s2  mz_support
+s3  mz_analytics
+s4  mz_jwt_sync
 u1  materialize
 u3  bar
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (size '1'))
+CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 query TT rowsort
 SELECT id, name FROM mz_clusters
@@ -115,6 +119,7 @@ s1  mz_system
 s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
+s5  mz_analytics
 u1  quickstart
 u2  foo
 
@@ -122,7 +127,7 @@ statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER bar REPLICAS (r1 (size '1'))
+CREATE CLUSTER bar REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 query TT rowsort
 SELECT id, name FROM mz_clusters
@@ -131,5 +136,6 @@ s1  mz_system
 s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
+s5  mz_analytics
 u1  quickstart
 u3  bar

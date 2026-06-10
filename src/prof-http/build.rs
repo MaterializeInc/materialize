@@ -8,5 +8,6 @@
 // by the Apache License, Version 2.0.
 
 fn main() -> Result<(), anyhow::Error> {
-    mz_npm::ensure()
+    let out_dir = std::env::var("OUT_DIR").ok().map(std::path::PathBuf::from);
+    mz_npm::ensure(out_dir)
 }

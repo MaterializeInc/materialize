@@ -7,7 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose.composition import Composition, Service
+"""
+Basic test for Postgres-compatible connections from JavaScript programming language.
+"""
+
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [

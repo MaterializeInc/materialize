@@ -28,6 +28,7 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     is_any_date_time_expression,
     is_known_to_involve_exact_data_types,
     is_operation_tagged,
+    is_table_function,
     matches_any_expression_arg,
     matches_fun_by_any_name,
     matches_fun_by_name,
@@ -58,8 +59,12 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 )
 from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
     TAG_JSONB_AGGREGATION,
+    TAG_JSONB_OBJECT_GENERATION,
     TAG_JSONB_TO_TEXT,
     TAG_JSONB_VALUE_ACCESS,
+)
+from materialize.output_consistency.input_data.operations.number_operations_provider import (
+    TAG_BASIC_ARITHMETIC_OP,
 )
 from materialize.output_consistency.input_data.operations.record_operations_provider import (
     TAG_RECORD_CREATION,
@@ -67,8 +72,14 @@ from materialize.output_consistency.input_data.operations.record_operations_prov
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
 )
+from materialize.output_consistency.input_data.operations.table_operations_provider import (
+    TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER,
+)
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
+)
+from materialize.output_consistency.input_data.types.date_time_types_provider import (
+    TIME_TYPE_IDENTIFIER,
 )
 from materialize.output_consistency.input_data.types.number_types_provider import (
     DECIMAL_TYPE_IDENTIFIERS,
@@ -86,6 +97,9 @@ from materialize.output_consistency.operation.operation import (
 )
 from materialize.output_consistency.query.query_result import QueryFailure, QueryResult
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.column_selection import (
+    ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+)
 from materialize.output_consistency.validation.validation_message import ValidationError
 
 NAME_OF_NON_EXISTING_FUNCTION_PATTERN = re.compile(
@@ -145,7 +159,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         if matches_float_comparison(expression):
-            return YesIgnore("#22022: real with decimal comparison")
+            return YesIgnore("database-issues#6630: real with decimal comparison")
 
         if (
             operation.is_tagged(TAG_JSONB_TO_TEXT)
@@ -157,13 +171,13 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ),
             True,
         ):
-            return YesIgnore("Consequence of #23571")
+            return YesIgnore("Consequence of database-issues#7085")
 
         if operation.is_tagged(TAG_CASTING) and expression.matches(
             partial(matches_fun_by_name, function_name_in_lower_case="to_char"),
             True,
         ):
-            return YesIgnore("#25228: date format that cannot be parsed")
+            return YesIgnore("database-issues#7529: date format that cannot be parsed")
 
         if (
             expression.matches(
@@ -179,18 +193,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             and ExpressionCharacteristics.STRING_WITH_SPECIAL_SPACE_CHARS
             in all_involved_characteristics
         ):
-            return YesIgnore("#27253: bpchar and char trim newline")
-
-        if expression.matches(
-            partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
-            True,
-        ) and expression.matches(
-            partial(
-                involves_data_type_category, data_type_category=DataTypeCategory.RANGE
-            ),
-            True,
-        ):
-            return YesIgnore("#28007: different formatting of array_agg on range")
+            return YesIgnore("database-issues#8061: bpchar and char trim newline")
 
         if operation.is_tagged(TAG_JSONB_AGGREGATION) and expression.matches(
             partial(
@@ -202,7 +205,17 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ),
             True,
         ):
-            return YesIgnore("#28193: bpchar in jsonb aggregation without spaces")
+            return YesIgnore(
+                "database-issues#8267: bpchar in jsonb aggregation without spaces"
+            )
+
+        if expression.matches(
+            partial(matches_any_expression_arg, arg_matcher=is_table_function),
+            True,
+        ) and expression.has_any_characteristic({ExpressionCharacteristics.NULL}):
+            return YesIgnore(
+                "database-issues#8410: table functions: combination with operations with NULL"
+            )
 
         return super()._matches_problematic_operation_or_function_invocation(
             expression, operation, all_involved_characteristics
@@ -214,14 +227,10 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         expression: ExpressionWithArgs,
         all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
-        inconsistent_value_ordering_functions = ["array_agg", "string_agg"]
-        if (
-            db_function.function_name_in_lower_case
-            in inconsistent_value_ordering_functions
-            # only exclude unordered variant
-            and "ORDER BY" not in db_function.to_pattern(db_function.max_param_count)
-        ):
-            return YesIgnore("inconsistent ordering, not an error")
+        if db_function.function_name_in_lower_case == "generate_subscripts":
+            return YesIgnore(
+                "database-issues#8410: table functions: combination with operations with NULL"
+            )
 
         if db_function.function_name_in_lower_case == "jsonb_pretty":
             return YesIgnore("Accepted")
@@ -229,34 +238,42 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         if db_function.function_name_in_lower_case == "date_trunc":
             precision = expression.args[0]
             if isinstance(precision, EnumConstant) and precision.value == "second":
-                return YesIgnore("#22017: date_trunc with seconds")
+                return YesIgnore("database-issues#6628: date_trunc with seconds")
             if isinstance(precision, EnumConstant) and precision.value == "quarter":
-                return YesIgnore("#21996: date_trunc does not support quarter")
+                return YesIgnore(
+                    "database-issues#6614: date_trunc does not support quarter"
+                )
 
         if db_function.function_name_in_lower_case == "lpad" and expression.args[
             1
         ].has_any_characteristic({ExpressionCharacteristics.NEGATIVE}):
-            return YesIgnore("#21997: lpad with negative")
+            return YesIgnore("database-issues#6615: lpad with negative")
 
         if db_function.function_name_in_lower_case in {"min", "max"}:
             return_type_category = expression.args[0].resolve_return_type_category()
             if return_type_category == DataTypeCategory.STRING:
-                return YesIgnore("#22002: ordering on text different (min/max)")
+                return YesIgnore(
+                    "database-issues#6620: ordering on text different (min/max)"
+                )
             if return_type_category == DataTypeCategory.JSONB:
-                return YesIgnore("#26309: ordering on JSON different (min/max)")
+                return YesIgnore(
+                    "database-issues#7812: ordering on JSON different (min/max)"
+                )
             if return_type_category == DataTypeCategory.ARRAY:
-                return YesIgnore("#27457: ordering on array different (min/max)")
+                return YesIgnore(
+                    "database-issues#8108: ordering on array different (min/max)"
+                )
 
         if db_function.function_name_in_lower_case == "replace":
             # replace is not working properly with empty text; however, it is not possible to reliably determine if an
             # expression is an empty text, we therefore need to exclude the function completely
-            return YesIgnore("#22001: replace")
+            return YesIgnore("database-issues#6619: replace")
 
         if db_function.function_name_in_lower_case == "regexp_replace":
             if expression.args[2].has_any_characteristic(
                 {ExpressionCharacteristics.STRING_WITH_BACKSLASH_CHAR}
             ):
-                return YesIgnore("#23605: regexp with backslash")
+                return YesIgnore("database-issues#7095: regexp with backslash")
             if expression.count_args() == 4:
                 regex_flag = expression.args[3]
                 assert isinstance(regex_flag, EnumConstant)
@@ -280,7 +297,9 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ].has_any_characteristic(
             {ExpressionCharacteristics.STRING_WITH_SPECIAL_SPACE_CHARS}
         ):
-            return YesIgnore("#25937 (base64 decode with new line and tab)")
+            return YesIgnore(
+                "database-issues#7733 (base64 decode with new line and tab)"
+            )
 
         if (
             db_function.function_name_in_lower_case == "coalesce"
@@ -296,7 +315,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             )
         ):
             # do not explicitly require the TEXT type to be included because it can appear by applying || to two char values
-            return YesIgnore("#27278: bpchar and char with coalesce")
+            return YesIgnore("database-issues#8067: bpchar and char with coalesce")
 
         if db_function.function_name_in_lower_case == "row":
             if expression.matches(
@@ -309,7 +328,9 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 ),
                 True,
             ):
-                return YesIgnore("#28130 / #28131: record type with array or ranges")
+                return YesIgnore(
+                    "materialize#28130 / database-issues#8245: record type with array or ranges"
+                )
 
             if expression.matches(
                 partial(
@@ -318,7 +339,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 ),
                 True,
             ):
-                return YesIgnore("#28392: record type with bytea")
+                return YesIgnore("database-issues#8314: record type with bytea")
 
             if expression.matches(
                 partial(
@@ -327,7 +348,27 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 ),
                 True,
             ):
-                return YesIgnore("Consequence of #25723: decimal 0s are not shown")
+                return YesIgnore(
+                    "Consequence of database-issues#7675: decimal 0s are not shown"
+                )
+
+        if expression.matches(
+            partial(
+                matches_fun_by_name,
+                function_name_in_lower_case="pg_size_pretty",
+            ),
+            True,
+        ):
+            if expression.matches(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers=DECIMAL_TYPE_IDENTIFIERS,
+                ),
+                True,
+            ):
+                return YesIgnore(
+                    "Consequence of database-issues#7675: decimal 0s are not shown"
+                )
 
         return NoIgnore()
 
@@ -346,7 +387,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ) and expression.args[0].has_any_characteristic(
             {ExpressionCharacteristics.NULL}
         ):
-            return YesIgnore("#22014: timestamp precision with null")
+            return YesIgnore("database-issues#6625: timestamp precision with null")
 
         if (
             db_operation.pattern in {"$ + $", "$ - $"}
@@ -355,13 +396,13 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             and db_operation.params[1].get_declared_type_category()
             == DataTypeCategory.DATE_TIME
         ):
-            return YesIgnore("#24578: different representation")
+            return YesIgnore("database-issues#7325: different representation")
 
         if db_operation.pattern == "$ % $" and (
             ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics
             or ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
         ):
-            return YesIgnore("#27634: modulo with large / tiny values")
+            return YesIgnore("database-issues#8134: modulo with large / tiny values")
 
         if db_operation.is_tagged(TAG_REGEX):
             return YesIgnore(
@@ -379,14 +420,18 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             and expression.args[1].resolve_return_type_category()
             == DataTypeCategory.NUMERIC
         ):
-            return YesIgnore("#26323: imprecise comparison between REAL and DECIMAL")
+            return YesIgnore(
+                "database-issues#7815: imprecise comparison between REAL and DECIMAL"
+            )
 
         if (
             db_operation.pattern in {"$ || $"}
             and db_operation.params[0].get_declared_type_category()
             == DataTypeCategory.JSONB
         ):
-            return YesIgnore("#23578: empty result in || with simple values")
+            return YesIgnore(
+                "database-issues#7087: empty result in || with simple values"
+            )
 
         if db_operation.pattern in [
             "position($ IN $)",
@@ -397,7 +442,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ),
             True,
         ):
-            return YesIgnore("Consequence of #23571")
+            return YesIgnore("Consequence of database-issues#7085")
 
         if db_operation.is_tagged(TAG_CASTING):
             casting_target = expression.args[1]
@@ -405,7 +450,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
 
             if casting_target.value == "DECIMAL(39)":
                 return YesIgnore(
-                    "#24678: different specification of default DECIMAL type"
+                    "database-issues#7344: different specification of default DECIMAL type"
                 )
 
         if db_operation.is_tagged(TAG_EQUALITY_ORDERING):
@@ -415,17 +460,23 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 return_type_category_1,
                 return_type_category_2,
             }:
-                return YesIgnore("#22002: ordering on text different (<, <=, ...)")
+                return YesIgnore(
+                    "database-issues#6620: ordering on text different (<, <=, ...)"
+                )
             if DataTypeCategory.JSONB in {
                 return_type_category_1,
                 return_type_category_2,
             }:
-                return YesIgnore("#26309: ordering on JSON different (<, <=, ...)")
+                return YesIgnore(
+                    "database-issues#7812: ordering on JSON different (<, <=, ...)"
+                )
             if DataTypeCategory.ARRAY in {
                 return_type_category_1,
                 return_type_category_2,
             }:
-                return YesIgnore("#27457: ordering on array different (<, <=, ...)")
+                return YesIgnore(
+                    "database-issues#8108: ordering on array different (<, <=, ...)"
+                )
 
         if db_operation.is_tagged(TAG_CASTING) and expression.matches(
             partial(
@@ -437,7 +488,20 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ),
             True,
         ):
-            return YesIgnore("#27282: casting bpchar or char")
+            return YesIgnore("database-issues#8068: casting bpchar or char")
+
+        if (
+            db_operation.pattern == "$ IS NULL"
+            and ExpressionCharacteristics.NULL in all_involved_characteristics
+            and expression.matches(
+                partial(
+                    involves_data_type_category,
+                    data_type_category=DataTypeCategory.RECORD,
+                ),
+                True,
+            )
+        ):
+            return YesIgnore("database-issues#8632: IS NULL on record with NULL value")
 
         return NoIgnore()
 
@@ -468,6 +532,41 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 query_template, mz_outcome
             )
 
+        if query_template.matches_any_expression(
+            partial(
+                is_operation_tagged,
+                tag=TAG_JSONB_OBJECT_GENERATION,
+            ),
+            True,
+        ) and (
+            len(
+                set.intersection(
+                    {
+                        ExpressionCharacteristics.MAX_VALUE,
+                        ExpressionCharacteristics.INFINITY,
+                        ExpressionCharacteristics.NAN,
+                    },
+                    query_template.get_involved_characteristics(
+                        ALL_QUERY_COLUMNS_BY_INDEX_SELECTION
+                    ),
+                )
+            )
+            > 0
+            or query_template.matches_any_expression(
+                partial(
+                    matches_any_expression_arg,
+                    arg_matcher=partial(
+                        matches_fun_by_any_name,
+                        function_names_in_lower_case=MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR,
+                    ),
+                ),
+                True,
+            )
+        ):
+            return YesIgnore(
+                "Deviations in floating point functions may cause an invalid JSONB (e.g., database-issues#8505 producing NaN in mz)"
+            )
+
         return super()._shall_ignore_success_mismatch(
             error, query_template, contains_aggregation
         )
@@ -496,10 +595,10 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("accepted")
 
         if " out of range" in pg_error_msg:
-            return YesIgnore("#22265")
+            return YesIgnore("database-issues#6717")
 
         if "value overflows numeric format" in pg_error_msg:
-            return YesIgnore("#21994")
+            return YesIgnore("database-issues#6612")
 
         if _error_message_is_about_zero_or_value_ranges(pg_error_msg):
             return YesIgnore("Caused by a different precision")
@@ -517,8 +616,15 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Not supported by pg")
 
+        if "invalid regular expression: parentheses () not balanced" in pg_error_msg:
+            return YesIgnore(
+                "Materialize regular expressions are similar to, but not identical to, PostgreSQL regular expressions."
+            )
+
         if 'invalid input syntax for type time: ""' in pg_error_msg:
-            return YesIgnore("#24736: different handling of empty time string")
+            return YesIgnore(
+                "database-issues#7367: different handling of empty time string"
+            )
 
         if (
             'syntax error at or near "NULL"' in pg_error_msg
@@ -527,7 +633,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             )
         ):
             return YesIgnore(
-                "#27078: different error handling when extracting from timestamp"
+                "database-issues#8019: different error handling when extracting from timestamp"
             )
 
         if (
@@ -561,7 +667,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 True,
             )
         ):
-            return YesIgnore("#28136: jsonb_object_agg with NULL as key")
+            return YesIgnore("database-issues#8246: jsonb_object_agg with NULL as key")
 
         if (
             re.search("function pg_size_pretty(.*?) is not unique", pg_error_msg)
@@ -579,7 +685,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 True,
             )
         ):
-            return YesIgnore("#28141: jsonb_object_agg with non-scalar key")
+            return YesIgnore(
+                "database-issues#8249: jsonb_object_agg with non-scalar key"
+            )
 
         if query_template.matches_any_expression(
             partial(
@@ -589,6 +697,45 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             True,
         ):
             return YesIgnore("Different evaluation order")
+
+        if "argument of IN must not return a set" in pg_error_msg:
+            return YesIgnore("Not supported by Postgres")
+
+        if query_template.matches_any_expression(
+            partial(
+                matches_op_by_pattern,
+                pattern="$ IS NULL",
+            ),
+            True,
+        ):
+            return YesIgnore("Evaluation shortcut for IS NULL")
+
+        if (
+            "FULL JOIN is only supported with merge-joinable or hash-joinable join conditions"
+            in pg_error_msg
+        ):
+            return YesIgnore("Not supported by Postgres")
+
+        if query_template.matches_any_expression(
+            is_table_function,
+            True,
+        ) and ExpressionCharacteristics.NULL in query_template.get_involved_characteristics(
+            ALL_QUERY_COLUMNS_BY_INDEX_SELECTION
+        ):
+            # where condition will not be evaluated if mz knows that the number of resulting
+            # rows is zero
+            return YesIgnore("Evaluation shortcut for table functions")
+
+        if (
+            query_template.matches_any_expression(
+                partial(
+                    matches_fun_by_name, function_name_in_lower_case="jsonb_object_agg"
+                ),
+                True,
+            )
+            and mz_outcome.row_count() == 0
+        ):
+            return YesIgnore("Evaluation shortcut")
 
         return NoIgnore()
 
@@ -616,7 +763,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             "value out of range: overflow" in mz_error_msg
             and query_template.matches_any_expression(matches_round_function, True)
         ):
-            return YesIgnore("#22028: round overflow")
+            return YesIgnore("database-issues#6634: round overflow")
 
         if (
             "value out of range: overflow" in mz_error_msg
@@ -625,50 +772,50 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             or 'inf" real out of range' in mz_error_msg
             or 'inf" double precision out of range' in mz_error_msg
         ):
-            return YesIgnore("#21994: overflow")
+            return YesIgnore("database-issues#6612: overflow")
 
         if (
             "value out of range: underflow" in mz_error_msg
             or '"-inf" real out of range' in mz_error_msg
         ):
-            return YesIgnore("#21995: underflow")
+            return YesIgnore("database-issues#6613: underflow")
 
         if (
             "precision for type timestamp or timestamptz must be between 0 and 6"
             in mz_error_msg
         ):
-            return YesIgnore("#22020: unsupported timestamp precision")
+            return YesIgnore("database-issues#6629: unsupported timestamp precision")
 
         if "array_agg on arrays not yet supported" in mz_error_msg:
-            return YesIgnore("#28384: array_agg on arrays")
+            return YesIgnore("database-issues#8310: array_agg on arrays")
 
         if "field position must be greater than zero" in mz_error_msg:
-            return YesIgnore("#22023: split_part")
+            return YesIgnore("database-issues#6631: split_part")
 
         if "timestamp out of range" in mz_error_msg:
-            return YesIgnore("#22264")
+            return YesIgnore("database-issues#6716")
 
         if "bigint out of range" in mz_error_msg:
             # when a large decimal number or NaN is used as an array index
-            return YesIgnore("#28145")
+            return YesIgnore("database-issues#8252")
 
         if "invalid regular expression: regex parse error" in mz_error_msg:
-            return YesIgnore("#22956")
+            return YesIgnore("database-issues#6921")
 
         if "invalid regular expression flag" in mz_error_msg:
-            return YesIgnore("#22958")
+            return YesIgnore("database-issues#6923")
 
         if "unit 'invalid_value_123' not recognized" in mz_error_msg:
-            return YesIgnore("#22957")
+            return YesIgnore("database-issues#6922")
 
         if "invalid time zone" in mz_error_msg:
-            return YesIgnore("#22984")
+            return YesIgnore("database-issues#6927")
 
         if _error_message_is_about_zero_or_value_ranges(mz_error_msg):
             return YesIgnore("Caused by a different precision")
 
         if query_template.limit == 0:
-            return YesIgnore("#17189: LIMIT 0 does not swallow errors")
+            return YesIgnore("database-issues#4972: LIMIT 0 does not swallow errors")
 
         if (
             query_template.matches_any_expression(
@@ -681,16 +828,18 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("regtype of postgres can be cast")
 
         if "array_agg on character not yet supported" in mz_error_msg:
-            return YesIgnore("#27252: array_agg on character")
+            return YesIgnore("database-issues#8060: array_agg on character")
 
         if "array subscript does not support slices" in mz_error_msg:
             return YesIgnore("array subscript does not support slices")
 
         if "|| does not support implicitly casting" in mz_error_msg:
-            return YesIgnore("#28024: no implicit casting from ...[] to ...[]")
+            return YesIgnore(
+                "database-issues#8219: no implicit casting from ...[] to ...[]"
+            )
 
         if "cannot reference pseudo type pg_catalog.record" in mz_error_msg:
-            return YesIgnore("#17870: cannot reference pg_catalog.record")
+            return YesIgnore("database-issues#5211: cannot reference pg_catalog.record")
 
         if query_template.matches_any_expression(
             partial(is_operation_tagged, tag=TAG_ARRAY_INDEX_OPERATION),
@@ -708,16 +857,56 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 True,
             )
         ):
-            return YesIgnore("#28169: JSONB with large number")
+            return YesIgnore("database-issues#8258: JSONB with large number")
 
         if (
             "function casting double precision to numeric is only defined for finite arguments"
             in mz_error_msg
         ):
-            return YesIgnore("#28240: infinity to decimal")
+            return YesIgnore("database-issues#8281: infinity to decimal")
 
         if "invalid regular expression flag: n" in mz_error_msg:
-            return YesIgnore("#28805: regex n flag")
+            return YesIgnore("database-issues#8409: regex n flag")
+
+        if "aggregate functions are not allowed in table function" in mz_error_msg:
+            return YesIgnore(
+                "database-issues#8313: aggregate functions are not allowed in table function arguments"
+            )
+
+        if "table functions are not allowed in other table functions" in mz_error_msg:
+            return YesIgnore(
+                "database-issues#8315: table functions are not allowed in other table functions"
+            )
+
+        if (
+            "table functions are not allowed in aggregate function calls"
+            in mz_error_msg
+        ):
+            return YesIgnore(
+                "database-issues#8422: table functions are not allowed in aggregate function calls"
+            )
+
+        if (
+            query_template.has_where_condition() or query_template.has_row_selection()
+        ) and query_template.uses_join():
+            return YesIgnore(
+                "Different evaluation order of join clause and where filter"
+            )
+
+        if query_template.uses_join():
+            # more generic catch
+            return YesIgnore(
+                "database-issues#8504: eager evaluation of select expression in mz"
+            )
+
+        if (
+            "invalid input syntax for type jsonb" in mz_error_msg
+            and "is out of range" in mz_error_msg
+        ):
+            return YesIgnore("value out of range")
+
+        if "coalesce could not convert type" in mz_error_msg:
+            return YesIgnore("database-issues#8648: coalesce could not convert type")
 
         return NoIgnore()
 
@@ -774,7 +963,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             ),
             True,
         ):
-            return YesIgnore("#22003: aggregation function")
+            return YesIgnore("database-issues#6621: aggregation function")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
@@ -801,7 +990,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             partial(matches_fun_by_name, function_name_in_lower_case="mod"),
             True,
         ):
-            return YesIgnore("#22005: mod")
+            return YesIgnore("database-issues#6623: mod")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
@@ -812,17 +1001,17 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             ),
             True,
         ):
-            return YesIgnore("#23586")
+            return YesIgnore("database-issues#7089")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index, matches_math_op_with_large_or_tiny_val, True
         ):
-            return YesIgnore("#22266: arithmetic funs with large value")
+            return YesIgnore("database-issues#6718: arithmetic funs with large value")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index, matches_nullif, True
         ):
-            return YesIgnore("#22267: nullif")
+            return YesIgnore("database-issues#6719: nullif")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
@@ -848,7 +1037,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
             if value1_str == value2_str:
                 return YesIgnore(
-                    "#24687: different representation of floating-point type"
+                    "database-issues#7348: different representation of floating-point type"
                 )
 
         if (
@@ -863,7 +1052,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             and ExpressionCharacteristics.STRING_WITH_ESZETT
             in all_involved_characteristics
         ):
-            return YesIgnore("#26846: eszett in upper")
+            return YesIgnore("database-issues#7938: eszett in upper")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
@@ -876,27 +1065,6 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
             if verdict.ignore:
                 return verdict
-
-        if query_template.matches_specific_select_or_filter_expression(
-            col_index,
-            partial(
-                matches_fun_by_name,
-                function_name_in_lower_case="pg_size_pretty",
-            ),
-            True,
-        ):
-            if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
-                # different value presentation, potentially an issue in Postgres
-                return YesIgnore("Postgres behaves differently for max_value")
-            if query_template.matches_specific_select_or_filter_expression(
-                col_index,
-                partial(
-                    is_known_to_involve_exact_data_types,
-                    internal_data_type_identifiers=DECIMAL_TYPE_IDENTIFIERS,
-                ),
-                True,
-            ):
-                return YesIgnore("Consequence of #25723: decimal 0s are not shown")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
@@ -914,7 +1082,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 ),
                 True,
             ):
-                return YesIgnore("#28137: different date string in JSONB")
+                return YesIgnore("database-issues#8247: different date string in JSONB")
 
             if query_template.matches_specific_select_or_filter_expression(
                 col_index,
@@ -924,13 +1092,13 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 ),
                 True,
             ):
-                return YesIgnore("#28143: non-quoted numbers")
+                return YesIgnore("database-issues#8251: non-quoted numbers")
 
         if (
             ExpressionCharacteristics.DATE_WITH_SHORT_YEAR
             in all_involved_characteristics
         ):
-            return YesIgnore("#28284: short date format")
+            return YesIgnore("database-issues#8289: short date format")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
@@ -944,7 +1112,39 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             or ExpressionCharacteristics.COLLECTION_EMPTY
             in all_involved_characteristics
         ):
-            return YesIgnore("#28300: ALL and ANY with NULL or empty array")
+            return YesIgnore(
+                "database-issues#8293: ALL and ANY with NULL or empty array"
+            )
+
+        # use here matches_any_expression instead of matches_specific_select_or_filter_expression on purpose because
+        # the concerned expression may affect other columns as well
+        if query_template.matches_any_expression(
+            partial(
+                is_operation_tagged, tag=TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER
+            ),
+            True,
+        ) and (query_template.has_offset() or query_template.has_limit()):
+            # When table functions are used, a row-order insensitive comparison will be conducted in the result
+            # comparator. However, this is not sufficient when a LIMIT or OFFSET clause is present.
+            return YesIgnore(
+                "Different sort order (partially a consequence of database-issues#6620 and database-issues#7812)"
+            )
+
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(matches_fun_by_name, function_name_in_lower_case="unnest"),
+            True,
+        ) and query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(
+                involves_data_type_categories,
+                data_type_categories={
+                    DataTypeCategory.ARRAY,
+                },
+            ),
+            True,
+        ):
+            return YesIgnore("database-issues#8466: unnest on array uses wrong order")
 
         return NoIgnore()
 
@@ -963,17 +1163,21 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
-            partial(matches_fun_by_name, function_name_in_lower_case="floor"),
+            partial(
+                matches_fun_by_any_name, function_names_in_lower_case={"floor", "ceil"}
+            ),
             True,
         ):
-            return YesIgnore("#28801: floor return type")
+            return YesIgnore("database-issues#8407: return type of floor and ceil")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
             partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
             True,
         ):
-            return YesIgnore("#27150: array_agg(pg_typeof(...)) in pg flattens result")
+            return YesIgnore(
+                "database-issues#8028: array_agg(pg_typeof(...)) in pg flattens result"
+            )
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
@@ -1013,9 +1217,19 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             )
 
         if query_template.matches_specific_select_or_filter_expression(
-            col_index, partial(matches_op_by_pattern, pattern="$ / $"), True
+            col_index, partial(is_operation_tagged, tag=TAG_BASIC_ARITHMETIC_OP), True
         ):
-            return YesIgnore("#28852: numeric return type inconsistency")
+            return YesIgnore("database-issues#8417: numeric return type inconsistency")
+
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(
+                is_known_to_involve_exact_data_types,
+                internal_data_type_identifiers={TIME_TYPE_IDENTIFIER},
+            ),
+            True,
+        ):
+            return YesIgnore("database-issues#8588: different type name for time")
 
         return NoIgnore()
 
@@ -1046,7 +1260,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         pg_error = details_by_strategy_key[EvaluationStrategyKey.POSTGRES]
 
         if mz_error.value == float and pg_error.value == int:
-            return YesIgnore("#26306: float instead of int returned")
+            return YesIgnore("database-issues#7811: float instead of int returned")
 
         return self._shall_ignore_content_mismatch(
             error,
@@ -1099,6 +1313,8 @@ def _error_message_is_about_zero_or_value_ranges(message: str) -> bool:
 def is_unknown_function_or_operation_invocation(error_msg: str) -> bool:
     return (
         "No function matches the given name and argument types" in error_msg
+        or re.search("function (.*?) does not exist", error_msg) is not None
+        or "operator does not exist:" in error_msg
         or "No operator matches the given name and argument types" in error_msg
         or ("WHERE clause error: " in error_msg and "does not exist" in error_msg)
     )

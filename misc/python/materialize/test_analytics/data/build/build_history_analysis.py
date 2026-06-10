@@ -7,19 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from textwrap import dedent
 
 from materialize import buildkite
-from materialize.buildkite import BuildkiteEnvVar
 from materialize.buildkite_insights.data.build_history import (
     BuildHistory,
     BuildHistoryEntry,
 )
-from materialize.mz_version import MzVersion
-from materialize.test_analytics.connector.test_analytics_connector import (
-    DatabaseConnector,
-)
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 class BuildHistoryAnalysis(BaseDataStorage):
@@ -36,8 +31,7 @@ class BuildHistoryAnalysis(BaseDataStorage):
             else "shard_index IS NULL"
         )
 
-        rows = self.query_data(
-            f"""
+        rows = self.query_data(f"""
                 SELECT
                     build_number,
                     build_id,
@@ -46,13 +40,12 @@ class BuildHistoryAnalysis(BaseDataStorage):
                 FROM
                     mv_recent_build_job_success_on_main_v2
                 WHERE
-                    pipeline = '{pipeline}' AND
-                    build_step_key = '{step_key}' AND
+                    pipeline = {as_sanitized_literal(pipeline)} AND
+                    build_step_key = {as_sanitized_literal(step_key)} AND
                     {shard_index_comparison}
                 ORDER BY
                     build_number DESC
-                """
-        )
+                """)
 
         result = []
 

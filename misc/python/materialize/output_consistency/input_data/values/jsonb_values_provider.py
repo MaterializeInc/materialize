@@ -30,22 +30,22 @@ JSONB_DATA_TYPE_WITH_VALUES.add_raw_value(
     {ExpressionCharacteristics.JSON_ARRAY},
 )
 JSONB_DATA_TYPE_WITH_VALUES.add_raw_value(
-    '\'["a", "b"]\'',
+    """'["a", "b"]'""",
     "VAL_ARR",
     {ExpressionCharacteristics.JSON_ARRAY},
 )
-JSONB_DATA_TYPE_WITH_VALUES.add_raw_value("'{\"a\": 1}'", "VAL_1", set())
-JSONB_DATA_TYPE_WITH_VALUES.add_raw_value('\'{"a": 1,"b": 2}\'', "VAL_1B", set())
-JSONB_DATA_TYPE_WITH_VALUES.add_raw_value('\'{"a": 1,"b": null}\'', "VAL_1C", set())
-JSONB_DATA_TYPE_WITH_VALUES.add_raw_value('\'{"a": 1,"c": 3}\'', "VAL_2", set())
+JSONB_DATA_TYPE_WITH_VALUES.add_raw_value("""'{"a": 1}'""", "VAL_1", set())
+JSONB_DATA_TYPE_WITH_VALUES.add_raw_value("""'{"a": 1,"b": 2}'""", "VAL_1B", set())
+JSONB_DATA_TYPE_WITH_VALUES.add_raw_value("""'{"a": 1,"b": null}'""", "VAL_1C", set())
+JSONB_DATA_TYPE_WITH_VALUES.add_raw_value("""'{"a": 1,"c": 3}'""", "VAL_2", set())
 JSONB_DATA_TYPE_WITH_VALUES.add_raw_value(
-    '\'{"a": 1,"b": 4, "m": {}}\'', "VAL_3", set()
+    """'{"a": 1,"b": 4, "m": {}}'""", "VAL_3", set()
 )
 JSONB_DATA_TYPE_WITH_VALUES.add_raw_value(
-    '\'{"a": "2", "b": ["1", "2"]}\'', "VAL_4", set()
+    """'{"a": "2", "b": ["1", "2"]}'""", "VAL_4", set()
 )
 JSONB_DATA_TYPE_WITH_VALUES.add_raw_value(
-    '\'{"a": "2", "b": { "b1": "1", "b2": { "b20": "2", "b21": "2" }}}\'',
+    """'{"a": "2", "b": { "b1": "1", "b2": { "b20": "2", "b21": "2" }}}'""",
     "VAL_5",
     set(),
 )

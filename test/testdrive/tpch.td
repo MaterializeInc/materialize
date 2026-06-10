@@ -13,43 +13,58 @@ $ set-arg-default single-replica-cluster=quickstart
 # cardinality, don't depend on exact count that could change if the rng
 # implementation changes, just check that it's within the spec range.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = false
+
 ! CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0)
 contains: multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = true
+
 ! CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR 9223372036854775807) FOR ALL TABLES
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 9223372036854775807)
 contains: unsupported scale factor 9223372036854776000
 
 ! CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR -1) FOR ALL TABLES
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR -1)
 contains: unsupported scale factor -1
 
+> BEGIN
 > CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR .01) FOR ALL TABLES
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR .01, UP TO 100)
 
-$ set-from-sql var=source-size
-SELECT size FROM (
-    SHOW SOURCES
-) WHERE name = 'gen'
+> CREATE TABLE customer FROM SOURCE gen (REFERENCE customer);
+> CREATE TABLE lineitem FROM SOURCE gen (REFERENCE lineitem);
+> CREATE TABLE nation FROM SOURCE gen (REFERENCE nation);
+> CREATE TABLE orders FROM SOURCE gen (REFERENCE orders);
+> CREATE TABLE part FROM SOURCE gen (REFERENCE part);
+> CREATE TABLE partsupp FROM SOURCE gen (REFERENCE partsupp);
+> CREATE TABLE region FROM SOURCE gen (REFERENCE region);
+> CREATE TABLE supplier FROM SOURCE gen (REFERENCE supplier);
+> COMMIT
 
 > SHOW SOURCES
-name           type            size             cluster
--------------------------------------------------------
- customer      subsource       ${source-size}   ${arg.single-replica-cluster}
- gen           load-generator  ${source-size}   ${arg.single-replica-cluster}
- gen_progress  progress        <null> <null>
- lineitem      subsource       ${source-size}   ${arg.single-replica-cluster}
- nation        subsource       ${source-size}   ${arg.single-replica-cluster}
- orders        subsource       ${source-size}   ${arg.single-replica-cluster}
- part          subsource       ${source-size}   ${arg.single-replica-cluster}
- partsupp      subsource       ${source-size}   ${arg.single-replica-cluster}
- region        subsource       ${source-size}   ${arg.single-replica-cluster}
- supplier      subsource       ${source-size}   ${arg.single-replica-cluster}
+name           type            cluster                          comment
+-----------------------------------------------------------------------
+ gen           load-generator  ${arg.single-replica-cluster}    ""
+
+> SHOW TABLES
+name           comment
+------------------------
+ customer      ""
+ lineitem      ""
+ nation        ""
+ orders        ""
+ part          ""
+ partsupp      ""
+ region        ""
+ supplier      ""
 
 # SF * 150,000
 > SELECT count(*) FROM customer
@@ -66,6 +81,11 @@ true
 # For each row in the CUSTOMER table, ten rows in the ORDERS table
 > SELECT count(*) FROM orders
 15000
+
+# o_totalprice is declared numeric(39,2), so generated values must not carry
+# more than two fractional digits.
+> SELECT count(*) FROM orders WHERE o_totalprice != round(o_totalprice, 2)
+0
 
 # SF * 200,000
 > SELECT count(*) FROM part
@@ -617,7 +637,7 @@ true
   ORDER BY
       o_totalprice DESC,
       o_orderdate;
-3 values hashing to 321256b5aef1aedab78f125c5925de92
+3 values hashing to 870490f2a7ea6ec18625e8f96cc91815
 
 # Query 19
 > SELECT
@@ -1338,7 +1358,7 @@ true
   ORDER BY
       o_totalprice DESC,
       o_orderdate;
-3 values hashing to 321256b5aef1aedab78f125c5925de92
+3 values hashing to 870490f2a7ea6ec18625e8f96cc91815
 
 # Query 19
 > SELECT

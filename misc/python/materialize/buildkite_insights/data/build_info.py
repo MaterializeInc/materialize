@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass
@@ -17,3 +18,4 @@ class Build:
     state: str
     branch: str
     web_url: str
+    created_at: datetime

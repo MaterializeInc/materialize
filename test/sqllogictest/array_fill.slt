@@ -37,7 +37,7 @@ SELECT array_fill(INTERVAL '1d', array[3])
 query T
 SELECT array_fill('[1,)'::int4range, array[3])
 ----
-{[1,),[1,),[1,)}
+{"[1,)","[1,)","[1,)"}
 
 query T
 SELECT (array_fill(5, array[3]))[1]
@@ -170,10 +170,10 @@ ORDER BY 1;
 
 # Polymorphic solution
 
-query error db error: ERROR: could not determine polymorphic type because input has type unknown
+query error could not determine polymorphic type because input has type unknown
 SELECT array_fill(null, array[3])
 
-query error db error: ERROR: could not determine polymorphic type because input has type unknown
+query error could not determine polymorphic type because input has type unknown
 SELECT array_fill(null, null)
 
 query T
@@ -195,10 +195,10 @@ SELECT array_fill(LIST[1], array[3, 2])
 query error array_fill on integer list not yet supported
 SELECT array_fill(LIST[1], array[3, 2], array[2, 3])
 
-query error array_fill on character not yet supported
+query error array_fill on char\(1\) not yet supported
 SELECT array_fill('c'::char, array[3, 2])
 
-query error array_fill on character not yet supported
+query error array_fill on char\(1\) not yet supported
 SELECT array_fill('c'::char, array[3, 2], array[2, 3])
 
 query error array_fill on map\[text=>integer\] not yet supported
@@ -372,3 +372,36 @@ ORDER BY o, i;
 0	-2	null
 0	-1	null
 0	0	null
+
+# array_lower/array_upper must respect the lower bounds of the array
+
+query I
+SELECT array_lower(array_fill(0, ARRAY[3], ARRAY[5]), 1);
+----
+5
+
+query I
+SELECT array_upper(array_fill(0, ARRAY[3], ARRAY[5]), 1);
+----
+7
+
+query II
+SELECT array_lower(a, 1), array_upper(a, 1) FROM (
+    SELECT array_fill(0, ARRAY[3], ARRAY[-3]) AS a
+);
+----
+-3
+-1
+
+query IIII
+SELECT
+    array_lower(a, 1), array_upper(a, 1),
+    array_lower(a, 2), array_upper(a, 2)
+FROM (
+    SELECT array_fill(0, ARRAY[3, 2], ARRAY[4, 3]) AS a
+);
+----
+4
+6
+3
+4

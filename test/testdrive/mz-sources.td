@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 # Verify that envelope types are correctly reported in mz_sources
 
@@ -21,21 +21,29 @@ $ set-arg-default default-storage-size=1
 $ kafka-create-topic topic=none-topic partitions=1
 
 > CREATE CLUSTER none_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE none_source
   IN CLUSTER none_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-none-topic-${testdrive.seed}')
+
+> CREATE TABLE none_source_tbl FROM SOURCE none_source (REFERENCE "testdrive-none-topic-${testdrive.seed}")
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE KEY
   ENVELOPE NONE
+> COMMIT
 
 > CREATE CLUSTER none_source_no_key_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE none_source_no_key
   IN CLUSTER none_source_no_key_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-none-topic-${testdrive.seed}')
+
+> CREATE TABLE none_source_no_key_tbl FROM SOURCE none_source_no_key (REFERENCE "testdrive-none-topic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
 
+> COMMIT
 
 $ set keyschema={
     "type": "record",
@@ -117,11 +125,15 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}, "op": "u", "source": {"file": "binlog1", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
 > CREATE CLUSTER debezium_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE debezium_source
   IN CLUSTER debezium_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+
+> CREATE TABLE debezium_source_tbl FROM SOURCE debezium_source (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 $ kafka-create-topic topic=upsert-topic
 
@@ -146,26 +158,23 @@ $ kafka-ingest format=avro topic=upsert-topic key-format=avro key-schema=${keysc
 {"key": "fish"} {"f1": "fish", "f2": 1000}
 
 > CREATE CLUSTER upsert_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE upsert_source
   IN CLUSTER upsert_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-topic-${testdrive.seed}')
+
+> CREATE TABLE upsert_source_tbl FROM SOURCE upsert_source (REFERENCE "testdrive-upsert-topic-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
-> SELECT envelope_type FROM mz_sources WHERE name = 'none_source'
-none
+> CREATE TABLE table_with_other_format_and_envelope FROM SOURCE upsert_source (REFERENCE "testdrive-upsert-topic-${testdrive.seed}")
+  FORMAT TEXT
+  ENVELOPE NONE
+> COMMIT
 
-> SELECT envelope_type FROM mz_sources WHERE name = 'debezium_source'
-debezium
-
-> SELECT envelope_type FROM mz_sources WHERE name = 'upsert_source'
-upsert
-
-> SELECT key_format, value_format FROM mz_sources WHERE name = 'none_source'
-text text
-
-> SELECT key_format, value_format FROM mz_sources WHERE name = 'none_source_no_key'
-<null> text
-
-> SELECT key_format, value_format FROM mz_sources WHERE name = 'debezium_source'
-avro avro
+> SELECT topic, envelope_type, key_format, value_format FROM mz_internal.mz_kafka_source_tables
+testdrive-none-topic-${testdrive.seed}     none            <null>       text
+testdrive-upsert-topic-${testdrive.seed}   none            <null>       text
+testdrive-none-topic-${testdrive.seed}     none            text         text
+testdrive-dbzupsert-${testdrive.seed}      debezium        avro         avro
+testdrive-upsert-topic-${testdrive.seed}   upsert          avro         avro

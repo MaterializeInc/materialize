@@ -25,7 +25,7 @@ known_errors = [
     "function list_prepend(",  # insufficient type system, parameter types have to match
     "function list_cat(",  # insufficient type system, parameter types have to match
     "does not support implicitly casting from",
-    "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/materialize/issues/3720
+    "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/database-issues/issues/1163
     "range lower bound must be less than or equal to range upper bound",
     "violates not-null constraint",
     "division by zero",
@@ -49,6 +49,7 @@ known_errors = [
     "is not defined for zero",
     "is not defined for negative numbers",
     "requested character too large for encoding",
+    "requested character not valid for encoding",
     "internal error: unrecognized configuration parameter",
     "invalid encoding name",
     "invalid time zone",
@@ -68,7 +69,7 @@ known_errors = [
     "field position must be greater than zero",
     "array_fill on ",  # Not yet supported
     "must not be null",  # Expected with array_fill, array_position
-    "' not recognized",  # Expected, see https://github.com/MaterializeInc/materialize/issues/17981
+    "' not recognized",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5253
     "must appear in the GROUP BY clause or be used in an aggregate function",
     "Expected joined table, found",  # Should fix for multi table join
     "Expected ON, or USING after JOIN, found",  # Should fix for multi table join
@@ -78,10 +79,11 @@ known_errors = [
     "result exceeds max size of",  # Seems expected with huge queries
     "expected expression, but found reserved keyword",  # Should fix, but only happens rarely with subqueries
     "Expected right parenthesis, found left parenthesis",  # Should fix, but only happens rarely with cast+coalesce
-    "invalid selection: operation may only refer to user-defined tables",  # Seems expected when using catalog tables
-    "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
-    "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
-    "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/materialize/issues/14290
+    "invalid selection: operation may only (transitively) refer to non-source, non-system tables",  # Seems expected when using catalog tables
+    "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
+    "Unsupported temporal operation: NotEq",
+    "Unsupported binary temporal operation: NotEq",
+    "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
     "string is not a valid identifier:",  # Expected in parse_ident & quote_ident
     "invalid datepart",
     "pg_cancel_backend in this position not yet supported",
@@ -99,6 +101,8 @@ known_errors = [
     "coalesce types text and text list cannot be matched",  # Bad typing for ||
     "coalesce types text list and text cannot be matched",  # Bad typing for ||
     "is out of range for type numeric: exceeds maximum precision",
+    "is out of range for type date",
+    "is out of range for type timestamp",
     "CAST does not support casting from ",  # TODO: Improve type system
     "SET clause does not support casting from ",  # TODO: Improve type system
     "coalesce types integer and interval cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
@@ -110,12 +114,12 @@ known_errors = [
     "out of valid range",
     '" does not exist',  # role does not exist
     "attempt to create relation with too many columns",
-    "target replica failed or was dropped",  # expected on replica OoMs with #21587
+    "target replica failed or was dropped",  # expected on replica OoMs with materialize#21587
     "cannot materialize call to",  # create materialized view on some internal views
     "arrays must not contain null values",  # aclexplode, mz_aclexplode
     "OVER clause not allowed on",  # window functions
     "cannot reference pseudo type",
-    "window functions are not allowed in table function arguments",  # TODO: Remove when #20979 is implemented
+    "window functions are not allowed in table function arguments",  # TODO: Remove when database-issues#6317 is implemented
     "window functions are not allowed in OR argument",  # wrong error message
     "window functions are not allowed in AND argument",  # wrong error message
     "window functions are not allowed in aggregate function",
@@ -132,6 +136,12 @@ known_errors = [
     "function map_build(text list) does not exist",
     "timestamp cannot be NaN",
     "exceeded recursion limit of 2048",
-    "key cannot be null",  # expected, see #25941
+    "key cannot be null",  # expected, see PR materialize#25941
     "regexp_extract must specify at least one capture group",
+    "array_fill with arrays not yet supported",
+    "not yet supported",
+    "Window function performance issue: `reduce_unnest_list_fusion` failed",  # TODO: Remove when database-issues#9644 is fixed
+    "WITH ORDINALITY or ROWS FROM with ",
+    "invalid normalization form",  # Expected with https://github.com/MaterializeInc/materialize/pull/33507
+    "invalid catalog JSON",  # `parse_catalog_*` function invoked with an invalid JSON object
 ]

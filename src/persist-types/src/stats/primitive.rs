@@ -9,20 +9,15 @@
 
 use std::fmt::{self, Debug};
 
-use arrow::array::{Array, BinaryArray, BooleanArray, PrimitiveArray, StringArray};
-use arrow::buffer::BooleanBuffer;
-use arrow::datatypes::ArrowPrimitiveType;
-use mz_ore::assert_none;
+use mz_ore::str::redact;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::Strategy;
 use serde::Serialize;
 
-use crate::columnar::Data;
-use crate::dyn_struct::ValidityRef;
 use crate::stats::{
-    proto_primitive_stats, BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
-    OptionStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats, StatsFrom, TrimStats,
+    BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats, OptionStats,
+    ProtoPrimitiveBytesStats, ProtoPrimitiveStats, TrimStats, proto_primitive_stats,
 };
 use crate::timestamp::try_parse_monotonic_iso8601_timestamp;
 
@@ -137,13 +132,19 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let l = serde_json::to_value(&self.lower).expect("valid json");
         let u = serde_json::to_value(&self.upper).expect("valid json");
-        Debug::fmt(&serde_json::json!({"lower": l, "upper": u}), f)
+        f.debug_struct("PrimitiveStats")
+            .field("lower", &redact(l))
+            .field("upper", &redact(u))
+            .finish()
     }
 }
 
 impl Debug for PrimitiveStats<Vec<u8>> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.debug_json(), f)
+        f.debug_struct("PrimitiveStats")
+            .field("lower", &redact(hex::encode(&self.lower)))
+            .field("upper", &redact(hex::encode(&self.upper)))
+            .finish()
     }
 }
 
@@ -188,52 +189,32 @@ impl DynStats for PrimitiveStats<Vec<u8>> {
 
 /// This macro implements the [`ColumnStats`] trait for all variants of [`PrimitiveStats`].
 macro_rules! stats_primitive {
-    ($data:ty, $ref:ident, $variant:ident) => {
-        impl ColumnStats<$data> for PrimitiveStats<$data> {
-            fn lower<'a>(&'a self) -> Option<<$data as Data>::Ref<'a>> {
+    ($data:ty, $ref_ty:ty, $ref:ident, $variant:ident) => {
+        impl ColumnStats for PrimitiveStats<$data> {
+            type Ref<'a> = $ref_ty;
+
+            fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
                 Some(self.lower.$ref())
             }
-            fn upper<'a>(&'a self) -> Option<<$data as Data>::Ref<'a>> {
+            fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
                 Some(self.upper.$ref())
             }
             fn none_count(&self) -> usize {
                 0
             }
-            fn downcast(stats: &super::ColumnarStats) -> Option<Self>
-            where
-                Self: Sized,
-            {
-                match stats.as_non_null_values()? {
-                    ColumnStatKinds::Primitive(PrimitiveStatsVariants::$variant(prim)) => {
-                        Some(prim.clone())
-                    }
-                    _ => None,
-                }
-            }
         }
 
-        impl ColumnStats<Option<$data>> for OptionStats<PrimitiveStats<$data>> {
-            fn lower<'a>(&'a self) -> Option<<Option<$data> as Data>::Ref<'a>> {
+        impl ColumnStats for OptionStats<PrimitiveStats<$data>> {
+            type Ref<'a> = Option<$ref_ty>;
+
+            fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
                 Some(self.some.lower())
             }
-            fn upper<'a>(&'a self) -> Option<<Option<$data> as Data>::Ref<'a>> {
+            fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
                 Some(self.some.upper())
             }
             fn none_count(&self) -> usize {
                 self.none
-            }
-            fn downcast(stats: &super::ColumnarStats) -> Option<Self>
-            where
-                Self: Sized,
-            {
-                let prim = match &stats.values {
-                    ColumnStatKinds::Primitive(PrimitiveStatsVariants::$variant(prim)) => prim,
-                    _ => return None,
-                };
-                Some(OptionStats {
-                    some: prim.clone(),
-                    none: stats.nulls.as_ref().map_or(0, |n| n.count),
-                })
             }
         }
 
@@ -245,168 +226,18 @@ macro_rules! stats_primitive {
     };
 }
 
-stats_primitive!(bool, clone, Bool);
-stats_primitive!(u8, clone, U8);
-stats_primitive!(u16, clone, U16);
-stats_primitive!(u32, clone, U32);
-stats_primitive!(u64, clone, U64);
-stats_primitive!(i8, clone, I8);
-stats_primitive!(i16, clone, I16);
-stats_primitive!(i32, clone, I32);
-stats_primitive!(i64, clone, I64);
-stats_primitive!(f32, clone, F32);
-stats_primitive!(f64, clone, F64);
-stats_primitive!(String, as_str, String);
-
-impl StatsFrom<BooleanBuffer> for PrimitiveStats<bool> {
-    fn stats_from(col: &BooleanBuffer, validity: ValidityRef) -> Self {
-        let array = BooleanArray::new(col.clone(), validity.0.as_ref().cloned());
-        let lower = arrow::compute::min_boolean(&array).unwrap_or_default();
-        let upper = arrow::compute::max_boolean(&array).unwrap_or_default();
-        PrimitiveStats { lower, upper }
-    }
-}
-
-impl StatsFrom<BooleanArray> for OptionStats<PrimitiveStats<bool>> {
-    fn stats_from(col: &BooleanArray, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-        let lower = arrow::compute::min_boolean(col).unwrap_or_default();
-        let upper = arrow::compute::max_boolean(col).unwrap_or_default();
-        let none = col.logical_nulls().map_or(0, |nulls| nulls.null_count());
-        OptionStats {
-            none,
-            some: PrimitiveStats { lower, upper },
-        }
-    }
-}
-
-impl<T: ArrowPrimitiveType> StatsFrom<PrimitiveArray<T>> for PrimitiveStats<T::Native> {
-    fn stats_from(col: &PrimitiveArray<T>, validity: ValidityRef) -> Self {
-        assert_none!(col.logical_nulls());
-
-        // Create a new array with the provided validity.
-        let array = PrimitiveArray::<T>::new(col.values().clone(), validity.0.as_ref().cloned());
-
-        let lower = arrow::compute::min(&array).unwrap_or_default();
-        let upper = arrow::compute::max(&array).unwrap_or_default();
-        PrimitiveStats { lower, upper }
-    }
-}
-
-impl<T: ArrowPrimitiveType> StatsFrom<PrimitiveArray<T>>
-    for OptionStats<PrimitiveStats<T::Native>>
-{
-    fn stats_from(col: &PrimitiveArray<T>, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-
-        let lower = arrow::compute::min::<T>(col).unwrap_or_default();
-        let upper = arrow::compute::max::<T>(col).unwrap_or_default();
-        let none = col.logical_nulls().map_or(0, |nulls| nulls.null_count());
-
-        OptionStats {
-            none,
-            some: PrimitiveStats { lower, upper },
-        }
-    }
-}
-
-impl StatsFrom<StringArray> for PrimitiveStats<String> {
-    fn stats_from(col: &StringArray, validity: ValidityRef) -> Self {
-        assert_none!(col.logical_nulls());
-
-        // Create a new array with the provided validity.
-        let array = StringArray::new(
-            col.offsets().clone(),
-            col.values().clone(),
-            validity.0.as_ref().cloned(),
-        );
-
-        let lower = arrow::compute::min_string(&array).unwrap_or_default();
-        let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-        let upper = arrow::compute::max_string(&array).unwrap_or_default();
-        let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
-            // NB: The cost+trim stuff will remove the column entirely if
-            // it's still too big (also this should be extremely rare in
-            // practice).
-            .unwrap_or_else(|| upper.to_owned());
-
-        PrimitiveStats { lower, upper }
-    }
-}
-
-impl StatsFrom<StringArray> for OptionStats<PrimitiveStats<String>> {
-    fn stats_from(col: &StringArray, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-
-        let lower = arrow::compute::min_string(col).unwrap_or_default();
-        let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-        let upper = arrow::compute::max_string(col).unwrap_or_default();
-        let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
-            // NB: The cost+trim stuff will remove the column entirely if
-            // it's still too big (also this should be extremely rare in
-            // practice).
-            .unwrap_or_else(|| upper.to_owned());
-        let none = col.logical_nulls().map_or(0, |nulls| nulls.null_count());
-
-        OptionStats {
-            none,
-            some: PrimitiveStats { lower, upper },
-        }
-    }
-}
-
-impl StatsFrom<BinaryArray> for PrimitiveStats<Vec<u8>> {
-    fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-        assert_none!(col.logical_nulls());
-
-        // Create a new array with the provided validity.
-        let array = BinaryArray::new(
-            col.offsets().clone(),
-            col.values().clone(),
-            validity.0.as_ref().cloned(),
-        );
-
-        let lower = arrow::compute::min_binary(&array).unwrap_or_default();
-        let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-
-        let upper = arrow::compute::max_binary(&array).unwrap_or_default();
-        let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
-            // NB: The cost+trim stuff will remove the column entirely if
-            // it's still too big (also this should be extremely rare in
-            // practice).
-            .unwrap_or_else(|| upper.to_owned());
-
-        PrimitiveStats { lower, upper }
-    }
-}
-
-impl StatsFrom<BinaryArray> for OptionStats<PrimitiveStats<Vec<u8>>> {
-    fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-
-        let lower = arrow::compute::min_binary(col).unwrap_or_default();
-        let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-        let upper = arrow::compute::max_binary(col).unwrap_or_default();
-        let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
-            // NB: The cost+trim stuff will remove the column entirely if
-            // it's still too big (also this should be extremely rare in
-            // practice).
-            .unwrap_or_else(|| upper.to_owned());
-
-        let none = col
-            .logical_nulls()
-            .as_ref()
-            .map_or(0, |nulls| nulls.null_count());
-        OptionStats {
-            none,
-            some: PrimitiveStats { lower, upper },
-        }
-    }
-}
+stats_primitive!(bool, bool, clone, Bool);
+stats_primitive!(u8, u8, clone, U8);
+stats_primitive!(u16, u16, clone, U16);
+stats_primitive!(u32, u32, clone, U32);
+stats_primitive!(u64, u64, clone, U64);
+stats_primitive!(i8, i8, clone, I8);
+stats_primitive!(i16, i16, clone, I16);
+stats_primitive!(i32, i32, clone, I32);
+stats_primitive!(i64, i64, clone, I64);
+stats_primitive!(f32, f32, clone, F32);
+stats_primitive!(f64, f64, clone, F64);
+stats_primitive!(String, &'a str, as_str, String);
 
 /// This macro implements the [`RustType`] trait for all variants of [`PrimitiveStats`].
 macro_rules! primitive_stats_rust_type {
@@ -432,7 +263,7 @@ macro_rules! primitive_stats_rust_type {
                     _ => {
                         return Err(TryFromProtoError::missing_field(
                             "proto_primitive_stats::Lower::$lower",
-                        ))
+                        ));
                     }
                 };
                 let upper = proto
@@ -443,7 +274,7 @@ macro_rules! primitive_stats_rust_type {
                     _ => {
                         return Err(TryFromProtoError::missing_field(
                             "proto_primitive_stats::Upper::$upper",
-                        ))
+                        ));
                     }
                 };
                 Ok(PrimitiveStats { lower, upper })
@@ -497,6 +328,7 @@ impl TrimStats for ProtoPrimitiveStats {
                     return;
                 }
 
+                #[allow(clippy::disallowed_methods)]
                 let common_prefix = lower
                     .char_indices()
                     .zip(upper.chars())
@@ -518,6 +350,7 @@ impl TrimStats for ProtoPrimitiveStats {
 
 impl TrimStats for ProtoPrimitiveBytesStats {
     fn trim(&mut self) {
+        #[allow(clippy::disallowed_methods)]
         let common_prefix = self
             .lower
             .iter()
@@ -717,11 +550,11 @@ pub(crate) fn any_primitive_vec_u8_stats() -> impl Strategy<Value = PrimitiveSta
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{BinaryArray, StringArray};
     use proptest::prelude::*;
 
     use super::*;
-    use crate::columnar::sealed::ColumnMut;
-    use crate::columnar::ColumnPush;
+    use crate::stats::ColumnarStatsBuilder;
 
     #[mz_ore::test]
     fn test_truncate_bytes() {
@@ -842,20 +675,19 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn proptest_cost_trim() {
-        fn primitive_stats<'a, T: Data<Cfg = ()>, F>(xs: &'a [T], f: F) -> (&'a [T], T::Stats)
+        fn primitive_stats<T, A>(vals: &[T]) -> (&[T], PrimitiveStats<T>)
         where
-            F: for<'b> Fn(&'b T) -> T::Ref<'b>,
+            T: Clone,
+            A: arrow::array::Array + From<Vec<T>>,
+            PrimitiveStats<T>: ColumnarStatsBuilder<T, ArrowColumn = A>,
         {
-            let mut col = T::Mut::new(&());
-            for x in xs {
-                col.push(f(x));
-            }
+            let column = A::from(vals.to_vec());
+            let stats = <PrimitiveStats<T> as ColumnarStatsBuilder<T>>::from_column(&column);
 
-            let col = col.finish();
-            let stats = T::Stats::stats_from(&col, ValidityRef(None));
-            (xs, stats)
+            (vals, stats)
         }
-        fn testcase<T: Data + PartialOrd + Clone + Debug, P>(xs_stats: (&[T], PrimitiveStats<T>))
+
+        fn testcase<T: PartialOrd + Clone + Debug, P>(xs_stats: (&[T], PrimitiveStats<T>))
         where
             PrimitiveStats<T>: RustType<P> + DynStats,
             P: TrimStats,
@@ -878,44 +710,46 @@ mod tests {
         }
 
         proptest!(|(a in any::<bool>(), b in any::<bool>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<u8>(), b in any::<u8>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<u16>(), b in any::<u16>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<u32>(), b in any::<u32>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<u64>(), b in any::<u64>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<i8>(), b in any::<i8>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<i16>(), b in any::<i16>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<i32>(), b in any::<i32>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<i64>(), b in any::<i64>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<f32>(), b in any::<f32>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<f64>(), b in any::<f64>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
 
         // Construct strings that are "interesting" in that they have some
         // (possibly empty) shared prefix.
         proptest!(|(prefix in any::<String>(), a in any::<String>(), b in any::<String>())| {
             let vals = &[format!("{}{}", prefix, a), format!("{}{}", prefix, b)];
-            testcase(primitive_stats(vals, |x| x))
+            let col = StringArray::from(vals.to_vec());
+            let stats = PrimitiveStats::<String>::from_column(&col);
+            testcase((&vals[..], stats))
         });
 
         // Construct strings that are "interesting" in that they have some
@@ -927,7 +761,7 @@ mod tests {
             sb.extend(&b);
             let vals = &[sa, sb];
             let array = BinaryArray::from_vec(vals.iter().map(|v| v.as_ref()).collect());
-            let stats = PrimitiveStats::<Vec<u8>>::stats_from(&array, ValidityRef(None));
+            let stats = PrimitiveStats::<Vec<u8>>::from_column(&array);
             testcase((vals, stats));
         });
     }

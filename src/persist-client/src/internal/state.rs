@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::ensure;
+use async_stream::{stream, try_stream};
+use differential_dataflow::difference::Monoid;
+use mz_persist::metrics::ColumnarMetrics;
+use proptest::prelude::{Arbitrary, Strategy};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -15,39 +21,53 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
-use arrow::array::Array;
+use arrow::array::{Array, ArrayData, make_array};
+use arrow::datatypes::DataType;
 use bytes::Bytes;
+use differential_dataflow::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use differential_dataflow::trace::implementations::BatchContainer;
+use futures::Stream;
+use futures_util::StreamExt;
+use itertools::Itertools;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_ore::soft_panic_or_log;
 use mz_ore::vec::PartialOrdVecExt;
-use mz_persist::indexed::encoding::BatchColumnarFormat;
-use mz_persist::location::SeqNo;
-use mz_persist_types::columnar::{ColumnEncoder, Schema2};
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
+use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
+use mz_persist_types::columnar::{ColumnEncoder, Schema};
+use mz_persist_types::schema::{SchemaId, backward_compatible};
+use mz_persist_types::{Codec, Codec64};
+use mz_proto::ProtoType;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
+use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
 use tracing::info;
 use uuid::Uuid;
 
-use crate::critical::CriticalReaderId;
+use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats};
+use crate::internal::encoding::{
+    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, parse_id,
+};
 use crate::internal::gc::GcReq;
-use crate::internal::paths::{PartialBatchKey, PartialRollupKey, WriterKey};
+use crate::internal::machine::retry_external;
+use crate::internal::paths::{BlobKey, PartId, PartialBatchKey, PartialRollupKey, WriterKey};
 use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
 };
+use crate::metrics::Metrics;
 use crate::read::LeasedReaderId;
-use crate::schema::SchemaId;
+use crate::schema::CaESchema;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -74,10 +94,56 @@ pub(crate) const ROLLUP_THRESHOLD: Config<usize> = Config::new(
     "The number of seqnos between rollups.",
 );
 
-pub(crate) const WRITE_DIFFS_SUM: Config<bool> = Config::new(
-    "persist_write_diffs_sum",
+/// Determines how long to wait before an active rollup is considered
+/// "stuck" and a new rollup is started.
+pub(crate) const ROLLUP_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
+    "persist_rollup_fallback_threshold_ms",
+    5000,
+    "The number of milliseconds before a worker claims an already claimed rollup.",
+);
+
+/// Feature flag the new active rollup tracking mechanism.
+/// We musn't enable this until we are fully deployed on the new version.
+pub(crate) const ROLLUP_USE_ACTIVE_ROLLUP: Config<bool> = Config::new(
+    "persist_rollup_use_active_rollup",
     true,
-    "CYA to skip writing the diffs_sum field on HollowBatchPart",
+    "Whether to use the new active rollup tracking mechanism.",
+);
+
+/// Determines how long to wait before an active GC is considered
+/// "stuck" and a new GC is started.
+pub(crate) const GC_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
+    "persist_gc_fallback_threshold_ms",
+    900000,
+    "The number of milliseconds before a worker claims an already claimed GC.",
+);
+
+/// See the config description string.
+pub(crate) const GC_MIN_VERSIONS: Config<usize> = Config::new(
+    "persist_gc_min_versions",
+    32,
+    "The number of un-GCd versions that may exist in state before we'll trigger a GC.",
+);
+
+/// See the config description string.
+pub(crate) const GC_MAX_VERSIONS: Config<usize> = Config::new(
+    "persist_gc_max_versions",
+    128_000,
+    "The maximum number of versions to GC in a single GC run.",
+);
+
+/// Feature flag the new active GC tracking mechanism.
+/// We musn't enable this until we are fully deployed on the new version.
+pub(crate) const GC_USE_ACTIVE_GC: Config<bool> = Config::new(
+    "persist_gc_use_active_gc",
+    false,
+    "Whether to use the new active GC tracking mechanism.",
+);
+
+pub(crate) const ENABLE_INCREMENTAL_COMPACTION: Config<bool> = Config::new(
+    "persist_enable_incremental_compaction",
+    false,
+    "Whether to enable incremental compaction.",
 );
 
 /// A token to disambiguate state commands that could not otherwise be
@@ -102,7 +168,7 @@ impl std::str::FromStr for IdempotencyToken {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('i', "IdempotencyToken", s).map(IdempotencyToken)
+        parse_id("i", "IdempotencyToken", s).map(IdempotencyToken)
     }
 }
 
@@ -134,24 +200,12 @@ pub struct LeasedReaderState<T> {
     pub debug: HandleDebugState,
 }
 
-#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize)]
-#[serde(into = "u64")]
-pub struct OpaqueState(pub [u8; 8]);
-
-impl From<OpaqueState> for u64 {
-    fn from(value: OpaqueState) -> Self {
-        u64::from_le_bytes(value.0)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CriticalReaderState<T> {
     /// The since capability of this reader.
     pub since: Antichain<T>,
     /// An opaque token matched on by compare_and_downgrade_since.
-    pub opaque: OpaqueState,
-    /// The [Codec64] used to encode [Self::opaque].
-    pub opaque_codec: String,
+    pub opaque: Opaque,
     /// For debugging.
     pub debug: HandleDebugState,
 }
@@ -194,7 +248,29 @@ pub enum BatchPart<T> {
         updates: LazyInlineBatchPart,
         ts_rewrite: Option<Antichain<T>>,
         schema_id: Option<SchemaId>,
+
+        /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+        deprecated_schema_id: Option<SchemaId>,
     },
+}
+
+fn decode_structured_lower(lower: &LazyProto<ProtoArrayData>) -> Option<ArrayBound> {
+    let try_decode = |lower: &LazyProto<ProtoArrayData>| {
+        let proto = lower.decode()?;
+        let data = ArrayData::from_proto(proto)?;
+        ensure!(data.len() == 1);
+        Ok(ArrayBound::new(make_array(data), 0))
+    };
+
+    let decoded: anyhow::Result<ArrayBound> = try_decode(lower);
+
+    match decoded {
+        Ok(bound) => Some(bound),
+        Err(e) => {
+            soft_panic_or_log!("failed to decode bound: {e:#?}");
+            None
+        }
+    }
 }
 
 impl<T> BatchPart<T> {
@@ -218,7 +294,7 @@ impl<T> BatchPart<T> {
 
     pub fn writer_key(&self) -> Option<WriterKey> {
         match self {
-            BatchPart::Hollow(x) => Some(x.key.split().0),
+            BatchPart::Hollow(x) => x.key.split().map(|(writer, _part)| writer),
             BatchPart::Inline { .. } => None,
         }
     }
@@ -259,6 +335,15 @@ impl<T> BatchPart<T> {
         }
     }
 
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        let part = match self {
+            BatchPart::Hollow(part) => part,
+            BatchPart::Inline { .. } => return None,
+        };
+
+        decode_structured_lower(part.structured_key_lower.as_ref()?)
+    }
+
     pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
         match self {
             BatchPart::Hollow(x) => x.ts_rewrite.as_ref(),
@@ -270,6 +355,344 @@ impl<T> BatchPart<T> {
         match self {
             BatchPart::Hollow(x) => x.schema_id,
             BatchPart::Inline { schema_id, .. } => *schema_id,
+        }
+    }
+
+    pub fn deprecated_schema_id(&self) -> Option<SchemaId> {
+        match self {
+            BatchPart::Hollow(x) => x.deprecated_schema_id,
+            BatchPart::Inline {
+                deprecated_schema_id,
+                ..
+            } => *deprecated_schema_id,
+        }
+    }
+}
+
+impl<T: Timestamp + Codec64> BatchPart<T> {
+    pub fn is_structured_only(&self, metrics: &ColumnarMetrics) -> bool {
+        match self {
+            BatchPart::Hollow(x) => matches!(x.format, Some(BatchColumnarFormat::Structured)),
+            BatchPart::Inline { updates, .. } => {
+                let inline_part = updates.decode::<T>(metrics).expect("valid inline part");
+                matches!(inline_part.updates, BlobTraceUpdates::Structured { .. })
+            }
+        }
+    }
+
+    pub fn diffs_sum<D: Codec64 + Monoid>(&self, metrics: &ColumnarMetrics) -> Option<D> {
+        match self {
+            BatchPart::Hollow(x) => x.diffs_sum.map(D::decode),
+            BatchPart::Inline { updates, .. } => Some(
+                updates
+                    .decode::<T>(metrics)
+                    .expect("valid inline part")
+                    .updates
+                    .diffs_sum(),
+            ),
+        }
+    }
+}
+
+/// An ordered list of parts, generally stored as part of a larger run.
+#[derive(Debug, Clone)]
+pub struct HollowRun<T> {
+    /// Pointers usable to retrieve the updates.
+    pub(crate) parts: Vec<RunPart<T>>,
+}
+
+/// A reference to a [HollowRun], including the key in the blob store and some denormalized
+/// metadata.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize)]
+pub struct HollowRunRef<T> {
+    pub key: PartialBatchKey,
+
+    /// The size of the referenced run object, plus all of the hollow objects it contains.
+    pub hollow_bytes: usize,
+
+    /// The size of the largest individual part in the run; useful for sizing compaction.
+    pub max_part_bytes: usize,
+
+    /// The lower bound of the data in this part, ordered by the codec ordering.
+    pub key_lower: Vec<u8>,
+
+    /// The lower bound of the data in this part, ordered by the structured ordering.
+    pub structured_key_lower: Option<LazyProto<ProtoArrayData>>,
+
+    pub diffs_sum: Option<[u8; 8]>,
+
+    pub(crate) _phantom_data: PhantomData<T>,
+}
+impl<T: Eq> PartialOrd<Self> for HollowRunRef<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Eq> Ord for HollowRunRef<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+impl<T> HollowRunRef<T> {
+    pub fn writer_key(&self) -> Option<WriterKey> {
+        Some(self.key.split()?.0)
+    }
+}
+
+impl<T: Timestamp + Codec64> HollowRunRef<T> {
+    /// Stores the given runs and returns a [HollowRunRef] that points to them.
+    pub async fn set<D: Codec64 + Monoid>(
+        shard_id: ShardId,
+        blob: &dyn Blob,
+        writer: &WriterKey,
+        data: HollowRun<T>,
+        metrics: &Metrics,
+    ) -> Self {
+        let hollow_bytes = data.parts.iter().map(|p| p.hollow_bytes()).sum();
+        let max_part_bytes = data
+            .parts
+            .iter()
+            .map(|p| p.max_part_bytes())
+            .max()
+            .unwrap_or(0);
+        let key_lower = data
+            .parts
+            .first()
+            .map_or(vec![], |p| p.key_lower().to_vec());
+        let structured_key_lower = match data.parts.first() {
+            Some(RunPart::Many(r)) => r.structured_key_lower.clone(),
+            Some(RunPart::Single(BatchPart::Hollow(p))) => p.structured_key_lower.clone(),
+            Some(RunPart::Single(BatchPart::Inline { .. })) | None => None,
+        };
+        let diffs_sum = data
+            .parts
+            .iter()
+            .map(|p| {
+                p.diffs_sum::<D>(&metrics.columnar)
+                    .expect("valid diffs sum")
+            })
+            .reduce(|mut a, b| {
+                a.plus_equals(&b);
+                a
+            })
+            .expect("valid diffs sum")
+            .encode();
+
+        let key = PartialBatchKey::new(writer, &PartId::new());
+        let blob_key = key.complete(&shard_id);
+        let bytes = Bytes::from(prost::Message::encode_to_vec(&data.into_proto()));
+        let () = retry_external(&metrics.retries.external.hollow_run_set, || {
+            blob.set(&blob_key, bytes.clone())
+        })
+        .await;
+        Self {
+            key,
+            hollow_bytes,
+            max_part_bytes,
+            key_lower,
+            structured_key_lower,
+            diffs_sum: Some(diffs_sum),
+            _phantom_data: Default::default(),
+        }
+    }
+
+    /// Retrieve the [HollowRun] that this reference points to.
+    /// The caller is expected to ensure that this ref is the result of calling [HollowRunRef::set]
+    /// with the same shard id and backing store.
+    pub async fn get(
+        &self,
+        shard_id: ShardId,
+        blob: &dyn Blob,
+        metrics: &Metrics,
+    ) -> Option<HollowRun<T>> {
+        let blob_key = self.key.complete(&shard_id);
+        let mut bytes = retry_external(&metrics.retries.external.hollow_run_get, || {
+            blob.get(&blob_key)
+        })
+        .await?;
+        let proto_runs: ProtoHollowRun =
+            prost::Message::decode(&mut bytes).expect("illegal state: invalid proto bytes");
+        let runs = proto_runs
+            .into_rust()
+            .expect("illegal state: invalid encoded runs proto");
+        Some(runs)
+    }
+}
+
+/// Part of the updates in a run.
+///
+/// Either a pointer to ones stored in Blob or a single part stored inline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum RunPart<T> {
+    Single(BatchPart<T>),
+    Many(HollowRunRef<T>),
+}
+
+impl<T: Ord> PartialOrd<Self> for RunPart<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Ord> Ord for RunPart<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (RunPart::Single(a), RunPart::Single(b)) => a.cmp(b),
+            (RunPart::Single(_), RunPart::Many(_)) => Ordering::Less,
+            (RunPart::Many(_), RunPart::Single(_)) => Ordering::Greater,
+            (RunPart::Many(a), RunPart::Many(b)) => a.cmp(b),
+        }
+    }
+}
+
+impl<T> RunPart<T> {
+    #[cfg(test)]
+    pub fn expect_hollow_part(&self) -> &HollowBatchPart<T> {
+        match self {
+            RunPart::Single(BatchPart::Hollow(hollow)) => hollow,
+            _ => panic!("expected hollow part!"),
+        }
+    }
+
+    pub fn hollow_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.hollow_bytes(),
+            Self::Many(r) => r.hollow_bytes,
+        }
+    }
+
+    pub fn is_inline(&self) -> bool {
+        match self {
+            Self::Single(p) => p.is_inline(),
+            Self::Many(_) => false,
+        }
+    }
+
+    pub fn inline_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.inline_bytes(),
+            Self::Many(_) => 0,
+        }
+    }
+
+    pub fn max_part_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.encoded_size_bytes(),
+            Self::Many(r) => r.max_part_bytes,
+        }
+    }
+
+    pub fn writer_key(&self) -> Option<WriterKey> {
+        match self {
+            Self::Single(p) => p.writer_key(),
+            Self::Many(r) => r.writer_key(),
+        }
+    }
+
+    pub fn encoded_size_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.encoded_size_bytes(),
+            Self::Many(r) => r.hollow_bytes,
+        }
+    }
+
+    pub fn schema_id(&self) -> Option<SchemaId> {
+        match self {
+            Self::Single(p) => p.schema_id(),
+            Self::Many(_) => None,
+        }
+    }
+
+    // A user-interpretable identifier or description of the part (for logs and
+    // such).
+    pub fn printable_name(&self) -> &str {
+        match self {
+            Self::Single(p) => p.printable_name(),
+            Self::Many(r) => r.key.0.as_str(),
+        }
+    }
+
+    pub fn stats(&self) -> Option<&LazyPartStats> {
+        match self {
+            Self::Single(p) => p.stats(),
+            // TODO: if we kept stats we could avoid fetching the metadata here.
+            Self::Many(_) => None,
+        }
+    }
+
+    pub fn key_lower(&self) -> &[u8] {
+        match self {
+            Self::Single(p) => p.key_lower(),
+            Self::Many(r) => r.key_lower.as_slice(),
+        }
+    }
+
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        match self {
+            Self::Single(p) => p.structured_key_lower(),
+            Self::Many(_) => None,
+        }
+    }
+
+    pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
+        match self {
+            Self::Single(p) => p.ts_rewrite(),
+            Self::Many(_) => None,
+        }
+    }
+}
+
+impl<T> RunPart<T>
+where
+    T: Timestamp + Codec64,
+{
+    pub fn diffs_sum<D: Codec64 + Monoid>(&self, metrics: &ColumnarMetrics) -> Option<D> {
+        match self {
+            Self::Single(p) => p.diffs_sum(metrics),
+            Self::Many(hollow_run) => hollow_run.diffs_sum.map(D::decode),
+        }
+    }
+}
+
+/// A blob was missing!
+#[derive(Clone, Debug)]
+pub struct MissingBlob(BlobKey);
+
+impl std::fmt::Display for MissingBlob {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unexpectedly missing key: {}", self.0)
+    }
+}
+
+impl std::error::Error for MissingBlob {}
+
+impl<T: Timestamp + Codec64 + Sync> RunPart<T> {
+    pub fn part_stream<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> impl Stream<Item = Result<Cow<'a, BatchPart<T>>, MissingBlob>> + Send + 'a {
+        try_stream! {
+            match self {
+                RunPart::Single(p) => {
+                    yield Cow::Borrowed(p);
+                }
+                RunPart::Many(r) => {
+                    let fetched = r.get(shard_id, blob, metrics).await
+                        .ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                    for run_part in fetched.parts {
+                        for await batch_part in
+                            run_part.part_stream(shard_id, blob, metrics).boxed()
+                        {
+                            yield Cow::Owned(batch_part?.into_owned());
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -289,21 +712,25 @@ impl<T: Ord> Ord for BatchPart<T> {
                     updates: s_updates,
                     ts_rewrite: s_ts_rewrite,
                     schema_id: s_schema_id,
+                    deprecated_schema_id: s_deprecated_schema_id,
                 },
                 BatchPart::Inline {
                     updates: o_updates,
                     ts_rewrite: o_ts_rewrite,
                     schema_id: o_schema_id,
+                    deprecated_schema_id: o_deprecated_schema_id,
                 },
             ) => (
                 s_updates,
                 s_ts_rewrite.as_ref().map(|x| x.elements()),
                 s_schema_id,
+                s_deprecated_schema_id,
             )
                 .cmp(&(
                     o_updates,
                     o_ts_rewrite.as_ref().map(|x| x.elements()),
                     o_schema_id,
+                    o_deprecated_schema_id,
                 )),
             (BatchPart::Hollow(_), BatchPart::Inline { .. }) => Ordering::Less,
             (BatchPart::Inline { .. }, BatchPart::Hollow(_)) => Ordering::Greater,
@@ -311,17 +738,102 @@ impl<T: Ord> Ord for BatchPart<T> {
     }
 }
 
+/// What order are the parts in this run in?
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+pub(crate) enum RunOrder {
+    /// They're in no particular order.
+    Unordered,
+    /// They're ordered based on the codec-encoded K/V bytes.
+    Codec,
+    /// They're ordered by the natural ordering of the structured data.
+    Structured,
+}
+
+#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Serialize, Copy, Hash)]
+pub struct RunId(pub(crate) [u8; 16]);
+
+impl std::fmt::Display for RunId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ri{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for RunId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RunId({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::str::FromStr for RunId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_id("ri", "RunId", s).map(RunId)
+    }
+}
+
+impl From<RunId> for String {
+    fn from(x: RunId) -> Self {
+        x.to_string()
+    }
+}
+
+impl RunId {
+    pub(crate) fn new() -> Self {
+        RunId(*Uuid::new_v4().as_bytes())
+    }
+}
+
+impl Arbitrary for RunId {
+    type Parameters = ();
+    type Strategy = proptest::strategy::BoxedStrategy<Self>;
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        Strategy::prop_map(proptest::prelude::any::<u128>(), |n| {
+            RunId(*Uuid::from_u128(n).as_bytes())
+        })
+        .boxed()
+    }
+}
+
+/// Metadata shared across a run.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+pub struct RunMeta {
+    /// If none, Persist should infer the order based on the proto metadata.
+    pub(crate) order: Option<RunOrder>,
+    /// All parts in a run should have the same schema.
+    pub(crate) schema: Option<SchemaId>,
+
+    /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+    pub(crate) deprecated_schema: Option<SchemaId>,
+
+    /// If set, a UUID that uniquely identifies this run.
+    pub(crate) id: Option<RunId>,
+
+    /// The number of updates in this run, or `None` if the number is unknown.
+    pub(crate) len: Option<usize>,
+
+    /// Additional unstructured metadata.
+    #[serde(skip_serializing_if = "MetadataMap::is_empty")]
+    pub(crate) meta: MetadataMap,
+}
+
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HollowBatchPart<T> {
     /// Pointer usable to retrieve the updates.
     pub key: PartialBatchKey,
+    /// Miscellaneous metadata.
+    #[serde(skip_serializing_if = "MetadataMap::is_empty")]
+    pub meta: MetadataMap,
     /// The encoded size of this part.
     pub encoded_size_bytes: usize,
     /// A lower bound on the keys in the part. (By default, this the minimum
     /// possible key: `vec![]`.)
     #[serde(serialize_with = "serialize_part_bytes")]
     pub key_lower: Vec<u8>,
+    /// A lower bound on the keys in the part, stored as structured data.
+    #[serde(serialize_with = "serialize_lazy_proto")]
+    pub structured_key_lower: Option<LazyProto<ProtoArrayData>>,
     /// Aggregate statistics about data contained in this part.
     #[serde(serialize_with = "serialize_part_stats")]
     pub stats: Option<LazyPartStats>,
@@ -345,15 +857,16 @@ pub struct HollowBatchPart<T> {
     /// Columnar format that this batch was written in.
     ///
     /// This is `None` if this part was written before we started writing structured
-    /// columnar data, or if the [`BATCH_RECORD_PART_FORMAT`] dyncfg is off.
-    ///
-    /// [`BATCH_RECORD_PART_FORMAT`]: crate::batch::BATCH_RECORD_PART_FORMAT
+    /// columnar data.
     pub format: Option<BatchColumnarFormat>,
     /// The schemas used to encode the data in this batch part.
     ///
     /// Or None for historical data written before the schema registry was
     /// added.
     pub schema_id: Option<SchemaId>,
+
+    /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+    pub deprecated_schema_id: Option<SchemaId>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -366,7 +879,7 @@ pub struct HollowBatch<T> {
     /// The number of updates in the batch.
     pub len: usize,
     /// Pointers usable to retrieve the updates.
-    pub(crate) parts: Vec<BatchPart<T>>,
+    pub(crate) parts: Vec<RunPart<T>>,
     /// Runs of sequential sorted batch parts, stored as indices into `parts`.
     /// ex.
     /// ```text
@@ -374,7 +887,10 @@ pub struct HollowBatch<T> {
     ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
     ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
     /// ```
-    pub(crate) runs: Vec<usize>,
+    pub(crate) run_splits: Vec<usize>,
+    /// Run-level metadata: the first entry has metadata for the first run, and so on.
+    /// If there's no corresponding entry for a particular run, it's assumed to be [RunMeta::default()].
+    pub(crate) run_meta: Vec<RunMeta>,
 }
 
 impl<T: Debug> Debug for HollowBatch<T> {
@@ -383,7 +899,8 @@ impl<T: Debug> Debug for HollowBatch<T> {
             desc,
             parts,
             len,
-            runs,
+            run_splits: runs,
+            run_meta,
         } = self;
         f.debug_struct("HollowBatch")
             .field(
@@ -397,6 +914,7 @@ impl<T: Debug> Debug for HollowBatch<T> {
             .field("parts", &parts)
             .field("len", &len)
             .field("runs", &runs)
+            .field("run_meta", &run_meta)
             .finish()
     }
 }
@@ -408,7 +926,8 @@ impl<T: Serialize> serde::Serialize for HollowBatch<T> {
             len,
             // Both parts and runs are covered by the self.runs call.
             parts: _,
-            runs: _,
+            run_splits: _,
+            run_meta: _,
         } = self;
         let mut s = s.serialize_struct("HollowBatch", 5)?;
         let () = s.serialize_field("lower", &desc.lower().elements())?;
@@ -434,13 +953,15 @@ impl<T: Ord> Ord for HollowBatch<T> {
             desc: self_desc,
             parts: self_parts,
             len: self_len,
-            runs: self_runs,
+            run_splits: self_runs,
+            run_meta: self_run_meta,
         } = self;
         let HollowBatch {
             desc: other_desc,
             parts: other_parts,
             len: other_len,
-            runs: other_runs,
+            run_splits: other_runs,
+            run_meta: other_run_meta,
         } = other;
         (
             self_desc.lower().elements(),
@@ -449,6 +970,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             self_parts,
             self_len,
             self_runs,
+            self_run_meta,
         )
             .cmp(&(
                 other_desc.lower().elements(),
@@ -457,10 +979,27 @@ impl<T: Ord> Ord for HollowBatch<T> {
                 other_parts,
                 other_len,
                 other_runs,
+                other_run_meta,
             ))
     }
 }
 
+impl<T: Timestamp + Codec64 + Sync> HollowBatch<T> {
+    pub(crate) fn part_stream<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> impl Stream<Item = Result<Cow<'a, BatchPart<T>>, MissingBlob>> + 'a {
+        stream! {
+            for part in &self.parts {
+                for await part in part.part_stream(shard_id, blob, metrics) {
+                    yield part;
+                }
+            }
+        }
+    }
+}
 impl<T> HollowBatch<T> {
     /// Construct an in-memory hollow batch from the given metadata.
     ///
@@ -470,20 +1009,73 @@ impl<T> HollowBatch<T> {
     /// `len` should represent the number of valid updates in the referenced parts.
     pub(crate) fn new(
         desc: Description<T>,
-        parts: Vec<BatchPart<T>>,
+        parts: Vec<RunPart<T>>,
         len: usize,
-        runs: Vec<usize>,
+        run_meta: Vec<RunMeta>,
+        run_splits: Vec<usize>,
     ) -> Self {
-        debug_assert!(runs.is_sorted(), "run indices should be sorted");
         debug_assert!(
-            runs.last().iter().all(|i| **i <= parts.len()),
-            "run indices should be a valid indices into parts"
+            run_splits.is_strictly_sorted(),
+            "run indices should be strictly increasing"
         );
+        debug_assert!(
+            run_splits.first().map_or(true, |i| *i > 0),
+            "run indices should be positive"
+        );
+        debug_assert!(
+            run_splits.last().map_or(true, |i| *i < parts.len()),
+            "run indices should be valid indices into parts"
+        );
+        debug_assert!(
+            parts.is_empty() || run_meta.len() == run_splits.len() + 1,
+            "all metadata should correspond to a run"
+        );
+
         Self {
             desc,
             len,
             parts,
-            runs,
+            run_splits,
+            run_meta,
+        }
+    }
+
+    /// Construct a batch of a single run with default metadata. Mostly interesting for tests.
+    pub(crate) fn new_run(desc: Description<T>, parts: Vec<RunPart<T>>, len: usize) -> Self {
+        let run_meta = if parts.is_empty() {
+            vec![]
+        } else {
+            vec![RunMeta::default()]
+        };
+        Self {
+            desc,
+            len,
+            parts,
+            run_splits: vec![],
+            run_meta,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_run_for_test(
+        desc: Description<T>,
+        parts: Vec<RunPart<T>>,
+        len: usize,
+        run_id: RunId,
+    ) -> Self {
+        let run_meta = if parts.is_empty() {
+            vec![]
+        } else {
+            let mut meta = RunMeta::default();
+            meta.id = Some(run_id);
+            vec![meta]
+        };
+        Self {
+            desc,
+            len,
+            parts,
+            run_splits: vec![],
+            run_meta,
         }
     }
 
@@ -493,41 +1085,38 @@ impl<T> HollowBatch<T> {
             desc,
             len: 0,
             parts: vec![],
-            runs: vec![],
+            run_splits: vec![],
+            run_meta: vec![],
         }
     }
 
-    pub(crate) fn runs(&self) -> impl Iterator<Item = &[BatchPart<T>]> {
+    pub(crate) fn runs(&self) -> impl Iterator<Item = (&RunMeta, &[RunPart<T>])> {
         let run_ends = self
-            .runs
+            .run_splits
             .iter()
             .copied()
             .chain(std::iter::once(self.parts.len()));
-        run_ends
+        let run_metas = self.run_meta.iter();
+        let run_parts = run_ends
             .scan(0, |start, end| {
                 let range = *start..end;
                 *start = end;
                 Some(range)
             })
             .filter(|range| !range.is_empty())
-            .map(|range| &self.parts[range])
+            .map(|range| &self.parts[range]);
+        run_metas.zip_eq(run_parts)
     }
 
     pub(crate) fn inline_bytes(&self) -> usize {
-        self.parts
-            .iter()
-            .map(|x| match x {
-                BatchPart::Inline { updates, .. } => updates.encoded_size_bytes(),
-                BatchPart::Hollow(_) => 0,
-            })
-            .sum()
+        self.parts.iter().map(|x| x.inline_bytes()).sum()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.parts.is_empty()
     }
 
-    pub fn part_count(&self) -> usize {
+    pub(crate) fn part_count(&self) -> usize {
         self.parts.len()
     }
 
@@ -595,8 +1184,17 @@ impl<T: Timestamp + TotalOrder> HollowBatch<T> {
         );
         for part in &mut self.parts {
             match part {
-                BatchPart::Hollow(part) => part.ts_rewrite = Some(frontier.clone()),
-                BatchPart::Inline { ts_rewrite, .. } => *ts_rewrite = Some(frontier.clone()),
+                RunPart::Single(BatchPart::Hollow(part)) => {
+                    part.ts_rewrite = Some(frontier.clone())
+                }
+                RunPart::Single(BatchPart::Inline { ts_rewrite, .. }) => {
+                    *ts_rewrite = Some(frontier.clone())
+                }
+                RunPart::Many(runs) => {
+                    // Currently unreachable: we only apply rewrites to user batches, and we don't
+                    // ever generate runs of >1 part for those.
+                    panic!("unexpected rewrite of a hollow runs ref: {runs:?}");
+                }
             }
         }
         Ok(())
@@ -615,43 +1213,55 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
         // are added.
         let HollowBatchPart {
             key: self_key,
+            meta: self_meta,
             encoded_size_bytes: self_encoded_size_bytes,
             key_lower: self_key_lower,
+            structured_key_lower: self_structured_key_lower,
             stats: self_stats,
             ts_rewrite: self_ts_rewrite,
             diffs_sum: self_diffs_sum,
             format: self_format,
             schema_id: self_schema_id,
+            deprecated_schema_id: self_deprecated_schema_id,
         } = self;
         let HollowBatchPart {
             key: other_key,
+            meta: other_meta,
             encoded_size_bytes: other_encoded_size_bytes,
             key_lower: other_key_lower,
+            structured_key_lower: other_structured_key_lower,
             stats: other_stats,
             ts_rewrite: other_ts_rewrite,
             diffs_sum: other_diffs_sum,
             format: other_format,
             schema_id: other_schema_id,
+            deprecated_schema_id: other_deprecated_schema_id,
         } = other;
         (
             self_key,
+            self_meta,
             self_encoded_size_bytes,
             self_key_lower,
+            self_structured_key_lower,
             self_stats,
             self_ts_rewrite.as_ref().map(|x| x.elements()),
             self_diffs_sum,
             self_format,
             self_schema_id,
+            self_deprecated_schema_id,
         )
             .cmp(&(
                 other_key,
+                other_meta,
                 other_encoded_size_bytes,
                 other_key_lower,
+                other_structured_key_lower,
                 other_stats,
                 other_ts_rewrite.as_ref().map(|x| x.elements()),
                 other_diffs_sum,
                 other_format,
                 other_schema_id,
+                other_deprecated_schema_id,
             ))
     }
 }
@@ -672,6 +1282,24 @@ pub enum HollowBlobRef<'a, T> {
     Rollup(&'a HollowRollup),
 }
 
+/// A rollup that is currently being computed.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize
+)]
+pub struct ActiveRollup {
+    pub seqno: SeqNo,
+    pub start_ms: u64,
+}
+
+/// A garbage collection request that is currently being computed.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize
+)]
+pub struct ActiveGc {
+    pub seqno: SeqNo,
+    pub start_ms: u64,
+}
+
 /// A sentinel for a state transition that was a no-op.
 ///
 /// Critically, this also indicates that the no-op state transition was not
@@ -684,12 +1312,22 @@ pub struct NoOpStateTransition<T>(pub T);
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct StateCollections<T> {
+    /// The version of this state. This is typically identical to the version of the code
+    /// that wrote it, but may diverge during 0dt upgrades and similar operations when a
+    /// new version of code is intentionally interoperating with an older state format.
+    pub(crate) version: Version,
+
     // - Invariant: `<= all reader.since`
     // - Invariant: Doesn't regress across state versions.
     pub(crate) last_gc_req: SeqNo,
 
     // - Invariant: There is a rollup with `seqno <= self.seqno_since`.
     pub(crate) rollups: BTreeMap<SeqNo, HollowRollup>,
+
+    /// The rollup that is currently being computed.
+    pub(crate) active_rollup: Option<ActiveRollup>,
+    /// The gc request that is currently being computed.
+    pub(crate) active_gc: Option<ActiveGc>,
 
     pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
     pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
@@ -725,11 +1363,18 @@ pub struct EncodedSchemas {
     /// The arrow `DataType` produced by this `K::Schema` at the time it was
     /// registered, encoded as a `ProtoDataType`.
     pub key_data_type: Bytes,
-    /// A full in-mem `K::Schema` impl encoded via [Codec::encode_schema].
+    /// A full in-mem `V::Schema` impl encoded via [Codec::encode_schema].
     pub val: Bytes,
     /// The arrow `DataType` produced by this `V::Schema` at the time it was
     /// registered, encoded as a `ProtoDataType`.
     pub val_data_type: Bytes,
+}
+
+impl EncodedSchemas {
+    pub(crate) fn decode_data_type(buf: &[u8]) -> DataType {
+        let proto = prost::Message::decode(buf).expect("valid ProtoDataType");
+        DataType::from_proto(proto).expect("valid DataType")
+    }
 }
 
 #[derive(Debug)]
@@ -763,6 +1408,32 @@ where
         let applied = match self.rollups.get(&rollup_seqno) {
             Some(x) => x.key == rollup.key,
             None => {
+                // PER-16: refuse to insert a rollup at a seqno that GC has
+                // already physically removed. `apply_unbatched_idempotent_cmd`
+                // replays the captured `(rollup_seqno, rollup)` tuple on
+                // every retry. If the original CAS committed indeterminately
+                // and a concurrent GC then removed the rollup, the retry
+                // would otherwise observe an empty map entry and re-insert
+                // the same `PartialRollupKey` at the same seqno, producing
+                // a second Insert (and, later, a second Delete) for that
+                // key in the diff stream and tripping the `assert!` in
+                // `find_removable_blobs`.
+                //
+                // We use the smallest seqno currently in `self.rollups` as
+                // the GC watermark. GC's `remove_rollups` always keeps the
+                // latest rollup `<= seqno_since` and removes the older
+                // ones, so the surviving minimum is strictly above every
+                // seqno that has been removed. (Unlike `last_gc_req`, this
+                // is only advanced by an actual physical removal, not by
+                // `maybe_gc` deciding to *request* one — `last_gc_req` runs
+                // ahead of removals and would falsely reject legitimate
+                // late `add_rollup` calls for older seqnos.)
+                if let Some(min_kept) = self.rollups.keys().next() {
+                    if rollup_seqno < *min_kept {
+                        return Continue(false);
+                    }
+                }
+                self.active_rollup = None;
                 self.rollups.insert(rollup_seqno, rollup.to_owned());
                 true
             }
@@ -777,8 +1448,20 @@ where
         &mut self,
         remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
-        if remove_rollups.is_empty() || self.is_tombstone() {
+        if self.is_tombstone() {
             return Break(NoOpStateTransition(vec![]));
+        }
+
+        // This state transition is called at the end of the GC process, so we
+        // need to unset the `active_gc` field.
+        let active_gc_was_set = self.active_gc.take().is_some();
+
+        if remove_rollups.is_empty() {
+            return if active_gc_was_set {
+                Continue(vec![])
+            } else {
+                Break(NoOpStateTransition(vec![]))
+            };
         }
 
         let mut removed = vec![];
@@ -813,7 +1496,8 @@ where
         (LeasedReaderState<T>, SeqNo),
     > {
         let since = if use_critical_since {
-            self.critical_since().unwrap_or(self.trace.since().clone())
+            self.critical_since()
+                .unwrap_or_else(|| self.trace.since().clone())
         } else {
             self.trace.since().clone()
         };
@@ -843,10 +1527,11 @@ where
         Continue((reader_state, self.seqno_since(seqno)))
     }
 
-    pub fn register_critical_reader<O: Opaque + Codec64>(
+    pub fn register_critical_reader(
         &mut self,
         hostname: &str,
         reader_id: &CriticalReaderId,
+        opaque: Opaque,
         purpose: &str,
     ) -> ControlFlow<NoOpStateTransition<CriticalReaderState<T>>, CriticalReaderState<T>> {
         let state = CriticalReaderState {
@@ -855,8 +1540,7 @@ where
                 purpose: purpose.to_owned(),
             },
             since: self.trace.since().clone(),
-            opaque: OpaqueState(Codec64::encode(&O::initial())),
-            opaque_codec: O::codec_name(),
+            opaque,
         };
 
         // We expire all readers if the upper and since both advance to the
@@ -886,12 +1570,8 @@ where
         key_schema: &K::Schema,
         val_schema: &V::Schema,
     ) -> ControlFlow<NoOpStateTransition<Option<SchemaId>>, Option<SchemaId>> {
-        fn data_type<T>(schema: &impl Schema2<T>) -> Bytes {
-            // To be defensive, create an empty batch and inspect the resulting
-            // data type (as opposed to something like allowing the `Schema2` to
-            // declare the DataType).
-            let (array, _stats) = Schema2::encoder(schema).expect("valid schema").finish();
-            let proto = Array::data_type(&array).into_proto();
+        fn encode_data_type(data_type: &DataType) -> Bytes {
+            let proto = data_type.into_proto();
             prost::Message::encode_to_vec(&proto).into()
         }
 
@@ -926,13 +1606,17 @@ where
                 // generate the next id if/when we start supporting the removal
                 // of schemas.
                 let id = SchemaId(self.schemas.len());
+                let key_data_type = mz_persist_types::columnar::data_type::<K>(key_schema)
+                    .expect("valid key schema");
+                let val_data_type = mz_persist_types::columnar::data_type::<V>(val_schema)
+                    .expect("valid val schema");
                 let prev = self.schemas.insert(
                     id,
                     EncodedSchemas {
                         key: K::encode_schema(key_schema),
-                        key_data_type: data_type(key_schema),
+                        key_data_type: encode_data_type(&key_data_type),
                         val: V::encode_schema(val_schema),
-                        val_data_type: data_type(val_schema),
+                        val_data_type: encode_data_type(&val_data_type),
                     },
                 );
                 assert_eq!(prev, None);
@@ -954,6 +1638,77 @@ where
         }
     }
 
+    pub fn compare_and_evolve_schema<K: Codec, V: Codec>(
+        &mut self,
+        expected: SchemaId,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> ControlFlow<NoOpStateTransition<CaESchema<K, V>>, CaESchema<K, V>> {
+        fn data_type<T>(schema: &impl Schema<T>) -> DataType {
+            // To be defensive, create an empty batch and inspect the resulting
+            // data type (as opposed to something like allowing the `Schema` to
+            // declare the DataType).
+            let array = Schema::encoder(schema).expect("valid schema").finish();
+            Array::data_type(&array).clone()
+        }
+
+        let (current_id, current) = self
+            .schemas
+            .last_key_value()
+            .expect("all shards have a schema");
+        if *current_id != expected {
+            return Break(NoOpStateTransition(CaESchema::ExpectedMismatch {
+                schema_id: *current_id,
+                key: K::decode_schema(&current.key),
+                val: V::decode_schema(&current.val),
+            }));
+        }
+
+        let current_key = K::decode_schema(&current.key);
+        let current_key_dt = EncodedSchemas::decode_data_type(&current.key_data_type);
+        let current_val = V::decode_schema(&current.val);
+        let current_val_dt = EncodedSchemas::decode_data_type(&current.val_data_type);
+
+        let key_dt = data_type(key_schema);
+        let val_dt = data_type(val_schema);
+
+        // If the schema is exactly the same as the current one, no-op.
+        if current_key == *key_schema
+            && current_key_dt == key_dt
+            && current_val == *val_schema
+            && current_val_dt == val_dt
+        {
+            return Break(NoOpStateTransition(CaESchema::Ok(*current_id)));
+        }
+
+        let key_fn = backward_compatible(&current_key_dt, &key_dt);
+        let val_fn = backward_compatible(&current_val_dt, &val_dt);
+        let (Some(key_fn), Some(val_fn)) = (key_fn, val_fn) else {
+            return Break(NoOpStateTransition(CaESchema::Incompatible));
+        };
+        // Persist initially disallows dropping columns. This would require a
+        // bunch more work (e.g. not safe to use the latest schema in
+        // compaction) and isn't initially necessary in mz.
+        if key_fn.contains_drop() || val_fn.contains_drop() {
+            return Break(NoOpStateTransition(CaESchema::Incompatible));
+        }
+
+        // We'll have to do something more sophisticated here to
+        // generate the next id if/when we start supporting the removal
+        // of schemas.
+        let id = SchemaId(self.schemas.len());
+        self.schemas.insert(
+            id,
+            EncodedSchemas {
+                key: K::encode_schema(key_schema),
+                key_data_type: prost::Message::encode_to_vec(&key_dt.into_proto()).into(),
+                val: V::encode_schema(val_schema),
+                val_data_type: prost::Message::encode_to_vec(&val_dt.into_proto()).into(),
+            },
+        );
+        Continue(CaESchema::Ok(id))
+    }
+
     pub fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
@@ -963,8 +1718,8 @@ where
         idempotency_token: &IdempotencyToken,
         debug_info: &HandleDebugState,
         inline_writes_total_max_bytes: usize,
-        record_compactions: bool,
-        claim_unclaimed_compactions: bool,
+        claim_compaction_percent: usize,
+        claim_compaction_min_version: Option<&Version>,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -1065,20 +1820,31 @@ where
         let all_empty_reqs = merge_reqs
             .iter()
             .all(|req| req.inputs.iter().all(|b| b.batch.is_empty()));
-        if record_compactions && claim_unclaimed_compactions && all_empty_reqs {
+        if all_empty_reqs && !batch.is_empty() {
+            let mut reqs_to_take = claim_compaction_percent / 100;
+            if (usize::cast_from(idempotency_token.hashed()) % 100)
+                < (claim_compaction_percent % 100)
+            {
+                reqs_to_take += 1;
+            }
             let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
-            merge_reqs.extend(self.trace.fueled_merge_reqs_before_ms(threshold_ms).take(1))
+            let min_writer = claim_compaction_min_version.map(WriterKey::for_version);
+            merge_reqs.extend(
+                // We keep the oldest `reqs_to_take` batches, under the theory that they're least
+                // likely to be compacted soon for other reasons.
+                self.trace
+                    .fueled_merge_reqs_before_ms(threshold_ms, min_writer)
+                    .take(reqs_to_take),
+            )
         }
 
-        if record_compactions {
-            for req in &merge_reqs {
-                self.trace.claim_compaction(
-                    req.id,
-                    ActiveCompaction {
-                        start_ms: heartbeat_timestamp_ms,
-                    },
-                )
-            }
+        for req in &merge_reqs {
+            self.trace.claim_compaction(
+                req.id,
+                ActiveCompaction {
+                    start_ms: heartbeat_timestamp_ms,
+                },
+            )
         }
 
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
@@ -1103,9 +1869,10 @@ where
         Continue(merge_reqs)
     }
 
-    pub fn apply_merge_res(
+    pub fn apply_merge_res<D: Codec64 + Monoid + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
+        metrics: &ColumnarMetrics,
     ) -> ControlFlow<NoOpStateTransition<ApplyMergeResult>, ApplyMergeResult> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -1115,15 +1882,30 @@ where
             return Break(NoOpStateTransition(ApplyMergeResult::NotAppliedNoMatch));
         }
 
-        let apply_merge_result = self.trace.apply_merge_res(res);
+        let apply_merge_result = self.trace.apply_merge_res_checked::<D>(res, metrics);
         Continue(apply_merge_result)
+    }
+
+    pub fn spine_exert(
+        &mut self,
+        fuel: usize,
+    ) -> ControlFlow<NoOpStateTransition<Vec<FueledMergeReq<T>>>, Vec<FueledMergeReq<T>>> {
+        let (merge_reqs, did_work) = self.trace.exert(fuel);
+        if did_work {
+            Continue(merge_reqs)
+        } else {
+            assert!(merge_reqs.is_empty());
+            // Break if we have nothing useful to do to save the seqno (and
+            // resulting crdb traffic)
+            Break(NoOpStateTransition(Vec::new()))
+        }
     }
 
     pub fn downgrade_since(
         &mut self,
         reader_id: &LeasedReaderId,
         seqno: SeqNo,
-        outstanding_seqno: Option<SeqNo>,
+        outstanding_seqno: SeqNo,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<NoOpStateTransition<Since<T>>, Since<T>> {
@@ -1135,7 +1917,14 @@ where
             return Break(NoOpStateTransition(Since(Antichain::new())));
         }
 
-        let reader_state = self.leased_reader(reader_id);
+        // The only way to have a missing reader in state is if it's been expired... and in that
+        // case, we behave the same as though that reader had been downgraded to the empty antichain.
+        let Some(reader_state) = self.leased_reader(reader_id) else {
+            tracing::warn!(
+                "Leased reader {reader_id} was expired due to inactivity. Did the machine go to sleep?",
+            );
+            return Break(NoOpStateTransition(Since(Antichain::new())));
+        };
 
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
@@ -1144,18 +1933,15 @@ where
             reader_state.last_heartbeat_timestamp_ms,
         );
 
-        let seqno = match outstanding_seqno {
-            Some(outstanding_seqno) => {
-                assert!(
-                    outstanding_seqno >= reader_state.seqno,
-                    "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
+        let seqno = {
+            assert!(
+                outstanding_seqno >= reader_state.seqno,
+                "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
                     is behind current reader_state ({:?})",
-                    outstanding_seqno,
-                    reader_state.seqno,
-                );
-                std::cmp::min(outstanding_seqno, seqno)
-            }
-            None => seqno,
+                outstanding_seqno,
+                reader_state.seqno,
+            );
+            std::cmp::min(outstanding_seqno, seqno)
         };
 
         reader_state.seqno = seqno;
@@ -1173,14 +1959,14 @@ where
         Continue(Since(reader_current_since))
     }
 
-    pub fn compare_and_downgrade_since<O: Opaque + Codec64>(
+    pub fn compare_and_downgrade_since(
         &mut self,
         reader_id: &CriticalReaderId,
-        expected_opaque: &O,
-        (new_opaque, new_since): (&O, &Antichain<T>),
+        expected_opaque: &Opaque,
+        (new_opaque, new_since): (&Opaque, &Antichain<T>),
     ) -> ControlFlow<
-        NoOpStateTransition<Result<Since<T>, (O, Since<T>)>>,
-        Result<Since<T>, (O, Since<T>)>,
+        NoOpStateTransition<Result<Since<T>, (Opaque, Since<T>)>>,
+        Result<Since<T>, (Opaque, Since<T>)>,
     > {
         // We expire all readers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -1194,20 +1980,19 @@ where
         }
 
         let reader_state = self.critical_reader(reader_id);
-        assert_eq!(reader_state.opaque_codec, O::codec_name());
 
-        if &O::decode(reader_state.opaque.0) != expected_opaque {
+        if reader_state.opaque != *expected_opaque {
             // No-op, but still commit the state change so that this gets
             // linearized.
             return Continue(Err((
-                Codec64::decode(reader_state.opaque.0),
+                reader_state.opaque.clone(),
                 Since(reader_state.since.clone()),
             )));
         }
 
+        reader_state.opaque = new_opaque.clone();
         if PartialOrder::less_equal(&reader_state.since, new_since) {
             reader_state.since.clone_from(new_since);
-            reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
             self.update_since();
             Continue(Ok(Since(new_since.clone())))
         } else {
@@ -1215,33 +2000,6 @@ where
             // advanced. we may someday need to revisit this branch when it's possible
             // for two `since` frontiers to be incomparable.
             Continue(Ok(Since(reader_state.since.clone())))
-        }
-    }
-
-    pub fn heartbeat_leased_reader(
-        &mut self,
-        reader_id: &LeasedReaderId,
-        heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
-        // We expire all readers if the upper and since both advance to the
-        // empty antichain. Gracefully handle this. At the same time,
-        // short-circuit the cmd application so we don't needlessly create new
-        // SeqNos.
-        if self.is_tombstone() {
-            return Break(NoOpStateTransition(false));
-        }
-
-        match self.leased_readers.get_mut(reader_id) {
-            Some(reader_state) => {
-                reader_state.last_heartbeat_timestamp_ms = std::cmp::max(
-                    heartbeat_timestamp_ms,
-                    reader_state.last_heartbeat_timestamp_ms,
-                );
-                Continue(true)
-            }
-            // No-op, but we still commit the state change so that this gets
-            // linearized (maybe we're looking at old state).
-            None => Continue(false),
         }
     }
 
@@ -1259,7 +2017,7 @@ where
 
         let existed = self.leased_readers.remove(reader_id).is_some();
         if existed {
-            // TODO(#22789): Re-enable this
+            // TODO(database-issues#6885): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -1292,7 +2050,7 @@ where
 
         let existed = self.critical_readers.remove(reader_id).is_some();
         if existed {
-            // TODO(#22789): Re-enable this
+            // TODO(database-issues#6885): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -1331,20 +2089,8 @@ where
         Continue(existed)
     }
 
-    fn leased_reader(&mut self, id: &LeasedReaderId) -> &mut LeasedReaderState<T> {
-        self.leased_readers
-            .get_mut(id)
-            // The only (tm) ways to hit this are (1) inventing a LeasedReaderId
-            // instead of getting it from Register or (2) if a lease expired.
-            // (1) is a gross mis-use and (2) may happen if a reader did not get
-            // to heartbeat for a long time. Readers are expected to
-            // heartbeat/downgrade their since regularly.
-            .unwrap_or_else(|| {
-                panic!(
-                    "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
-                    id
-                )
-            })
+    fn leased_reader(&mut self, id: &LeasedReaderId) -> Option<&mut LeasedReaderState<T>> {
+        self.leased_readers.get_mut(id)
     }
 
     fn critical_reader(&mut self, id: &CriticalReaderId) -> &mut CriticalReaderState<T> {
@@ -1457,10 +2203,7 @@ where
             // We have a nonempty batch: replace it with an empty batch and return.
             // This should not produce an excessively large diff: if it did, we wouldn't have been
             // able to append that batch in the first place.
-            let fake_merge = FueledMergeRes {
-                output: HollowBatch::empty(desc),
-            };
-            let result = self.trace.apply_merge_res(&fake_merge);
+            let result = self.trace.apply_tombstone_merge(&desc);
             assert!(
                 result.matched(),
                 "merge with a matching desc should always match"
@@ -1493,7 +2236,6 @@ where
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
 pub struct State<T> {
-    pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
 
     pub(crate) seqno: SeqNo,
@@ -1523,10 +2265,9 @@ pub struct TypedState<K, V, T, D> {
 
 impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
     #[cfg(any(test, debug_assertions))]
-    pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
+    pub(crate) fn clone(&self, hostname: String) -> Self {
         TypedState {
             state: State {
-                applier_version,
                 shard_id: self.shard_id.clone(),
                 seqno: self.seqno.clone(),
                 walltime_ms: self.walltime_ms,
@@ -1540,7 +2281,6 @@ impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
     pub(crate) fn clone_for_rollup(&self) -> Self {
         TypedState {
             state: State {
-                applier_version: self.applier_version.clone(),
                 shard_id: self.shard_id.clone(),
                 seqno: self.seqno.clone(),
                 walltime_ms: self.walltime_ms,
@@ -1607,14 +2347,16 @@ where
         walltime_ms: u64,
     ) -> Self {
         let state = State {
-            applier_version,
             shard_id,
             seqno: SeqNo::minimum(),
             walltime_ms,
             hostname,
             collections: StateCollections {
+                version: applier_version,
                 last_gc_req: SeqNo::minimum(),
                 rollups: BTreeMap::new(),
+                active_rollup: None,
+                active_gc: None,
                 leased_readers: BTreeMap::new(),
                 critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
@@ -1636,19 +2378,15 @@ where
     where
         WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     {
-        // Now that we support one minor version of forward compatibility, tag
-        // each version of state with the _max_ version of code that has ever
-        // contributed to it. Otherwise, we'd erroneously allow rolling back an
-        // arbitrary number of versions if they were done one-by-one.
-        let new_applier_version = std::cmp::max(&self.applier_version, &cfg.build_version);
+        // We do not increment the version by default, though work_fn can if it chooses to.
         let mut new_state = State {
-            applier_version: new_applier_version.clone(),
             shard_id: self.shard_id,
             seqno: self.seqno.next(),
             walltime_ms: (cfg.now)(),
             hostname: cfg.hostname.clone(),
             collections: self.collections.clone(),
         };
+
         // Make sure walltime_ms is strictly increasing, in case clocks are
         // offset.
         if new_state.walltime_ms <= self.walltime_ms {
@@ -1662,6 +2400,14 @@ where
         };
         Continue((work_ret, new_state))
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct GcConfig {
+    pub use_active_gc: bool,
+    pub fallback_threshold_ms: u64,
+    pub min_versions: usize,
+    pub max_versions: usize,
 }
 
 impl<T> State<T>
@@ -1743,19 +2489,48 @@ where
     // them being executed in the order they are given. But it is expected that
     // gc assignments are best-effort respected. In practice, cmds like
     // register_foo or expire_foo, where it would be awkward, ignore gc.
-    pub fn maybe_gc(&mut self, is_write: bool) -> Option<GcReq> {
+    pub fn maybe_gc(&mut self, is_write: bool, now: u64, cfg: GcConfig) -> Option<GcReq> {
+        let GcConfig {
+            use_active_gc,
+            fallback_threshold_ms,
+            min_versions,
+            max_versions,
+        } = cfg;
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
         // could use a tuning pass at some point.
-        let gc_threshold = std::cmp::max(
-            1,
-            u64::from(self.seqno.0.next_power_of_two().trailing_zeros()),
-        );
+        let gc_threshold = if use_active_gc {
+            u64::cast_from(min_versions)
+        } else {
+            std::cmp::max(
+                1,
+                u64::cast_from(self.seqno.0.next_power_of_two().trailing_zeros()),
+            )
+        };
         let new_seqno_since = self.seqno_since();
+        // Collect until the new seqno since... or the old since plus the max number of versions,
+        // whatever is less.
+        let gc_until_seqno = new_seqno_since.min(SeqNo(
+            self.collections
+                .last_gc_req
+                .0
+                .saturating_add(u64::cast_from(max_versions)),
+        ));
         let should_gc = new_seqno_since
             .0
             .saturating_sub(self.collections.last_gc_req.0)
             >= gc_threshold;
+
+        // If we wouldn't otherwise gc, check if we have an active gc. If we do, and
+        // it's been a while since it started, we should gc.
+        let should_gc = if use_active_gc && !should_gc {
+            match self.collections.active_gc {
+                Some(active_gc) => now.saturating_sub(active_gc.start_ms) > fallback_threshold_ms,
+                None => false,
+            }
+        } else {
+            should_gc
+        };
         // Assign GC traffic preferentially to writers, falling back to anyone
         // generating new state versions if there are no writers.
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
@@ -1765,11 +2540,23 @@ where
         // the final rollup.
         let tombstone_needs_gc = self.collections.is_tombstone();
         let should_gc = should_gc || tombstone_needs_gc;
+        let should_gc = if use_active_gc {
+            // If we have an active gc, we should only gc if the active gc is
+            // sufficiently old. This is to avoid doing more gc work than
+            // necessary.
+            should_gc
+                && match self.collections.active_gc {
+                    Some(active) => now.saturating_sub(active.start_ms) > fallback_threshold_ms,
+                    None => true,
+                }
+        } else {
+            should_gc
+        };
         if should_gc {
-            self.collections.last_gc_req = new_seqno_since;
+            self.collections.last_gc_req = gc_until_seqno;
             Some(GcReq {
                 shard_id: self.shard_id,
-                new_seqno_since,
+                new_seqno_since: gc_until_seqno,
             })
         } else {
             None
@@ -1785,19 +2572,26 @@ where
     pub fn expire_at(&mut self, walltime_ms: EpochMillis) -> ExpiryMetrics {
         let mut metrics = ExpiryMetrics::default();
         let shard_id = self.shard_id();
-        self.collections.leased_readers.retain(|k, v| {
-            let retain = v.last_heartbeat_timestamp_ms + v.lease_duration_ms >= walltime_ms;
+        self.collections.leased_readers.retain(|id, state| {
+            let retain = state.last_heartbeat_timestamp_ms + state.lease_duration_ms >= walltime_ms;
             if !retain {
-                info!("Force expiring reader ({k}) of shard ({shard_id}) due to inactivity");
+                info!(
+                    "Force expiring reader {id} ({}) of shard {shard_id} due to inactivity",
+                    state.debug.purpose
+                );
                 metrics.readers_expired += 1;
             }
             retain
         });
         // critical_readers don't need forced expiration. (In fact, that's the point!)
-        self.collections.writers.retain(|k, v| {
-            let retain = (v.last_heartbeat_timestamp_ms + v.lease_duration_ms) >= walltime_ms;
+        self.collections.writers.retain(|id, state| {
+            let retain =
+                (state.last_heartbeat_timestamp_ms + state.lease_duration_ms) >= walltime_ms;
             if !retain {
-                info!("Force expiring writer ({k}) of shard ({shard_id}) due to inactivity");
+                info!(
+                    "Force expiring writer {id} ({}) of shard {shard_id} due to inactivity",
+                    state.debug.purpose
+                );
                 metrics.writers_expired += 1;
             }
             retain
@@ -1833,15 +2627,11 @@ where
     }
 
     // NB: Unlike the other methods here, this one is read-only.
-    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Result<(), Upper<T>>, Since<T>> {
+    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
         if PartialOrder::less_than(as_of, self.collections.trace.since()) {
             return Err(Since(self.collections.trace.since().clone()));
         }
-        let upper = self.collections.trace.upper();
-        if PartialOrder::less_equal(upper, as_of) {
-            return Ok(Err(Upper(upper.clone())));
-        }
-        Ok(Ok(()))
+        Ok(())
     }
 
     pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Result<HollowBatch<T>, SeqNo> {
@@ -1858,7 +2648,17 @@ where
             .ok_or(self.seqno)
     }
 
-    pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
+    pub fn active_rollup(&self) -> Option<ActiveRollup> {
+        self.collections.active_rollup
+    }
+
+    pub fn need_rollup(
+        &self,
+        threshold: usize,
+        use_active_rollup: bool,
+        fallback_threshold_ms: u64,
+        now: u64,
+    ) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
 
         // Tombstoned shards require one final rollup. However, because we
@@ -1871,28 +2671,50 @@ where
         }
 
         let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
-        // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
-        // we avoid assigning rollups to every seqno past the threshold to avoid handles
-        // racing / performing redundant work.
-        if seqnos_since_last_rollup > 0 && seqnos_since_last_rollup % u64::cast_from(threshold) == 0
-        {
-            return Some(self.seqno);
-        }
 
-        // however, since maintenance is best-effort and could fail, do assign rollup
-        // work to every seqno after a fallback threshold to ensure one is written.
-        if seqnos_since_last_rollup
-            > u64::cast_from(
-                threshold * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
-            )
-        {
-            return Some(self.seqno);
+        if use_active_rollup {
+            // If sequnos_since_last_rollup>threshold, and there is no existing rollup in progress,
+            // we should start a new rollup.
+            // If there is an active rollup, we should check if it has been running too long.
+            // If it has, we should start a new rollup.
+            // This is to guard against a worker dying/taking too long/etc.
+            if seqnos_since_last_rollup > u64::cast_from(threshold) {
+                match self.active_rollup() {
+                    Some(active_rollup) => {
+                        if now.saturating_sub(active_rollup.start_ms) > fallback_threshold_ms {
+                            return Some(self.seqno);
+                        }
+                    }
+                    None => {
+                        return Some(self.seqno);
+                    }
+                }
+            }
+        } else {
+            // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
+            // we avoid assigning rollups to every seqno past the threshold to avoid handles
+            // racing / performing redundant work.
+            if seqnos_since_last_rollup > 0
+                && seqnos_since_last_rollup % u64::cast_from(threshold) == 0
+            {
+                return Some(self.seqno);
+            }
+
+            // however, since maintenance is best-effort and could fail, do assign rollup
+            // work to every seqno after a fallback threshold to ensure one is written.
+            if seqnos_since_last_rollup
+                > u64::cast_from(
+                    threshold * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
+                )
+            {
+                return Some(self.seqno);
+            }
         }
 
         None
     }
 
-    pub(crate) fn blobs(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
+    pub(crate) fn blobs(&self) -> impl Iterator<Item = HollowBlobRef<'_, T>> {
         let batches = self.collections.trace.batches().map(HollowBlobRef::Batch);
         let rollups = self.collections.rollups.values().map(HollowBlobRef::Rollup);
         batches.chain(rollups)
@@ -1902,6 +2724,15 @@ where
 fn serialize_part_bytes<S: Serializer>(val: &[u8], s: S) -> Result<S::Ok, S::Error> {
     let val = hex::encode(val);
     val.serialize(s)
+}
+
+fn serialize_lazy_proto<S: Serializer, T: prost::Message + Default>(
+    val: &Option<LazyProto<T>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    val.as_ref()
+        .map(|lazy| hex::encode(&lazy.into_proto()))
+        .serialize(s)
 }
 
 fn serialize_part_stats<S: Serializer>(
@@ -1926,15 +2757,17 @@ fn serialize_diffs_sum<S: Serializer>(val: &Option<[u8; 8]>, s: S) -> Result<S::
 impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let State {
-            applier_version,
             shard_id,
             seqno,
             walltime_ms,
             hostname,
             collections:
                 StateCollections {
+                    version: applier_version,
                     last_gc_req,
                     rollups,
+                    active_rollup,
+                    active_gc,
                     leased_readers,
                     critical_readers,
                     writers,
@@ -1950,6 +2783,8 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
         let () = s.serialize_field("hostname", hostname)?;
         let () = s.serialize_field("last_gc_req", last_gc_req)?;
         let () = s.serialize_field("rollups", rollups)?;
+        let () = s.serialize_field("active_rollup", active_rollup)?;
+        let () = s.serialize_field("active_gc", active_gc)?;
         let () = s.serialize_field("leased_readers", leased_readers)?;
         let () = s.serialize_field("critical_readers", critical_readers)?;
         let () = s.serialize_field("writers", writers)?;
@@ -1996,6 +2831,7 @@ pub struct Upper<T>(pub Antichain<T>);
 #[cfg(test)]
 pub(crate) mod tests {
     use std::ops::Range;
+    use std::str::FromStr;
 
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
@@ -2006,13 +2842,13 @@ pub(crate) mod tests {
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
+    use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
     use crate::cache::PersistClientCache;
     use crate::internal::encoding::any_some_lazy_part_stats;
     use crate::internal::paths::RollupId;
     use crate::internal::trace::tests::any_trace;
     use crate::tests::new_test_client_cache;
-    use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
-    use crate::PersistLocation;
+    use crate::{Diagnostics, PersistLocation};
 
     use super::*;
 
@@ -2024,29 +2860,92 @@ pub(crate) mod tests {
         }
     }
 
-    pub fn any_hollow_batch<T: Arbitrary + Timestamp>() -> impl Strategy<Value = HollowBatch<T>> {
-        Strategy::prop_map(
-            (
-                any::<T>(),
-                any::<T>(),
-                any::<T>(),
-                proptest::collection::vec(any_batch_part::<T>(), 0..3),
-                any::<usize>(),
-                any::<bool>(),
-            ),
-            |(t0, t1, since, parts, len, runs)| {
+    pub fn any_hollow_batch_with_exact_runs<T: Arbitrary + Timestamp>(
+        num_runs: usize,
+    ) -> impl Strategy<Value = HollowBatch<T>> {
+        (
+            any::<T>(),
+            any::<T>(),
+            any::<T>(),
+            proptest::collection::vec(any_run_part::<T>(), num_runs + 1..20),
+            any::<usize>(),
+        )
+            .prop_map(move |(t0, t1, since, parts, len)| {
                 let (lower, upper) = if t0 <= t1 {
                     (Antichain::from_elem(t0), Antichain::from_elem(t1))
                 } else {
                     (Antichain::from_elem(t1), Antichain::from_elem(t0))
                 };
                 let since = Antichain::from_elem(since);
-                let runs = if runs { vec![parts.len()] } else { vec![] };
-                HollowBatch {
-                    desc: Description::new(lower, upper, since),
+
+                let run_splits = (1..num_runs)
+                    .map(|i| i * parts.len() / num_runs)
+                    .collect::<Vec<_>>();
+
+                let run_meta = (0..num_runs)
+                    .map(|_| {
+                        let mut meta = RunMeta::default();
+                        meta.id = Some(RunId::new());
+                        meta
+                    })
+                    .collect::<Vec<_>>();
+
+                HollowBatch::new(
+                    Description::new(lower, upper, since),
                     parts,
-                    len: len % 10,
-                    runs,
+                    len % 10,
+                    run_meta,
+                    run_splits,
+                )
+            })
+    }
+
+    pub fn any_hollow_batch<T: Arbitrary + Timestamp>() -> impl Strategy<Value = HollowBatch<T>> {
+        Strategy::prop_map(
+            (
+                any::<T>(),
+                any::<T>(),
+                any::<T>(),
+                proptest::collection::vec(any_run_part::<T>(), 0..20),
+                any::<usize>(),
+                0..=10usize,
+                proptest::collection::vec(any::<RunId>(), 10),
+            ),
+            |(t0, t1, since, parts, len, num_runs, run_ids)| {
+                let (lower, upper) = if t0 <= t1 {
+                    (Antichain::from_elem(t0), Antichain::from_elem(t1))
+                } else {
+                    (Antichain::from_elem(t1), Antichain::from_elem(t0))
+                };
+                let since = Antichain::from_elem(since);
+                if num_runs > 0 && parts.len() > 2 && num_runs < parts.len() {
+                    let run_splits = (1..num_runs)
+                        .map(|i| i * parts.len() / num_runs)
+                        .collect::<Vec<_>>();
+
+                    let run_meta = (0..num_runs)
+                        .enumerate()
+                        .map(|(i, _)| {
+                            let mut meta = RunMeta::default();
+                            meta.id = Some(run_ids[i]);
+                            meta
+                        })
+                        .collect::<Vec<_>>();
+
+                    HollowBatch::new(
+                        Description::new(lower, upper, since),
+                        parts,
+                        len % 10,
+                        run_meta,
+                        run_splits,
+                    )
+                } else {
+                    HollowBatch::new_run_for_test(
+                        Description::new(lower, upper, since),
+                        parts,
+                        len % 10,
+                        run_ids[0],
+                    )
                 }
             },
         )
@@ -2059,8 +2958,9 @@ pub(crate) mod tests {
                 any_hollow_batch_part(),
                 any::<Option<T>>(),
                 any::<Option<SchemaId>>(),
+                any::<Option<SchemaId>>(),
             ),
-            |(is_hollow, hollow, ts_rewrite, schema_id)| {
+            |(is_hollow, hollow, ts_rewrite, schema_id, deprecated_schema_id)| {
                 if is_hollow {
                     BatchPart::Hollow(hollow)
                 } else {
@@ -2070,14 +2970,19 @@ pub(crate) mod tests {
                         updates,
                         ts_rewrite,
                         schema_id,
+                        deprecated_schema_id,
                     }
                 }
             },
         )
     }
 
-    pub fn any_hollow_batch_part<T: Arbitrary + Timestamp>(
-    ) -> impl Strategy<Value = HollowBatchPart<T>> {
+    pub fn any_run_part<T: Arbitrary + Timestamp>() -> impl Strategy<Value = RunPart<T>> {
+        Strategy::prop_map(any_batch_part(), |part| RunPart::Single(part))
+    }
+
+    pub fn any_hollow_batch_part<T: Arbitrary + Timestamp>()
+    -> impl Strategy<Value = HollowBatchPart<T>> {
         Strategy::prop_map(
             (
                 any::<PartialBatchKey>(),
@@ -2087,6 +2992,7 @@ pub(crate) mod tests {
                 any::<Option<T>>(),
                 any::<[u8; 8]>(),
                 any::<Option<BatchColumnarFormat>>(),
+                any::<Option<SchemaId>>(),
                 any::<Option<SchemaId>>(),
             ),
             |(
@@ -2098,16 +3004,20 @@ pub(crate) mod tests {
                 diffs_sum,
                 format,
                 schema_id,
+                deprecated_schema_id,
             )| {
                 HollowBatchPart {
                     key,
+                    meta: Default::default(),
                     encoded_size_bytes,
                     key_lower,
+                    structured_key_lower: None,
                     stats,
                     ts_rewrite: ts_rewrite.map(Antichain::from_elem),
                     diffs_sum: Some(diffs_sum),
                     format,
                     schema_id,
+                    deprecated_schema_id,
                 }
             },
         )
@@ -2140,19 +3050,19 @@ pub(crate) mod tests {
         )
     }
 
-    pub fn any_critical_reader_state<T: Arbitrary>() -> impl Strategy<Value = CriticalReaderState<T>>
+    pub fn any_critical_reader_state<T>() -> impl Strategy<Value = CriticalReaderState<T>>
+    where
+        T: Arbitrary,
     {
         Strategy::prop_map(
             (
                 any::<Option<T>>(),
-                any::<OpaqueState>(),
-                any::<String>(),
+                any::<Opaque>(),
                 any::<HandleDebugState>(),
             ),
-            |(since, opaque, opaque_codec, debug)| CriticalReaderState {
+            |(since, opaque, debug)| CriticalReaderState {
                 since: since.map_or_else(Antichain::new, Antichain::from_elem),
                 opaque,
-                opaque_codec,
                 debug,
             },
         )
@@ -2204,54 +3114,53 @@ pub(crate) mod tests {
     pub fn any_state<T: Arbitrary + Timestamp + Lattice>(
         num_trace_batches: Range<usize>,
     ) -> impl Strategy<Value = State<T>> {
-        Strategy::prop_map(
-            (
-                any::<ShardId>(),
-                any::<SeqNo>(),
-                any::<u64>(),
-                any::<String>(),
-                any::<SeqNo>(),
-                proptest::collection::btree_map(any::<SeqNo>(), any::<HollowRollup>(), 1..3),
-                proptest::collection::btree_map(
-                    any::<LeasedReaderId>(),
-                    any_leased_reader_state::<T>(),
-                    1..3,
-                ),
-                proptest::collection::btree_map(
-                    any::<CriticalReaderId>(),
-                    any_critical_reader_state::<T>(),
-                    1..3,
-                ),
-                proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
-                proptest::collection::btree_map(any::<SchemaId>(), any_encoded_schemas(), 0..3),
-                any_trace::<T>(num_trace_batches),
+        let part1 = (
+            any::<ShardId>(),
+            any::<SeqNo>(),
+            any::<u64>(),
+            any::<String>(),
+            any::<SeqNo>(),
+            proptest::collection::btree_map(any::<SeqNo>(), any::<HollowRollup>(), 1..3),
+            proptest::option::of(any::<ActiveRollup>()),
+        );
+
+        let part2 = (
+            proptest::option::of(any::<ActiveGc>()),
+            proptest::collection::btree_map(
+                any::<LeasedReaderId>(),
+                any_leased_reader_state::<T>(),
+                1..3,
             ),
+            proptest::collection::btree_map(
+                any::<CriticalReaderId>(),
+                any_critical_reader_state::<T>(),
+                1..3,
+            ),
+            proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
+            proptest::collection::btree_map(any::<SchemaId>(), any_encoded_schemas(), 0..3),
+            any_trace::<T>(num_trace_batches),
+        );
+
+        (part1, part2).prop_map(
             |(
-                shard_id,
-                seqno,
-                walltime_ms,
-                hostname,
-                last_gc_req,
-                rollups,
-                leased_readers,
-                critical_readers,
-                writers,
-                schemas,
-                trace,
+                (shard_id, seqno, walltime_ms, hostname, last_gc_req, rollups, active_rollup),
+                (active_gc, leased_readers, critical_readers, writers, schemas, trace),
             )| State {
-                applier_version: semver::Version::new(1, 2, 3),
                 shard_id,
                 seqno,
                 walltime_ms,
                 hostname,
                 collections: StateCollections {
+                    version: Version::new(1, 2, 3),
                     last_gc_req,
                     rollups,
+                    active_rollup,
+                    active_gc,
                     leased_readers,
                     critical_readers,
                     writers,
-                    trace,
                     schemas,
+                    trace,
                 },
             },
         )
@@ -2263,7 +3172,7 @@ pub(crate) mod tests {
         keys: &[&str],
         len: usize,
     ) -> HollowBatch<T> {
-        HollowBatch::new(
+        HollowBatch::new_run(
             Description::new(
                 Antichain::from_elem(lower),
                 Antichain::from_elem(upper),
@@ -2271,20 +3180,22 @@ pub(crate) mod tests {
             ),
             keys.iter()
                 .map(|x| {
-                    BatchPart::Hollow(HollowBatchPart {
+                    RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                         key: PartialBatchKey((*x).to_owned()),
+                        meta: Default::default(),
                         encoded_size_bytes: 0,
                         key_lower: vec![],
+                        structured_key_lower: None,
                         stats: None,
                         ts_rewrite: None,
                         diffs_sum: None,
                         format: None,
                         schema_id: None,
-                    })
+                        deprecated_schema_id: None,
+                    }))
                 })
                 .collect(),
             len,
-            vec![],
         )
     }
 
@@ -2317,7 +3228,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -2329,7 +3240,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -2341,7 +3252,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(1),
                 now()
             ),
@@ -2366,7 +3277,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader2,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(3),
                 now()
             ),
@@ -2378,7 +3289,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(5),
                 now()
             ),
@@ -2410,7 +3321,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader3,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(10),
                 now()
             ),
@@ -2423,7 +3334,7 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader2),
             Continue(true)
         );
-        // TODO(#22789): expiry temporarily doesn't advance since
+        // TODO(database-issues#6885): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
@@ -2434,11 +3345,92 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader3),
             Continue(true)
         );
-        // TODO(#22789): expiry temporarily doesn't advance since
+        // TODO(database-issues#6885): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
+    }
+
+    #[mz_ore::test]
+    fn compare_and_downgrade_since() {
+        let mut state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+        let reader = CriticalReaderId::new();
+        let _ = state
+            .collections
+            .register_critical_reader("", &reader, Opaque::encode(&0u64), "");
+
+        // The shard global since == 0 initially.
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
+        // The initial opaque value should be set.
+        assert_eq!(
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
+            u64::MIN
+        );
+
+        // Greater
+        assert_eq!(
+            state.collections.compare_and_downgrade_since(
+                &reader,
+                &Opaque::encode(&0u64),
+                (&Opaque::encode(&1u64), &Antichain::from_elem(2)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
+            1
+        );
+        // Equal (no-op)
+        assert_eq!(
+            state.collections.compare_and_downgrade_since(
+                &reader,
+                &Opaque::encode(&1u64),
+                (&Opaque::encode(&2u64), &Antichain::from_elem(2)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
+            2
+        );
+        // Less (no-op)
+        assert_eq!(
+            state.collections.compare_and_downgrade_since(
+                &reader,
+                &Opaque::encode(&2u64),
+                (&Opaque::encode(&3u64), &Antichain::from_elem(1)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
+            3
+        );
     }
 
     #[mz_ore::test]
@@ -2469,8 +3461,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
-                true,
-                true,
+                100,
+                None
             ),
             Break(CompareAndAppendBreak::Upper {
                 shard_upper: Antichain::from_elem(0),
@@ -2479,19 +3471,21 @@ pub(crate) mod tests {
         );
 
         // Insert an empty batch with an upper > lower..
-        assert!(state
-            .compare_and_append(
-                &hollow(0, 5, &[], 0),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                true,
-            )
-            .is_continue());
+        assert!(
+            state
+                .compare_and_append(
+                    &hollow(0, 5, &[], 0),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
         // Cannot insert a batch with a upper less than the lower.
         assert_eq!(
@@ -2503,8 +3497,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
-                true,
-                true,
+                100,
+                None
             ),
             Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
@@ -2522,8 +3516,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
-                true,
-                true,
+                100,
+                None
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidEmptyTimeInterval {
@@ -2535,19 +3529,21 @@ pub(crate) mod tests {
         );
 
         // Can insert an empty batch with an upper equal to lower.
-        assert!(state
-            .compare_and_append(
-                &hollow(5, 5, &[], 0),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                true,
-            )
-            .is_continue());
+        assert!(
+            state
+                .compare_and_append(
+                    &hollow(5, 5, &[], 0),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
     }
 
     #[mz_ore::test]
@@ -2581,20 +3577,22 @@ pub(crate) mod tests {
         let writer_id = WriterId::new();
 
         // Advance upper to 5.
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(0, 5, &["key1"], 1),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                true,
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(0, 5, &["key1"], 1),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
         // Can take a snapshot with as_of < upper.
         assert_eq!(
@@ -2639,7 +3637,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 SeqNo::minimum(),
-                None,
+                SeqNo::minimum(),
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -2655,20 +3653,22 @@ pub(crate) mod tests {
         );
 
         // Advance the upper to 10 via an empty batch.
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(5, 10, &[], 0),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                true,
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(5, 10, &[], 0),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
         // Can still take snapshots at times < upper.
         assert_eq!(
@@ -2686,20 +3686,22 @@ pub(crate) mod tests {
         );
 
         // Advance upper to 15.
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(10, 15, &["key2"], 1),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                true,
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(10, 15, &["key2"], 1),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
         // Filter out batches whose lowers are less than the requested as of (the
         // batches that are too far in the future for the requested as_of).
@@ -2749,34 +3751,38 @@ pub(crate) mod tests {
         let now = SYSTEM_TIME.clone();
 
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(0, 5, &["key1"], 1),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                true,
-            )
-            .is_continue());
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(5, 10, &["key2"], 1),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                true,
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(0, 5, &["key1"], 1),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(5, 10, &["key2"], 1),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
         // All frontiers in [0, 5) return the first batch.
         for t in 0..=4 {
@@ -2820,45 +3826,180 @@ pub(crate) mod tests {
         let writer_id_two = WriterId::new();
 
         // Writer is eligible to write
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(0, 2, &["key1"], 1),
-                &writer_id_one,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                true,
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(0, 2, &["key1"], 1),
+                    &writer_id_one,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
-        assert!(state
-            .collections
-            .expire_writer(&writer_id_one)
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .expire_writer(&writer_id_one)
+                .is_continue()
+        );
 
         // Other writers should still be able to write
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(2, 5, &["key2"], 1),
-                &writer_id_two,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                true,
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(2, 5, &["key2"], 1),
+                    &writer_id_two,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
     }
 
     #[mz_ore::test]
-    fn maybe_gc() {
+    fn maybe_gc_active_gc() {
+        const GC_CONFIG: GcConfig = GcConfig {
+            use_active_gc: true,
+            fallback_threshold_ms: 5000,
+            min_versions: 99,
+            max_versions: 500,
+        };
+        let now_fn = SYSTEM_TIME.clone();
+
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let now = now_fn();
+        // Empty state doesn't need gc, regardless of is_write.
+        assert_eq!(state.maybe_gc(true, now, GC_CONFIG), None);
+        assert_eq!(state.maybe_gc(false, now, GC_CONFIG), None);
+
+        // Artificially advance the seqno so the seqno_since advances past our
+        // internal gc_threshold.
+        state.seqno = SeqNo(100);
+        assert_eq!(state.seqno_since(), SeqNo(100));
+
+        // When a writer is present, non-writes don't gc.
+        let writer_id = WriterId::new();
+        let _ = state.collections.compare_and_append(
+            &hollow(1, 2, &["key1"], 1),
+            &writer_id,
+            now,
+            LEASE_DURATION_MS,
+            &IdempotencyToken::new(),
+            &debug_state(),
+            0,
+            100,
+            None,
+        );
+        assert_eq!(state.maybe_gc(false, now, GC_CONFIG), None);
+
+        // A write will gc though.
+        assert_eq!(
+            state.maybe_gc(true, now, GC_CONFIG),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(100)
+            })
+        );
+
+        // But if we write down an active gc, we won't gc.
+        state.collections.active_gc = Some(ActiveGc {
+            seqno: state.seqno,
+            start_ms: now,
+        });
+
+        state.seqno = SeqNo(200);
+        assert_eq!(state.seqno_since(), SeqNo(200));
+
+        assert_eq!(state.maybe_gc(true, now, GC_CONFIG), None);
+
+        state.seqno = SeqNo(300);
+        assert_eq!(state.seqno_since(), SeqNo(300));
+        // But if we advance the time past the threshold, we will gc.
+        let new_now = now + GC_CONFIG.fallback_threshold_ms + 1;
+        assert_eq!(
+            state.maybe_gc(true, new_now, GC_CONFIG),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(300)
+            })
+        );
+
+        // Even if the sequence number doesn't pass the threshold, if the
+        // active gc is expired, we will gc.
+
+        state.seqno = SeqNo(301);
+        assert_eq!(state.seqno_since(), SeqNo(301));
+        assert_eq!(
+            state.maybe_gc(true, new_now, GC_CONFIG),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(301)
+            })
+        );
+
+        state.collections.active_gc = None;
+
+        // Artificially advance the seqno (again) so the seqno_since advances
+        // past our internal gc_threshold (again).
+        state.seqno = SeqNo(400);
+        assert_eq!(state.seqno_since(), SeqNo(400));
+
+        let now = now_fn();
+
+        // If there are no writers, even a non-write will gc.
+        let _ = state.collections.expire_writer(&writer_id);
+        assert_eq!(
+            state.maybe_gc(false, now, GC_CONFIG),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(400)
+            })
+        );
+
+        // Upper-bound the number of seqnos we'll attempt to collect in one go.
+        let previous_seqno = state.seqno;
+        state.seqno = SeqNo(10_000);
+        assert_eq!(state.seqno_since(), SeqNo(10_000));
+
+        let now = now_fn();
+        assert_eq!(
+            state.maybe_gc(true, now, GC_CONFIG),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(previous_seqno.0 + u64::cast_from(GC_CONFIG.max_versions))
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    fn maybe_gc_classic() {
+        const GC_CONFIG: GcConfig = GcConfig {
+            use_active_gc: false,
+            fallback_threshold_ms: 5000,
+            min_versions: 16,
+            max_versions: 128,
+        };
+        const NOW_MS: u64 = 0;
+
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -2867,8 +4008,8 @@ pub(crate) mod tests {
         );
 
         // Empty state doesn't need gc, regardless of is_write.
-        assert_eq!(state.maybe_gc(true), None);
-        assert_eq!(state.maybe_gc(false), None);
+        assert_eq!(state.maybe_gc(true, NOW_MS, GC_CONFIG), None);
+        assert_eq!(state.maybe_gc(false, NOW_MS, GC_CONFIG), None);
 
         // Artificially advance the seqno so the seqno_since advances past our
         // internal gc_threshold.
@@ -2878,7 +4019,7 @@ pub(crate) mod tests {
         // When a writer is present, non-writes don't gc.
         let writer_id = WriterId::new();
         let now = SYSTEM_TIME.clone();
-        state.collections.compare_and_append(
+        let _ = state.collections.compare_and_append(
             &hollow(1, 2, &["key1"], 1),
             &writer_id,
             now(),
@@ -2886,14 +4027,14 @@ pub(crate) mod tests {
             &IdempotencyToken::new(),
             &debug_state(),
             0,
-            true,
-            true,
+            100,
+            None,
         );
-        assert_eq!(state.maybe_gc(false), None);
+        assert_eq!(state.maybe_gc(false, NOW_MS, GC_CONFIG), None);
 
         // A write will gc though.
         assert_eq!(
-            state.maybe_gc(true),
+            state.maybe_gc(true, NOW_MS, GC_CONFIG),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(100)
@@ -2908,7 +4049,7 @@ pub(crate) mod tests {
         // If there are no writers, even a non-write will gc.
         let _ = state.collections.expire_writer(&writer_id);
         assert_eq!(
-            state.maybe_gc(true),
+            state.maybe_gc(false, NOW_MS, GC_CONFIG),
             Some(GcReq {
                 shard_id: state.shard_id,
                 new_seqno_since: SeqNo(200)
@@ -2917,8 +4058,12 @@ pub(crate) mod tests {
     }
 
     #[mz_ore::test]
-    fn need_rollup() {
+    fn need_rollup_active_rollup() {
         const ROLLUP_THRESHOLD: usize = 3;
+        const ROLLUP_USE_ACTIVE_ROLLUP: bool = true;
+        const ROLLUP_FALLBACK_THRESHOLD_MS: u64 = 5000;
+        let now = SYSTEM_TIME.clone();
+
         mz_ore::test::init_logging();
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
@@ -2933,36 +4078,222 @@ pub(crate) mod tests {
             encoded_size_bytes: None,
         };
 
-        assert!(state
-            .collections
-            .add_rollup((rollup_seqno, &rollup))
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .add_rollup((rollup_seqno, &rollup))
+                .is_continue()
+        );
 
         // shouldn't need a rollup at the seqno of the rollup
         state.seqno = SeqNo(5);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
 
         // shouldn't need a rollup at seqnos less than our threshold
         state.seqno = SeqNo(6);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
         state.seqno = SeqNo(7);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
+        state.seqno = SeqNo(8);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            now()
+        ));
+
+        let mut current_time = now();
+        // hit our threshold! we should need a rollup
+        state.seqno = SeqNo(9);
+        assert_eq!(
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    current_time
+                )
+                .expect("rollup"),
+            SeqNo(9)
+        );
+
+        state.collections.active_rollup = Some(ActiveRollup {
+            seqno: SeqNo(9),
+            start_ms: current_time,
+        });
+
+        // There is now an active rollup, so we shouldn't need a rollup.
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            current_time
+        ));
+
+        state.seqno = SeqNo(10);
+        // We still don't need a rollup, even though the seqno is greater than
+        // the rollup threshold.
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            current_time
+        ));
+
+        // But if we wait long enough, we should need a rollup again.
+        current_time += u64::cast_from(ROLLUP_FALLBACK_THRESHOLD_MS) + 1;
+        assert_eq!(
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    current_time
+                )
+                .expect("rollup"),
+            SeqNo(10)
+        );
+
+        state.seqno = SeqNo(9);
+        // Clear the active rollup and ensure we need a rollup again.
+        state.collections.active_rollup = None;
+        let rollup_seqno = SeqNo(9);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        assert!(
+            state
+                .collections
+                .add_rollup((rollup_seqno, &rollup))
+                .is_continue()
+        );
+
+        state.seqno = SeqNo(11);
+        // We shouldn't need a rollup at seqnos less than our threshold
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            current_time
+        ));
+        // hit our threshold! we should need a rollup
+        state.seqno = SeqNo(13);
+        assert_eq!(
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    current_time
+                )
+                .expect("rollup"),
+            SeqNo(13)
+        );
+    }
+
+    #[mz_ore::test]
+    fn need_rollup_classic() {
+        const ROLLUP_THRESHOLD: usize = 3;
+        const ROLLUP_USE_ACTIVE_ROLLUP: bool = false;
+        const ROLLUP_FALLBACK_THRESHOLD_MS: u64 = 0;
+        const NOW: u64 = 0;
+
+        mz_ore::test::init_logging();
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let rollup_seqno = SeqNo(5);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+
+        assert!(
+            state
+                .collections
+                .add_rollup((rollup_seqno, &rollup))
+                .is_continue()
+        );
+
+        // shouldn't need a rollup at the seqno of the rollup
+        state.seqno = SeqNo(5);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
+
+        // shouldn't need a rollup at seqnos less than our threshold
+        state.seqno = SeqNo(6);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
+        state.seqno = SeqNo(7);
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
 
         // hit our threshold! we should need a rollup
         state.seqno = SeqNo(8);
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             SeqNo(8)
         );
 
         // but we don't need rollups for every seqno > the threshold
         state.seqno = SeqNo(9);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
 
         // we only need a rollup each `ROLLUP_THRESHOLD` beyond our current seqno
         state.seqno = SeqNo(11);
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             SeqNo(11)
         );
 
@@ -2972,16 +4303,30 @@ pub(crate) mod tests {
             key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
             encoded_size_bytes: None,
         };
-        assert!(state
-            .collections
-            .add_rollup((rollup_seqno, &rollup))
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .add_rollup((rollup_seqno, &rollup))
+                .is_continue()
+        );
 
         state.seqno = SeqNo(8);
-        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
+        assert_none!(state.need_rollup(
+            ROLLUP_THRESHOLD,
+            ROLLUP_USE_ACTIVE_ROLLUP,
+            ROLLUP_FALLBACK_THRESHOLD_MS,
+            NOW
+        ));
         state.seqno = SeqNo(9);
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             SeqNo(9)
         );
 
@@ -2992,12 +4337,26 @@ pub(crate) mod tests {
         );
         state.seqno = fallback_seqno;
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             fallback_seqno
         );
         state.seqno = fallback_seqno.next();
         assert_eq!(
-            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            state
+                .need_rollup(
+                    ROLLUP_THRESHOLD,
+                    ROLLUP_USE_ACTIVE_ROLLUP,
+                    ROLLUP_FALLBACK_THRESHOLD_MS,
+                    NOW
+                )
+                .expect("rollup"),
             fallback_seqno.next()
         );
     }
@@ -3019,10 +4378,11 @@ pub(crate) mod tests {
     /// This golden will have to be updated each time we change State, but
     /// that's a feature, not a bug.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn state_inspect_serde_json() {
         const STATE_SERDE_JSON: &str = include_str!("state_serde.json");
         let mut runner = proptest::test_runner::TestRunner::deterministic();
-        let tree = any_state::<u64>(5..6).new_tree(&mut runner).unwrap();
+        let tree = any_state::<u64>(6..8).new_tree(&mut runner).unwrap();
         let json = serde_json::to_string_pretty(&tree.current()).unwrap();
         assert_eq!(
             json.trim(),
@@ -3048,6 +4408,10 @@ pub(crate) mod tests {
             let client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
             // Run in a task so we can catch the panic.
             mz_ore::task::spawn(|| version.to_string(), async move {
+                let () = client
+                    .upgrade_version::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+                    .await
+                    .expect("valid usage");
                 let (mut write, _) = client.expect_open::<String, (), u64, i64>(shard_id).await;
                 let current = *write.upper().as_option().unwrap();
                 // Do a write so that we tag the state with the version.
@@ -3055,6 +4419,7 @@ pub(crate) mod tests {
                     .expect_compare_and_append_batch(&mut [], current, current + 1)
                     .await;
             })
+            .into_tokio_handle()
             .await
         }
 
@@ -3066,12 +4431,90 @@ pub(crate) mod tests {
         let res = open_and_write(&mut clients, Version::new(0, 11, 0), shard_id).await;
         assert_ok!(res);
 
-        // Downgrade to v0.10.0 is allowed.
+        // Downgrade to v0.10.0 is no longer allowed.
         let res = open_and_write(&mut clients, Version::new(0, 10, 0), shard_id).await;
-        assert_ok!(res);
+        assert!(res.unwrap_err().is_panic());
 
         // Downgrade to v0.9.0 is _NOT_ allowed.
         let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;
         assert!(res.unwrap_err().is_panic());
+    }
+
+    #[mz_ore::test]
+    fn runid_roundtrip() {
+        proptest!(|(runid: RunId)| {
+            let runid_str = runid.to_string();
+            let parsed = RunId::from_str(&runid_str);
+            prop_assert_eq!(parsed, Ok(runid));
+        });
+    }
+
+    /// Regression for PER-16. `add_rollup` must refuse to (re-)insert a
+    /// rollup at a seqno that GC has already physically removed.
+    /// Without this guard, an `apply_unbatched_idempotent_cmd` retry of
+    /// `add_rollup` that runs after a concurrent GC removed the rollup's
+    /// original map entry will re-insert it under the same key, producing
+    /// duplicate Insert events in the diff stream and (later) duplicate
+    /// Delete events that trip the `assert!` in `gc.rs`'s
+    /// `find_removable_blobs`.
+    ///
+    /// This test reaches the bug state via the public
+    /// `add_rollup` → `add_rollup` (newer) → `remove_rollups` (the older
+    /// one) → `add_rollup` (retry of the older one) sequence, mirroring
+    /// how a delayed retry of an indeterminate add_rollup commit can race
+    /// a concurrent GC pass that has since added a newer rollup and
+    /// removed the older one.
+    #[mz_ore::test]
+    fn add_rollup_idempotent_across_gc_removal() {
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let older_seqno = SeqNo(10);
+        let older = HollowRollup {
+            key: PartialRollupKey::new(older_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        let newer_seqno = SeqNo(20);
+        let newer = HollowRollup {
+            key: PartialRollupKey::new(newer_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        let add_older = |state: &mut StateCollections<u64>| state.add_rollup((older_seqno, &older));
+
+        // First attempt commits the older rollup.
+        assert_eq!(add_older(&mut state.collections), Continue(true));
+        // A repeat at the same seqno with the same key is the pre-existing
+        // idempotent no-op and should report applied=true.
+        assert_eq!(add_older(&mut state.collections), Continue(true));
+        assert_eq!(state.collections.rollups.len(), 1);
+
+        // The shard keeps making progress and a later command commits a
+        // newer rollup. This is what gives GC something to keep when it
+        // later removes the older entry.
+        assert_eq!(
+            state.collections.add_rollup((newer_seqno, &newer)),
+            Continue(true),
+        );
+
+        // The GC worker, having found a kept rollup at `newer_seqno`,
+        // commits the removal of the older one. State.rollups now only
+        // contains the kept rollup; the older entry is gone.
+        let _ = state
+            .collections
+            .remove_rollups(&[(older_seqno, older.key.clone())]);
+        assert!(!state.collections.rollups.contains_key(&older_seqno));
+        assert!(state.collections.rollups.contains_key(&newer_seqno));
+
+        // The retry replays the same captured `(older_seqno, older)`
+        // tuple. Even though no entry references the key anymore,
+        // re-inserting it must be refused: `older_seqno` falls below the
+        // smallest live rollup seqno, which is the GC watermark.
+        assert_eq!(add_older(&mut state.collections), Continue(false));
+        assert!(!state.collections.rollups.contains_key(&older_seqno));
+        assert_eq!(state.collections.rollups.len(), 1);
     }
 }

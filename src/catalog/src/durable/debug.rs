@@ -16,10 +16,10 @@ use mz_repr::Diff;
 use serde::{Deserialize, Serialize};
 use serde_plain::{derive_display_from_serialize, derive_fromstr_from_deserialize};
 
+use crate::durable::CatalogError;
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::state_update::StateUpdateKind;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
-use crate::durable::CatalogError;
 
 /// The contents of the catalog are logically separated into separate [`Collection`]s, which
 /// describe the category of data that the content belongs to.
@@ -63,10 +63,12 @@ pub enum CollectionType {
     DefaultPrivileges,
     IdAlloc,
     Item,
+    NetworkPolicy,
     Role,
+    RoleAuth,
     Schema,
     Setting,
-    StorageUsage,
+    SourceReferences,
     SystemConfiguration,
     SystemGidMapping,
     SystemPrivileges,
@@ -199,12 +201,28 @@ collection_impl!({
     update: StateUpdateKind::Item,
 });
 collection_impl!({
+    name: NetworkPolicyCollection,
+    key: proto::NetworkPolicyKey,
+    value: proto::NetworkPolicyValue,
+    collection_type: CollectionType::NetworkPolicy,
+    trace_field: network_policies,
+    update: StateUpdateKind::NetworkPolicy,
+});
+collection_impl!({
     name: RoleCollection,
     key: proto::RoleKey,
     value: proto::RoleValue,
     collection_type: CollectionType::Role,
     trace_field: roles,
     update: StateUpdateKind::Role,
+});
+collection_impl!({
+    name: RoleAuthCollection,
+    key: proto::RoleAuthKey,
+    value: proto::RoleAuthValue,
+    collection_type: CollectionType::RoleAuth,
+    trace_field: role_auth,
+    update: StateUpdateKind::RoleAuth,
 });
 collection_impl!({
     name: SchemaCollection,
@@ -223,12 +241,12 @@ collection_impl!({
     update: StateUpdateKind::Setting,
 });
 collection_impl!({
-    name: StorageUsageCollection,
-    key: proto::StorageUsageKey,
-    value: (),
-    collection_type: CollectionType::StorageUsage,
-    trace_field: storage_usage,
-    update: StateUpdateKind::StorageUsage,
+    name: SourceReferencesCollection,
+    key: proto::SourceReferencesKey,
+    value: proto::SourceReferencesValue,
+    collection_type: CollectionType::SourceReferences,
+    trace_field: source_references,
+    update: StateUpdateKind::SourceReferences,
 });
 collection_impl!({
     name: SystemConfigurationCollection,
@@ -295,6 +313,18 @@ impl<T: Collection> CollectionTrace<T> {
     }
 }
 
+impl<T: Collection> CollectionTrace<T>
+where
+    T: Collection,
+    T::Key: Ord,
+    T::Value: Ord,
+{
+    fn sort(&mut self) {
+        self.values
+            .sort_by(|(x1, ts1, d1), (x2, ts2, d2)| ts1.cmp(ts2).then(d1.cmp(d2)).then(x1.cmp(x2)));
+    }
+}
+
 /// Catalog data structured as timestamped diffs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trace {
@@ -308,10 +338,12 @@ pub struct Trace {
     pub default_privileges: CollectionTrace<DefaultPrivilegeCollection>,
     pub id_allocator: CollectionTrace<IdAllocatorCollection>,
     pub items: CollectionTrace<ItemCollection>,
+    pub network_policies: CollectionTrace<NetworkPolicyCollection>,
     pub roles: CollectionTrace<RoleCollection>,
+    pub role_auth: CollectionTrace<RoleAuthCollection>,
     pub schemas: CollectionTrace<SchemaCollection>,
     pub settings: CollectionTrace<SettingCollection>,
-    pub storage_usage: CollectionTrace<StorageUsageCollection>,
+    pub source_references: CollectionTrace<SourceReferencesCollection>,
     pub system_object_mappings: CollectionTrace<SystemItemMappingCollection>,
     pub system_configurations: CollectionTrace<SystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
@@ -333,10 +365,12 @@ impl Trace {
             default_privileges: CollectionTrace::new(),
             id_allocator: CollectionTrace::new(),
             items: CollectionTrace::new(),
+            network_policies: CollectionTrace::new(),
             roles: CollectionTrace::new(),
+            role_auth: CollectionTrace::new(),
             schemas: CollectionTrace::new(),
             settings: CollectionTrace::new(),
-            storage_usage: CollectionTrace::new(),
+            source_references: CollectionTrace::new(),
             system_object_mappings: CollectionTrace::new(),
             system_configurations: CollectionTrace::new(),
             system_privileges: CollectionTrace::new(),
@@ -344,6 +378,55 @@ impl Trace {
             unfinalized_shards: CollectionTrace::new(),
             txn_wal_shard: CollectionTrace::new(),
         }
+    }
+
+    pub fn sort(&mut self) {
+        let Trace {
+            audit_log,
+            clusters,
+            introspection_sources,
+            cluster_replicas,
+            comments,
+            configs,
+            databases,
+            default_privileges,
+            id_allocator,
+            items,
+            network_policies,
+            roles,
+            role_auth,
+            schemas,
+            settings,
+            source_references,
+            system_object_mappings,
+            system_configurations,
+            system_privileges,
+            storage_collection_metadata,
+            unfinalized_shards,
+            txn_wal_shard,
+        } = self;
+        audit_log.sort();
+        clusters.sort();
+        introspection_sources.sort();
+        cluster_replicas.sort();
+        comments.sort();
+        configs.sort();
+        databases.sort();
+        default_privileges.sort();
+        id_allocator.sort();
+        items.sort();
+        network_policies.sort();
+        roles.sort();
+        role_auth.sort();
+        schemas.sort();
+        settings.sort();
+        source_references.sort();
+        system_object_mappings.sort();
+        system_configurations.sort();
+        system_privileges.sort();
+        storage_collection_metadata.sort();
+        unfinalized_shards.sort();
+        txn_wal_shard.sort();
     }
 }
 

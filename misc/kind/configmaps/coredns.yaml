@@ -7,29 +7,34 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Set a CoreDNS config with zero caching to simplify networking / retry behavior
 apiVersion: v1
 kind: ConfigMap
 metadata:
-    name: coredns
-    namespace: kube-system
+  name: coredns
+  namespace: kube-system
 data:
-    Corefile: |
-        # This is the stock EKS configuration for CoreDNS, with modifications
-        # noted inline.
-        .:53 {
-            errors
-            health
-            ready
-            kubernetes cluster.local in-addr.arpa ip6.arpa {
-                pods insecure
-                fallthrough in-addr.arpa ip6.arpa
-                # Set the TTL to 1
-                ttl 1
-            }
-            prometheus :9153
-            forward . /etc/resolv.conf
-            # Set the TTL to 1 in general
-            cache 1
-            loop
-            reload
+  Corefile: |
+    .:53 {
+        errors
+        health {
+            lameduck 5s
         }
+        ready
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+            ttl 0
+            pods insecure
+            fallthrough in-addr.arpa ip6.arpa
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf {
+            max_concurrent 1000
+        }
+        cache 30 {
+            disable denial cluster.local
+            disable success cluster.local
+        }
+        loop
+        reload
+        loadbalance
+    }

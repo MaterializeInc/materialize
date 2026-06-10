@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 > CREATE MATERIALIZED VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
 
@@ -165,7 +167,7 @@ contains:column "a" specified more than once
 
 > CREATE TYPE int4_map_map AS MAP (KEY TYPE = text, VALUE TYPE = int4_map);
 
-# We do this dance here to work around #25282
+# We do this dance here to work around database-issues#7544
 $ set-from-sql var=int4_id
 SELECT id FROM mz_objects WHERE name = '_int4';
 $ set-from-sql var=text_id

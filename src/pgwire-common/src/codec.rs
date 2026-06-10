@@ -20,13 +20,13 @@ use std::{fmt, str};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut};
-use mz_ore::cast::{u64_to_usize, CastFrom};
+use mz_ore::cast::{CastFrom, u64_to_usize};
 use mz_ore::netio::{self};
 use tokio::io::{self, AsyncRead, AsyncReadExt};
 
+use crate::FrontendMessage;
 use crate::format::Format;
 use crate::message::{FrontendStartupMessage, VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL};
-use crate::FrontendMessage;
 
 pub const REJECT_ENCRYPTION: u8 = b'N';
 pub const ACCEPT_SSL_ENCRYPTION: u8 = b'S';
@@ -63,8 +63,9 @@ impl<B: BufMut> Pgbuf for B {
     }
 
     fn put_length_i16(&mut self, len: usize) -> Result<(), io::Error> {
-        let len = i16::try_from(len)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "length does not fit in an i16"))?;
+        let len = i16::try_from(len).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "length does not fit in an i16")
+        })?;
         self.put_i16(len);
         Ok(())
     }
@@ -148,7 +149,8 @@ impl FrontendStartupMessage {
                 dst.put_u32(*conn_id);
                 dst.put_u32(*secret_key);
             }
-            _ => panic!("unsupported"),
+            FrontendStartupMessage::SslRequest {} => dst.put_i32(VERSION_SSL),
+            FrontendStartupMessage::GssEncRequest => panic!("unsupported"),
         }
 
         let len = dst.len() - base;
@@ -156,7 +158,7 @@ impl FrontendStartupMessage {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;
@@ -193,7 +195,7 @@ impl FrontendMessage {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;
@@ -241,7 +243,7 @@ pub struct Cursor<'a> {
 impl<'a> Cursor<'a> {
     /// Constructs a new `Cursor` from a byte slice. The cursor will begin
     /// decoding from the beginning of the slice.
-    pub fn new(buf: &'a [u8]) -> Cursor {
+    pub fn new(buf: &'a [u8]) -> Cursor<'a> {
         Cursor { buf }
     }
 

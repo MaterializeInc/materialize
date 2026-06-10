@@ -8,42 +8,33 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
-use std::fmt::{self, Debug, Display};
+use std::fmt::{self, Debug};
 
 use itertools::Itertools;
 use mz_ore::assert_none;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::Data;
-use mz_persist_types::dyn_struct::DynStruct;
-use mz_persist_types::stats::{PartStats, StructStats};
+use mz_persist_types::schema::SchemaId;
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{Datum, GlobalId, RelationDesc, Row, SqlScalarType, Timestamp};
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_timely_util::antichain::AntichainExt;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use tracing::error;
 
-use crate::errors::DataflowError;
+use crate::errors::{CollectionMissing, DataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::SourceData;
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage_types.controller.rs"));
-
 /// Metadata required by a storage instance to read a storage collection
-#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
     /// The persist location where the shards are located.
     pub persist_location: PersistLocation,
-    /// The persist shard id of the remap collection used to reclock this collection.
-    pub remap_shard: Option<ShardId>,
     /// The persist shard containing the contents of this storage collection.
     pub data_shard: ShardId,
-    /// The persist shard containing the status updates for this storage collection.
-    pub status_shard: Option<ShardId>,
     /// The `RelationDesc` that describes the contents of the `data_shard`.
     pub relation_desc: RelationDesc,
     /// The shard id of the txn-wal shard, if `self.data_shard` is managed
@@ -52,11 +43,7 @@ pub struct CollectionMetadata {
 }
 
 impl crate::AlterCompatible for CollectionMetadata {
-    fn alter_compatible(
-        &self,
-        id: mz_repr::GlobalId,
-        other: &Self,
-    ) -> Result<(), self::AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), self::AlterError> {
         if self == other {
             return Ok(());
         }
@@ -66,17 +53,13 @@ impl crate::AlterCompatible for CollectionMetadata {
             // we allow this because if this changes unexpectedly, we will
             // notice in other ways.
             persist_location: _,
-            remap_shard,
             data_shard,
-            status_shard,
             relation_desc,
             txns_shard,
         } = self;
 
         let compatibility_checks = [
-            (remap_shard == &other.remap_shard, "remap_shard"),
             (data_shard == &other.data_shard, "data_shard"),
-            (status_shard == &other.status_shard, "status_shard"),
             (relation_desc == &other.relation_desc, "relation_desc"),
             (txns_shard == &other.txns_shard, "txns_shard"),
         ];
@@ -97,76 +80,17 @@ impl crate::AlterCompatible for CollectionMetadata {
     }
 }
 
-impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
-    fn into_proto(&self) -> ProtoCollectionMetadata {
-        ProtoCollectionMetadata {
-            blob_uri: self.persist_location.blob_uri.clone(),
-            consensus_uri: self.persist_location.consensus_uri.clone(),
-            data_shard: self.data_shard.to_string(),
-            remap_shard: self.remap_shard.map(|s| s.to_string()),
-            status_shard: self.status_shard.map(|s| s.to_string()),
-            relation_desc: Some(self.relation_desc.into_proto()),
-            txns_shard: self.txns_shard.map(|x| x.to_string()),
-        }
-    }
-
-    fn from_proto(value: ProtoCollectionMetadata) -> Result<Self, TryFromProtoError> {
-        Ok(CollectionMetadata {
-            persist_location: PersistLocation {
-                blob_uri: value.blob_uri,
-                consensus_uri: value.consensus_uri,
-            },
-            remap_shard: value
-                .remap_shard
-                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
-                .transpose()?,
-            data_shard: value
-                .data_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
-            status_shard: value
-                .status_shard
-                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
-                .transpose()?,
-            relation_desc: value
-                .relation_desc
-                .into_rust_if_some("ProtoCollectionMetadata::relation_desc")?,
-            txns_shard: value
-                .txns_shard
-                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
-                .transpose()?,
-        })
-    }
-}
-
 /// The subset of [`CollectionMetadata`] that must be durable stored.
-#[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
 pub struct DurableCollectionMetadata {
     pub data_shard: ShardId,
 }
 
-impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
-    fn into_proto(&self) -> ProtoDurableCollectionMetadata {
-        ProtoDurableCollectionMetadata {
-            data_shard: self.data_shard.to_string(),
-        }
-    }
-
-    fn from_proto(value: ProtoDurableCollectionMetadata) -> Result<Self, TryFromProtoError> {
-        Ok(DurableCollectionMetadata {
-            data_shard: value
-                .data_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
-        })
-    }
-}
-
 #[derive(Debug)]
-pub enum StorageError<T> {
+pub enum StorageError {
     /// The source identifier was re-created after having been dropped,
     /// or installed with a different description.
-    SourceIdReused(GlobalId),
+    CollectionIdReused(GlobalId),
     /// The sink identifier was re-created after having been dropped, or
     /// installed with a different description.
     SinkIdReused(GlobalId),
@@ -179,7 +103,7 @@ pub enum StorageError<T> {
     /// The read was at a timestamp before the collection's since
     ReadBeforeSince(GlobalId),
     /// The expected upper of one or more appends was different from the actual upper of the collection
-    InvalidUppers(Vec<InvalidUpper<T>>),
+    InvalidUppers(Vec<InvalidUpper>),
     /// The (client for) the requested cluster instance is missing.
     IngestionInstanceMissing {
         storage_instance_id: StorageInstanceId,
@@ -197,14 +121,24 @@ pub enum StorageError<T> {
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
-    /// The specified resource was exhausted, and is not currently accepting more requests.
-    ResourceExhausted(&'static str),
     /// The specified component is shutting down.
     ShuttingDown(&'static str),
     /// Collection metadata already exists for ID.
     CollectionMetadataAlreadyExists(GlobalId),
     /// Some other collection is already writing to this persist shard.
     PersistShardAlreadyInUse(ShardId),
+    /// Raced with some other process while trying to evolve the schema of a Persist shard.
+    PersistSchemaEvolveRace {
+        global_id: GlobalId,
+        shard_id: ShardId,
+        schema_id: SchemaId,
+        relation_desc: RelationDesc,
+    },
+    /// We tried to evolve the schema of a Persist shard in an invalid way.
+    PersistInvalidSchemaEvolve {
+        global_id: GlobalId,
+        shard_id: ShardId,
+    },
     /// Txn WAL shard already exists.
     TxnWalShardAlreadyExists,
     /// The item that a subsource refers to is unexpectedly missing from the
@@ -225,10 +159,10 @@ pub enum StorageError<T> {
     ReadOnly,
 }
 
-impl<T: Debug + Display + 'static> Error for StorageError<T> {
+impl Error for StorageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::SourceIdReused(_) => None,
+            Self::CollectionIdReused(_) => None,
             Self::SinkIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
             Self::IdentifierInvalid(_) => None,
@@ -240,10 +174,11 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
             Self::DataflowError(err) => Some(err),
             Self::InvalidAlter { .. } => None,
             Self::InvalidUsage(_) => None,
-            Self::ResourceExhausted(_) => None,
             Self::ShuttingDown(_) => None,
             Self::CollectionMetadataAlreadyExists(_) => None,
             Self::PersistShardAlreadyInUse(_) => None,
+            Self::PersistSchemaEvolveRace { .. } => None,
+            Self::PersistInvalidSchemaEvolve { .. } => None,
             Self::TxnWalShardAlreadyExists => None,
             Self::MissingSubsourceReference { .. } => None,
             Self::RtrTimeout(_) => None,
@@ -254,11 +189,11 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
     }
 }
 
-impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
+impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("storage error: ")?;
         match self {
-            Self::SourceIdReused(id) => write!(
+            Self::CollectionIdReused(id) => write!(
                 f,
                 "source identifier was re-created after having been dropped: {id}"
             ),
@@ -309,13 +244,31 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
             Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
             Self::InvalidAlter(err) => std::fmt::Display::fmt(err, f),
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
-            Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
             Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
             Self::CollectionMetadataAlreadyExists(key) => {
                 write!(f, "storage metadata for '{key}' already exists")
             }
             Self::PersistShardAlreadyInUse(shard) => {
                 write!(f, "persist shard already in use: {shard}")
+            }
+            Self::PersistSchemaEvolveRace {
+                global_id,
+                shard_id,
+                ..
+            } => {
+                write!(
+                    f,
+                    "persist raced when trying to evolve the schema of a shard: {global_id}, {shard_id}"
+                )
+            }
+            Self::PersistInvalidSchemaEvolve {
+                global_id,
+                shard_id,
+            } => {
+                write!(
+                    f,
+                    "persist shard evolved in an invalid way: {global_id}, {shard_id}"
+                )
             }
             Self::TxnWalShardAlreadyExists => {
                 write!(f, "txn WAL already exists")
@@ -329,7 +282,10 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
                 reference
             ),
             Self::RtrTimeout(_) => {
-                write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
+                write!(
+                    f,
+                    "timed out before ingesting the source's visible frontier when real-time-recency query issued"
+                )
             }
             Self::RtrDropFailure(_) => write!(
                 f,
@@ -342,9 +298,9 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct InvalidUpper<T> {
+pub struct InvalidUpper {
     pub id: GlobalId,
-    pub current_upper: Antichain<T>,
+    pub current_upper: Antichain<Timestamp>,
 }
 
 #[derive(Debug)]
@@ -360,15 +316,21 @@ impl fmt::Display for AlterError {
     }
 }
 
-impl<T> From<AlterError> for StorageError<T> {
+impl From<AlterError> for StorageError {
     fn from(error: AlterError) -> Self {
         Self::InvalidAlter(error)
     }
 }
 
-impl<T> From<DataflowError> for StorageError<T> {
+impl From<DataflowError> for StorageError {
     fn from(error: DataflowError) -> Self {
         Self::DataflowError(error)
+    }
+}
+
+impl From<CollectionMissing> for StorageError {
+    fn from(err: CollectionMissing) -> Self {
+        Self::IdentifierMissing(err.0)
     }
 }
 
@@ -377,10 +339,11 @@ pub struct TxnsCodecRow;
 
 impl TxnsCodecRow {
     pub fn desc() -> RelationDesc {
-        RelationDesc::empty()
-            .with_column("shard_id", ScalarType::String.nullable(false))
-            .with_column("ts", ScalarType::UInt64.nullable(false))
-            .with_column("batch", ScalarType::Bytes.nullable(true))
+        RelationDesc::builder()
+            .with_column("shard_id", SqlScalarType::String.nullable(false))
+            .with_column("ts", SqlScalarType::UInt64.nullable(false))
+            .with_column("batch", SqlScalarType::Bytes.nullable(true))
+            .finish()
     }
 }
 
@@ -427,14 +390,18 @@ impl TxnsCodec for TxnsCodecRow {
     }
 
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
-        fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<T::Stats> {
-            stats
-                .col::<T>(col)
-                .map_err(|err| error!("unexpected stats type for col {}: {}", col, err))
-                .ok()?
-        }
-        let stats = col::<Option<DynStruct>>(&stats.key, "ok")?;
-        let stats = col::<String>(&stats.some, "shard_id")?;
+        let stats = stats
+            .key
+            .col("ok")?
+            .try_as_optional_struct()
+            .map_err(|err| error!("unexpected stats type for col 'ok': {}", err))
+            .ok()?;
+        let stats = stats
+            .some
+            .col("shard_id")?
+            .try_as_string()
+            .map_err(|err| error!("unexpected stats type for col 'shard_id': {}", err))
+            .ok()?;
         let data_id_str = data_id.to_string();
         Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }

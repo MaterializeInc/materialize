@@ -20,13 +20,22 @@ from typing import IO
 import requests
 
 from materialize import buildkite, spawn
+from materialize.linear import LINEAR_CLOSED_STATE_TYPES
 
 ISSUE_RE = re.compile(
     r"""
     ( TimelyDataflow/timely-dataflow\#(?P<timelydataflow>[0-9]+)
-    | ( materialize\# | materialize/issues/ | \# ) (?P<materialize>[0-9]+)
+    | ( materialize\# | materialize/issues/ ) (?P<materialize>[0-9]+)
     | ( cloud\# | cloud/issues/ ) (?P<cloud>[0-9]+)
     | ( incidents-and-escalations\# | incidents-and-escalations/issues/ ) (?P<incidentsandescalations>[0-9]+)
+    | ( database-issues\# | database-issues/issues/ ) (?P<databaseissues>[0-9]+)
+    | ( terraform-aws-materialize\# | terraform-aws-materialize/issues/ ) (?P<terraformawsmaterialize>[0-9]+)
+    | ( terraform-google-materialize\# | terraform-google-materialize/issues/ ) (?P<terraformgooglematerialize>[0-9]+)
+    | ( materialize-terraform-self-managed\# | materialize-terraform-self-managed/issues/ ) (?P<materializeterraformselfmanaged>[0-9]+)
+    # Linear issue identifiers like linear#SEC-308 or full Linear URLs
+    | (linear\# | linear\.app/\S+/issue/) (?P<linear>[A-Z][A-Z0-9]+-[0-9]+)
+    # only match from the beginning of the line or after a space character to avoid matching Buildkite URLs
+    | (^|\s) \# (?P<ambiguous>[0-9]+)
     )
     """,
     re.VERBOSE,
@@ -37,6 +46,12 @@ GROUP_REPO = {
     "materialize": "MaterializeInc/materialize",
     "cloud": "MaterializeInc/cloud",
     "incidentsandescalations": "MaterializeInc/incidents-and-escalations",
+    "databaseissues": "MaterializeInc/database-issues",
+    "terraformawsmaterialize": "MaterializeInc/terraform-aws-materialize",
+    "terraformgooglematerialize": "MaterializeInc/terraform-google-materialize",
+    "materializeterraformselfmanaged": "MaterializeInc/materialize-terraform-self-managed",
+    "linear": "linear",
+    "ambiguous": None,
 }
 
 REFERENCE_RE = re.compile(
@@ -56,6 +71,8 @@ REFERENCE_RE = re.compile(
     | tracked\ with
     # Used in proto files
     | //\ buf\ breaking:\ ignore
+    # Used in documentation
+    | in\ the\ future
     )
     """,
     re.VERBOSE | re.IGNORECASE,
@@ -74,11 +91,13 @@ IGNORE_RE = re.compile(
     | cockroach\#
     | Liquibase
     # ci/test/lint-buf/README.md
-    | Ignore\ because\ of\ #99999
+    | Ignore\ because\ of\ database-issues#99999
     # src/storage-client/src/controller.rs
     | issues/20211\>
     # src/sql/src/plan/statement.rs
     | issues/20019\>
+    # src/storage/src/storage_state.rs
+    | \#19907$
     )
     """,
     re.VERBOSE | re.IGNORECASE,
@@ -88,20 +107,21 @@ COMMENT_RE = re.compile(r"#|//")
 
 IGNORE_FILENAME_RE = re.compile(
     r"""
-    ( .*\.(svg|png|jpg|jpeg|avro|ico)
+    ( .*\.(svg|png|jpg|jpeg|avro|ico|woff)
     | doc/developer/design/20230223_stabilize_with_mutually_recursive.md
+    | \.(agents|claude)/skills/.*
     )
     """,
     re.VERBOSE,
 )
 
-FILENAME_REFERENCE_RE = re.compile(r".*\.(td|slt|test)\.gh(?P<materialize>[0-9]+)")
+FILENAME_REFERENCE_RE = re.compile(r".*\.(td|slt|test)\.gh(?P<ambiguous>[0-9]+)")
 
 
 @dataclass
 class IssueRef:
-    repository: str
-    issue_id: int
+    repository: str | None
+    issue_id: int | str
     filename: str
     line_number: int
     text: str | None
@@ -164,7 +184,7 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
 
                 # Explain plans can look like issue references
                 if (
-                    group == "materialize"
+                    group == "ambiguous"
                     and int(issue_id) < 100
                     and not is_referenced_with_url
                 ):
@@ -173,7 +193,7 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
                 issue_refs.append(
                     IssueRef(
                         GROUP_REPO[group],
-                        int(issue_id),
+                        issue_id if group == "linear" else int(issue_id),
                         filename,
                         line_number,
                         text.strip(),
@@ -183,7 +203,8 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
     return issue_refs
 
 
-def is_issue_closed_on_github(repository: str, issue_id: int) -> bool:
+def is_issue_closed_on_github(repository: str | None, issue_id: int) -> bool:
+    assert repository
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -208,10 +229,53 @@ def is_issue_closed_on_github(repository: str, issue_id: int) -> bool:
         )
 
     issue_json = response.json()
-    assert (
-        issue_json["number"] == issue_id
-    ), f"Returned issue number {issue_json['number']} is not the expected issue number {issue_id}"
+    # We can't check the issue number anymore because issues can have moved
     return issue_json["state"] == "closed"
+
+
+def is_issue_closed_on_linear(identifier: str) -> bool:
+    token = os.getenv("LINEAR_READ_ONLY_TOKEN")
+    if not token:
+        if not os.getenv("CI"):
+            print(
+                f"Can't check Linear issue {identifier}, set LINEAR_READ_ONLY_TOKEN environment variable"
+            )
+        return False
+
+    parts = identifier.split("-", 1)
+    if len(parts) != 2:
+        return False
+    team_key, number_str = parts
+    try:
+        number = int(number_str)
+    except ValueError:
+        return False
+
+    query = """
+    query($teamKey: String!, $number: Float!) {
+      issues(filter: { number: { eq: $number }, team: { key: { eq: $teamKey } } }) {
+        nodes {
+          state { type }
+        }
+      }
+    }
+    """
+
+    response = requests.post(
+        "https://api.linear.app/graphql",
+        headers={"Authorization": token, "Content-Type": "application/json"},
+        json={"query": query, "variables": {"teamKey": team_key, "number": number}},
+    )
+
+    if response.status_code != 200:
+        return False
+
+    result = response.json()
+    nodes = result.get("data", {}).get("issues", {}).get("nodes", [])
+    if not nodes:
+        return False
+
+    return nodes[0]["state"]["type"] in LINEAR_CLOSED_STATE_TYPES
 
 
 def filter_changed_lines(issue_refs: list[IssueRef]) -> list[IssueRef]:
@@ -227,17 +291,43 @@ def filter_changed_lines(issue_refs: list[IssueRef]) -> list[IssueRef]:
     ]
 
 
+def filter_ambiguous_issues(
+    issue_refs: list[IssueRef],
+) -> tuple[list[IssueRef], list[IssueRef]]:
+    return [issue_ref for issue_ref in issue_refs if issue_ref.repository], [
+        issue_ref for issue_ref in issue_refs if not issue_ref.repository
+    ]
+
+
 def filter_closed_issues(issue_refs: list[IssueRef]) -> list[IssueRef]:
-    issues = {(issue_ref.repository, issue_ref.issue_id) for issue_ref in issue_refs}
-    closed_issues = {
-        (repository, issue)
-        for repository, issue in issues
-        if is_issue_closed_on_github(repository, issue)
+    github_issues = {
+        (ref.repository, ref.issue_id)
+        for ref in issue_refs
+        if ref.repository != "linear"
     }
+    closed_github = {
+        (repository, issue)
+        for repository, issue in github_issues
+        if isinstance(issue, int) and is_issue_closed_on_github(repository, issue)
+    }
+
+    linear_identifiers = {
+        ref.issue_id for ref in issue_refs if ref.repository == "linear"
+    }
+    closed_linear = {
+        identifier
+        for identifier in linear_identifiers
+        if is_issue_closed_on_linear(str(identifier))
+    }
+
     return [
-        issue_ref
-        for issue_ref in issue_refs
-        if (issue_ref.repository, issue_ref.issue_id) in closed_issues
+        ref
+        for ref in issue_refs
+        if (ref.repository == "linear" and ref.issue_id in closed_linear)
+        or (
+            ref.repository != "linear"
+            and (ref.repository, ref.issue_id) in closed_github
+        )
     ]
 
 
@@ -285,16 +375,36 @@ def main() -> int:
         ):
             issue_refs.extend(detect_referenced_issues(filename))
 
+    issue_refs, ambiguous_refs = filter_ambiguous_issues(issue_refs)
+
     if args.changed_lines_only:
         issue_refs = filter_changed_lines(issue_refs)
+        ambiguous_refs = filter_changed_lines(ambiguous_refs)
 
     issue_refs = filter_closed_issues(issue_refs)
 
-    for issue_ref in issue_refs:
-        url = buildkite.inline_link(
-            f"https://github.com/{issue_ref.repository}/issues/{issue_ref.issue_id}",
-            f"#{issue_ref.issue_id}",
+    for issue_ref in ambiguous_refs:
+        print(f"--- Ambiguous issue reference: #{issue_ref.issue_id}")
+        if issue_ref.text is not None:
+            print(f"{issue_ref.filename}:{issue_ref.line_number}:")
+            print(issue_ref.text)
+        else:
+            print(f"{issue_ref.filename} (filename)")
+        print(
+            f"Use database-issues#{issue_ref.issue_id} or materialize#{issue_ref.issue_id} instead to have an unambiguous reference"
         )
+
+    for issue_ref in issue_refs:
+        if issue_ref.repository == "linear":
+            url = buildkite.inline_link(
+                f"https://linear.app/materializeinc/issue/{issue_ref.issue_id}",
+                str(issue_ref.issue_id),
+            )
+        else:
+            url = buildkite.inline_link(
+                f"https://github.com/{issue_ref.repository}/issues/{issue_ref.issue_id}",
+                f"{issue_ref.repository}#{issue_ref.issue_id}",
+            )
         print(f"--- Issue is referenced in comment but already closed: {url}")
         if issue_ref.text is not None:
             print(f"{issue_ref.filename}:{issue_ref.line_number}:")
@@ -302,7 +412,7 @@ def main() -> int:
         else:
             print(f"{issue_ref.filename} (filename)")
 
-    return 1 if len(issue_refs) else 0
+    return 1 if issue_refs + ambiguous_refs else 0
 
 
 if __name__ == "__main__":

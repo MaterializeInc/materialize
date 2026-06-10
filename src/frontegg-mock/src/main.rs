@@ -17,10 +17,12 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_frontegg_mock::{FronteggMockServer, UserConfig, UserRole};
+use mz_frontegg_mock::models::{UserConfig, UserRole};
+use mz_frontegg_mock::server::FronteggMockServer;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::now::SYSTEM_TIME;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Frontegg mock server", long_about = None)]
@@ -55,14 +57,26 @@ struct Args {
     /// JSON of the form: `[{"id":"1", "name": "Organization Admin"}, {"id":"2", "name": "Organization Member"}]`
     #[clap(long)]
     roles: Option<String>,
+    /// JWT `expires_in` (seconds). Lower values speed up the background
+    /// refresh task; useful for tests that need to observe refresh-driven
+    /// behavior on a short timescale.
+    #[clap(long, default_value_t = 500)]
+    expires_in_secs: i64,
 }
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
     let args: Args = cli::parse_args(CliConfig::default());
     let res = run(args).await;
     if let Err(err) = res {
-        eprintln!("frontegg-mock: fatal: {}", err.display_with_causes());
+        tracing::error!("frontegg-mock: fatal: {}", err.display_with_causes());
         std::process::exit(1);
     }
 }
@@ -119,7 +133,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         tenant_api_tokens,
         role_permissions,
         SYSTEM_TIME.clone(),
-        500,
+        args.expires_in_secs,
         None,
         roles,
     )
@@ -128,6 +142,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     println!("frontegg-mock listening...");
     println!(" HTTP address: {}", server.base_url);
 
-    server.handle.await??;
+    server.handle.await?;
     anyhow::bail!("serving tasks unexpectedly exited");
 }

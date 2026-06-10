@@ -40,23 +40,23 @@ Int64(-100)
 build-datum
 -10.45
 ----
-Float64(OrderedFloat(-10.45))
+Float64(-10.45)
 
 build-datum
 34.56
 ----
-Float64(OrderedFloat(34.56))
+Float64(34.56)
 
 build-datum
 -2.234
 float64
 ----
-Float64(OrderedFloat(-2.234))
+Float64(-2.234)
 
 build-datum
 1.1 float32
 ----
-Float32(OrderedFloat(1.1))
+Float32(1.1)
 
 build-datum
 "hello" string
@@ -91,17 +91,17 @@ Int32(5)
 build-datum
 5.2 numeric
 ----
-Numeric(OrderedDecimal(5.2))
+Numeric(5.2)
 
 build-datum
 "2021-01-02 00:12:59" timestamp
 ----
-Timestamp(CheckedTimestamp { t: 2021-01-02T00:12:59 })
+Timestamp(2021-01-02T00:12:59)
 
 build-datum
 "1999-12-31 23:42:23.342" timestamp
 ----
-Timestamp(CheckedTimestamp { t: 1999-12-31T23:42:23.342 })
+Timestamp(1999-12-31T23:42:23.342)
 
 build-datum
 2 (list jsonb (user 100))

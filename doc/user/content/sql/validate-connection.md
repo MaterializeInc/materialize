@@ -14,11 +14,9 @@ system.
 
 ## Syntax
 
-{{< diagram "validate-connection.svg" >}}
-
-Field              | Use
--------------------|-----------
-_connection_name_  | The identifier of the connection you want to validate.
+```mzsql
+VALIDATE CONNECTION <connection_name>;
+```
 
 ## Description
 
@@ -33,8 +31,7 @@ a validation error.
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the containing schema.
-- `USAGE` privileges on the connection.
+{{% include-headless "/headless/sql-command-privileges/validate-connection" %}}
 
 ## Related pages
 

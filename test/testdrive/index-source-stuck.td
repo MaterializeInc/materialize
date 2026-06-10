@@ -9,14 +9,15 @@
 
 > DROP CLUSTER IF EXISTS cluster1 CASCADE;
 > DROP CLUSTER IF EXISTS cluster2 CASCADE;
-> CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE '1'));
-> CREATE CLUSTER cluster2 REPLICAS (replica1 (SIZE '1'));
-> CREATE SOURCE src IN CLUSTER cluster1 FROM LOAD GENERATOR counter;
-> CREATE MATERIALIZED VIEW mv IN CLUSTER cluster2 AS SELECT * FROM src;
+> CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
+> CREATE CLUSTER cluster2 REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
+> CREATE SOURCE src IN CLUSTER cluster1 FROM LOAD GENERATOR counter (UP TO 100);
+> CREATE TABLE src_tbl FROM SOURCE src;
+> CREATE MATERIALIZED VIEW mv IN CLUSTER cluster2 AS SELECT * FROM src_tbl;
 > SET cluster = cluster2;
 
-# Prevent us from getting stuck, see #28328
-> SELECT min(counter) FROM src
+# Prevent us from getting stuck, see database-issues#8300
+> SELECT min(counter) FROM src_tbl
 1
 > SELECT min(counter) FROM mv
 1
@@ -32,12 +33,12 @@
 > SET transaction_isolation = serializable;
 
 # Should return instantly since we have selected serializable isolation
-> SELECT min(counter) FROM src;
+> SELECT min(counter) FROM src_tbl;
 1
 
 # Should return instantly, even inside of a transaction
 # > BEGIN
-# > SELECT * FROM src;
+# > SELECT * FROM src_tbl;
 # > COMMIT
 
 # Should return instantly since it only uses the materialized view and we have selected serializable isolation
@@ -53,8 +54,12 @@
 > CREATE INDEX IN CLUSTER cluster2 ON mv (counter);
 
 # Check that index is actually used
-? EXPLAIN SELECT min(counter) FROM mv;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT min(counter) FROM mv;
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[min(#0{counter})]
+        ReadIndex on=mv mv_counter_idx=[*** full scan ***]
   Return
     Union
       Get l0
@@ -65,10 +70,6 @@ Explained Query:
               Get l0
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[min(#0)]
-        ReadIndex on=mv mv_counter_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.mv_counter_idx (*** full scan ***)
@@ -77,6 +78,7 @@ Target cluster: cluster2
 
 > SELECT 1
 1
+
 # Should return instantly since it only uses the index and we have selected serializable isolation
 > SELECT min(counter) FROM mv;
 1

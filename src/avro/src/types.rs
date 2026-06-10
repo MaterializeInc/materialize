@@ -28,6 +28,7 @@ use std::fmt;
 
 use chrono::NaiveDateTime;
 use enum_kinds::EnumKind;
+use itertools::Itertools;
 use serde_json::Value as JsonValue;
 
 use crate::schema::{RecordField, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
@@ -91,7 +92,7 @@ impl From<Scalar> for Value {
 
 /// Represents any valid Avro value
 /// More information about Avro values can be found in the
-/// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)
+/// [Avro Specification](https://avro.apache.org/docs/++version++/specification/#schema-declaration)
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     // Fixed-length types
@@ -352,7 +353,7 @@ impl ToAvro for JsonValue {
 impl Value {
     /// Validate the value against the given [Schema](../schema/enum.Schema.html).
     ///
-    /// See the [Avro specification](https://avro.apache.org/docs/current/spec.html)
+    /// See the [Avro specification](https://avro.apache.org/docs/++version++/specification/)
     /// for the full set of rules of schema validation.
     pub fn validate(&self, schema: SchemaNode) -> bool {
         match (self, schema.inner) {
@@ -417,7 +418,7 @@ impl Value {
             }
             (&Value::Record(ref record_fields), SchemaPiece::Record { fields, .. }) => {
                 fields.len() == record_fields.len()
-                    && fields.iter().zip(record_fields.iter()).all(
+                    && fields.iter().zip_eq(record_fields.iter()).all(
                         |(field, &(ref name, ref value))| {
                             let node = schema.step(&field.schema);
                             field.name == *name && value.validate(node)
@@ -575,48 +576,59 @@ mod tests {
         )
         .unwrap();
 
-        assert!(Value::Record(vec![
-            ("a".to_string(), Value::Long(42i64)),
-            ("b".to_string(), Value::String("foo".to_string())),
-        ])
-        .validate(schema.top_node()));
+        assert!(
+            Value::Record(vec![
+                ("a".to_string(), Value::Long(42i64)),
+                ("b".to_string(), Value::String("foo".to_string())),
+            ])
+            .validate(schema.top_node())
+        );
 
-        assert!(!Value::Record(vec![
-            ("b".to_string(), Value::String("foo".to_string())),
-            ("a".to_string(), Value::Long(42i64)),
-        ])
-        .validate(schema.top_node()));
+        assert!(
+            !Value::Record(vec![
+                ("b".to_string(), Value::String("foo".to_string())),
+                ("a".to_string(), Value::Long(42i64)),
+            ])
+            .validate(schema.top_node())
+        );
 
-        assert!(!Value::Record(vec![
-            ("a".to_string(), Value::Boolean(false)),
-            ("b".to_string(), Value::String("foo".to_string())),
-        ])
-        .validate(schema.top_node()));
+        assert!(
+            !Value::Record(vec![
+                ("a".to_string(), Value::Boolean(false)),
+                ("b".to_string(), Value::String("foo".to_string())),
+            ])
+            .validate(schema.top_node())
+        );
 
-        assert!(!Value::Record(vec![
-            ("a".to_string(), Value::Long(42i64)),
-            ("c".to_string(), Value::String("foo".to_string())),
-        ])
-        .validate(schema.top_node()));
+        assert!(
+            !Value::Record(vec![
+                ("a".to_string(), Value::Long(42i64)),
+                ("c".to_string(), Value::String("foo".to_string())),
+            ])
+            .validate(schema.top_node())
+        );
 
-        assert!(!Value::Record(vec![
-            ("a".to_string(), Value::Long(42i64)),
-            ("b".to_string(), Value::String("foo".to_string())),
-            ("c".to_string(), Value::Null),
-        ])
-        .validate(schema.top_node()));
+        assert!(
+            !Value::Record(vec![
+                ("a".to_string(), Value::Long(42i64)),
+                ("b".to_string(), Value::String("foo".to_string())),
+                ("c".to_string(), Value::Null),
+            ])
+            .validate(schema.top_node())
+        );
     }
 
     #[mz_ore::test]
     fn validate_decimal() {
-        assert!(Value::Decimal(DecimalValue {
-            unscaled: vec![7],
-            precision: 12,
-            scale: 5
-        })
-        .validate(
-            Schema::from_str(
-                r#"
+        assert!(
+            Value::Decimal(DecimalValue {
+                unscaled: vec![7],
+                precision: 12,
+                scale: 5
+            })
+            .validate(
+                Schema::from_str(
+                    r#"
             {
                 "type": "bytes",
                 "logicalType": "decimal",
@@ -624,19 +636,21 @@ mod tests {
                 "scale": 5
             }
         "#
+                )
+                .unwrap()
+                .top_node()
             )
-            .unwrap()
-            .top_node()
-        ));
+        );
 
-        assert!(!Value::Decimal(DecimalValue {
-            unscaled: vec![7],
-            precision: 13,
-            scale: 5
-        })
-        .validate(
-            Schema::from_str(
-                r#"
+        assert!(
+            !Value::Decimal(DecimalValue {
+                unscaled: vec![7],
+                precision: 13,
+                scale: 5
+            })
+            .validate(
+                Schema::from_str(
+                    r#"
             {
                 "type": "bytes",
                 "logicalType": "decimal",
@@ -644,9 +658,10 @@ mod tests {
                 "scale": 5
             }
         "#
+                )
+                .unwrap()
+                .top_node()
             )
-            .unwrap()
-            .top_node()
-        ));
+        );
     }
 }

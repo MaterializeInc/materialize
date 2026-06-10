@@ -10,7 +10,7 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 

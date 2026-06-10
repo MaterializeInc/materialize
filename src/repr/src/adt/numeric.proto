@@ -12,10 +12,10 @@ syntax = "proto3";
 package mz_repr.adt.numeric;
 
 message ProtoNumericMaxScale {
-    uint32 value = 1;
+  uint32 value = 1;
 }
 
 // Helper struct for representing `Option<NumericMaxScale>`.
 message ProtoOptionalNumericMaxScale {
-    ProtoNumericMaxScale value = 1;
+  ProtoNumericMaxScale value = 1;
 }

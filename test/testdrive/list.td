@@ -36,16 +36,16 @@ $ set-regex match=^u\d*$ replacement=<GID>
 > CREATE TYPE test_schema.bool AS LIST (ELEMENT TYPE = float4)
 
 > SHOW TYPES
-name
---------------
-bool
-custom
-another_custom
+name            comment
+-----------------------
+bool            ""
+custom          ""
+another_custom  ""
 
 > SHOW TYPES FROM test_schema
-name
-----
-bool
+name  comment
+-------------
+bool  ""
 
 ! DROP TYPE bool
 contains:cannot drop type bool because it is required by the database system

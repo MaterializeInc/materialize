@@ -19,6 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
@@ -27,29 +28,29 @@ use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHand
 use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::critical::Opaque;
 use mz_persist_client::metrics::Metrics as PersistMetrics;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+use mz_timestamp_oracle::TimestampOracle;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
-use mz_timestamp_oracle::TimestampOracle;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::operator::DataSubscribeTask;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
-use url::Url;
 
+use crate::maelstrom::Args;
 use crate::maelstrom::api::{Body, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
 use crate::maelstrom::services::{
     CachingBlob, MaelstromBlob, MaelstromConsensus, MemTimestampOracle,
 };
-use crate::maelstrom::Args;
 
 #[derive(Debug)]
 pub struct Transactor {
@@ -75,8 +76,7 @@ impl Transactor {
             mz_txn_wal::all_dyncfgs(client.dyncfgs().clone()),
             Arc::new(TxnMetrics::new(&MetricsRegistry::new())),
             txns_id,
-            Arc::new(StringSchema),
-            Arc::new(UnitSchema),
+            Opaque::encode(&0u64),
         )
         .await;
         oracle.apply_write(init_ts.into()).await;
@@ -375,6 +375,14 @@ impl Service for TransactorService {
 
         let mut config =
             PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
+        {
+            // We only use the Postgres tuned queries when connected to vanilla
+            // Postgres, so we always want to enable them for testing.
+            let mut updates = ConfigUpdates::default();
+            updates.add(&mz_persist::postgres::USE_POSTGRES_TUNED_QUERIES, true);
+            config.apply_from(&updates);
+        }
+
         let metrics_registry = MetricsRegistry::new();
         let metrics = Arc::new(PersistMetrics::new(&config, &metrics_registry));
 
@@ -385,7 +393,6 @@ impl Service for TransactorService {
                     blob_uri,
                     Box::new(config.clone()),
                     metrics.s3_blob.clone(),
-                    Arc::clone(&config.configs),
                 )
                 .await
                 .expect("blob_uri should be valid");
@@ -420,6 +427,7 @@ impl Service for TransactorService {
                     consensus_uri,
                     Box::new(config.clone()),
                     metrics.postgres_consensus.clone(),
+                    Arc::clone(&config.configs),
                 )
                 .expect("consensus_uri should be valid");
                 loop {
@@ -437,7 +445,7 @@ impl Service for TransactorService {
             Arc::new(UnreliableConsensus::new(consensus, unreliable));
 
         // Wire up the TransactorService.
-        let isolated_runtime = Arc::new(IsolatedRuntime::default());
+        let isolated_runtime = Arc::new(IsolatedRuntime::new_for_tests());
         let pubsub_sender = PubSubClientConnection::noop().sender;
         let shared_states = Arc::new(StateCache::new(
             &config,
@@ -455,13 +463,11 @@ impl Service for TransactorService {
         )?;
         // It's an annoying refactor to add an oracle_uri cli flag, so for now,
         // piggy-back on --consensus_uri.
-        let oracle_uri = args.consensus_uri.as_ref().map(|x| {
-            Url::parse(x).unwrap_or_else(|err| panic!("failed to parse oracle_uri {}: {}", x, err))
-        });
+        let oracle_uri = args.consensus_uri.clone();
         let oracle_scheme = oracle_uri.as_ref().map(|x| (x.scheme(), x));
         let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp> + Send> = match oracle_scheme {
             Some(("postgres", uri)) | Some(("postgresql", uri)) => {
-                let cfg = PostgresTimestampOracleConfig::new(uri.as_str(), &metrics_registry);
+                let cfg = PostgresTimestampOracleConfig::new(uri, &metrics_registry);
                 Box::new(
                     PostgresTimestampOracle::open(
                         cfg,

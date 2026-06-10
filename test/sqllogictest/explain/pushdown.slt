@@ -22,20 +22,25 @@ CREATE TABLE numbers (
 );
 
 query T multiline
-EXPLAIN SELECT * FROM numbers where value > 10;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM numbers where value > 10;
 ----
 Explained Query:
-  Filter (#0 > 10)
+  Filter (#0{value} > 10)
     ReadStorage materialize.public.numbers
 
 Source materialize.public.numbers
-  filter=((#0 > 10))
+  filter=((#0{value} > 10))
 
 Target cluster: quickstart
 
 EOF
 
-query error db error: ERROR: EXPLAIN FILTER PUSHDOWN is not supported
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_explain_pushdown = false
+----
+COMPLETE 0
+
+query error EXPLAIN FILTER PUSHDOWN is not available
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10;
 
 # Even when the feature flag is enabled, the feature is blocked in adapter for most queries
@@ -45,7 +50,7 @@ ALTER SYSTEM SET enable_explain_pushdown = true
 ----
 COMPLETE 0
 
-query error db error: ERROR: EXPLAIN FILTER PUSHDOWN queries for this explainee type are not supported
+query error EXPLAIN FILTER PUSHDOWN queries for this explainee type are not supported
 EXPLAIN FILTER PUSHDOWN FOR CREATE MATERIALIZED VIEW foo AS SELECT * FROM numbers where value > 10;
 
 # However, EXPLAIN FILTER PUSHDOWN FOR SELECT is now supported
@@ -63,12 +68,12 @@ INSERT INTO numbers VALUES (1), (2), (3);
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10;
 ----
-materialize.public.numbers  963  0  1  0
+materialize.public.numbers  1313  0  1  0
 
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value < 10;
 ----
-materialize.public.numbers  963  963  1  1
+materialize.public.numbers  1313  1313  1  1
 
 # Verify that pushdown of jsonb_get_string is infallible. Before this was
 # fixed, a filter expression on a jsonb field that is not present in all parts
@@ -93,11 +98,47 @@ INSERT INTO jsonb_fields VALUES (2, '{ "other-field": "value" }');
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM jsonb_fields where timestamp > 1000 AND payload->>'field' = 'not-value';
 ----
-materialize.public.jsonb_fields  1859  0  2  0
+materialize.public.jsonb_fields  3018  0  2  0
+
+# Regression test for PER-6: filter pushdown over a CASE that picks between two
+# JSON columns must not prune parts where accessing a key only present in one
+# branch could yield NULL on the other. Before the fix, the union of two `Nested`
+# specs with disjoint keys discarded one side's contribution, so this query
+# returned 0 instead of 3 (or panicked under audit).
+
+statement ok
+CREATE TABLE case_jsonb (flag bool, j1 jsonb, j2 jsonb)
+
+statement ok
+INSERT INTO case_jsonb VALUES
+    (true,  '{"x":"a"}', '{"y":"b"}'),
+    (true,  '{"x":"a"}', '{"y":"b"}'),
+    (true,  '{"x":"a"}', '{"y":"b"}'),
+    (false, '{"x":"a"}', '{"y":"b"}'),
+    (false, '{"x":"a"}', '{"y":"b"}')
+
+query I
+SELECT count(*) FROM case_jsonb
+WHERE ((CASE WHEN flag THEN j1 ELSE j2 END) ->> 'y') IS NULL
+----
+3
+
+# EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW is also supported
+
+statement ok
+CREATE MATERIALIZED VIEW big_numbers AS SELECT * FROM numbers WHERE value > 10000;
+
+statement ok
+SELECT mz_unsafe.mz_sleep(3);
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW big_numbers
+----
+materialize.public.numbers  1313  0  1  0
 
 # EXPLAIN FILTER PUSHDOWN should work even if there are no replicas.
 statement ok
-CREATE CLUSTER no_replicas (SIZE '1', REPLICATION FACTOR 0);
+CREATE CLUSTER no_replicas (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0);
 
 statement ok
 SET CLUSTER = no_replicas;
@@ -105,21 +146,11 @@ SET CLUSTER = no_replicas;
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM jsonb_fields where timestamp > 1000 AND payload->>'field' = 'not-value';
 ----
-materialize.public.jsonb_fields  1859  0  2  0
+materialize.public.jsonb_fields  3018  0  2  0
 
 # ----------------------------------------
 # Cleanup
 # ----------------------------------------
-
-# EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW is also supported
-
-statement ok
-CREATE MATERIALIZED VIEW big_numbers AS SELECT * FROM numbers WHERE value > 10000;
-
-query TIIII
-EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW big_numbers
-----
-materialize.public.numbers  0  0  0  0
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = false

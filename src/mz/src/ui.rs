@@ -20,7 +20,8 @@ use mz_ore::option::OptionExt;
 
 use serde::{Deserialize, Serialize};
 use serde_aux::serde_introspection::serde_introspect;
-use tabled::{Style, Table, Tabled};
+use tabled::settings::Style;
+use tabled::{Table, Tabled};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 use crate::error::Error;
@@ -75,7 +76,7 @@ impl OutputFormatter {
         if self.no_color {
             eprintln!("\n* Warning * {}", msg);
         } else {
-            let _ = self.print_with_color("\n* Warning *", Color::Yellow, true)?;
+            self.print_with_color("\n* Warning *", Color::Yellow, true)?;
             eprintln!(" {}", msg);
         }
 

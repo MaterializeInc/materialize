@@ -14,13 +14,9 @@ from materialize.checks.checks import Check
 
 class Commit(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE commit_table (f1 INTEGER);
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -50,11 +46,7 @@ class Commit(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT COUNT(*), COUNT(f1), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM commit_table;
                 40 40 40 1 40
-           """
-            )
-        )
+           """))

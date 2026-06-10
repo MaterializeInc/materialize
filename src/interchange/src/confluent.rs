@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use byteorder::{BigEndian, ByteOrder};
 
 /// Extracts the schema_id placed in front of the serialized message by the confluent stack
@@ -59,8 +59,7 @@ pub fn extract_protobuf_header(buf: &[u8]) -> Result<(i32, &[u8])> {
         Some(0) => Ok((schema_id, &buf[1..])),
         Some(message_id) => bail!(
             "unsupported Confluent-style protobuf message descriptor id: \
-                expected 0, but found: {}. \
-                See https://github.com/MaterializeInc/materialize/issues/9250",
+                expected 0, but found: {}",
             message_id
         ),
         None => bail!(

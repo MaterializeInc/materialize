@@ -1,0 +1,186 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+import {
+  Card,
+  Grid,
+  GridItem,
+  HStack,
+  Text,
+  useTheme,
+  VStack,
+} from "@chakra-ui/react";
+import React from "react";
+import { Link as RouterLink } from "react-router-dom";
+
+import { createNamespace } from "~/api/materialize";
+import { OUTDATED_THRESHOLD_SECONDS } from "~/api/materialize/cluster/materializationLag";
+import StatusPill from "~/components/StatusPill";
+import TextLink from "~/components/TextLink";
+import { DetailItem } from "~/platform/connectors/AsideBox";
+import { absoluteClusterPath } from "~/platform/routeHelpers";
+import { useAllClusters } from "~/store/allClusters";
+import { useRegionSlug } from "~/store/environments";
+import { MaterializeTheme } from "~/theme";
+import { pluralize } from "~/util";
+import { formatIntervalShort } from "~/utils/format";
+
+import {
+  bucketForHydration,
+  HYDRATION_LABELS,
+  STATUS_COLOR_SCHEMES,
+} from "./filters";
+import { pMaxFromHistory } from "./freshnessHistory";
+import { MaintainedObjectListItem, useObjectFreshnessHistory } from "./queries";
+
+const OUTDATED_MS = OUTDATED_THRESHOLD_SECONDS * 1_000;
+const WARNING_MS = OUTDATED_MS / 2;
+
+/** Formats a replica for inline display, e.g. `r1 (xsmall)`. */
+const formatReplicaName = (replica: { name: string; size: string | null }) =>
+  replica.size ? `${replica.name} (${replica.size})` : replica.name;
+
+export interface ObjectDetailsCardProps {
+  item: MaintainedObjectListItem;
+  freshnessLookbackMinutes: number;
+}
+
+export const ObjectDetailsCard = ({
+  item,
+  freshnessLookbackMinutes,
+}: ObjectDetailsCardProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const regionSlug = useRegionSlug();
+  const { getClusterById } = useAllClusters();
+
+  const cluster = item.cluster ? getClusterById(item.cluster.id) : undefined;
+  const namespace = createNamespace(item.databaseName, item.schemaName);
+  const replicas = cluster?.replicas ?? [];
+
+  const { data: freshness } = useObjectFreshnessHistory({
+    objectId: item.id,
+    lookbackMs: freshnessLookbackMinutes * 60 * 1000,
+  });
+  const badgeLag = freshness
+    ? pMaxFromHistory(freshness.historicalData, item.id)
+    : item.lag;
+
+  return (
+    <Card
+      p={6}
+      width="100%"
+      borderRadius="md"
+      border="1px"
+      borderColor={colors.border.primary}
+    >
+      <VStack align="start" spacing={4} width="100%">
+        <HStack spacing={3} alignItems="center" width="100%" minW={0}>
+          <Text
+            textStyle="heading-lg"
+            noOfLines={1}
+            title={item.name}
+            minW={0}
+            flex="1"
+          >
+            {item.name}
+          </Text>
+          <LagBadge lag={badgeLag} />
+          <HydrationBadge item={item} />
+        </HStack>
+
+        <Text textStyle="heading-sm" color={colors.foreground.secondary}>
+          Overview
+        </Text>
+
+        <Grid templateColumns="1fr 1fr" gap={6} width="100%">
+          <GridItem minW={0}>
+            <VStack align="stretch" spacing={2} width="100%">
+              <DetailItem label="Object name">{item.name}</DetailItem>
+              <DetailItem label="Object type">{item.objectType}</DetailItem>
+              <DetailItem label="Schema">{namespace ?? "-"}</DetailItem>
+              {item.sourceType && (
+                <DetailItem label="Source type">{item.sourceType}</DetailItem>
+              )}
+            </VStack>
+          </GridItem>
+          <GridItem minW={0}>
+            <VStack align="stretch" spacing={2} width="100%">
+              <DetailItem label="Cluster">
+                {item.cluster ? (
+                  <TextLink
+                    as={RouterLink}
+                    to={absoluteClusterPath(regionSlug, item.cluster)}
+                  >
+                    {item.cluster.name}
+                  </TextLink>
+                ) : (
+                  "-"
+                )}
+              </DetailItem>
+              {cluster?.managed !== null && cluster?.managed !== undefined && (
+                <DetailItem label="Cluster type">
+                  {cluster.managed ? "managed" : "unmanaged"}
+                </DetailItem>
+              )}
+              {replicas.length > 0 && (
+                <DetailItem
+                  label={pluralize(replicas.length, "Replica", "Replicas")}
+                >
+                  {replicas.map(formatReplicaName).join(", ")}
+                </DetailItem>
+              )}
+            </VStack>
+          </GridItem>
+        </Grid>
+      </VStack>
+    </Card>
+  );
+};
+
+const HydrationBadge = ({ item }: { item: MaintainedObjectListItem }) => {
+  const bucket = bucketForHydration(item.hydratedReplicas, item.totalReplicas);
+  if (!bucket) return null;
+  return (
+    <StatusPill
+      status={bucket}
+      label={HYDRATION_LABELS[bucket]}
+      colorScheme={STATUS_COLOR_SCHEMES[bucket]}
+      flexShrink={0}
+    />
+  );
+};
+
+const LagBadge = ({ lag }: { lag: MaintainedObjectListItem["lag"] }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  if (!lag) return null;
+
+  const bg =
+    lag.ms >= OUTDATED_MS
+      ? colors.accent.red
+      : lag.ms >= WARNING_MS
+        ? colors.accent.orange
+        : colors.accent.green;
+
+  return (
+    <Text
+      textStyle="text-small-heavy"
+      px={2}
+      py={0.5}
+      borderRadius="full"
+      bg={bg}
+      color={colors.foreground.primaryButtonLabel}
+      whiteSpace="nowrap"
+      flexShrink={0}
+    >
+      {formatIntervalShort(lag.value)} behind
+    </Text>
+  );
+};
+
+export default ObjectDetailsCard;

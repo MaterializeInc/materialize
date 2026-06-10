@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Deploys are fast, do them quickly
+priority: 30
+
 steps:
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz.version
     timeout_in_minutes: 30
@@ -38,13 +41,6 @@ steps:
       queue: linux-x86_64-small
     concurrency: 1
     concurrency_group: deploy-mz/docker
-
-  - command: bin/pyactivate -m ci.deploy_mz.macos
-    agents:
-      queue: mac-x86_64
-    timeout_in_minutes: 30
-    concurrency: 1
-    concurrency_group: deploy-mz/macos/x86_64
 
   - command: bin/pyactivate -m ci.deploy_mz.macos
     agents:

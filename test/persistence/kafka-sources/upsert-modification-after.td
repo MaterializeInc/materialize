@@ -28,10 +28,10 @@ $ set schema={
 $ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=${keyschema} schema=${schema} start-iteration=2500 repeat=5000
 {"f1": ${kafka-ingest.iteration}} {"f2": "a${kafka-ingest.iteration}"}
 
-> SELECT COUNT(*), MIN(f1), MAX(f1) FROM upsert_modification;
+> SELECT COUNT(*), MIN(f1), MAX(f1) FROM upsert_modification_tbl;
 10000 0 9999
 
-> SELECT MIN(f1), MAX(f1), COUNT(*) FROM upsert_modification WHERE f2 LIKE 'a%';
+> SELECT MIN(f1), MAX(f1), COUNT(*) FROM upsert_modification_tbl WHERE f2 LIKE 'a%';
 2500 7499 5000
 
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
@@ -40,7 +40,7 @@ mammalmore:moose
 mammal1:
 mammal1:mouse
 
-> select * from texttext
+> select * from texttext_tbl
 key           text  kafka_partition  mz_offset
 ----------------------------------------------
 fish          fish  0                0
@@ -48,7 +48,7 @@ bírdmore      géese 0                5
 mammal1       mouse 0                8
 mammalmore    moose 0                6
 
-> select * from textbytes
+> select * from textbytes_tbl
 key           data            kafka_partition  mz_offset
 -------------------------------------------------------
 fish          fish            0                0
@@ -56,7 +56,7 @@ bírdmore      g\xc3\xa9ese    0                5
 mammal1       mouse           0                8
 mammalmore    moose           0                6
 
-> select * from bytestext
+> select * from bytestext_tbl
 key             text  kafka_partition  mz_offset
 ------------------------------------------------
 fish            fish  0                0
@@ -64,7 +64,7 @@ b\xc3\xadrdmore géese 0                5
 mammal1         mouse 0                8
 mammalmore      moose 0                6
 
-> select * from bytesbytes
+> select * from bytesbytes_tbl
 key                data            kafka_partition  mz_offset
 -------------------------------------------------------------
 fish               fish            0                0

@@ -9,25 +9,26 @@
 
 //! CLI argument types for persist
 
+use crate::ShardId;
 use crate::cfg::PersistConfig;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
-use crate::ShardId;
 use async_trait::async_trait;
 use bytes::Bytes;
 use mz_build_info::BuildInfo;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::url::SensitiveUrl;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
     Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, Tasked,
     VersionedData,
 };
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::warn;
 
 /// Arguments for commands that work over both backing stores.
@@ -49,7 +50,7 @@ pub struct StoreArgs {
     /// ```
     ///
     #[clap(long, verbatim_doc_comment, env = "CONSENSUS_URI")]
-    pub(crate) consensus_uri: String,
+    pub(crate) consensus_uri: SensitiveUrl,
 
     /// Blob to use
     ///
@@ -57,7 +58,7 @@ pub struct StoreArgs {
     /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
     /// URI scoped to the environment's bucket prefix.
     #[clap(long, env = "BLOB_URI")]
-    pub(crate) blob_uri: String,
+    pub(crate) blob_uri: SensitiveUrl,
 }
 
 /// Arguments for viewing the current state of a given shard
@@ -82,7 +83,7 @@ pub struct StateArgs {
     /// ```
     ///
     #[clap(long, verbatim_doc_comment, env = "CONSENSUS_URI")]
-    pub(crate) consensus_uri: String,
+    pub(crate) consensus_uri: SensitiveUrl,
 
     /// Blob to use
     ///
@@ -90,7 +91,7 @@ pub struct StateArgs {
     /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
     /// URI scoped to the environment's bucket prefix.
     #[clap(long, env = "BLOB_URI")]
-    pub(crate) blob_uri: String,
+    pub(crate) blob_uri: SensitiveUrl,
 }
 
 // BuildInfo with a larger version than any version we expect to see in prod,
@@ -99,7 +100,6 @@ pub struct StateArgs {
 pub(crate) const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
     version: "99.999.99+test",
     sha: "0000000000000000000000000000000000000000",
-    time: "",
 };
 
 // All `inspect` command are read-only.
@@ -122,7 +122,7 @@ impl StateArgs {
 
 pub(super) async fn make_consensus(
     cfg: &PersistConfig,
-    consensus_uri: &str,
+    consensus_uri: &SensitiveUrl,
     commit: bool,
     metrics: Arc<Metrics>,
 ) -> anyhow::Result<Arc<dyn Consensus>> {
@@ -130,6 +130,7 @@ pub(super) async fn make_consensus(
         consensus_uri,
         Box::new(cfg.clone()),
         metrics.postgres_consensus.clone(),
+        Arc::clone(&cfg.configs),
     )?;
     let consensus = consensus.clone().open().await?;
     let consensus = if commit {
@@ -144,17 +145,12 @@ pub(super) async fn make_consensus(
 
 pub(super) async fn make_blob(
     cfg: &PersistConfig,
-    blob_uri: &str,
+    blob_uri: &SensitiveUrl,
     commit: bool,
     metrics: Arc<Metrics>,
 ) -> anyhow::Result<Arc<dyn Blob>> {
-    let blob = BlobConfig::try_from(
-        blob_uri,
-        Box::new(cfg.clone()),
-        metrics.s3_blob.clone(),
-        Arc::clone(&cfg.configs),
-    )
-    .await?;
+    let blob =
+        BlobConfig::try_from(blob_uri, Box::new(cfg.clone()), metrics.s3_blob.clone()).await?;
     let blob = blob.clone().open().await?;
     let blob = if commit {
         blob
@@ -234,7 +230,7 @@ impl Blob for ReadOnly<Arc<dyn Blob>> {
 
 #[async_trait]
 impl Consensus for ReadOnly<Arc<dyn Consensus>> {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         if self.ignored_write() {
             warn!("potentially-invalid list_keys() after ignored write");
         }
@@ -251,12 +247,12 @@ impl Consensus for ReadOnly<Arc<dyn Consensus>> {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         warn!(
-            "ignoring cas({key}) in read-only mode ({} bytes at seqno {expected:?})",
+            "ignoring cas({key}) in read-only mode ({} bytes at seqno {:?})",
             new.data.len(),
+            new.seqno,
         );
         self.ignoring_write();
         Ok(CaSResult::Committed)
@@ -274,9 +270,9 @@ impl Consensus for ReadOnly<Arc<dyn Consensus>> {
         self.store.scan(key, from, limit).await
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         warn!("ignoring truncate({key}) in read-only mode (to seqno {seqno})");
         self.ignoring_write();
-        Ok(0)
+        Ok(None)
     }
 }

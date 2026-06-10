@@ -77,13 +77,13 @@ impl MySqlSourceMetricDefs {
 
 /// Metrics for MySql sources.
 pub(crate) struct MySqlSourceMetrics {
-    pub(crate) inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) ignored: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) total: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) tables: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) gtid_txids: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) ignored: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) total: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) tables: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) gtid_txids: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub(crate) snapshot_metrics: MySqlSnapshotMetrics,
 }
 
@@ -135,7 +135,7 @@ pub(crate) struct MySqlSnapshotMetrics {
     // This has to be shared between tokio tasks and the replication operator, as the collection
     // of these metrics happens once in those tasks, which do not live long enough to keep them
     // alive.
-    gauges: Arc<Mutex<Vec<DeleteOnDropGauge<'static, AtomicF64, Vec<String>>>>>,
+    gauges: Arc<Mutex<Vec<DeleteOnDropGauge<AtomicF64, Vec<String>>>>>,
     defs: MySqlSnapshotMetricDefs,
 }
 

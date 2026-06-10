@@ -11,18 +11,26 @@ use std::fmt;
 
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
-use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
-use proptest_derive::Arbitrary;
+use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
-use crate::{EvalError, MirScalarExpr};
+use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
+use crate::{Eval, EvalError, MirScalarExpr};
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub struct CastRecordToString {
-    pub ty: ScalarType,
+    pub ty: SqlScalarType,
 }
 
 impl LazyUnaryFunc for CastRecordToString {
@@ -30,7 +38,7 @@ impl LazyUnaryFunc for CastRecordToString {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -41,8 +49,8 @@ impl LazyUnaryFunc for CastRecordToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::String.nullable(input_type.nullable)
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::String.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -65,6 +73,10 @@ impl LazyUnaryFunc for CastRecordToString {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastRecordToString {
@@ -75,10 +87,21 @@ impl fmt::Display for CastRecordToString {
 
 /// Casts between two record types by casting each element of `a` ("record1") using
 /// `cast_expr` and collecting the results into a new record ("record2").
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastRecord1ToRecord2 {
-    pub return_ty: ScalarType,
-    pub cast_exprs: Vec<MirScalarExpr>,
+    pub return_ty: SqlScalarType,
+    pub cast_exprs: Box<[MirScalarExpr]>,
 }
 
 impl LazyUnaryFunc for CastRecord1ToRecord2 {
@@ -86,7 +109,7 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -99,7 +122,7 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -128,6 +151,10 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         // track enough information to make that call, though!
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastRecord1ToRecord2 {
@@ -137,7 +164,16 @@ impl fmt::Display for CastRecord1ToRecord2 {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub struct RecordGet(pub usize);
 
@@ -146,7 +182,7 @@ impl LazyUnaryFunc for RecordGet {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -155,14 +191,18 @@ impl LazyUnaryFunc for RecordGet {
         Ok(a.unwrap_list().iter().nth(self.0).unwrap())
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         match input_type.scalar_type {
-            ScalarType::Record { mut fields, .. } => {
-                let (_name, mut ty) = fields.swap_remove(self.0);
+            SqlScalarType::Record { fields, .. } => {
+                let (_name, ty) = &fields[self.0];
+                let mut ty = ty.clone();
                 ty.nullable = ty.nullable || input_type.nullable;
                 ty
             }
-            _ => unreachable!("RecordGet specified nonexistent field"),
+            _ => unreachable!(
+                "RecordGet on non-record input: {:?}",
+                input_type.scalar_type
+            ),
         }
     }
 
@@ -184,6 +224,10 @@ impl LazyUnaryFunc for RecordGet {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }

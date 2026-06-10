@@ -10,6 +10,7 @@
 //! Fuses a sequence of `TopK` operators in to one `TopK` operator
 
 use mz_expr::MirRelationExpr;
+use mz_repr::ReprScalarType;
 
 use crate::TransformCtx;
 
@@ -19,12 +20,16 @@ use crate::TransformCtx;
 pub struct TopK;
 
 impl crate::Transform for TopK {
+    fn name(&self) -> &'static str {
+        "TopKFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "topk_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -103,12 +108,12 @@ impl TopK {
                         };
                         *limit = Some(mz_expr::MirScalarExpr::literal_ok(
                             mz_repr::Datum::Int64(new_limit),
-                            mz_repr::ScalarType::Int64,
+                            ReprScalarType::Int64,
                         ));
                     }
 
                     if let Some(0) = limit.as_ref().and_then(|l| l.as_literal_int64()) {
-                        relation.take_safely();
+                        relation.take_safely(None);
                         break;
                     }
 

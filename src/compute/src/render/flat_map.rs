@@ -7,41 +7,49 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::VecDeque;
+
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use mz_expr::MfpPlan;
+use mz_compute_types::dyncfgs::COMPUTE_FLAT_MAP_FUEL;
+use mz_expr::{Eval, MfpPlan};
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::{Counter, Tee};
-use timely::dataflow::Scope;
+use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::generic::Session;
 use timely::progress::Antichain;
 
 use crate::render::context::{CollectionBundle, Context};
-use crate::render::DataflowError;
+use crate::render::errors::DataflowErrorSer;
 
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
-{
-    /// Renders `relation_expr` followed by `map_filter_project` if provided.
+impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
+    /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(
-        &mut self,
-        input: CollectionBundle<G>,
-        func: TableFunc,
-        exprs: Vec<MirScalarExpr>,
-        mfp: MapFilterProject,
+        &self,
         input_key: Option<Vec<MirScalarExpr>>,
-    ) -> CollectionBundle<G> {
+        input: CollectionBundle<'scope, T>,
+        exprs: Vec<MirScalarExpr>,
+        func: TableFunc,
+        mfp: MapFilterProject,
+    ) -> CollectionBundle<'scope, T> {
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
-        let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
-        let mut storage = Vec::new();
+        let (ok_collection, err_collection) =
+            input.as_specific_collection(input_key.as_deref(), &self.config_set);
         let stream = ok_collection.inner;
-        let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, _| {
+        let scope = input.scope();
+
+        // Budget to limit the number of rows processed in a single invocation.
+        //
+        // The current implementation can only yield between input batches, but not from within
+        // a batch. A `generate_series` can still cause unavailability if it generates many rows.
+        let budget = COMPUTE_FLAT_MAP_FUEL.get(&self.config_set);
+
+        let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, info| {
+            let activator = scope.activator_for(info.address);
+            let mut queue = VecDeque::new();
             Box::new(move |input, ok_output, err_output| {
                 let mut datums = DatumVec::new();
                 let mut datums_mfp = DatumVec::new();
@@ -49,13 +57,17 @@ where
                 // Buffer for extensions to `input_row`.
                 let mut table_func_output = Vec::new();
 
+                let mut budget = budget;
+
                 input.for_each(|cap, data| {
-                    data.swap(&mut storage);
+                    queue.push_back((cap.retain(0), cap.retain(1), std::mem::take(data)))
+                });
 
-                    let mut ok_session = ok_output.session_with_builder(&cap);
-                    let mut err_session = err_output.session_with_builder(&cap);
+                while let Some((ok_cap, err_cap, data)) = queue.pop_front() {
+                    let mut ok_session = ok_output.session_with_builder(&ok_cap);
+                    let mut err_session = err_output.session_with_builder(&err_cap);
 
-                    'input: for (input_row, time, diff) in storage.drain(..) {
+                    'input: for (input_row, time, diff) in data {
                         let temp_storage = RowArena::new();
 
                         // Unpack datums for expression evaluation.
@@ -94,18 +106,23 @@ where
                                 &until,
                                 &mut ok_session,
                                 &mut err_session,
+                                &mut budget,
                             );
                             table_func_output.clear();
                         }
                     }
-                })
+                    if budget == 0 {
+                        activator.activate();
+                        break;
+                    }
+                }
             })
         });
 
         use differential_dataflow::AsCollection;
         let ok_collection = oks.as_collection();
         let new_err_collection = errs.as_collection();
-        let err_collection = err_collection.concat(&new_err_collection);
+        let err_collection = err_collection.concat(new_err_collection);
         CollectionBundle::from_collections(ok_collection, err_collection)
     }
 }
@@ -122,21 +139,25 @@ fn drain_through_mfp<T>(
     mfp_plan: &MfpPlan,
     until: &Antichain<Timestamp>,
     ok_output: &mut Session<
+        '_,
+        '_,
         T,
         ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>,
-        Counter<T, Vec<(Row, T, Diff)>, Tee<T, Vec<(Row, T, Diff)>>>,
+        Capability<T>,
     >,
     err_output: &mut Session<
+        '_,
+        '_,
         T,
-        ConsolidatingContainerBuilder<Vec<(DataflowError, T, Diff)>>,
-        Counter<T, Vec<(DataflowError, T, Diff)>, Tee<T, Vec<(DataflowError, T, Diff)>>>,
+        ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>,
+        Capability<T>,
     >,
+    budget: &mut usize,
 ) where
     T: crate::render::RenderTimestamp,
 {
     let temp_storage = RowArena::new();
-    let binding = SharedRow::get();
-    let mut row_builder = binding.borrow_mut();
+    let mut row_builder = SharedRow::get();
 
     // This is not cheap, and is meant to be amortized across many `extensions`.
     let mut datums_local = datum_vec.borrow_with(input_row);
@@ -153,12 +174,13 @@ fn drain_through_mfp<T>(
             &mut datums_local,
             &temp_storage,
             event_time,
-            diff * *input_diff,
+            *diff * *input_diff,
             |time| !until.less_equal(time),
             &mut row_builder,
         );
 
         for result in results {
+            *budget = budget.saturating_sub(1);
             match result {
                 Ok((row, event_time, diff)) => {
                     // Copy the whole time, and re-populate event time.

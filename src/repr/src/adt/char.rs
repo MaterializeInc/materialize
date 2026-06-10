@@ -14,7 +14,9 @@ use anyhow::bail;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
@@ -24,19 +26,29 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.char.rs"));
 const MAX_LENGTH: u32 = 10_485_760;
 
 /// A marker type indicating that a Rust string should be interpreted as a
-/// [`ScalarType::Char`].
+/// [`SqlScalarType::Char`].
 ///
-/// [`ScalarType::Char`]: crate::ScalarType::Char
+/// [`SqlScalarType::Char`]: crate::SqlScalarType::Char
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Char<S: AsRef<str>>(pub S);
 
-/// The `length` of a [`ScalarType::Char`].
+/// The `length` of a [`SqlScalarType::Char`].
 ///
 /// This newtype wrapper ensures that the length is within the valid range.
 ///
-/// [`ScalarType::Char`]: crate::ScalarType::Char
+/// [`SqlScalarType::Char`]: crate::SqlScalarType::Char
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
 )]
 pub struct CharLength(pub(crate) u32);
 
@@ -61,6 +73,7 @@ impl TryFrom<i64> for CharLength {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for CharLength {
     type Parameters = ();
     type Strategy = BoxedStrategy<CharLength>;
@@ -141,6 +154,12 @@ fn format_char_str(
         // does.
         Some(l) => {
             let l = usize::cast_from(l.into_u32());
+            // The number of chars in a string is always less or equal to the length of the string.
+            // Hence, if the string is shorter than the length, we do not have to check for
+            // the maximum length.
+            if s.len() < l {
+                return Ok(white_space.process_str(s, Some(l)));
+            }
             match s.char_indices().nth(l) {
                 None => white_space.process_str(s, Some(l)),
                 Some((idx, _)) => {

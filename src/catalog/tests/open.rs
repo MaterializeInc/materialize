@@ -7,35 +7,38 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::time::Duration;
 
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
-    test_bootstrap_args, test_persist_backed_catalog_state,
-    test_persist_backed_catalog_state_with_version, CatalogError, Database, DurableCatalogError,
-    Epoch, OpenableDurableCatalogState, Schema, CATALOG_VERSION,
+    BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, Database, DurableCatalogError,
+    DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError,
+    MOCK_AUTHENTICATION_NONCE_KEY, Schema, TestCatalogStateBuilder, test_bootstrap_args,
 };
+use mz_catalog_protos::objects::{SettingKey, SettingValue};
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation};
+use mz_persist_types::ShardId;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
+use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};
 use uuid::Uuid;
 
-/// A new type for [`Snapshot`] that excludes the user_version from the debug output. The
-/// user_version changes frequently, so it's useful to print the contents excluding the
-/// user_version to avoid having to update the expected value in tests.
-struct HiddenUserVersionSnapshot<'a>(&'a Snapshot);
+/// A new type for [`Snapshot`] that excludes fields that change often from the debug output. It's
+/// useful to print the contents excluding these fields to avoid having to update the expected value
+/// in tests.
+struct StableSnapshot<'a>(&'a Snapshot);
 
-impl HiddenUserVersionSnapshot<'_> {
+impl StableSnapshot<'_> {
     fn user_version(&self) -> Option<&proto::ConfigValue> {
         self.0.configs.get(&Self::user_version_key())
     }
@@ -45,22 +48,51 @@ impl HiddenUserVersionSnapshot<'_> {
             key: USER_VERSION_KEY.to_string(),
         }
     }
+
+    fn builtin_migration_shard(&self) -> Option<&proto::SettingValue> {
+        self.0.settings.get(&Self::builtin_migration_shard_key())
+    }
+
+    fn builtin_migration_shard_key() -> proto::SettingKey {
+        proto::SettingKey {
+            name: BUILTIN_MIGRATION_SHARD_KEY.to_string(),
+        }
+    }
+
+    fn expression_cache_shard(&self) -> Option<&proto::SettingValue> {
+        self.0.settings.get(&Self::expression_cache_shard_key())
+    }
+
+    fn expression_cache_shard_key() -> proto::SettingKey {
+        proto::SettingKey {
+            name: EXPRESSION_CACHE_SHARD_KEY.to_string(),
+        }
+    }
+
+    fn mock_authentication_nonce_key() -> proto::SettingKey {
+        proto::SettingKey {
+            name: MOCK_AUTHENTICATION_NONCE_KEY.to_string(),
+        }
+    }
 }
 
-impl Debug for HiddenUserVersionSnapshot<'_> {
+impl Debug for StableSnapshot<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Snapshot {
             databases,
             schemas,
             roles,
+            role_auth,
             items,
             comments,
             clusters,
+            network_policies,
             cluster_replicas,
             introspection_sources,
             id_allocator,
             configs,
             settings,
+            source_references,
             system_object_mappings,
             system_configurations,
             default_privileges,
@@ -71,18 +103,25 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
         } = self.0;
         let mut configs: BTreeMap<proto::ConfigKey, proto::ConfigValue> = configs.clone();
         configs.remove(&Self::user_version_key());
+        let mut settings: BTreeMap<proto::SettingKey, proto::SettingValue> = settings.clone();
+        settings.remove(&Self::builtin_migration_shard_key());
+        settings.remove(&Self::expression_cache_shard_key());
+        settings.remove(&Self::mock_authentication_nonce_key());
         f.debug_struct("Snapshot")
             .field("databases", databases)
             .field("schemas", schemas)
             .field("roles", roles)
+            .field("role_auth", role_auth)
             .field("items", items)
             .field("comments", comments)
             .field("clusters", clusters)
+            .field("network_policies", network_policies)
             .field("cluster_replicas", cluster_replicas)
             .field("introspection_sources", introspection_sources)
             .field("id_allocator", id_allocator)
             .field("configs", &configs)
-            .field("settings", settings)
+            .field("settings", &settings)
+            .field("source_references", source_references)
             .field("system_object_mappings", system_object_mappings)
             .field("system_configurations", system_configurations)
             .field("default_privileges", default_privileges)
@@ -98,36 +137,27 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_is_initialized() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let persist_openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client, organization_id).boxed();
-    test_is_initialized(persist_openable_state1, persist_openable_state2).await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_is_initialized(state_builder).await;
 }
 
-async fn test_is_initialized(
-    mut openable_state1: Box<dyn OpenableDurableCatalogState>,
-    openable_state2: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
-) {
+async fn test_is_initialized(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+
+    let mut openable_state1 = state_builder.clone().unwrap_build().await;
     assert!(
         !openable_state1.is_initialized().await.unwrap(),
         "catalog has not been opened yet"
     );
 
-    let deploy_generation = 0;
     let state = openable_state1
-        .open(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     state.expire().await;
 
-    let mut openable_state2 = openable_state2.await;
+    let mut openable_state2 = state_builder.unwrap_build().await;
     assert!(
         openable_state2.is_initialized().await.unwrap(),
         "catalog has been opened"
@@ -143,86 +173,74 @@ async fn test_is_initialized(
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_get_deployment_generation() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let persist_openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client, organization_id).boxed();
-    test_get_deployment_generation(persist_openable_state1, persist_openable_state2).await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_get_deployment_generation(state_builder).await;
 }
 
-async fn test_get_deployment_generation(
-    mut openable_state1: Box<dyn OpenableDurableCatalogState>,
-    openable_state2: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
-) {
-    assert_eq!(
-        openable_state1
-            .get_deployment_generation()
+async fn test_get_deployment_generation(state_builder: TestCatalogStateBuilder) {
+    let deploy_generation = 42;
+
+    {
+        let mut openable_state = state_builder
+            .clone()
+            .with_deploy_generation(deploy_generation)
+            .unwrap_build()
+            .await;
+        assert_eq!(
+            openable_state
+                .get_deployment_generation()
+                .await
+                .unwrap_err()
+                .to_string(),
+            CatalogError::Durable(DurableCatalogError::Uninitialized).to_string()
+        );
+
+        let state = openable_state
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap_err()
-            .to_string(),
-        CatalogError::Durable(DurableCatalogError::Uninitialized).to_string()
-    );
+            .unwrap()
+            .0;
+        state.expire().await;
+    }
 
-    let state = openable_state1
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), 42, None)
-        .await
-        .unwrap();
-    state.expire().await;
-
-    let mut openable_state2 = openable_state2.await;
-    assert_eq!(
-        openable_state2.get_deployment_generation().await.unwrap(),
-        42,
-        "deployment generation has been set to 42"
-    );
-    // Check twice because some implementations will cache a read-only connection.
-    assert_eq!(
-        openable_state2.get_deployment_generation().await.unwrap(),
-        42,
-        "deployment generation has been set to 42"
-    );
+    {
+        let mut openable_state = state_builder
+            .clone()
+            .with_deploy_generation(deploy_generation)
+            .unwrap_build()
+            .await;
+        assert_eq!(
+            openable_state.get_deployment_generation().await.unwrap(),
+            deploy_generation,
+            "deployment generation has been set to {deploy_generation}"
+        );
+        // Check twice because some implementations will cache a read-only connection.
+        assert_eq!(
+            openable_state.get_deployment_generation().await.unwrap(),
+            deploy_generation,
+            "deployment generation has been set to {deploy_generation}"
+        );
+    }
 }
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open_savepoint() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let persist_openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state3 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state4 =
-        test_persist_backed_catalog_state(persist_client, organization_id).await;
-    test_open_savepoint(
-        persist_openable_state1,
-        persist_openable_state2,
-        persist_openable_state3,
-        persist_openable_state4,
-    )
-    .await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_open_savepoint(state_builder).await;
 }
 
-async fn test_open_savepoint(
-    openable_state1: Box<dyn OpenableDurableCatalogState>,
-    openable_state2: Box<dyn OpenableDurableCatalogState>,
-    openable_state3: Box<dyn OpenableDurableCatalogState>,
-    openable_state4: Box<dyn OpenableDurableCatalogState>,
-) {
-    let deploy_generation = 0;
+async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
 
     {
         // Can't open a savepoint catalog until it's been initialized.
-        let err = openable_state1
-            .open_savepoint(
-                SYSTEM_TIME(),
-                &test_bootstrap_args(),
-                deploy_generation,
-                None,
-            )
+        let err = state_builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap_err();
         match err {
@@ -233,31 +251,28 @@ async fn test_open_savepoint(
 
     // Initialize the catalog.
     {
-        let state = openable_state2
-            .open(
-                SYSTEM_TIME(),
-                &test_bootstrap_args(),
-                deploy_generation,
-                None,
-            )
+        let state = state_builder
+            .clone()
+            .unwrap_build()
             .await
-            .unwrap();
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap()
+            .0;
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
         Box::new(state).expire().await;
     }
 
     {
         // Open catalog in savepoint mode.
-        let deploy_generation = 0;
-        let mut state = openable_state3
-            .open_savepoint(
-                SYSTEM_TIME(),
-                &test_bootstrap_args(),
-                deploy_generation,
-                None,
-            )
+        let mut state = state_builder
+            .clone()
+            .unwrap_build()
             .await
-            .unwrap();
+            .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap()
+            .0;
         // Drain initial updates.
         let _ = state
             .sync_to_current_updates()
@@ -268,7 +283,6 @@ async fn test_open_savepoint(
 
         // Perform writes.
         let mut txn = state.transaction().await.unwrap();
-        let mut ids = Vec::new();
         let mut db_schemas = Vec::new();
         for i in 0..10 {
             let (db_id, db_oid) = txn
@@ -288,7 +302,6 @@ async fn test_open_savepoint(
                     &HashSet::new(),
                 )
                 .unwrap();
-            ids.push((db_id.clone(), schema_id.clone()));
             db_schemas.push((
                 Database {
                     id: db_id.clone(),
@@ -309,7 +322,8 @@ async fn test_open_savepoint(
         }
         // Drain txn updates.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit().await.unwrap();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
 
         // Read back writes.
         let snapshot = state.snapshot().await.unwrap();
@@ -336,7 +350,8 @@ async fn test_open_savepoint(
         }
         // Drain txn updates.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit().await.unwrap();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
 
         // Read back updates.
         let snapshot = state.snapshot().await.unwrap();
@@ -354,15 +369,14 @@ async fn test_open_savepoint(
 
     {
         // Open catalog normally.
-        let mut state = openable_state4
-            .open(
-                SYSTEM_TIME(),
-                &test_bootstrap_args(),
-                deploy_generation,
-                None,
-            )
+        let mut state = state_builder
+            .clone()
+            .unwrap_build()
             .await
-            .unwrap();
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap()
+            .0;
         // Write should not have persisted.
         let db = state
             .snapshot()
@@ -380,30 +394,18 @@ async fn test_open_savepoint(
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open_read_only() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let persist_openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state3 =
-        test_persist_backed_catalog_state(persist_client, organization_id).await;
-    test_open_read_only(
-        persist_openable_state1,
-        persist_openable_state2,
-        persist_openable_state3,
-    )
-    .await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_open_read_only(state_builder).await;
 }
 
-async fn test_open_read_only(
-    openable_state1: Box<dyn OpenableDurableCatalogState>,
-    openable_state2: Box<dyn OpenableDurableCatalogState>,
-    openable_state3: Box<dyn OpenableDurableCatalogState>,
-) {
-    let deploy_generation = 0;
+async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
 
     // Can't open a read-only catalog until it's been initialized.
-    let err = openable_state1
+    let err = state_builder
+        .clone()
+        .unwrap_build()
+        .await
         .open_read_only(&test_bootstrap_args())
         .await
         .unwrap_err();
@@ -413,15 +415,14 @@ async fn test_open_read_only(
     }
 
     // Initialize the catalog.
-    let mut state = openable_state2
-        .open(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
+    let mut state = state_builder
+        .clone()
+        .unwrap_build()
         .await
-        .unwrap();
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -429,7 +430,10 @@ async fn test_open_read_only(
         .expect("unable to sync");
     assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
 
-    let mut read_only_state = openable_state3
+    let mut read_only_state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
         .open_read_only(&test_bootstrap_args())
         .await
         .unwrap();
@@ -438,7 +442,11 @@ async fn test_open_read_only(
         read_only_state.epoch(),
         Epoch::new(2).expect("known to be non-zero")
     );
-    let err = read_only_state.allocate_user_id().await.unwrap_err();
+    let commit_ts = state.current_upper().await;
+    let err = read_only_state
+        .allocate_user_id(commit_ts)
+        .await
+        .unwrap_err();
     match err {
         CatalogError::Catalog(_) => panic!("unexpected catalog error"),
         CatalogError::Durable(e) => assert!(e.can_recover_with_write_mode()),
@@ -449,7 +457,7 @@ async fn test_open_read_only(
     let (role_id, _) = txn
         .insert_user_role(
             "joe".to_string(),
-            RoleAttributes::new(),
+            RoleAttributesRaw::new(),
             RoleMembership::new(),
             RoleVars::default(),
             &HashSet::new(),
@@ -457,11 +465,12 @@ async fn test_open_read_only(
         .unwrap();
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
-    txn.commit().await.unwrap();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
 
     let snapshot = read_only_state.snapshot().await.unwrap();
     let role = snapshot.roles.get(&proto::RoleKey {
-        id: Some(role_id.into_proto()),
+        id: role_id.into_proto(),
     });
     assert_eq!(&role.unwrap().name, "joe");
 
@@ -473,42 +482,39 @@ async fn test_open_read_only(
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let persist_openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).boxed();
-    let persist_openable_state3 =
-        test_persist_backed_catalog_state(persist_client, organization_id).boxed();
-    test_open(
-        persist_openable_state1,
-        persist_openable_state2,
-        persist_openable_state3,
-    )
-    .await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_open(state_builder).await;
 }
 
-async fn test_open(
-    openable_state1: Box<dyn OpenableDurableCatalogState>,
-    openable_state2: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
-    openable_state3: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
-) {
-    let deploy_generation = 0;
+async fn test_open(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
 
-    let (snapshot, audit_log) = {
-        let mut state = openable_state1
-            // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-            .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
+    let (mut snapshot, audit_log) = {
+        let mut state = state_builder
+            .clone()
+            .unwrap_build()
             .await
-            .unwrap();
+            // Use `NOW_ZERO` for consistent timestamps in the snapshots.
+            .open(NOW_ZERO().into(), &test_bootstrap_args())
+            .await
+            .unwrap()
+            .0;
 
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
         // Check initial snapshot.
         let snapshot = state.snapshot().await.unwrap();
         {
-            let test_snapshot = HiddenUserVersionSnapshot(&snapshot);
+            let test_snapshot = StableSnapshot(&snapshot);
+
             let user_version = test_snapshot.user_version().unwrap();
             assert_eq!(user_version.value, CATALOG_VERSION);
+
+            let builtin_migration_shard = test_snapshot.builtin_migration_shard().unwrap();
+            let _shard_id: ShardId = builtin_migration_shard.value.parse().unwrap();
+
+            let expression_cache_shard = test_snapshot.expression_cache_shard().unwrap();
+            let _shard_id: ShardId = expression_cache_shard.value.parse().unwrap();
+
             insta::assert_debug_snapshot!("initial_snapshot", test_snapshot);
         }
         let audit_log = state.get_audit_logs().await.unwrap();
@@ -518,16 +524,26 @@ async fn test_open(
     };
     // Reopening the catalog will increment the epoch, but shouldn't change the initial snapshot.
     {
-        let mut state = openable_state2
+        let mut state = state_builder
+            .clone()
+            .unwrap_build()
             .await
-            .open(
-                SYSTEM_TIME(),
-                &test_bootstrap_args(),
-                deploy_generation,
-                None,
-            )
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
+
+        // Because of the ad-hoc migration for `migration_version`, reopening the catalog does
+        // change this version currently.
+        // TODO: remove this once we only support upgrades from version >= 0.164
+        snapshot.settings.insert(
+            SettingKey {
+                name: "migration_version".into(),
+            },
+            SettingValue {
+                value: "0.0.0".into(),
+            },
+        );
 
         assert_eq!(state.epoch(), Epoch::new(3).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);
@@ -536,16 +552,14 @@ async fn test_open(
     }
     // Reopen the catalog a third time for good measure.
     {
-        let mut state = openable_state3
+        let mut state = state_builder
+            .clone()
+            .unwrap_build()
             .await
-            .open(
-                SYSTEM_TIME(),
-                &test_bootstrap_args(),
-                deploy_generation,
-                None,
-            )
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         assert_eq!(state.epoch(), Epoch::new(4).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);
@@ -556,88 +570,299 @@ async fn test_open(
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_unopened_fencing() {
-    let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let persist_openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).boxed();
-    let persist_openable_state3 =
-        test_persist_backed_catalog_state(persist_client, organization_id).await;
-    test_unopened_fencing(
-        persist_openable_state1,
-        persist_openable_state2,
-        persist_openable_state3,
-    )
-    .await;
-}
-
-async fn test_unopened_fencing(
-    openable_state1: Box<dyn OpenableDurableCatalogState>,
-    openable_state2: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
-    openable_state3: Box<dyn OpenableDurableCatalogState>,
-) {
-    let deployment_generation = 42;
+async fn test_persist_unopened_deploy_generation_fencing() {
+    let mut persist_cache = PersistClientCache::new_no_metrics();
+    persist_cache.cfg.build_version = semver::Version::new(0, 1, 0);
+    let persist_client = persist_cache
+        .open(PersistLocation::new_in_mem())
+        .await
+        .unwrap();
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
 
     // Initialize catalog.
+    let deploy_generation = 0;
+    let version = semver::Version::new(0, 1, 0);
+    let zdt_deployment_max_wait = Duration::from_millis(666);
+    let state_builder = state_builder
+        .with_deploy_generation(deploy_generation)
+        .with_version(version);
     {
-        let _ = openable_state1
-            // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-            .open(
-                NOW_ZERO(),
-                &test_bootstrap_args(),
-                deployment_generation,
-                None,
-            )
+        let mut state = state_builder
+            .clone()
+            .unwrap_build()
             .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap()
+            .0;
+        // drain catalog updates.
+        let _ = state.sync_to_current_updates().await.unwrap();
+        let mut txn = state.transaction().await.unwrap();
+        txn.set_0dt_deployment_max_wait(zdt_deployment_max_wait)
             .unwrap();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
     }
-    let mut openable_state2 = openable_state2.await;
+    let mut openable_state = state_builder.clone().unwrap_build().await;
 
     // Read config collection with unopened catalog.
     assert_eq!(
-        deployment_generation,
-        openable_state2.get_deployment_generation().await.unwrap()
+        zdt_deployment_max_wait,
+        openable_state
+            .get_0dt_deployment_max_wait()
+            .await
+            .unwrap()
+            .unwrap()
     );
 
-    // Open catalog, which should bump the epoch.
-    let _state = openable_state3
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(
-            NOW_ZERO(),
-            &test_bootstrap_args(),
-            deployment_generation + 1,
-            None,
-        )
+    // Open catalog, which will bump the epoch AND deploy generation.
+    let _state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation + 1)
+        .unwrap_build()
         .await
-        .unwrap();
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
 
-    // Unopened catalog should be fenced now.
-    let err = openable_state2
+    // Unopened catalog should be fenced now with a deploy generation fence.
+    let err = openable_state
         .get_deployment_generation()
         .await
         .unwrap_err();
     assert!(
-        matches!(err, CatalogError::Durable(DurableCatalogError::Fence(_))),
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
+        ),
         "unexpected err: {err:?}"
     );
 
-    let err = openable_state2.is_initialized().await.unwrap_err();
+    let err = openable_state.is_initialized().await.unwrap_err();
     assert!(
-        matches!(err, CatalogError::Durable(DurableCatalogError::Fence(_))),
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    // Re-initializing with the old deploy version doesn't work.
+    let err = state_builder.clone().build().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            DurableCatalogError::Fence(FenceError::DeployGeneration { .. })
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    // Re-initializing with the old deploy version and earlier version returns a fence error.
+    let err = state_builder
+        .with_version(semver::Version::new(0, 0, 0))
+        .build()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, DurableCatalogError::IncompatiblePersistVersion { .. }),
         "unexpected err: {err:?}"
     );
 }
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_fencing() {
+async fn test_persist_opened_epoch_fencing() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_opened_epoch_fencing(state_builder).await;
+}
+
+async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
+    // Initialize catalog.
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+
+    // Open catalog, which will bump the epoch.
+    let _state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+
+    // Opened catalog should be fenced now with an epoch fence.
+    let err = state.snapshot().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    let err = state.transaction().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_opened_deploy_generation_fencing() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_opened_deploy_generation_fencing(state_builder).await;
+}
+
+async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBuilder) {
+    let deploy_generation = 0;
+    let mut state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+
+    // Open catalog, which will bump the epoch AND deploy generation.
+    let _state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation + 1)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+
+    // Opened catalog should be fenced now with an epoch fence.
+    let err = state.snapshot().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    let err = state.transaction().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
+        ),
+        "unexpected err: {err:?}"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_fencing_during_write() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_fencing_during_write(state_builder).await;
+}
+
+async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
+    let deploy_generation = 0;
+    let mut state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+    // Drain updates.
+    let _ = state.sync_to_current_updates().await;
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_config("cmu".to_string(), Some(1900)).unwrap();
+
+    // Open catalog, which will bump the epoch.
+    let mut state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+    // Drain updates.
+    let _ = state.sync_to_current_updates().await;
+
+    // Committing results in an epoch fence error.
+    let commit_ts = txn.upper();
+    let err = txn.commit(commit_ts).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_config("wes".to_string(), Some(1831)).unwrap();
+
+    // Open catalog, which will bump the epoch AND deploy generation.
+    let _state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation + 1)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+
+    // Committing results in a deploy generation fence error.
+    let commit_ts = txn.upper();
+    let err = txn.commit(commit_ts).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
+        ),
+        "unexpected err: {err:?}"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_version_fencing() {
     async fn testcase(catalog: &str, reader: &str, expected: Result<(), ()>) {
-        let deploy_generation = 0;
         let catalog_version = semver::Version::parse(catalog).unwrap();
         let reader_version = semver::Version::parse(reader).unwrap();
         let organization_id = Uuid::new_v4();
+        let deploy_generation = 0;
         let mut persist_cache = PersistClientCache::new_no_metrics();
 
         persist_cache.cfg.build_version = catalog_version.clone();
@@ -645,34 +870,34 @@ async fn test_persist_fencing() {
             .open(PersistLocation::new_in_mem())
             .await
             .expect("in-mem location is valid");
-        let persist_openable_state = test_persist_backed_catalog_state_with_version(
-            persist_client.clone(),
-            organization_id.clone(),
-            catalog_version,
-        )
-        .await
-        .unwrap();
+        let persist_openable_state = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_deploy_generation(deploy_generation)
+            .with_organization_id(organization_id)
+            .with_version(catalog_version)
+            .unwrap_build()
+            .await;
         let _persist_state = persist_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         persist_cache.cfg.build_version = reader_version.clone();
         let persist_client = persist_cache
             .open(PersistLocation::new_in_mem())
             .await
             .expect("in-mem location is valid");
-        let persist_openable_state = test_persist_backed_catalog_state_with_version(
-            persist_client.clone(),
-            organization_id.clone(),
-            reader_version,
-        )
-        .await
-        .map(|_| ())
-        .map_err(|err| match err {
-            DurableCatalogError::IncompatiblePersistVersion { .. } => (),
-            err => panic!("unexpected error: {err:?}"),
-        });
+        let persist_openable_state = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_deploy_generation(deploy_generation)
+            .with_organization_id(organization_id)
+            .with_version(reader_version)
+            .build()
+            .await
+            .map(|_| ())
+            .map_err(|err| match err {
+                DurableCatalogError::IncompatiblePersistVersion { .. } => (),
+                err => panic!("unexpected error: {err:?}"),
+            });
         assert_eq!(
             persist_openable_state, expected,
             "test case failed, catalog: {catalog}, reader: {reader}, expected: {expected:?}"
@@ -680,6 +905,79 @@ async fn test_persist_fencing() {
     }
 
     testcase("0.10.0", "0.10.0", Ok(())).await;
-    testcase("0.10.0", "0.11.0", Ok(())).await;
-    testcase("0.10.0", "0.12.0", Err(())).await;
+    testcase("0.147.0", "0.148.1", Ok(())).await;
+    testcase("0.10.0", "0.148.1", Err(())).await;
+    testcase("0.147.0", "0.158.0", Ok(())).await;
+    testcase("0.147.0", "26.0.0", Ok(())).await;
+    testcase("0.160.0", "26.0.0", Ok(())).await;
+    testcase("26.0.0", "26.10.0", Ok(())).await;
+    testcase("26.1.0", "27.0.0", Ok(())).await;
+    testcase("0.147.0", "27.0.0", Err(())).await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_concurrent_open() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_concurrent_open(state_builder).await;
+}
+
+async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+
+    async fn run_state(state: &mut Box<dyn DurableCatalogState>) -> Result<(), CatalogError> {
+        let mut i = 0;
+        loop {
+            // Drain updates.
+            let _ = state.sync_to_current_updates().await?;
+            let commit_ts = state.current_upper().await;
+            state.allocate_user_id(commit_ts).await?;
+            // After winning the race 100 times, sleep to give the debug state a chance to win the
+            // race.
+            if i > 100 {
+                tokio::time::sleep(Duration::from_nanos(1)).await;
+            }
+            i += 1;
+        }
+    }
+
+    let mut state = state_builder
+        .clone()
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+    let state_handle = mz_ore::task::spawn(|| "state", async move {
+        // Eventually this state should get fenced by the open below.
+        let err = run_state(&mut state).await.unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ))
+    });
+
+    // Open should be successful without retrying, even though there is an active state.
+    let _state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+
+    state_handle.await;
+
+    // Open again to ensure that we didn't commit an invalid retraction.
+    let _state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
 }

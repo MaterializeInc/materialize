@@ -23,8 +23,8 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist::workload::{self, DataGenerator};
-use mz_persist_client::internals_bench::trace_push_batch_one_iter;
 use mz_persist_client::ShardId;
+use mz_persist_client::internals_bench::trace_push_batch_one_iter;
 use mz_persist_types::parquet::EncodingConfig;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
@@ -98,7 +98,6 @@ fn bench_consensus_compare_and_set_all_iters(
 
                             let fut = consensus.compare_and_set(
                                 key,
-                                current_seqno,
                                 VersionedData {
                                     seqno: next_seqno,
                                     data: Bytes::clone(&data),
@@ -120,7 +119,7 @@ fn bench_consensus_compare_and_set_all_iters(
             handles.push(handle);
         }
         for handle in handles.into_iter() {
-            runtime.block_on(handle).expect("task failed");
+            runtime.block_on(handle);
         }
 
         start.elapsed()

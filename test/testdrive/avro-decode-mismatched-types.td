@@ -38,13 +38,17 @@ $ kafka-ingest format=avro topic=avro-types-null2int schema=${null} timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE avro_types_null2int
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-null2int-${testdrive.seed}')
+
+> CREATE TABLE avro_types_null2int_tbl FROM SOURCE avro_types_null2int (REFERENCE "testdrive-avro-types-null2int-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+> COMMIT
 
-! SELECT * FROM avro_types_null2int
+! SELECT * FROM avro_types_null2int_tbl
 contains:avro deserialization error: unable to decode row : IO error: UnexpectedEof
 
 #
@@ -57,14 +61,18 @@ $ kafka-ingest format=avro topic=avro-types-boolean2int schema=${boolean} timest
 {"f1": true}
 {"f1": false}
 
+> BEGIN
 > CREATE SOURCE avro_types_boolean2int
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-boolean2int-${testdrive.seed}')
+
+> CREATE TABLE avro_types_boolean2int_tbl FROM SOURCE avro_types_boolean2int (REFERENCE "testdrive-avro-types-boolean2int-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+> COMMIT
 
 # Bogus result, but at least we do not panic
-> SELECT f1 FROM avro_types_boolean2int
+> SELECT f1 FROM avro_types_boolean2int_tbl
 -1
 0
 
@@ -77,13 +85,17 @@ $ kafka-create-topic topic=avro-types-int2long
 $ kafka-ingest format=avro topic=avro-types-int2long schema=${int} timestamp=1
 {"f1": 123}
 
+> BEGIN
 > CREATE SOURCE avro_types_int2long
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-int2long-${testdrive.seed}')
+
+> CREATE TABLE avro_types_int2long_tbl FROM SOURCE avro_types_int2long (REFERENCE "testdrive-avro-types-int2long-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${long}'
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM avro_types_int2long
+> SELECT * FROM avro_types_int2long_tbl
 123
 
 #
@@ -95,13 +107,17 @@ $ kafka-create-topic topic=avro-types-int2float
 $ kafka-ingest format=avro topic=avro-types-int2float schema=${int} timestamp=1
 {"f1": 123}
 
+> BEGIN
 > CREATE SOURCE avro_types_int2float
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-int2float-${testdrive.seed}')
+
+> CREATE TABLE avro_types_int2float_tbl FROM SOURCE avro_types_int2float (REFERENCE "testdrive-avro-types-int2float-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${float}'
   ENVELOPE NONE
+> COMMIT
 
-! SELECT * FROM avro_types_int2float
+! SELECT * FROM avro_types_int2float_tbl
 contains:avro deserialization error: unable to decode row : IO error: UnexpectedEof
 
 #
@@ -113,13 +129,17 @@ $ kafka-create-topic topic=avro-types-long2float
 $ kafka-ingest format=avro topic=avro-types-long2float schema=${long} timestamp=1
 {"f1": 992147483647}
 
+> BEGIN
 > CREATE SOURCE avro_types_long2float
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-long2float-${testdrive.seed}')
+
+> CREATE TABLE avro_types_long2float_tbl FROM SOURCE avro_types_long2float (REFERENCE "testdrive-avro-types-long2float-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${float}'
   ENVELOPE NONE
+> COMMIT
 
-! SELECT * FROM avro_types_long2float
+! SELECT * FROM avro_types_long2float_tbl
 contains:Unexpected bytes remaining
 
 #
@@ -131,13 +151,17 @@ $ kafka-create-topic topic=avro-types-long2int
 $ kafka-ingest format=avro topic=avro-types-long2int schema=${long} timestamp=1
 {"f1": 992147483647}
 
+> BEGIN
 > CREATE SOURCE avro_types_long2int
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-long2int-${testdrive.seed}')
+
+> CREATE TABLE avro_types_long2int_tbl FROM SOURCE avro_types_long2int (REFERENCE "testdrive-avro-types-long2int-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+> COMMIT
 
-! SELECT * FROM avro_types_long2int
+! SELECT * FROM avro_types_long2int_tbl
 contains:Decoding error: Expected i32, got: 992147483647
 
 #
@@ -149,13 +173,17 @@ $ kafka-create-topic topic=avro-types-float2double
 $ kafka-ingest format=avro topic=avro-types-float2double schema=${float} timestamp=1
 {"f1": 123456789.123456789}
 
+> BEGIN
 > CREATE SOURCE avro_types_float2double
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-float2double-${testdrive.seed}')
+
+> CREATE TABLE avro_types_float2double_tbl FROM SOURCE avro_types_float2double (REFERENCE "testdrive-avro-types-float2double-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${double}'
   ENVELOPE NONE
+> COMMIT
 
-! SELECT * FROM avro_types_float2double
+! SELECT * FROM avro_types_float2double_tbl
 contains:avro deserialization error: unable to decode row : IO error: UnexpectedEof
 
 #
@@ -167,11 +195,15 @@ $ kafka-create-topic topic=avro-types-string2bytes
 $ kafka-ingest format=avro topic=avro-types-string2bytes schema=${string} timestamp=1
 {"f1": "abc абц"}
 
+> BEGIN
 > CREATE SOURCE avro_types_string2bytes
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-string2bytes-${testdrive.seed}')
+
+> CREATE TABLE avro_types_string2bytes_tbl FROM SOURCE avro_types_string2bytes (REFERENCE "testdrive-avro-types-string2bytes-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${bytes}'
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM avro_types_string2bytes
+> SELECT * FROM avro_types_string2bytes_tbl
 "abc \\xd0\\xb0\\xd0\\xb1\\xd1\\x86"

@@ -45,7 +45,7 @@ fn main() -> Result<()> {
 }
 
 mod simple_option_names {
-    use mz_ore::codegen::CodegenBuf;
+    use mz_ore_build::codegen::CodegenBuf;
     use mz_walkabout::ir;
 
     // TODO: we might want to identify these enums using an attribute.

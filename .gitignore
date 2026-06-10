@@ -25,6 +25,7 @@ node_modules
 /test/feature-benchmark/tmp/*.td
 /test/zippy/tmp/*.td
 /test/**/tmp_*.toml
+/test/**/fdb_*.cluster
 junit_*.xml
 parallel-workload-queries.log
 perf.data*
@@ -39,7 +40,11 @@ services.log
 /temp
 test/scalability/results/**/*.csv
 test/scalability/results/**/*.png
+misc/mcp-materialize/dist
 misc/wasm/target
+parallel-benchmark.db
+license_key
+/trufflehog.log
 
 # This is un-orthodox, but adding it to the repo would "tie" it to each user's
 # local version of nixpkgs. This way, we can all use the flake and have a
@@ -51,7 +56,14 @@ flake.lock
 /misc/python/materialize/*.egg-info/
 /misc/python/materialize/dist/
 
-/bazel-*
-
 /src/testdrive/ci/protobuf-bin
 /src/testdrive/ci/protobuf-include
+/known-docker-images.txt
+/test/sqllogictest/sqlite
+my-local-mz/
+/test/orchestratord/cluster.yaml
+uv.lock
+/test/workload-replay/captured-workloads/
+/misc/kind/cache/
+/plots/
+/test/testdrive/types.parquet*

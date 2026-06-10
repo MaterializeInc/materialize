@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Test for issue #10981
+# Test for issue database-issues#3215
 #
 
 > CREATE SECRET pgpass AS 'postgres'
@@ -29,12 +29,15 @@ CREATE SCHEMA public;
 CREATE TABLE t1 (id int, name text, id2 int);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
 INSERT INTO t1 VALUES (1, NULL, 1);
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR TABLE t1;
 
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (t1);
+> BEGIN
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
+> COMMIT
 
 > SELECT * FROM t1;
 1 <null> 1

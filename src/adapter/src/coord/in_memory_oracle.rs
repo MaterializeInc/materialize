@@ -10,11 +10,11 @@
 //! A timestamp oracle that relies on the [`crate::catalog::Catalog`] for persistence/durability
 //! and reserves ranges of timestamps.
 
-use std::fmt::Debug;
-
 use derivative::Derivative;
-use mz_repr::TimestampManipulation;
+use mz_ore::now::NowFn;
+use mz_repr::{Timestamp, TimestampManipulation};
 use mz_timestamp_oracle::{GenericNowFn, WriteTimestamp};
+use timely::order::PartialOrder;
 
 /// A type that provides write and read timestamps, reads observe exactly their
 /// preceding writes.
@@ -29,29 +29,19 @@ use mz_timestamp_oracle::{GenericNowFn, WriteTimestamp};
 /// greater than or equal to `self.write_ts`.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct InMemoryTimestampOracle<T, N>
-where
-    T: Debug,
-    N: GenericNowFn<T>,
-{
-    read_ts: T,
-    write_ts: T,
+pub struct InMemoryTimestampOracle {
+    read_ts: Timestamp,
+    write_ts: Timestamp,
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    next: N,
+    next: NowFn<Timestamp>,
 }
 
-impl<T: TimestampManipulation, N> InMemoryTimestampOracle<T, N>
-where
-    N: GenericNowFn<T>,
-{
+impl InMemoryTimestampOracle {
     /// Create a new timeline, starting at the indicated time. `next` generates
     /// new timestamps when invoked. The timestamps have no requirements, and
     /// can retreat from previous invocations.
-    pub fn new(initially: T, next: N) -> Self
-    where
-        N: GenericNowFn<T>,
-    {
+    pub fn new(initially: Timestamp, next: NowFn<Timestamp>) -> Self {
         Self {
             read_ts: initially.clone(),
             write_ts: initially,
@@ -64,7 +54,7 @@ where
     /// This timestamp will be strictly greater than all prior values of
     /// `self.read_ts()` and `self.write_ts()`.
     #[allow(dead_code)]
-    fn write_ts(&mut self) -> WriteTimestamp<T> {
+    fn write_ts(&mut self) -> WriteTimestamp<Timestamp> {
         let mut next = self.next.now();
         if next.less_equal(&self.write_ts) {
             next = TimestampManipulation::step_forward(&self.write_ts);
@@ -82,7 +72,7 @@ where
 
     /// Peek the current write timestamp.
     #[allow(dead_code)]
-    fn peek_write_ts(&self) -> T {
+    fn peek_write_ts(&self) -> Timestamp {
         self.write_ts.clone()
     }
 
@@ -91,7 +81,7 @@ where
     /// This timestamp will be greater or equal to all prior values of
     /// `self.apply_write(write_ts)`, and strictly less than all subsequent
     /// values of `self.write_ts()`.
-    pub(crate) fn read_ts(&self) -> T {
+    pub(crate) fn read_ts(&self) -> Timestamp {
         self.read_ts.clone()
     }
 
@@ -99,7 +89,7 @@ where
     ///
     /// All subsequent values of `self.read_ts()` will be greater or equal to
     /// `write_ts`.
-    pub(crate) fn apply_write(&mut self, write_ts: T) {
+    pub(crate) fn apply_write(&mut self, write_ts: Timestamp) {
         if self.read_ts.less_than(&write_ts) {
             self.read_ts = write_ts;
 

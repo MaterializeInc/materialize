@@ -13,12 +13,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import subprocess
 import time
 from collections import namedtuple
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
 import dbt_common.exceptions
+import psycopg2
 from dbt_common.contracts.constraints import (
     ColumnLevelConstraint,
     ConstraintType,
@@ -33,8 +35,10 @@ from dbt.adapters.capability import (
     CapabilitySupport,
     Support,
 )
+from dbt.adapters.events.logging import AdapterLogger
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.exceptions import (
+    PartitionByConfigError,
     RefreshIntervalConfigError,
     RefreshIntervalConfigNotDictError,
 )
@@ -42,6 +46,8 @@ from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres.column import PostgresColumn
 from dbt.adapters.postgres.impl import PostgresAdapter, SQLAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
+
+logger = AdapterLogger("Materialize")
 
 
 # types in ./misc/dbt-materialize need to import generic types from typing
@@ -102,7 +108,9 @@ class MaterializeRefreshIntervalConfig(dbtClassMixin):
 @dataclass
 class MaterializeConfig(AdapterConfig):
     cluster: Optional[str] = None
+    partition_by: Optional[List[str]] = None
     refresh_interval: Optional[MaterializeRefreshIntervalConfig] = None
+    retain_history: Optional[str] = None
 
 
 class MaterializeAdapter(PostgresAdapter, SQLAdapter):
@@ -113,7 +121,7 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
 
     # NOTE(morsapaes): Materialize supports enforcing the NOT NULL constraint
     # for materialized views (via the ASSERT NOT NULL clause) and tables. As a
-    # reminder, tables are modeled as static materialized views (see #5266).
+    # reminder, tables are modeled as static materialized views (see database-issues#1623).
     CONSTRAINT_SUPPORT = {
         ConstraintType.check: ConstraintSupport.NOT_SUPPORTED,
         ConstraintType.not_null: ConstraintSupport.ENFORCED,
@@ -189,6 +197,20 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
     ) -> Optional[MaterializeRefreshIntervalConfig]:
         return MaterializeRefreshIntervalConfig.parse(raw_refresh_interval)
 
+    @available
+    def parse_partition_by(self, raw_partition_by: Any) -> Optional[List[str]]:
+        # Materialize requires PARTITION BY columns to be a prefix of the
+        # relation's columns and to have order-preserving types. We don't
+        # duplicate those checks here; they are enforced server-side and
+        # produce clear errors. We only validate the shape of the config.
+        if raw_partition_by is None:
+            return None
+        if not isinstance(raw_partition_by, list) or not all(
+            isinstance(c, str) for c in raw_partition_by
+        ):
+            raise PartitionByConfigError(raw_partition_by)
+        return raw_partition_by or None
+
     def list_relations_without_caching(
         self, schema_relation: MaterializeRelation
     ) -> List[MaterializeRelation]:
@@ -256,6 +278,20 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
     def sleep(cls, seconds):
         time.sleep(seconds)
 
+    @available
+    @classmethod
+    def get_git_commit_sha(cls):
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return None
+
     def get_column_schema_from_query(self, sql: str) -> List[PostgresColumn]:
         # The idea is that this function returns the names and types of the
         # columns returned by `sql` without actually executing the statement.
@@ -322,10 +358,54 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
 
         return columns
 
+    # SQLSTATE raised by Materialize when a DDL transaction is aborted because
+    # another session modified the catalog concurrently. See
+    # `AdapterError::DDLTransactionRace` in `src/adapter/src/error.rs`.
+    _DDL_CONFLICT_SQLSTATE = "40001"
+
+    @available
+    def try_atomic_swap(self, swap_sql: str) -> bool:
+        """Execute a multi-statement atomic swap as a single transaction.
+
+        Returns True on success. Returns False if the transaction failed due
+        to a concurrent-DDL conflict (SQLSTATE 40001), which callers may
+        retry. Any other error, including permission, syntax, or missing
+        object errors, is raised immediately so it is surfaced to the user
+        without retry noise.
+
+        This reaches down to the raw psycopg2 connection rather than going
+        through dbt's `add_query`/`run_query` because we need the original
+        `pgcode` to classify the failure: dbt's wrapper converts psycopg2
+        errors into `DbtDatabaseError` and drops the SQLSTATE, leaving no
+        reliable way to tell a retryable DDL conflict apart from a
+        permissions or syntax error.
+        """
+        connection = self.connections.get_thread_connection()
+        handle = connection.handle
+        try:
+            with handle.cursor() as cursor:
+                cursor.execute(swap_sql)
+            return True
+        except psycopg2.Error as e:
+            # The server has already aborted the transaction on error, but
+            # send a ROLLBACK to explicitly exit the transaction block.
+            try:
+                with handle.cursor() as cursor:
+                    cursor.execute("ROLLBACK")
+            except psycopg2.Error as rollback_err:
+                logger.debug(
+                    f"ROLLBACK after aborted swap failed (connection may be "
+                    f"broken): {rollback_err}"
+                )
+            if getattr(e, "pgcode", None) == self._DDL_CONFLICT_SQLSTATE:
+                logger.info(f"Atomic swap aborted by concurrent DDL: {e}")
+                return False
+            raise
+
     @available
     def generate_final_cluster_name(
         self, cluster_name: str, force_deploy_suffix: bool = False
-    ) -> str:
+    ) -> Optional[str]:
         cluster_name = self.execute_macro(
             "generate_cluster_name",
             kwargs={"custom_cluster_name": cluster_name},

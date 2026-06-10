@@ -9,26 +9,42 @@
 
 //! Methods common to servers listening for TCP connections.
 
+use std::fmt;
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use anyhow::bail;
+use async_trait::async_trait;
+use clap::builder::ArgPredicate;
 use futures::stream::{BoxStream, Stream, StreamExt};
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::channel::trigger;
 use mz_ore::error::ErrorExt;
+use mz_ore::netio::AsyncReady;
+use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
+use proxy_header::{ParseConfig, ProxiedAddress, ProxyHeader};
+use schemars::JsonSchema;
+use scopeguard::ScopeGuard;
+use serde::{Deserialize, Serialize};
 use socket2::{SockRef, TcpKeepalive};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, Interest, ReadBuf, Ready};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
+use tokio_metrics::TaskMetrics;
 use tokio_stream::wrappers::{IntervalStream, TcpListenerStream};
 use tracing::{debug, error, warn};
+use uuid::Uuid;
+
+pub mod listeners;
 
 /// TCP keepalive settings. The idle time and interval match CockroachDB [0].
 /// The number of retries matches the Linux default.
@@ -42,13 +58,204 @@ const KEEPALIVE: TcpKeepalive = TcpKeepalive::new()
 /// A future that handles a connection.
 pub type ConnectionHandler = Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + Send>>;
 
+/// A wrapper around a [`TcpStream`] that can identify a connection across
+/// processes.
+pub struct Connection {
+    conn_uuid: Arc<Mutex<Option<Uuid>>>,
+    tcp_stream: TcpStream,
+}
+
+impl Connection {
+    fn new(tcp_stream: TcpStream) -> Connection {
+        Connection {
+            conn_uuid: Arc::new(Mutex::new(None)),
+            tcp_stream,
+        }
+    }
+
+    /// Returns a handle to the connection UUID.
+    pub fn uuid_handle(&self) -> ConnectionUuidHandle {
+        ConnectionUuidHandle(Arc::clone(&self.conn_uuid))
+    }
+
+    /// Attempts to parse a proxy header from the tcp_stream.
+    /// If none is found or it is unable to be parsed None will
+    /// be returned. If a header is found it will be returned and its
+    /// bytes will be removed from the stream.
+    ///
+    /// It is possible an invalid header was sent, if that is the case
+    /// any downstream service will be responsible for returning errors
+    /// to the client.
+    pub async fn take_proxy_header_address(&mut self) -> Option<ProxiedAddress> {
+        // 1024 bytes is a rather large header for tcp proxy header, unless
+        // if the header contains TLV fields or uses a unix socket address
+        // this could easily be hit. We'll use a 1024 byte max buf to allow
+        // limited support for this.
+        let mut buf = [0u8; 1024];
+        let len = match self.tcp_stream.peek(&mut buf).await {
+            Ok(n) if n > 0 => n,
+            _ => {
+                debug!("Failed to read from client socket or no data received");
+                return None;
+            }
+        };
+
+        // Attempt to parse the header, and log failures.
+        let (header, hlen) = match ProxyHeader::parse(
+            &buf[..len],
+            ParseConfig {
+                include_tlvs: false,
+                allow_v1: false,
+                allow_v2: true,
+            },
+        ) {
+            Ok((header, hlen)) => (header, hlen),
+            Err(proxy_header::Error::Invalid) => {
+                debug!("Proxy header is invalid. This is likely due to no header being provided",);
+                return None;
+            }
+            // Data matches the PROXY v2 signature prefix but the header
+            // is incomplete — likely split across TCP segments. Read the
+            // 16-byte fixed v2 header to learn the total size, then read
+            // the remaining address bytes.
+            Err(proxy_header::Error::BufferTooShort) => {
+                return self.read_proxy_v2_header(&mut buf).await;
+            }
+            Err(e) => {
+                debug!("Proxy header parse error '{:?}', ignoring header.", e);
+                return None;
+            }
+        };
+        debug!("Proxied connection with header {:?}", header);
+        let address = header.proxied_address().map(|a| a.to_owned());
+        // Proxy header found, clear the bytes.
+        let _ = self.read_exact(&mut buf[..hlen]).await;
+        address
+    }
+
+    /// Fallback path for [`Self::take_proxy_header_address`] when the initial
+    /// peek returned an incomplete PROXY v2 header. Reads the fixed 16-byte
+    /// v2 prefix to learn the total header size, then reads the rest.
+    async fn read_proxy_v2_header(&mut self, buf: &mut [u8; 1024]) -> Option<ProxiedAddress> {
+        // PROXY v2 fixed prefix: 12-byte signature + ver/cmd + fam/proto + 2-byte length.
+        const V2_PREFIX_LEN: usize = 16;
+        if self.read_exact(&mut buf[..V2_PREFIX_LEN]).await.is_err() {
+            debug!("Failed to read PROXY v2 fixed header");
+            return None;
+        }
+        let addr_len = usize::from(u16::from_be_bytes([buf[14], buf[15]]));
+        let total = V2_PREFIX_LEN + addr_len;
+        if total > buf.len() {
+            debug!("PROXY v2 header too large: {total} bytes");
+            return None;
+        }
+        if self
+            .read_exact(&mut buf[V2_PREFIX_LEN..total])
+            .await
+            .is_err()
+        {
+            debug!("Failed to read PROXY v2 address data");
+            return None;
+        }
+        match ProxyHeader::parse(
+            &buf[..total],
+            ParseConfig {
+                include_tlvs: false,
+                allow_v1: false,
+                allow_v2: true,
+            },
+        ) {
+            Ok((header, _)) => {
+                debug!("Proxied connection with header {:?}", header);
+                header.proxied_address().map(|a| a.to_owned())
+            }
+            Err(e) => {
+                debug!("Proxy header parse error '{:?}', ignoring header.", e);
+                None
+            }
+        }
+    }
+
+    /// Peer address of the inner tcp_stream.
+    pub fn peer_addr(&self) -> Result<std::net::SocketAddr, io::Error> {
+        self.tcp_stream.peer_addr()
+    }
+}
+
+impl AsyncRead for Connection {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.tcp_stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Connection {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.tcp_stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.tcp_stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.tcp_stream).poll_shutdown(cx)
+    }
+}
+
+#[async_trait]
+impl AsyncReady for Connection {
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        self.tcp_stream.ready(interest).await
+    }
+}
+
+/// A handle that permits getting and setting the UUID for a [`Connection`].
+///
+/// A connection's UUID is a globally unique value that can identify a given
+/// connection across environments and process boundaries. Connection UUIDs are
+/// never reused.
+///
+/// This is distinct from environmentd's concept of a "connection ID", which is
+/// a `u32` that only identifies a connection within a given environment and
+/// only during its lifetime. These connection IDs are frequently reused.
+pub struct ConnectionUuidHandle(Arc<Mutex<Option<Uuid>>>);
+
+impl ConnectionUuidHandle {
+    /// Gets the UUID for the connection, if it exists.
+    pub fn get(&self) -> Option<Uuid> {
+        *self.0.lock().expect("lock poisoned")
+    }
+
+    /// Sets the UUID for this connection.
+    pub fn set(&self, conn_uuid: Uuid) {
+        *self.0.lock().expect("lock poisoned") = Some(conn_uuid);
+    }
+
+    /// Returns a displayable that renders a possibly missing connection UUID.
+    pub fn display(&self) -> impl fmt::Display {
+        self.get().display_or("<unknown>")
+    }
+}
+
 /// A server handles incoming network connections.
 pub trait Server {
     /// Returns the name of the connection handler for use in e.g. log messages.
     const NAME: &'static str;
 
     /// Handles a single connection.
-    fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler;
+    fn handle_connection(
+        &self,
+        conn: Connection,
+        tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
+    ) -> ConnectionHandler;
 }
 
 /// A stream of incoming connections.
@@ -59,7 +266,7 @@ impl<T> ConnectionStream for T where T: Stream<Item = io::Result<TcpStream>> + U
 /// A handle to a listener created by [`listen`].
 #[derive(Debug)]
 pub struct ListenerHandle {
-    local_addr: SocketAddr,
+    pub local_addr: SocketAddr,
     _trigger: trigger::Trigger,
 }
 
@@ -91,13 +298,46 @@ pub async fn listen(
     Ok((handle, Box::pin(stream)))
 }
 
-/// Serves incoming TCP connections from `conns` using `server`. `wait_timeout` is the time to wait
-/// after `conns` terminates for outstanding connections to complete. Returns handles to the
-/// outstanding connections after `wait_timeout` has expired or all connections have completed.
-pub async fn serve<C, S>(mut conns: C, server: S, wait_timeout: Option<Duration>) -> JoinSet<()>
+/// Configuration for [`serve`].
+pub struct ServeConfig<S, C>
 where
-    C: ConnectionStream,
     S: Server,
+    C: ConnectionStream,
+{
+    /// The server for the connections.
+    pub server: S,
+    /// The stream of incoming TCP connections.
+    pub conns: C,
+    /// Optional dynamic configuration for the server.
+    pub dyncfg: Option<ServeDyncfg>,
+}
+
+/// Dynamic configuration for [`ServeConfig`].
+pub struct ServeDyncfg {
+    /// The current bundle of dynamic configuration values.
+    pub config_set: ConfigSet,
+    /// A configuration in `config_set` that specifies how long to wait for
+    /// connections to terminate after receiving a SIGTERM before forcibly
+    /// terminated.
+    ///
+    /// If `None`, then forcible shutdown occurs immediately.
+    pub sigterm_wait_config: &'static Config<Duration>,
+}
+
+/// Serves incoming TCP connections.
+///
+/// Returns handles to the outstanding connections after the configured timeout
+/// has expired or all connections have completed.
+pub async fn serve<S, C>(
+    ServeConfig {
+        server,
+        mut conns,
+        dyncfg,
+    }: ServeConfig<S, C>,
+) -> JoinSet<()>
+where
+    S: Server,
+    C: ConnectionStream,
 {
     let task_name = format!("handle_{}_connection", S::NAME);
     let mut set = JoinSet::new();
@@ -133,22 +373,46 @@ where
                     error!("failed enabling keepalive: {e}");
                     continue;
                 }
-                let fut = server.handle_connection(conn);
-                set.spawn_named(|| &task_name, async {
-                    if let Err(e) = fut.await {
+                let conn = Connection::new(conn);
+                let conn_uuid = conn.uuid_handle();
+                let metrics_monitor = tokio_metrics::TaskMonitor::new();
+                let tokio_metrics_intervals = metrics_monitor.intervals();
+                let fut = server.handle_connection(conn, tokio_metrics_intervals);
+                set.spawn_named(|| &task_name, metrics_monitor.instrument(async move {
+                    let guard = scopeguard::guard((), |_| {
                         debug!(
-                            "error handling connection in {}: {}",
-                            S::NAME,
-                            e.display_with_causes()
+                            server = S::NAME,
+                            conn_uuid = %conn_uuid.display(),
+                            "dropping connection without explicit termination",
                         );
+                    });
+
+                    match fut.await {
+                        Ok(()) => {
+                            debug!(
+                                server = S::NAME,
+                                conn_uuid = %conn_uuid.display(),
+                                "successfully handled connection",
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                server = S::NAME,
+                                conn_uuid = %conn_uuid.display(),
+                                "error handling connection: {}",
+                                e.display_with_causes(),
+                            );
+                        }
                     }
-                });
+
+                    let () = ScopeGuard::into_inner(guard);
+                }));
             }
             // Actively cull completed tasks from the JoinSet so it does not grow unbounded. This
             // method is cancel safe.
             res = set.join_next(), if set.len() > 0 => {
                 if let Some(Err(e)) = res {
-                    debug!(
+                    warn!(
                         "error joining connection in {}: {}",
                         S::NAME,
                         e.display_with_causes()
@@ -157,7 +421,8 @@ where
             }
         }
     }
-    if let Some(wait) = wait_timeout {
+    if let Some(dyncfg) = dyncfg {
+        let wait = dyncfg.sigterm_wait_config.get(&dyncfg.config_set);
         if set.len() > 0 {
             warn!(
                 "{} exiting, {} outstanding connections, waiting for {:?}",
@@ -169,7 +434,7 @@ where
         let timedout = tokio::time::timeout(wait, async {
             while let Some(res) = set.join_next().await {
                 if let Err(e) = res {
-                    debug!(
+                    warn!(
                         "error joining connection in {}: {}",
                         S::NAME,
                         e.display_with_causes()
@@ -200,7 +465,7 @@ pub struct TlsConfig {
 }
 
 /// Specifies how strictly to enforce TLS encryption.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub enum TlsMode {
     /// Allow TLS encryption.
     Allow,
@@ -274,7 +539,7 @@ pub struct ReloadingSslContext {
 }
 
 impl ReloadingSslContext {
-    pub fn get(&self) -> RwLockReadGuard<SslContext> {
+    pub fn get(&self) -> RwLockReadGuard<'_, SslContext> {
         self.context.read().expect("poisoned")
     }
 }
@@ -318,11 +583,11 @@ pub struct TlsCliArgs {
     /// rejected.
     #[clap(
         long, env = "TLS_MODE",
-        possible_values = &["disable", "require"],
+        value_parser = ["disable", "require"],
         default_value = "disable",
-        default_value_ifs = &[
-            ("frontegg-tenant", None, Some("require")),
-            ("frontegg-resolver-template", None, Some("require")),
+        default_value_ifs = [
+            ("frontegg_tenant", ArgPredicate::IsPresent, Some("require")),
+            ("frontegg_resolver_template", ArgPredicate::IsPresent, Some("require")),
         ],
         value_name = "MODE",
     )]
@@ -331,8 +596,8 @@ pub struct TlsCliArgs {
     #[clap(
         long,
         env = "TLS_CERT",
-        requires = "tls-key",
-        required_if_eq_any(&[("tls-mode", "require")]),
+        requires = "tls_key",
+        required_if_eq_any([("tls_mode", "require")]),
         value_name = "PATH"
     )]
     tls_cert: Option<PathBuf>,
@@ -340,8 +605,8 @@ pub struct TlsCliArgs {
     #[clap(
         long,
         env = "TLS_KEY",
-        requires = "tls-cert",
-        required_if_eq_any(&[("tls-mode", "require")]),
+        requires = "tls_cert",
+        required_if_eq_any([("tls_mode", "require")]),
         value_name = "PATH"
     )]
     tls_key: Option<PathBuf>,

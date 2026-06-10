@@ -1,0 +1,24 @@
+[package]
+name = "mz-sql-parser-wasm"
+description = "The parser for Materialize's SQL dialect, with wasm build targets."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-sql-parser = { path = "../../../../src/sql-parser", default-features = false }
+mz-ore = { path = "../../../../src/ore", default-features = false, features = ["stack", "assert-no-tracing"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.114"
+lol_alloc = "0.4.1"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ['-Oz']

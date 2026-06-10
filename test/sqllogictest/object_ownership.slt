@@ -37,6 +37,7 @@ GRANT ALL PRIVILEGES ON SYSTEM TO materialize;
 COMPLETE 0
 
 # All objects on a fresh installation should be owned by mz_system (s1)
+# except for the mz_analytics connection which is owned by mz_analytics (s3)
 
 # No builtin sinks
 query T
@@ -48,10 +49,10 @@ SELECT owner_id FROM mz_indexes GROUP BY owner_id
 ----
 s1
 
-# No builtin connections
 query T
 SELECT owner_id FROM mz_connections GROUP BY owner_id
 ----
+s3
 
 query T
 SELECT owner_id FROM mz_types GROUP BY owner_id
@@ -88,21 +89,22 @@ SELECT owner_id FROM mz_views GROUP BY owner_id
 ----
 s1
 
-# No builtin materialized views
 query T
 SELECT owner_id FROM mz_materialized_views GROUP BY owner_id
 ----
+s1
 
 query T
 SELECT owner_id FROM mz_databases GROUP BY owner_id
 ----
 s1
 
-query T
+query T rowsort
 SELECT owner_id FROM mz_clusters GROUP BY owner_id
 ----
 s1
 s2
+s3
 
 query T
 SELECT owner_id FROM mz_cluster_replicas GROUP BY owner_id
@@ -378,8 +380,8 @@ ALTER SOURCE js RENAME TO cool
 statement error must be owner of SOURCE materialize.public.js
 ALTER SOURCE js OWNER TO group_materialize
 
-statement error db error: ERROR: Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
-ALTER SOURCE js SET (SIZE = '4')
+statement error Expected one of TIMESTAMP or RETAIN, found SIZE
+ALTER SOURCE js SET (SIZE = 'scale=1,workers=4')
 
 ## Views
 
@@ -819,7 +821,7 @@ materialize
 ## Clusters
 
 statement ok
-CREATE CLUSTER mclus REPLICAS (mr1 (SIZE '1'));
+CREATE CLUSTER mclus REPLICAS (mr1 (SIZE 'scale=1,workers=1'));
 
 query T
 SELECT mz_roles.name
@@ -863,7 +865,7 @@ statement ok
 DROP CLUSTER mclus
 
 simple conn=joe,user=joe
-CREATE CLUSTER jclus REPLICAS (jr1 (SIZE '1'));
+CREATE CLUSTER jclus REPLICAS (jr1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -910,10 +912,10 @@ COMPLETE 0
 ## Cluster Replicas
 
 statement ok
-CREATE CLUSTER mclus REPLICAS (mr1 (SIZE '1'));
+CREATE CLUSTER mclus REPLICAS (mr1 (SIZE 'scale=1,workers=1'));
 
 statement ok
-CREATE CLUSTER REPLICA mclus.mr2 SIZE '1';
+CREATE CLUSTER REPLICA mclus.mr2 SIZE 'scale=1,workers=1';
 
 query T
 SELECT mz_roles.name
@@ -966,12 +968,12 @@ statement ok
 DROP CLUSTER mclus
 
 simple conn=joe,user=joe
-CREATE CLUSTER jclus REPLICAS (jr1 (SIZE '1'));
+CREATE CLUSTER jclus REPLICAS (jr1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER REPLICA jclus.jr2 SIZE '1';
+CREATE CLUSTER REPLICA jclus.jr2 SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
@@ -1243,11 +1245,7 @@ simple conn=materialize,user=materialize
 DROP ROLE owner
 ----
 db error: ERROR: role "owner" cannot be dropped because some objects depend on it
-DETAIL: owner: owner of SOURCE "materialize.public.s_progress"
-owner: privileges granted on SOURCE "materialize.public.s_progress" to mz_support
-owner: privileges on SOURCE "materialize.public.s_progress" granted by owner
-owner: privileges granted on SOURCE "materialize.public.s_progress" to owner
-owner: owner of SOURCE "materialize.public.s"
+DETAIL: owner: owner of SOURCE "materialize.public.s"
 owner: privileges on SOURCE "materialize.public.s" granted by owner
 owner: privileges granted on SOURCE "materialize.public.s" to owner
 owner: privileges on DATABASE "materialize" granted by mz_system
@@ -1879,7 +1877,7 @@ GRANT CREATE ON CLUSTER quickstart TO owner;
 COMPLETE 0
 
 simple conn=owner11,user=owner
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -1955,12 +1953,12 @@ GRANT CREATE ON SCHEMA materialize.public TO owner;
 COMPLETE 0
 
 simple conn=owner12,user=owner
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=owner12,user=owner
-CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
@@ -2145,6 +2143,14 @@ ALTER SCHEMA mz_catalog OWNER TO mz_system
 ----
 db error: ERROR: cannot alter schema mz_catalog because it is required by the database system
 
+# Temporary schema ownership change should fail with correct error message.
+# With lazy temporary schema creation, the temp schema may not exist yet,
+# but we still need to return the correct error (not "unknown schema").
+simple conn=mz_system,user=mz_system
+ALTER SCHEMA mz_temp OWNER TO mz_system
+----
+db error: ERROR: cannot alter schema mz_temp because it is a temporary schema
+
 simple conn=mz_system,user=mz_system
 ALTER VIEW mz_introspection.mz_dataflow_operators OWNER TO mz_system
 ----
@@ -2166,9 +2172,9 @@ ALTER TYPE int4 OWNER TO mz_system
 db error: ERROR: cannot alter item pg_catalog.int4 because it is required by the database system
 
 simple conn=mz_system,user=mz_system
-ALTER INDEX mz_catalog.mz_show_databases_ind OWNER TO mz_system
+ALTER INDEX mz_catalog.mz_databases_ind OWNER TO mz_system
 ----
-db error: ERROR: cannot alter item mz_catalog.mz_show_databases_ind because it is required by the database system
+db error: ERROR: cannot alter item mz_catalog.mz_databases_ind because it is required by the database system
 
 # Superusers can alter the owner to a role that they are not a member of
 
@@ -2298,21 +2304,43 @@ COMPLETE 0
 # object and primary source owners.
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+CREATE SOURCE s FROM LOAD GENERATOR AUCTION
+
+statement ok
+CREATE TABLE accounts FROM SOURCE s (REFERENCE accounts);
+
+statement ok
+CREATE TABLE auctions FROM SOURCE s (REFERENCE auctions);
+
+statement ok
+CREATE TABLE bids FROM SOURCE s (REFERENCE bids);
+
+statement ok
+CREATE TABLE organizations FROM SOURCE s (REFERENCE organizations);
+
+statement ok
+CREATE TABLE users FROM SOURCE s (REFERENCE users);
 
 query TT
 SELECT mz_sources.name, mz_roles.name
   FROM mz_sources
   LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
-  WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  WHERE mz_sources.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
+----
+s  materialize
+
+query TT
+SELECT mz_tables.name, mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  ORDER BY mz_tables.name
 ----
 accounts       materialize
 auctions       materialize
 bids           materialize
 organizations  materialize
-s              materialize
-s_progress     materialize
 users          materialize
 
 query TT
@@ -2332,7 +2360,7 @@ SELECT mz_cluster_replicas.name, mz_roles.name
 ----
 
 
-statement error db error: ERROR: unknown cluster 'materialize_public_s'
+statement error unknown cluster 'materialize_public_s'
 ALTER CLUSTER materialize_public_s OWNER TO joe
 
 statement error altering the owner of a cluster replica is not supported
@@ -2341,24 +2369,36 @@ ALTER CLUSTER REPLICA materialize_public_s.linked OWNER TO joe
 simple conn=mz_system,user=mz_system
 ALTER SOURCE accounts OWNER TO joe
 ----
+db error: ERROR: accounts is a table not a source
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE accounts OWNER TO joe
+----
 COMPLETE 0
 
-statement error cannot ALTER this type of source
-ALTER SOURCE s_progress OWNER TO joe
+statement error must be a member of "joe"
+ALTER SOURCE s OWNER TO joe
 
 query TT
 SELECT mz_sources.name, mz_roles.name
   FROM mz_sources
   LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
-  WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  WHERE mz_sources.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
+----
+s  materialize
+
+query TT
+SELECT mz_tables.name, mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  ORDER BY mz_tables.name
 ----
 accounts       joe
 auctions       materialize
 bids           materialize
 organizations  materialize
-s              materialize
-s_progress     materialize
 users          materialize
 
 query TT
@@ -2387,15 +2427,22 @@ query TT
 SELECT mz_sources.name, mz_roles.name
   FROM mz_sources
   LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
-  WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  WHERE mz_sources.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
+----
+s  joe
+
+query TT
+SELECT mz_tables.name, mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  ORDER BY mz_tables.name
 ----
 accounts       joe
 auctions       materialize
 bids           materialize
 organizations  materialize
-s              joe
-s_progress     joe
 users          materialize
 
 query TT
@@ -2466,7 +2513,7 @@ SELECT name FROM mz_tables WHERE name = 't'
 t
 
 statement ok
-CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
 query T
 SELECT name FROM mz_clusters WHERE name = 'c'
@@ -2488,7 +2535,7 @@ GRANT SELECT ON v TO materialize;
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
 ----
 v  mz_system=r/mz_system
@@ -2497,8 +2544,8 @@ v  materialize=r/mz_system
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-mz_system=RBN/mz_system
 materialize=BN/mz_system
+mz_system=RBNP/mz_system
 
 simple conn=mz_system,user=mz_system
 DROP OWNED BY materialize;
@@ -2533,7 +2580,7 @@ v  mz_system=r/mz_system
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 simple conn=mz_system,user=mz_system
 DROP VIEW v;
@@ -2572,7 +2619,7 @@ SELECT name FROM mz_tables WHERE name = 't'
 t
 
 statement ok
-CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
 query T
 SELECT name FROM mz_clusters WHERE name = 'c'
@@ -2594,7 +2641,7 @@ GRANT SELECT ON v TO materialize;
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
 ----
 v  mz_system=r/mz_system
@@ -2625,7 +2672,7 @@ query T
 SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
 ----
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
 ----
 v  mz_system=r/mz_system
@@ -2663,7 +2710,7 @@ SELECT name FROM mz_tables WHERE name = 't'
 t
 
 statement ok
-CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
 query T
 SELECT name FROM mz_clusters WHERE name = 'c'
@@ -2771,7 +2818,7 @@ DROP OWNED BY materialize
 simple conn=mz_system,user=mz_system
 DROP OWNED BY mz_system CASCADE;
 ----
-db error: ERROR: cannot drop objects owned by role "mz_system" because they are required by the database system
+db error: ERROR: cannot drop objects owned by role "mz_system", "mz_analytics" because they are required by the database system
 
 ## Test dropping PUBLIC objects
 
@@ -2789,7 +2836,7 @@ COMPLETE 0
 ## Testing dropping a cluster with bound objects
 
 statement ok
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 statement ok
 CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
@@ -2816,7 +2863,7 @@ SELECT name FROM mz_materialized_views WHERE name = 'mv'
 ----
 
 statement ok
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 statement ok
 GRANT CREATE ON CLUSTER c TO joe
@@ -2922,7 +2969,7 @@ SELECT mz_roles.name
 joe
 
 statement ok
-CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
 query T
 SELECT mz_roles.name
@@ -3026,6 +3073,71 @@ REASSIGN OWNED BY materialize TO PUBLIC;
 ----
 db error: ERROR: role name "public" is reserved
 DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+
+# Test DROP OWNED BY with network policies
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB, CREATECLUSTER, CREATENETWORKPOLICY ON SYSTEM TO materialize;
+----
+COMPLETE 0
+
+statement ok
+CREATE NETWORK POLICY np_drop (RULES (r1 (address='0.0.0.0/0', action='allow', direction='ingress')))
+
+query T
+SELECT name FROM mz_internal.mz_network_policies WHERE name = 'np_drop'
+----
+np_drop
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+COMPLETE 0
+
+query T
+SELECT name FROM mz_internal.mz_network_policies WHERE name = 'np_drop'
+----
+
+# Test REASSIGN OWNED BY with network policies
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB, CREATECLUSTER, CREATENETWORKPOLICY ON SYSTEM TO materialize;
+----
+COMPLETE 0
+
+statement ok
+CREATE NETWORK POLICY np_reassign (RULES (r1 (address='0.0.0.0/0', action='allow', direction='ingress')))
+
+query T
+SELECT mz_roles.name
+  FROM mz_internal.mz_network_policies
+  LEFT JOIN mz_roles ON mz_internal.mz_network_policies.owner_id = mz_roles.id
+  WHERE mz_internal.mz_network_policies.name = 'np_reassign'
+----
+materialize
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY materialize TO joe;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_internal.mz_network_policies
+  LEFT JOIN mz_roles ON mz_internal.mz_network_policies.owner_id = mz_roles.id
+  WHERE mz_internal.mz_network_policies.name = 'np_reassign'
+----
+joe
+
+simple conn=mz_system,user=mz_system
+DROP NETWORK POLICY np_reassign;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY joe TO materialize;
+----
+COMPLETE 0
 
 # Disable rbac checks.
 

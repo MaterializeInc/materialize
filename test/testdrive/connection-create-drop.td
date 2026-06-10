@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 #
@@ -48,18 +48,23 @@ contains:PROGRESS TOPIC REPLICATION FACTOR must be greater than 0
 
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
-> SELECT name, type from mz_connections
+> SELECT name, type from mz_connections WHERE id LIKE 'u%'
 name       type
 ------------------------------
 testconn   kafka
 
 > SHOW CONNECTIONS
-testconn    kafka
+testconn    kafka    ""
 
-> SHOW CREATE CONNECTION testconn
+>[version<2600700] SHOW CREATE CONNECTION testconn
 name   create_sql
 ---------------------------------
-materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = \"plaintext\")"
+materialize.public.testconn   "CREATE CONNECTION materialize.public.testconn TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
+
+>[version>=2600700] SHOW CREATE CONNECTION testconn
+name   create_sql
+---------------------------------
+materialize.public.testconn   "CREATE CONNECTION materialize.public.testconn\nTO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
 
 > SELECT
       brokers,
@@ -91,12 +96,15 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE CLUSTER connection_source_cluster SIZE '${arg.default-storage-size}';
-> CREATE SOURCE connection_source (first, second)
+> CREATE SOURCE connection_source
   IN CLUSTER connection_source_cluster
   FROM KAFKA CONNECTION testconn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
+
+> CREATE TABLE connection_source_tbl (first, second)
+  FROM SOURCE connection_source (REFERENCE "testdrive-connection_test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
 
-> SELECT * FROM connection_source
+> SELECT * FROM connection_source_tbl
 first second
 ------------
 1     2
@@ -110,6 +118,9 @@ contains:depended upon by source "connection_source"
 > DROP CONNECTION testconn CASCADE;
 
 # Validate the cascading drop actually happened
+! SELECT * FROM connection_source_tbl
+contains:unknown catalog item 'connection_source_tbl'
+
 ! SELECT * FROM connection_source
 contains:unknown catalog item 'connection_source'
 
@@ -182,20 +193,21 @@ contains:CONFLUENT SCHEMA REGISTRY connections do not support SESSION TOKEN valu
 ! CREATE SOURCE csr_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION csr_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
-    FORMAT AVRO
-    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-    ENVELOPE DEBEZIUM
 contains:is not a KAFKA CONNECTION
 
 > CREATE CLUSTER csr_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE csr_source
     IN CLUSTER csr_source_cluster
     FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
+
+> CREATE TABLE csr_source_tbl FROM SOURCE csr_source (REFERENCE "testdrive-csr_test-${testdrive.seed}")
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
     ENVELOPE DEBEZIUM
+> COMMIT
 
-> SELECT * from csr_source
+> SELECT * from csr_source_tbl
 id creature
 -----------
 1  lizard
@@ -203,32 +215,37 @@ id creature
 > CREATE CONNECTION broker_connection TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE CLUSTER two_connection_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE two_connection_source
   IN CLUSTER two_connection_source_cluster
   FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
+
+> CREATE TABLE two_connection_source_tbl FROM SOURCE two_connection_source (REFERENCE "testdrive-csr_test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
-> SELECT * from two_connection_source
+> SELECT * from two_connection_source_tbl
 id creature
 -----------
 1  lizard
 
 ! DROP CONNECTION csr_conn
-contains:depended upon by source "csr_source"
+contains:depended upon by table "csr_source_tbl"
 
 > DROP CONNECTION csr_conn CASCADE
 
 ! CREATE SOURCE should_fail
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION does_not_exist (TOPIC 'testdrive-error_topic-${testdrive.seed}')
-  FORMAT TEXT
 contains: unknown catalog item 'does_not_exist'
 
-! CREATE SOURCE should_fail
+> CREATE SOURCE source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-csr_test-${testdrive.seed}')
+
+! CREATE TABLE should_fail_tbl FROM SOURCE source (REFERENCE "testdrive-csr_test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION does_not_exist
   ENVELOPE DEBEZIUM
 contains: unknown catalog item 'does_not_exist'
@@ -306,12 +323,16 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
   )
 
 > CREATE CLUSTER import_connection_csr_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE import_connection_csr
   IN CLUSTER import_connection_csr_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
 
-> SELECT importee1::text, importee2::text FROM import_connection_csr
+> CREATE TABLE import_connection_csr_tbl FROM SOURCE import_connection_csr (REFERENCE "testdrive-import-csr-${testdrive.seed}")
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
+> COMMIT
+
+> SELECT importee1::text, importee2::text FROM import_connection_csr_tbl
 importee1  importee2
 --------------------------------
 (f)        "(\"(1234,5678)\")"
@@ -458,6 +479,63 @@ contains: HOST option is required
 ! CREATE CONNECTION conn1 TO KAFKA (BROKER '${testdrive.kafka-addr}' USING AWS PRIVATELINK foo (PORT 9093), SECURITY PROTOCOL PLAINTEXT);
 contains: unknown catalog item 'foo'
 
+! CREATE CONNECTION conn1 TO KAFKA (
+    BROKERS (
+        MATCHING '*.use1-az1.*' USING AWS PRIVATELINK foo (AVAILABILITY ZONE = 'use1-az1'),
+        MATCHING '*.use1-az2.*' USING AWS PRIVATELINK foo (PORT 9093, AVAILABILITY ZONE = 'use1-az2')
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: unknown catalog item 'foo'
+
+## MATCHING broker rules for PrivateLink
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET max_aws_privatelink_connections = 5;
+
+> CREATE CONNECTION pl_for_matching TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az2')
+  )
+
+# MATCHING requires the feature flag
+! CREATE CONNECTION kafka_matching_no_flag TO KAFKA (
+    BROKERS (
+        'broker:9092',
+        MATCHING '*' USING AWS PRIVATELINK pl_for_matching
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  ) WITH (VALIDATE = false);
+contains: MATCHING broker rules in BROKERS for Kafka PrivateLink connections is not available
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_kafka_broker_matching_rules = true;
+
+# MATCHING-only BROKERS without a static broker is rejected
+! CREATE CONNECTION kafka_matching_no_static TO KAFKA (
+    BROKERS (
+        MATCHING '*.use1-az1.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az1')
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  ) WITH (VALIDATE = false);
+contains: BROKERS must contain at least one static broker address
+
+# Static broker + MATCHING works (validate = false, we just test planning)
+> CREATE CONNECTION kafka_matching_ok TO KAFKA (
+    BROKERS (
+        'broker:9092' USING AWS PRIVATELINK pl_for_matching,
+        MATCHING '*.use1-az1.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az1'),
+        MATCHING '*.use1-az2.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az2')
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  ) WITH (VALIDATE = false)
+
+> DROP CONNECTION kafka_matching_ok
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET enable_kafka_broker_matching_rules;
+ALTER SYSTEM RESET max_aws_privatelink_connections;
+
 ! CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK foo, PORT 8080)
 contains: unknown catalog item 'foo'
 
@@ -468,6 +546,6 @@ contains: unknown catalog item 'foo'
 # Error in cloudtest/K8s: creating AWS PrivateLink Connection would violate max_aws_privatelink_connections limit
 ! CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+    AVAILABILITY ZONES ('use1-az1', 'use1-az2')
   )
 contains: AWS PrivateLink

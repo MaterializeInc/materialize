@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
 > DROP CLUSTER IF EXISTS prod CASCADE
 > DROP CLUSTER IF EXISTS prod_deploy CASCADE
@@ -30,16 +30,27 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
 # For now sources are not considered in blue-green deployments, so create them separately
 > DROP SOURCE IF EXISTS counter CASCADE
 > CREATE SOURCE counter FROM LOAD GENERATOR counter (TICK INTERVAL '1s')
+> CREATE TABLE counter_tbl FROM SOURCE counter;
 
 > DROP SOURCE IF EXISTS tpch CASCADE
+> BEGIN
 > CREATE SOURCE tpch
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1)
-  FOR ALL TABLES
+
+> CREATE TABLE customer FROM SOURCE tpch (REFERENCE customer);
+> CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
+> CREATE TABLE nation FROM SOURCE tpch (REFERENCE nation);
+> CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+> CREATE TABLE part FROM SOURCE tpch (REFERENCE part);
+> CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
+> CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
+> CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
+> COMMIT
 
 > CREATE SCHEMA prod
-> CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM counter
-> CREATE MATERIALIZED VIEW prod.counter_mv2 IN CLUSTER prod_deploy WITH (REFRESH EVERY '60 seconds') AS SELECT count(*), 'some new value' FROM counter
-> CREATE DEFAULT INDEX IN CLUSTER prod ON counter
+> CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM counter_tbl
+> CREATE MATERIALIZED VIEW prod.counter_mv2 IN CLUSTER prod_deploy WITH (REFRESH EVERY '60 seconds') AS SELECT count(*), 'some new value' FROM counter_tbl
+> CREATE DEFAULT INDEX IN CLUSTER prod ON counter_tbl
 > CREATE MATERIALIZED VIEW prod.tpch_mv
   IN CLUSTER prod AS
   SELECT
@@ -80,7 +91,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
     ),
     -- Collect ready dataflows.
     -- For a dataflow to be ready it must be hydrated and caught up.
-    -- We define a dataflow to be caught up if its local lag is less than 1 second.
+    -- We define a dataflow to be caught up if its local lag is less than 4 seconds.
     ready_dataflows AS (
         SELECT id
         FROM dataflows d
@@ -90,7 +101,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
         LEFT JOIN mz_internal.mz_materialization_lag l ON (l.object_id = d.id)
         WHERE
             h.hydrated AND
-            (l.local_lag <= '1s' OR l.local_lag IS NULL)
+            (l.local_lag <= '4s' OR l.local_lag IS NULL)
     ),
     -- Collect dataflows that are not yet ready.
     pending_dataflows AS (

@@ -11,90 +11,121 @@
 //! and altering objects.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fail::fail_point;
-use futures::Future;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
-use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, Index, MaterializedView, Sink,
-};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_compute_client::protocol::response::PeekResponse;
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Sink};
+use mz_cluster_client::ReplicaId;
 use mz_controller::clusters::ReplicaLocation;
-use mz_controller_types::{ClusterId, ReplicaId};
-use mz_ore::error::ErrorExt;
-use mz_ore::future::InTask;
+use mz_controller_types::ClusterId;
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
-use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{GlobalId, Timestamp};
-use mz_sql::catalog::{CatalogCluster, CatalogSchema};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_sql::catalog::{CatalogClusterReplica, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
+use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
-    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
+    self, DEFAULT_TIMESTAMP_INTERVAL, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
-    MAX_MYSQL_CONNECTIONS, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
+    MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_TABLES,
+    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, Var,
 };
-use mz_storage_client::controller::ExportDescription;
+use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::read_policy::ReadPolicy;
-use mz_storage_types::sources::GenericSourceConnection;
+use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use serde_json::json;
-use tracing::{event, info_span, warn, Instrument, Level};
+use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{DropObjectInfo, Op, TransactionResult};
+use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
+use crate::coord::Coordinator;
 use crate::coord::appends::BuiltinTableAppendNotify;
-use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::{Coordinator, ReplicaMetadata};
+use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Session, Transaction, TransactionOps};
-use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
-use crate::{catalog, flags, AdapterError, TimestampProvider};
+use crate::{AdapterError, ExecuteContext, catalog, flags};
 
 impl Coordinator {
-    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
+    /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`].
     #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
         &mut self,
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        self.catalog_transact_conn(session.map(|session| session.conn_id()), ops)
-            .await
+        let start = Instant::now();
+        let result = self
+            .catalog_transact_with_context(session.map(|session| session.conn_id()), None, ops)
+            .await;
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact"])
+            .observe(start.elapsed().as_secs_f64());
+        result
     }
 
-    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`] and runs
-    /// builtin table updates concurrently with any side effects (e.g. creating
-    /// collections).
+    /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`]
+    /// and runs builtin table updates concurrently with any side effects (e.g.
+    /// creating collections).
+    // TODO(aljoscha): Remove this method once all call-sites have been migrated
+    // to the newer catalog_transact_with_context. The latter is what allows us
+    // to apply catalog implications that we derive from catalog chanages either
+    // when initially applying the ops to the catalog _or_ when following
+    // catalog changes from another process.
     #[instrument(name = "coord::catalog_transact_with_side_effects")]
-    pub(crate) async fn catalog_transact_with_side_effects<'c, F, Fut>(
-        &'c mut self,
-        session: Option<&Session>,
+    pub(crate) async fn catalog_transact_with_side_effects<F>(
+        &mut self,
+        mut ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
         side_effect: F,
     ) -> Result<(), AdapterError>
     where
-        F: FnOnce(&'c mut Coordinator) -> Fut,
-        Fut: Future<Output = ()>,
+        F: for<'a> FnOnce(
+                &'a mut Coordinator,
+                Option<&'a mut ExecuteContext>,
+            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+            + 'static,
     {
-        let table_updates = self
-            .catalog_transact_inner(session.map(|session| session.conn_id()), ops)
+        let start = Instant::now();
+
+        let (table_updates, catalog_updates) = self
+            .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
             .await?;
-        let side_effects_fut = side_effect(self);
+
+        // We can't run this concurrently with the explicit side effects,
+        // because both want to borrow self mutably.
+        let apply_implications_res = self
+            .apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)
+            .await;
+
+        // We would get into an inconsistent state if we updated the catalog but
+        // then failed to apply commands/updates to the controller. Easiest
+        // thing to do is panic and let restart/bootstrap handle it.
+        apply_implications_res.expect("cannot fail to apply catalog update implications");
+
+        // Note: It's important that we keep the function call inside macro, this way we only run
+        // the consistency checks if soft assertions are enabled.
+        mz_ore::soft_assert_eq_no_log!(
+            self.check_consistency(),
+            Ok(()),
+            "coordinator inconsistency detected"
+        );
+
+        let side_effects_fut = side_effect(self, ctx);
 
         // Run our side effects concurrently with the table updates.
         let ((), ()) = futures::future::join(
@@ -107,190 +138,215 @@ impl Coordinator {
         )
         .await;
 
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact_with_side_effects"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(())
     }
 
-    /// Same as [`Self::catalog_transact_inner`] but awaits the table updates.
-    #[instrument(name = "coord::catalog_transact_conn")]
-    pub(crate) async fn catalog_transact_conn(
+    /// Same as [`Self::catalog_transact_inner`] but takes an execution context
+    /// or connection ID and runs builtin table updates concurrently with any
+    /// catalog implications that are generated as part of applying the given
+    /// `ops` (e.g. creating collections).
+    ///
+    /// This will use a connection ID if provided and otherwise fall back to
+    /// getting a connection ID from the execution context.
+    #[instrument(name = "coord::catalog_transact_with_context")]
+    pub(crate) async fn catalog_transact_with_context(
         &mut self,
         conn_id: Option<&ConnectionId>,
+        ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let table_updates = self.catalog_transact_inner(conn_id, ops).await?;
-        table_updates
-            .instrument(info_span!("coord::catalog_transact_conn::table_updates"))
-            .await;
+        let start = Instant::now();
+
+        let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
+
+        let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
+
+        let apply_catalog_implications_fut = self.apply_catalog_implications(ctx, catalog_updates);
+
+        // Apply catalog implications concurrently with the table updates.
+        let (combined_apply_res, ()) = futures::future::join(
+            apply_catalog_implications_fut.instrument(info_span!(
+                "coord::catalog_transact_with_context::side_effects_fut"
+            )),
+            table_updates.instrument(info_span!(
+                "coord::catalog_transact_with_context::table_updates"
+            )),
+        )
+        .await;
+
+        // We would get into an inconsistent state if we updated the catalog but
+        // then failed to apply implications. Easiest thing to do is panic and
+        // let restart/bootstrap handle it.
+        combined_apply_res.expect("cannot fail to apply catalog implications");
+
+        // Note: It's important that we keep the function call inside macro, this way we only run
+        // the consistency checks if soft assertions are enabled.
+        mz_ore::soft_assert_eq_no_log!(
+            self.check_consistency(),
+            Ok(()),
+            "coordinator inconsistency detected"
+        );
+
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact_with_context"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(())
     }
 
     /// Executes a Catalog transaction with handling if the provided [`Session`]
     /// is in a SQL transaction that is executing DDL.
     #[instrument(name = "coord::catalog_transact_with_ddl_transaction")]
-    pub(crate) async fn catalog_transact_with_ddl_transaction(
+    pub(crate) async fn catalog_transact_with_ddl_transaction<F>(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         ops: Vec<catalog::Op>,
-    ) -> Result<(), AdapterError> {
+        side_effect: F,
+    ) -> Result<(), AdapterError>
+    where
+        F: for<'a> FnOnce(
+                &'a mut Coordinator,
+                Option<&'a mut ExecuteContext>,
+            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let start = Instant::now();
+
         let Some(Transaction {
             ops:
                 TransactionOps::DDL {
                     ops: txn_ops,
                     revision: txn_revision,
-                    state: _,
+                    state: txn_state,
+                    snapshot: txn_snapshot,
+                    side_effects: _,
                 },
             ..
-        }) = session.transaction().inner()
+        }) = ctx.session().transaction().inner()
         else {
-            return self.catalog_transact(Some(session), ops).await;
+            let result = self
+                .catalog_transact_with_side_effects(Some(ctx), ops, side_effect)
+                .await;
+            self.metrics
+                .catalog_transact_seconds
+                .with_label_values(&["catalog_transact_with_ddl_transaction"])
+                .observe(start.elapsed().as_secs_f64());
+            return result;
         };
 
         // Make sure our Catalog hasn't changed since openning the transaction.
         if self.catalog().transient_revision() != *txn_revision {
+            self.metrics
+                .catalog_transact_seconds
+                .with_label_values(&["catalog_transact_with_ddl_transaction"])
+                .observe(start.elapsed().as_secs_f64());
             return Err(AdapterError::DDLTransactionRace);
         }
 
-        // Combine the existing ops with the new ops so we can replay them.
-        let mut all_ops = Vec::with_capacity(ops.len() + txn_ops.len() + 1);
-        all_ops.extend(txn_ops.iter().cloned());
-        all_ops.extend(ops.clone());
-        all_ops.push(Op::TransactionDryRun);
+        // Clone what we need from the session before taking &mut below.
+        let txn_ops_clone = txn_ops.clone();
+        let txn_state_clone = txn_state.clone();
+        let prev_snapshot = txn_snapshot.clone();
 
-        // Run our Catalog transaction, but abort before committing.
-        let result = self.catalog_transact(Some(session), all_ops).await;
+        // Validate resource limits with all accumulated + new ops (cheap O(N) counting).
+        let mut combined_ops = txn_ops_clone;
+        combined_ops.extend(ops.iter().cloned());
+        let conn_id = ctx.session().conn_id().clone();
+        self.validate_resource_limits(&combined_ops, &conn_id)?;
 
-        match result {
-            // We purposefully fail with this error to prevent committing the transaction.
-            Err(AdapterError::TransactionDryRun { new_ops, new_state }) => {
-                // Sets these ops to our transaction, bailing if the Catalog has changed since we
-                // ran the transaction.
-                session.transaction_mut().add_ops(TransactionOps::DDL {
-                    ops: new_ops,
-                    state: new_state,
-                    revision: self.catalog().transient_revision(),
-                })?;
-                Ok(())
-            }
-            Ok(_) => unreachable!("unexpected success!"),
-            Err(e) => Err(e),
-        }
+        // Get oracle timestamp for audit log entries.
+        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+
+        // Get ConnMeta for the session.
+        let conn = self.active_conns.get(ctx.session().conn_id());
+
+        // Incremental dry run: process only NEW ops against accumulated state.
+        // If we have a saved snapshot from a previous dry run, use it to
+        // initialize the transaction so it starts in sync with the accumulated
+        // state. Otherwise (first statement), the fresh durable transaction is
+        // already in sync with the real catalog state.
+        let (new_state, new_snapshot) = self
+            .catalog()
+            .transact_incremental_dry_run(
+                &txn_state_clone,
+                ops.clone(),
+                conn,
+                prev_snapshot,
+                oracle_write_ts,
+            )
+            .await?;
+
+        // Accumulate ops for eventual COMMIT.
+        let result = ctx
+            .session_mut()
+            .transaction_mut()
+            .add_ops(TransactionOps::DDL {
+                ops: combined_ops,
+                state: new_state,
+                side_effects: vec![Box::new(side_effect)],
+                revision: self.catalog().transient_revision(),
+                snapshot: Some(new_snapshot),
+            });
+
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact_with_ddl_transaction"])
+            .observe(start.elapsed().as_secs_f64());
+
+        result
     }
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
     /// called after this function successfully returns on any built
     /// [`DataflowDesc`](mz_compute_types::dataflows::DataflowDesc).
     #[instrument(name = "coord::catalog_transact_inner")]
-    pub(crate) async fn catalog_transact_inner<'a>(
+    pub(crate) async fn catalog_transact_inner(
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
-    ) -> Result<BuiltinTableAppendNotify, AdapterError> {
+    ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>), AdapterError> {
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
         }
 
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
-        let mut sources_to_drop = vec![];
         let mut webhook_sources_to_restart = BTreeSet::new();
-        let mut tables_to_drop = vec![];
-        let mut storage_sinks_to_drop = vec![];
-        let mut indexes_to_drop = vec![];
-        let mut materialized_views_to_drop = vec![];
-        let mut views_to_drop = vec![];
-        let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
-        let mut secrets_to_drop = vec![];
-        let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
-        let mut compute_sinks_to_drop = BTreeMap::new();
-        let mut peeks_to_drop = vec![];
         let mut clusters_to_create = vec![];
         let mut cluster_replicas_to_create = vec![];
+        let mut update_metrics_config = false;
         let mut update_tracing_config = false;
+        let mut update_controller_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
-        let mut update_pg_timestamp_oracle_config = false;
+        let mut update_timestamp_oracle_config = false;
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
-        let mut update_arrangement_exert_proportionality = false;
         let mut update_http_config = false;
-        let mut log_indexes_to_drop = Vec::new();
+        let mut update_advance_timelines_interval = false;
 
         for op in &ops {
             match op {
                 catalog::Op::DropObjects(drop_object_infos) => {
                     for drop_object_info in drop_object_infos {
                         match &drop_object_info {
-                            catalog::DropObjectInfo::Item(id) => {
-                                match self.catalog().get_entry(id).item() {
-                                    CatalogItem::Table(_) => {
-                                        tables_to_drop.push(*id);
-                                    }
-                                    CatalogItem::Source(source) => {
-                                        sources_to_drop.push(*id);
-                                        if let DataSourceDesc::Ingestion {
-                                            ingestion_desc, ..
-                                        } = &source.data_source
-                                        {
-                                            match &ingestion_desc.desc.connection {
-                                                GenericSourceConnection::Postgres(conn) => {
-                                                    let conn = conn.clone().into_inline_connection(
-                                                        self.catalog().state(),
-                                                    );
-                                                    let pending_drop = (
-                                                        conn.connection.clone(),
-                                                        conn.publication_details.slot.clone(),
-                                                    );
-                                                    replication_slots_to_drop.push(pending_drop);
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                    }
-                                    CatalogItem::Sink(Sink { .. }) => {
-                                        storage_sinks_to_drop.push(*id);
-                                    }
-                                    CatalogItem::Index(Index { cluster_id, .. }) => {
-                                        indexes_to_drop.push((*cluster_id, *id));
-                                    }
-                                    CatalogItem::MaterializedView(MaterializedView {
-                                        cluster_id,
-                                        ..
-                                    }) => {
-                                        materialized_views_to_drop.push((*cluster_id, *id));
-                                    }
-                                    CatalogItem::View(_) => views_to_drop.push(*id),
-                                    CatalogItem::Secret(_) => {
-                                        secrets_to_drop.push(*id);
-                                    }
-                                    CatalogItem::Connection(Connection { connection, .. }) => {
-                                        match connection {
-                                        // SSH connections have an associated secret that should be dropped
-                                        mz_storage_types::connections::Connection::Ssh(_) => {
-                                            secrets_to_drop.push(*id);
-                                        }
-                                        // AWS PrivateLink connections have an associated
-                                        // VpcEndpoint K8S resource that should be dropped
-                                        mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
-                                            vpc_endpoints_to_drop.push(*id);
-                                        }
-                                        _ => (),
-                                    }
-                                    }
-                                    _ => (),
-                                }
+                            catalog::DropObjectInfo::Item(_) => {
+                                // Nothing to do, these will be handled by
+                                // applying the side effects that we return.
                             }
                             catalog::DropObjectInfo::Cluster(id) => {
                                 clusters_to_drop.push(*id);
-                                log_indexes_to_drop.extend(
-                                    self.catalog()
-                                        .get_cluster(*id)
-                                        .log_indexes
-                                        .values()
-                                        .cloned(),
-                                );
                             }
                             catalog::DropObjectInfo::ClusterReplica((
                                 cluster_id,
@@ -306,7 +362,17 @@ impl Coordinator {
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
+                    update_metrics_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_metrics_config_var(name);
                     update_tracing_config |= vars::is_tracing_var(name);
+                    update_controller_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_controller_config_var(name);
                     update_compute_config |= self
                         .catalog
                         .state()
@@ -317,28 +383,28 @@ impl Coordinator {
                         .state()
                         .system_config()
                         .is_storage_config_var(name);
-                    update_pg_timestamp_oracle_config |=
-                        vars::is_pg_timestamp_oracle_config_var(name);
+                    update_timestamp_oracle_config |= vars::is_timestamp_oracle_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
-                    update_arrangement_exert_proportionality |=
-                        name == vars::ARRANGEMENT_EXERT_PROPORTIONALITY.name();
                     update_http_config |= vars::is_http_config_var(name);
+                    update_advance_timelines_interval |= name == DEFAULT_TIMESTAMP_INTERVAL.name();
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
                     // We could see if the config's have actually changed, but
                     // this is simpler.
                     update_tracing_config = true;
+                    update_controller_config = true;
                     update_compute_config = true;
                     update_storage_config = true;
-                    update_pg_timestamp_oracle_config = true;
+                    update_timestamp_oracle_config = true;
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
-                    update_arrangement_exert_proportionality = true;
+                    update_metrics_config = true;
                     update_http_config = true;
+                    update_advance_timelines_interval = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
                     let item = self.catalog().get_entry(id);
@@ -373,119 +439,19 @@ impl Coordinator {
                 }
                 catalog::Op::CreateClusterReplica {
                     cluster_id,
-                    id,
+                    name,
                     config,
                     ..
                 } => {
                     cluster_replicas_to_create.push((
                         *cluster_id,
-                        *id,
+                        name.clone(),
                         config.location.num_processes(),
                     ));
                 }
                 _ => (),
             }
         }
-
-        let relations_to_drop: BTreeSet<_> = sources_to_drop
-            .iter()
-            .chain(tables_to_drop.iter())
-            .chain(storage_sinks_to_drop.iter())
-            .chain(indexes_to_drop.iter().map(|(_, id)| id))
-            .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-            .chain(views_to_drop.iter())
-            .collect();
-
-        // Clean up any active compute sinks like subscribes or copy to-s that rely on dropped relations or clusters.
-        for (sink_id, sink) in &self.active_compute_sinks {
-            let cluster_id = sink.cluster_id();
-            let conn_id = &sink.connection_id();
-            if let Some(id) = sink
-                .depends_on()
-                .iter()
-                .find(|id| relations_to_drop.contains(id))
-            {
-                let entry = self.catalog().get_entry(id);
-                let name = self
-                    .catalog()
-                    .resolve_full_name(entry.name(), Some(conn_id))
-                    .to_string();
-                compute_sinks_to_drop.insert(
-                    *sink_id,
-                    ActiveComputeSinkRetireReason::DependencyDropped(format!(
-                        "relation {}",
-                        name.quoted()
-                    )),
-                );
-            } else if clusters_to_drop.contains(&cluster_id) {
-                let name = self.catalog().get_cluster(cluster_id).name();
-                compute_sinks_to_drop.insert(
-                    *sink_id,
-                    ActiveComputeSinkRetireReason::DependencyDropped(format!(
-                        "cluster {}",
-                        name.quoted()
-                    )),
-                );
-            }
-        }
-
-        // Clean up any pending peeks that rely on dropped relations or clusters.
-        for (uuid, pending_peek) in &self.pending_peeks {
-            if let Some(id) = pending_peek
-                .depends_on
-                .iter()
-                .find(|id| relations_to_drop.contains(id))
-            {
-                let entry = self.catalog().get_entry(id);
-                let name = self
-                    .catalog()
-                    .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
-                peeks_to_drop.push((
-                    format!("relation {}", name.to_string().quoted()),
-                    uuid.clone(),
-                ));
-            } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
-                let name = self.catalog().get_cluster(pending_peek.cluster_id).name();
-                peeks_to_drop.push((format!("cluster {}", name.quoted()), uuid.clone()));
-            }
-        }
-
-        let storage_ids_to_drop = sources_to_drop
-            .iter()
-            .chain(storage_sinks_to_drop.iter())
-            .chain(tables_to_drop.iter())
-            .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-            .cloned();
-        let compute_ids_to_drop = indexes_to_drop
-            .iter()
-            .chain(materialized_views_to_drop.iter())
-            .cloned();
-
-        // Check if any Timelines would become empty, if we dropped the specified storage or
-        // compute resources.
-        //
-        // Note: only after a Transaction succeeds do we actually drop the timeline
-        let collection_id_bundle = self.build_collection_id_bundle(
-            storage_ids_to_drop,
-            compute_ids_to_drop,
-            clusters_to_drop.clone(),
-        );
-        let timeline_associations: BTreeMap<_, _> = self
-            .partition_ids_by_timeline_context(&collection_id_bundle)
-            .filter_map(|(context, bundle)| {
-                let TimelineContext::TimelineDependent(timeline) = context else {
-                    return None;
-                };
-                let TimelineState { read_holds, .. } = self
-                    .global_timelines
-                    .get(&timeline)
-                    .expect("all timeslines have a timestamp oracle");
-
-                let empty = read_holds.id_bundle().difference(&bundle).is_empty();
-
-                Some((timeline, (empty, bundle)))
-            })
-            .collect();
 
         self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
 
@@ -510,91 +476,44 @@ impl Coordinator {
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
         let TransactionResult {
-            mut builtin_table_updates,
+            builtin_table_updates,
+            catalog_updates,
             audit_events,
         } = catalog
-            .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
+            .transact(
+                Some(&mut controller.storage_collections),
+                oracle_write_ts,
+                conn,
+                ops,
+            )
             .await?;
 
-        // Update in-memory cluster replica statuses.
-        // TODO(jkosh44) All these builtin table updates should be handled as a builtin source
-        // updates elsewhere.
         for (cluster_id, replica_id) in &cluster_replicas_to_drop {
-            let replica_statuses =
-                cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
-            for (process_id, status) in replica_statuses {
-                let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
-                    *replica_id,
-                    process_id,
-                    &status,
-                    -1,
-                );
-                let builtin_table_update = catalog
-                    .state()
-                    .resolve_builtin_table_update(builtin_table_update);
-                builtin_table_updates.push(builtin_table_update);
-            }
+            cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
         }
         for cluster_id in &clusters_to_drop {
-            let cluster_statuses = cluster_replica_statuses.remove_cluster_statuses(cluster_id);
-            for (replica_id, replica_statuses) in cluster_statuses {
-                for (process_id, status) in replica_statuses {
-                    let builtin_table_update = catalog
-                        .state()
-                        .pack_cluster_replica_status_update(replica_id, process_id, &status, -1);
-                    let builtin_table_update = catalog
-                        .state()
-                        .resolve_builtin_table_update(builtin_table_update);
-                    builtin_table_updates.push(builtin_table_update);
-                }
-            }
+            cluster_replica_statuses.remove_cluster_statuses(cluster_id);
         }
         for cluster_id in clusters_to_create {
             cluster_replica_statuses.initialize_cluster_statuses(cluster_id);
-            for (replica_id, replica_statuses) in
-                cluster_replica_statuses.get_cluster_statuses(cluster_id)
-            {
-                for (process_id, status) in replica_statuses {
-                    let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
-                        *replica_id,
-                        *process_id,
-                        status,
-                        1,
-                    );
-                    let builtin_table_update = catalog
-                        .state()
-                        .resolve_builtin_table_update(builtin_table_update);
-                    builtin_table_updates.push(builtin_table_update);
-                }
-            }
         }
         let now = to_datetime((catalog.config().now)());
-        for (cluster_id, replica_id, num_processes) in cluster_replicas_to_create {
+        for (cluster_id, replica_name, num_processes) in cluster_replicas_to_create {
+            let replica_id = catalog
+                .resolve_replica_in_cluster(&cluster_id, &replica_name)
+                .expect("just created")
+                .replica_id();
             cluster_replica_statuses.initialize_cluster_replica_statuses(
                 cluster_id,
                 replica_id,
                 num_processes,
                 now,
             );
-            for (process_id, status) in
-                cluster_replica_statuses.get_cluster_replica_statuses(cluster_id, replica_id)
-            {
-                let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
-                    replica_id,
-                    *process_id,
-                    status,
-                    1,
-                );
-                let builtin_table_update = catalog
-                    .state()
-                    .resolve_builtin_table_update(builtin_table_update);
-                builtin_table_updates.push(builtin_table_update);
-            }
         }
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let builtin_update_notify = self
+        let (builtin_update_notify, _) = self
             .builtin_table_update()
             .execute(builtin_table_updates)
             .await;
@@ -602,152 +521,24 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            if !timeline_associations.is_empty() {
-                for (timeline, (should_be_empty, id_bundle)) in timeline_associations {
-                    let became_empty =
-                        self.remove_resources_associated_with_timeline(timeline, id_bundle);
-                    assert_eq!(should_be_empty, became_empty, "emptiness did not match!");
-                }
-            }
-            if !sources_to_drop.is_empty() {
-                self.drop_sources(sources_to_drop);
-            }
-            if !tables_to_drop.is_empty() {
-                let ts = self.get_local_write_ts().await;
-                self.drop_tables(tables_to_drop, ts.timestamp);
-            }
             if !webhook_sources_to_restart.is_empty() {
                 self.restart_webhook_sources(webhook_sources_to_restart);
             }
-            if !storage_sinks_to_drop.is_empty() {
-                self.drop_storage_sinks(storage_sinks_to_drop);
-            }
-            if !compute_sinks_to_drop.is_empty() {
-                self.retire_compute_sinks(compute_sinks_to_drop).await;
-            }
-            if !peeks_to_drop.is_empty() {
-                for (dropped_name, uuid) in peeks_to_drop {
-                    if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-                        self.controller
-                            .compute
-                            .cancel_peek(pending_peek.cluster_id, uuid)
-                            .unwrap_or_terminate("unable to cancel peek");
-                        self.retire_execution(
-                            StatementEndedExecutionReason::Canceled,
-                            pending_peek.ctx_extra,
-                        );
-                        // Client may have left.
-                        let _ = pending_peek.sender.send(PeekResponse::Error(format!(
-                            "query could not complete because {dropped_name} was dropped"
-                        )));
-                    }
-                }
-            }
-            if !indexes_to_drop.is_empty() {
-                self.drop_indexes(indexes_to_drop);
-            }
-            if !materialized_views_to_drop.is_empty() {
-                self.drop_materialized_views(materialized_views_to_drop);
-            }
-            if !vpc_endpoints_to_drop.is_empty() {
-                self.drop_vpc_endpoints_in_background(vpc_endpoints_to_drop)
-            }
-            if !cluster_replicas_to_drop.is_empty() {
-                fail::fail_point!("after_catalog_drop_replica");
-                for (cluster_id, replica_id) in cluster_replicas_to_drop {
-                    self.drop_replica(cluster_id, replica_id).await;
-                }
-            }
-            if !log_indexes_to_drop.is_empty() {
-                for id in log_indexes_to_drop {
-                    self.drop_compute_read_policy(&id);
-                }
-            }
-            if !clusters_to_drop.is_empty() {
-                for cluster_id in clusters_to_drop {
-                    self.controller.drop_cluster(cluster_id);
-                }
-            }
 
-            // We don't want to block the main coordinator thread on cleaning
-            // up external resources (PostgreSQL replication slots and secrets),
-            // so we perform that cleanup in a background task.
-            //
-            // TODO(14551): This is inherently best effort. An ill-timed crash
-            // means we'll never clean these resources up. Safer cleanup for non-Materialize resources.
-            // See <https://github.com/MaterializeInc/materialize/issues/14551>
-            task::spawn(|| "drop_replication_slots_and_secrets", {
-                let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
-                let secrets_controller = Arc::clone(&self.secrets_controller);
-                let secrets_reader = Arc::clone(self.secrets_reader());
-                let storage_config = self.controller.storage.config().clone();
-
-                async move {
-                    for (connection, replication_slot_name) in replication_slots_to_drop {
-                        tracing::info!(?replication_slot_name, "dropping replication slot");
-
-                        // Try to drop the replication slots, but give up after
-                        // a while. The PostgreSQL server may no longer be
-                        // healthy. Users often drop PostgreSQL sources
-                        // *because* the PostgreSQL server has been
-                        // decomissioned.
-                        let result: Result<(), anyhow::Error> = Retry::default()
-                            .max_duration(Duration::from_secs(60))
-                            .retry_async(|_state| async {
-                                let config = connection
-                                    .config(&secrets_reader, &storage_config, InTask::No)
-                                    .await
-                                    .map_err(|e| {
-                                        anyhow::anyhow!(
-                                            "error creating Postgres client for \
-                                            dropping acquired slots: {}",
-                                            e.display_with_causes()
-                                        )
-                                    })?;
-
-                                mz_postgres_util::drop_replication_slots(
-                                    &ssh_tunnel_manager,
-                                    config.clone(),
-                                    &[&replication_slot_name],
-                                )
-                                .await?;
-
-                                Ok(())
-                            })
-                            .await;
-
-                        if let Err(err) = result {
-                            tracing::warn!(
-                                ?replication_slot_name,
-                                ?err,
-                                "failed to drop replication slot"
-                            );
-                        }
-                    }
-
-                    // Drop secrets *after* dropping the replication slots,
-                    // because those replication slots may.
-                    //
-                    // It's okay if we crash before processing the secret drops,
-                    // as we look for and remove any orphaned secrets during
-                    // startup.
-                    fail_point!("drop_secrets");
-                    for secret in secrets_to_drop {
-                        if let Err(e) = secrets_controller.delete(secret).await {
-                            warn!("Dropping secrets has encountered an error: {}", e);
-                        }
-                    }
-                }
-            });
-
+            if update_metrics_config {
+                mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
+            }
+            if update_controller_config {
+                self.update_controller_config();
+            }
             if update_compute_config {
                 self.update_compute_config();
             }
             if update_storage_config {
                 self.update_storage_config();
             }
-            if update_pg_timestamp_oracle_config {
-                self.update_pg_timestamp_oracle_config();
+            if update_timestamp_oracle_config {
+                self.update_timestamp_oracle_config();
             }
             if update_metrics_retention {
                 self.update_metrics_retention();
@@ -761,11 +552,14 @@ impl Coordinator {
             if update_cluster_scheduling_config {
                 self.update_cluster_scheduling_config();
             }
-            if update_arrangement_exert_proportionality {
-                self.update_arrangement_exert_proportionality();
-            }
             if update_http_config {
                 self.update_http_config();
+            }
+            if update_advance_timelines_interval {
+                let new_interval = self.catalog().system_config().default_timestamp_interval();
+                if new_interval != self.advance_timelines_interval.period() {
+                    self.advance_timelines_interval = tokio::time::interval(new_interval);
+                }
             }
         }
         .instrument(info_span!("coord::catalog_transact_with::finalize"))
@@ -794,37 +588,11 @@ impl Coordinator {
             }
         }
 
-        // Note: It's important that we keep the function call inside macro, this way we only run
-        // the consistency checks if sort assertions are enabled.
-        mz_ore::soft_assert_eq_no_log!(
-            self.check_consistency(),
-            Ok(()),
-            "coordinator inconsistency detected"
-        );
-
-        Ok(builtin_update_notify)
+        Ok((builtin_update_notify, catalog_updates))
     }
 
-    async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        if let Some(Some(ReplicaMetadata { metrics })) =
-            self.transient_replica_metadata.insert(replica_id, None)
-        {
-            let mut updates = vec![];
-            if let Some(metrics) = metrics {
-                let retractions = self
-                    .catalog()
-                    .state()
-                    .pack_replica_metric_updates(replica_id, &metrics, -1);
-                let retractions = self
-                    .catalog()
-                    .state()
-                    .resolve_builtin_table_updates(retractions);
-                updates.extend(retractions);
-            }
-            self.builtin_table_update().background(updates);
-        }
-
-        self.drop_introspection_subscribes(replica_id).await;
+    pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
+        self.drop_introspection_subscribes(replica_id);
 
         self.controller
             .drop_replica(cluster_id, replica_id)
@@ -832,29 +600,33 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping sources.
-    fn drop_sources(&mut self, sources: Vec<GlobalId>) {
-        for id in &sources {
-            self.active_webhooks.remove(id);
-            self.drop_storage_read_policy(id);
+    pub(crate) fn drop_sources(&mut self, sources: Vec<(CatalogItemId, GlobalId)>) {
+        for (item_id, _gid) in &sources {
+            self.active_webhooks.remove(item_id);
         }
         let storage_metadata = self.catalog.state().storage_metadata();
+        let source_gids = sources.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
-            .drop_sources(storage_metadata, sources)
+            .drop_sources(storage_metadata, source_gids)
             .unwrap_or_terminate("cannot fail to drop sources");
     }
 
-    fn drop_tables(&mut self, tables: Vec<GlobalId>, ts: Timestamp) {
-        for id in &tables {
-            self.drop_storage_read_policy(id);
+    /// A convenience method for dropping tables.
+    pub(crate) fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>, ts: Timestamp) {
+        for (item_id, _gid) in &tables {
+            self.active_webhooks.remove(item_id);
         }
+
+        let storage_metadata = self.catalog.state().storage_metadata();
+        let table_gids = tables.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
-            .drop_tables(tables, ts)
+            .drop_tables(storage_metadata, table_gids, ts)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 
-    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = GlobalId>) {
+    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = CatalogItemId>) {
         for id in sources {
             self.active_webhooks.remove(&id);
         }
@@ -888,7 +660,11 @@ impl Coordinator {
         for sink_id in sink_ids {
             let sink = match self.remove_active_compute_sink(sink_id).await {
                 None => {
-                    tracing::error!(%sink_id, "drop_compute_sinks called on nonexistent sink");
+                    // This can happen due to a race condition: an internal
+                    // subscribe may be cleaned up via its own message while
+                    // session disconnect cleanup is in progress. This is
+                    // benign.
+                    tracing::debug!(%sink_id, "drop_compute_sinks: sink already removed");
                     continue;
                 }
                 Some(sink) => sink,
@@ -929,11 +705,57 @@ impl Coordinator {
         }
     }
 
+    /// Drops all pending replicas for a set of clusters
+    /// that are undergoing reconfiguration.
+    pub async fn drop_reconfiguration_replicas(
+        &mut self,
+        cluster_ids: BTreeSet<ClusterId>,
+    ) -> Result<(), AdapterError> {
+        let pending_cluster_ops: Vec<Op> = cluster_ids
+            .iter()
+            .map(|c| {
+                self.catalog()
+                    .get_cluster(c.clone())
+                    .replicas()
+                    .filter_map(|r| match r.config.location {
+                        ReplicaLocation::Managed(ref l) if l.pending => {
+                            Some(DropObjectInfo::ClusterReplica((
+                                c.clone(),
+                                r.replica_id,
+                                ReplicaCreateDropReason::Manual,
+                            )))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<DropObjectInfo>>()
+            })
+            .filter_map(|pending_replica_drop_ops_by_cluster| {
+                match pending_replica_drop_ops_by_cluster.len() {
+                    0 => None,
+                    _ => Some(Op::DropObjects(pending_replica_drop_ops_by_cluster)),
+                }
+            })
+            .collect();
+        if !pending_cluster_ops.is_empty() {
+            self.catalog_transact(None, pending_cluster_ops).await?;
+        }
+        Ok(())
+    }
+
     /// Cancels all active compute sinks for the identified connection.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn cancel_compute_sinks_for_conn(&mut self, conn_id: &ConnectionId) {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
+    }
+
+    /// Cancels all active cluster reconfigurations sinks for the identified connection.
+    #[mz_ore::instrument(level = "debug")]
+    pub(crate) async fn cancel_cluster_reconfigurations_for_conn(
+        &mut self,
+        conn_id: &ConnectionId,
+    ) {
+        self.retire_cluster_reconfigurations_for_conn(conn_id).await
     }
 
     /// Retires all active compute sinks for the identified connection with the
@@ -955,65 +777,63 @@ impl Coordinator {
         self.retire_compute_sinks(drop_sinks).await;
     }
 
-    pub(crate) fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
-        for id in &sinks {
-            self.drop_storage_read_policy(id);
-        }
+    /// Cleans pending cluster reconfiguraiotns for the identified connection
+    #[mz_ore::instrument(level = "debug")]
+    pub(crate) async fn retire_cluster_reconfigurations_for_conn(
+        &mut self,
+        conn_id: &ConnectionId,
+    ) {
+        let reconfiguring_clusters = self
+            .active_conns
+            .get(conn_id)
+            .expect("must exist for active session")
+            .pending_cluster_alters
+            .clone();
+        // try to drop reconfig replicas
+        self.drop_reconfiguration_replicas(reconfiguring_clusters)
+            .await
+            .unwrap_or_terminate("cannot fail to drop reconfiguration replicas");
+
+        self.active_conns
+            .get_mut(conn_id)
+            .expect("must exist for active session")
+            .pending_cluster_alters
+            .clear();
+    }
+
+    pub(crate) fn drop_storage_sinks(&mut self, sink_gids: Vec<GlobalId>) {
+        let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_sinks(sinks)
+            .drop_sinks(storage_metadata, sink_gids)
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
-    pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
+    pub(crate) fn drop_compute_collections(&mut self, collections: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for (cluster_id, id) in indexes {
-            if self.drop_compute_read_policy(&id) {
-                by_cluster.entry(cluster_id).or_default().push(id);
-            } else {
-                tracing::error!("Instructed to drop a non-index index");
-            }
+        for (cluster_id, gid) in collections {
+            by_cluster.entry(cluster_id).or_default().push(gid);
         }
-        for (cluster_id, ids) in by_cluster {
+        for (cluster_id, gids) in by_cluster {
             let compute = &mut self.controller.compute;
             // A cluster could have been dropped, so verify it exists.
             if compute.instance_exists(cluster_id) {
                 compute
-                    .drop_collections(cluster_id, ids)
+                    .drop_collections(cluster_id, gids)
                     .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
     }
 
-    /// A convenience method for dropping materialized views.
-    fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
-        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let mut source_ids = Vec::new();
-        for (cluster_id, id) in mviews {
-            by_cluster.entry(cluster_id).or_default().push(id);
-            source_ids.push(id);
-        }
-
-        // Drop compute sinks.
-        for (cluster_id, ids) in by_cluster {
-            let compute = &mut self.controller.compute;
-            // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(cluster_id) {
-                compute
-                    .drop_collections(cluster_id, ids)
-                    .unwrap_or_terminate("cannot fail to drop collections");
-            }
-        }
-
-        // Drop storage sources.
-        self.drop_sources(source_ids)
-    }
-
-    fn drop_vpc_endpoints_in_background(&mut self, vpc_endpoints: Vec<GlobalId>) {
-        let cloud_resource_controller = Arc::clone(self.cloud_resource_controller
-            .as_ref()
-            .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))
-            .expect("vpc endpoints should only be dropped in CLOUD, where `cloud_resource_controller` is `Some`"));
+    pub(crate) fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<CatalogItemId>) {
+        // Match the create path (catalog_implications.rs) which gracefully
+        // logs an error when cloud_resource_controller is None, rather than
+        // panicking.
+        let Some(cloud_resource_controller) = self.cloud_resource_controller.as_ref() else {
+            warn!("dropping VPC endpoints without cloud_resource_controller; skipping cleanup");
+            return;
+        };
+        let cloud_resource_controller = Arc::clone(cloud_resource_controller);
         // We don't want to block the coordinator on an external delete api
         // calls, so move the drop vpc_endpoint to a separate task. This does
         // mean that a failed drop won't bubble up to the user as an error
@@ -1067,23 +887,23 @@ impl Coordinator {
                 .collect(),
         );
 
-        self.catalog_transact_conn(Some(conn_id), vec![op])
+        self.catalog_transact_with_context(Some(conn_id), None, vec![op])
             .await
             .expect("unable to drop temporary items for conn_id");
     }
 
-    fn update_cluster_scheduling_config(&mut self) {
+    fn update_cluster_scheduling_config(&self) {
         let config = flags::orchestrator_scheduling_config(self.catalog.system_config());
         self.controller
             .update_orchestrator_scheduling_config(config);
     }
 
-    fn update_secrets_caching_config(&mut self) {
+    fn update_secrets_caching_config(&self) {
         let config = flags::caching_config(self.catalog.system_config());
         self.caching_secrets_reader.set_policy(config);
     }
 
-    fn update_tracing_config(&mut self) {
+    fn update_tracing_config(&self) {
         let tracing = flags::tracing_config(self.catalog().system_config());
         tracing.apply(&self.tracing_handle);
     }
@@ -1098,14 +918,14 @@ impl Coordinator {
         self.controller.storage.update_parameters(config_params);
     }
 
-    fn update_pg_timestamp_oracle_config(&mut self) {
-        let config_params = flags::pg_timstamp_oracle_config(self.catalog().system_config());
-        if let Some(config) = self.pg_timestamp_oracle_config.as_ref() {
-            config_params.apply(config)
+    fn update_timestamp_oracle_config(&self) {
+        let config_params = flags::timestamp_oracle_config(self.catalog().system_config());
+        if let Some(config) = self.timestamp_oracle_config.as_ref() {
+            config.apply_parameters(config_params)
         }
     }
 
-    fn update_metrics_retention(&mut self) {
+    fn update_metrics_retention(&self) {
         let duration = self.catalog().system_config().metrics_retention();
         let policy = ReadPolicy::lag_writes_by(
             Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
@@ -1137,18 +957,14 @@ impl Coordinator {
                 }
             })
             .collect::<Vec<_>>();
-        self.update_storage_base_read_policies(storage_policies);
-        self.update_compute_base_read_policies(compute_policies);
+        self.update_storage_read_policies(storage_policies);
+        self.update_compute_read_policies(compute_policies);
     }
 
-    fn update_arrangement_exert_proportionality(&mut self) {
-        let prop = self
-            .catalog()
-            .system_config()
-            .arrangement_exert_proportionality();
+    fn update_controller_config(&mut self) {
+        let sys_config = self.catalog().system_config();
         self.controller
-            .compute
-            .set_arrangement_exert_proportionality(prop);
+            .update_configuration(sys_config.dyncfg_updates());
     }
 
     fn update_http_config(&mut self) {
@@ -1167,11 +983,6 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.check_exists(sink.from)?;
-
-        let status_id = Some(
-            self.catalog()
-                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
-        );
 
         // The AsOf is used to determine at what time to snapshot reading from
         // the persist collection.  This is primarily relevant when we do _not_
@@ -1192,41 +1003,49 @@ impl Coordinator {
         // TODO: Maybe in the future, pass those holds on to storage, to hold on
         // to them and downgrade when possible?
         let read_holds = self.acquire_read_holds(&id_bundle);
-        let as_of = self.least_valid_read(&read_holds);
+        let as_of = read_holds.least_valid_read();
 
-        let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
+        let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
-                .desc(&self.catalog().resolve_full_name(
-                    storage_sink_from_entry.name(),
-                    storage_sink_from_entry.conn_id(),
-                ))
-                .expect("indexes can only be built on items with descs")
+                .relation_desc()
+                .expect("sinks can only be built on items with descs")
                 .into_owned(),
             connection: sink
                 .connection
                 .clone()
                 .into_inline_connection(self.catalog().state()),
-            partition_strategy: sink.partition_strategy.clone(),
             envelope: sink.envelope,
             as_of,
             with_snapshot: sink.with_snapshot,
             version: sink.version,
-            status_id,
             from_storage_metadata: (),
+            to_storage_metadata: (),
+            commit_interval: sink.commit_interval,
         };
 
-        let res = self
-            .controller
-            .storage
-            .create_exports(vec![(
-                id,
-                ExportDescription {
+        let collection_desc = CollectionDescription {
+            // TODO(sinks): make generic once we have more than one sink type.
+            desc: KAFKA_PROGRESS_DESC.clone(),
+            data_source: DataSource::Sink {
+                desc: ExportDescription {
                     sink: storage_sink_desc,
                     instance_id: sink.cluster_id,
                 },
-            )])
+            },
+            since: None,
+            timeline: None,
+            primary: None,
+        };
+        let collections = vec![(id, collection_desc)];
+
+        // Create the collections.
+        let storage_metadata = self.catalog.state().storage_metadata();
+        let res = self
+            .controller
+            .storage
+            .create_collections(storage_metadata, None, collections)
             .await;
 
         // Drop read holds after the export has been created, at which point
@@ -1246,6 +1065,7 @@ impl Coordinator {
         let mut new_kafka_connections = 0;
         let mut new_postgres_connections = 0;
         let mut new_mysql_connections = 0;
+        let mut new_sql_server_connections = 0;
         let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;
         let mut new_sources = 0;
@@ -1259,6 +1079,7 @@ impl Coordinator {
         let mut new_objects_per_schema = BTreeMap::new();
         let mut new_secrets = 0;
         let mut new_roles = 0;
+        let mut new_network_policies = 0;
         for op in ops {
             match op {
                 Op::CreateDatabase { .. } => {
@@ -1272,6 +1093,9 @@ impl Coordinator {
                 Op::CreateRole { .. } => {
                     new_roles += 1;
                 }
+                Op::CreateNetworkPolicy { .. } => {
+                    new_network_policies += 1;
+                }
                 Op::CreateCluster { .. } => {
                     // TODO(benesch): having deprecated linked clusters, remove
                     // the `max_sources` and `max_sinks` limit, and set a higher
@@ -1281,15 +1105,19 @@ impl Coordinator {
                 Op::CreateClusterReplica {
                     cluster_id, config, ..
                 } => {
-                    *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
-                    if let ReplicaLocation::Managed(location) = &config.location {
-                        let replica_allocation = self
-                            .catalog()
-                            .cluster_replica_sizes()
-                            .0
-                            .get(location.size_for_billing())
-                            .expect("location size is validated against the cluster replica sizes");
-                        new_credit_consumption_rate += replica_allocation.credits_per_hour
+                    if cluster_id.is_user() {
+                        *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
+                        if let ReplicaLocation::Managed(location) = &config.location {
+                            let replica_allocation = self
+                                .catalog()
+                                .cluster_replica_sizes()
+                                .0
+                                .get(location.size_for_billing())
+                                .expect(
+                                    "location size is validated against the cluster replica sizes",
+                                );
+                            new_credit_consumption_rate += replica_allocation.credits_per_hour
+                        }
                     }
                 }
                 Op::CreateItem { name, item, .. } => {
@@ -1300,18 +1128,21 @@ impl Coordinator {
                         ))
                         .or_insert(0) += 1;
                     match item {
-                        CatalogItem::Connection(connection) => {
-                            use mz_storage_types::connections::Connection;
-                            match connection.connection {
-                                Connection::Kafka(_) => new_kafka_connections += 1,
-                                Connection::Postgres(_) => new_postgres_connections += 1,
-                                Connection::MySql(_) => new_mysql_connections += 1,
-                                Connection::AwsPrivatelink(_) => {
-                                    new_aws_privatelink_connections += 1
-                                }
-                                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
+                        CatalogItem::Connection(connection) => match connection.details {
+                            ConnectionDetails::Kafka(_) => new_kafka_connections += 1,
+                            ConnectionDetails::Postgres(_) => new_postgres_connections += 1,
+                            ConnectionDetails::MySql(_) => new_mysql_connections += 1,
+                            ConnectionDetails::SqlServer(_) => new_sql_server_connections += 1,
+                            ConnectionDetails::AwsPrivatelink(_) => {
+                                new_aws_privatelink_connections += 1
                             }
-                        }
+                            ConnectionDetails::Csr(_)
+                            | ConnectionDetails::GlueSchemaRegistry(_)
+                            | ConnectionDetails::Ssh { .. }
+                            | ConnectionDetails::Aws(_)
+                            | ConnectionDetails::Gcp(_)
+                            | ConnectionDetails::IcebergCatalog(_) => {}
+                        },
                         CatalogItem::Table(_) => {
                             new_tables += 1;
                         }
@@ -1339,21 +1170,25 @@ impl Coordinator {
                                 new_clusters -= 1;
                             }
                             DropObjectInfo::ClusterReplica((cluster_id, replica_id, _reason)) => {
-                                *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
-                                let cluster =
-                                    self.catalog().get_cluster_replica(*cluster_id, *replica_id);
-                                if let ReplicaLocation::Managed(location) = &cluster.config.location
-                                {
-                                    let replica_allocation = self
-                                .catalog()
-                                .cluster_replica_sizes()
-                                .0
-                                .get(location.size_for_billing())
-                                .expect(
-                                    "location size is validated against the cluster replica sizes",
-                                );
-                                    new_credit_consumption_rate -=
-                                        replica_allocation.credits_per_hour
+                                if cluster_id.is_user() {
+                                    *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                                    let cluster = self
+                                        .catalog()
+                                        .get_cluster_replica(*cluster_id, *replica_id);
+                                    if let ReplicaLocation::Managed(location) =
+                                        &cluster.config.location
+                                    {
+                                        let replica_allocation = self
+                                            .catalog()
+                                            .cluster_replica_sizes()
+                                            .0
+                                            .get(location.size_for_billing())
+                                            .expect(
+                                                "location size is validated against the cluster replica sizes",
+                                            );
+                                        new_credit_consumption_rate -=
+                                            replica_allocation.credits_per_hour
+                                    }
                                 }
                             }
                             DropObjectInfo::Database(_) => {
@@ -1367,6 +1202,9 @@ impl Coordinator {
                             DropObjectInfo::Role(_) => {
                                 new_roles -= 1;
                             }
+                            DropObjectInfo::NetworkPolicy(_) => {
+                                new_network_policies -= 1;
+                            }
                             DropObjectInfo::Item(id) => {
                                 let entry = self.catalog().get_entry(id);
                                 *new_objects_per_schema
@@ -1376,31 +1214,33 @@ impl Coordinator {
                                     ))
                                     .or_insert(0) -= 1;
                                 match entry.item() {
-                            CatalogItem::Connection(connection) => match connection.connection {
-                                mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
-                                    new_aws_privatelink_connections -= 1;
+                                    CatalogItem::Connection(connection) => match connection.details
+                                    {
+                                        ConnectionDetails::AwsPrivatelink(_) => {
+                                            new_aws_privatelink_connections -= 1;
+                                        }
+                                        _ => (),
+                                    },
+                                    CatalogItem::Table(_) => {
+                                        new_tables -= 1;
+                                    }
+                                    CatalogItem::Source(source) => {
+                                        new_sources -=
+                                            source.user_controllable_persist_shard_count()
+                                    }
+                                    CatalogItem::Sink(_) => new_sinks -= 1,
+                                    CatalogItem::MaterializedView(_) => {
+                                        new_materialized_views -= 1;
+                                    }
+                                    CatalogItem::Secret(_) => {
+                                        new_secrets -= 1;
+                                    }
+                                    CatalogItem::Log(_)
+                                    | CatalogItem::View(_)
+                                    | CatalogItem::Index(_)
+                                    | CatalogItem::Type(_)
+                                    | CatalogItem::Func(_) => {}
                                 }
-                                _ => (),
-                            },
-                            CatalogItem::Table(_) => {
-                                new_tables -= 1;
-                            }
-                            CatalogItem::Source(source) => {
-                                new_sources -= source.user_controllable_persist_shard_count()
-                            }
-                            CatalogItem::Sink(_) => new_sinks -= 1,
-                            CatalogItem::MaterializedView(_) => {
-                                new_materialized_views -= 1;
-                            }
-                            CatalogItem::Secret(_) => {
-                                new_secrets -= 1;
-                            }
-                            CatalogItem::Log(_)
-                            | CatalogItem::View(_)
-                            | CatalogItem::Index(_)
-                            | CatalogItem::Type(_)
-                            | CatalogItem::Func(_) => {}
-                        }
                             }
                         }
                     }
@@ -1433,6 +1273,10 @@ impl Coordinator {
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
+                | Op::AlterSourceTimestampInterval { .. }
+                | Op::AlterNetworkPolicy { .. }
+                | Op::AlterAddColumn { .. }
+                | Op::AlterMaterializedViewApplyReplacement { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
@@ -1443,32 +1287,38 @@ impl Coordinator {
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
-                | Op::UpdateStorageUsage { .. }
+                | Op::UpdateClusterReplicaConfig { .. }
+                | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
-                | Op::WeirdBuiltinTableUpdates { .. }
-                | Op::TransactionDryRun => {}
+                | Op::InjectAuditEvents { .. } => {}
             }
         }
 
         let mut current_aws_privatelink_connections = 0;
         let mut current_postgres_connections = 0;
         let mut current_mysql_connections = 0;
+        let mut current_sql_server_connections = 0;
         let mut current_kafka_connections = 0;
         for c in self.catalog().user_connections() {
             let connection = c
                 .connection()
                 .expect("`user_connections()` only returns connection objects");
 
-            use mz_storage_types::connections::Connection;
-            match connection.connection {
-                Connection::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
-                Connection::Postgres(_) => current_postgres_connections += 1,
-                Connection::MySql(_) => current_mysql_connections += 1,
-                Connection::Kafka(_) => current_kafka_connections += 1,
-                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
+            match connection.details {
+                ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
+                ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
+                ConnectionDetails::MySql(_) => current_mysql_connections += 1,
+                ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
+                ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
+                ConnectionDetails::Csr(_)
+                | ConnectionDetails::GlueSchemaRegistry(_)
+                | ConnectionDetails::Ssh { .. }
+                | ConnectionDetails::Aws(_)
+                | ConnectionDetails::Gcp(_)
+                | ConnectionDetails::IcebergCatalog(_) => {}
             }
         }
         self.validate_resource_limit(
@@ -1491,6 +1341,13 @@ impl Coordinator {
             SystemVars::max_mysql_connections,
             "MySQL Connection",
             MAX_MYSQL_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_sql_server_connections,
+            new_sql_server_connections,
+            SystemVars::max_sql_server_connections,
+            "SQL Server Connection",
+            MAX_SQL_SERVER_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
             current_aws_privatelink_connections,
@@ -1554,7 +1411,7 @@ impl Coordinator {
             let current_amount = self
                 .catalog()
                 .try_get_cluster(cluster_id)
-                .map(|instance| instance.replicas().count())
+                .map(|instance| instance.user_replicas().count())
                 .unwrap_or(0);
             self.validate_resource_limit(
                 current_amount,
@@ -1564,26 +1421,14 @@ impl Coordinator {
                 MAX_REPLICAS_PER_CLUSTER.name(),
             )?;
         }
-        let current_credit_consumption_rate = self
-            .catalog()
-            .user_cluster_replicas()
-            .filter_map(|replica| match &replica.config.location {
-                ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
-                ReplicaLocation::Unmanaged(_) => None,
-            })
-            .map(|size| {
-                self.catalog()
-                    .cluster_replica_sizes()
-                    .0
-                    .get(size)
-                    .expect("location size is validated against the cluster replica sizes")
-                    .credits_per_hour
-            })
-            .sum();
         self.validate_resource_limit_numeric(
-            current_credit_consumption_rate,
+            self.current_credit_consumption_rate(),
             new_credit_consumption_rate,
-            SystemVars::max_credit_consumption_rate,
+            |system_vars| {
+                self.license_key
+                    .max_credit_consumption_rate()
+                    .map_or_else(|| system_vars.max_credit_consumption_rate(), Numeric::from)
+            },
             "cluster replica",
             MAX_CREDIT_CONSUMPTION_RATE.name(),
         )?;
@@ -1604,11 +1449,15 @@ impl Coordinator {
             )?;
         }
         for ((database_spec, schema_spec), new_objects) in new_objects_per_schema {
+            // For temporary schemas that don't exist yet (lazy creation),
+            // treat them as having 0 items.
+            let current_items = self
+                .catalog()
+                .try_get_schema(&database_spec, &schema_spec, conn_id)
+                .map(|schema| schema.items.len())
+                .unwrap_or(0);
             self.validate_resource_limit(
-                self.catalog()
-                    .get_schema(&database_spec, &schema_spec, conn_id)
-                    .items
-                    .len(),
+                current_items,
                 new_objects,
                 SystemVars::max_objects_per_schema,
                 "object",
@@ -1628,6 +1477,13 @@ impl Coordinator {
             SystemVars::max_roles,
             "role",
             MAX_ROLES.name(),
+        )?;
+        self.validate_resource_limit(
+            self.catalog().user_network_policies().count(),
+            new_network_policies,
+            SystemVars::max_network_policies,
+            "network_policy",
+            MAX_NETWORK_POLICIES.name(),
         )?;
         Ok(())
     }
@@ -1681,7 +1537,7 @@ impl Coordinator {
     /// Validate a specific type of float resource limit and return an error if that limit is exceeded.
     ///
     /// This is very similar to [`Self::validate_resource_limit`] but for numerics.
-    fn validate_resource_limit_numeric<F>(
+    pub(crate) fn validate_resource_limit_numeric<F>(
         &self,
         current_amount: Numeric,
         new_amount: Numeric,

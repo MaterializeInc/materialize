@@ -22,7 +22,18 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct MsgId(pub usize);
 
 impl MsgId {
@@ -174,7 +185,16 @@ impl std::fmt::Display for MaelstromError {
 impl std::error::Error for MaelstromError {}
 
 /// <https://github.com/jepsen-io/maelstrom/blob/v0.2.1/doc/protocol.md#errors>
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoPrimitive, TryFromPrimitive)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    IntoPrimitive,
+    TryFromPrimitive
+)]
 #[serde(try_from = "usize", into = "usize")]
 #[repr(usize)]
 pub enum ErrorCode {

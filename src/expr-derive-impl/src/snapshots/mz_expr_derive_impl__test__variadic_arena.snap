@@ -1,0 +1,52 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(ArrayFill, sqlname = \"array_fill\", introduces_nulls = false)]\nfn array_fill<'a>(\n    &self,\n    fill: Datum<'a>,\n    dims: Datum<'a>,\n    lb: OptionalArg<Datum<'a>>,\n    temp_storage: &RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    unimplemented!()\n}\n"
+---
+impl ArrayFill {
+    fn array_fill<'a>(
+        &self,
+        fill: Datum<'a>,
+        dims: Datum<'a>,
+        lb: OptionalArg<Datum<'a>>,
+        temp_storage: &RowArena,
+    ) -> Result<Datum<'a>, EvalError> {
+        unimplemented!()
+    }
+}
+impl crate::func::variadic::EagerVariadicFunc for ArrayFill {
+    type Input<'a> = (Datum<'a>, Datum<'a>, OptionalArg<Datum<'a>>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+    fn call<'a>(
+        &self,
+        (fill, dims, lb): Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        self.array_fill(fill, dims, lb, temp_storage)
+    }
+    fn output_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::variadic::EagerVariadicFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false;
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        output
+            .nullable(
+                nullable || non_nullable_input_is_nullable
+                    || (propagates_nulls && inputs_nullable),
+            )
+    }
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+}
+impl std::fmt::Display for ArrayFill {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("array_fill")
+    }
+}

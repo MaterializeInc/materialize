@@ -43,15 +43,19 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 > CREATE CONNECTION c_conn
   FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}'
 
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION c_conn
   ENVELOPE UPSERT
+> COMMIT
 
-> SELECT * from upsert
+> SELECT * from upsert_tbl
 key           f1       f2
 ---------------------------
 fish          fish     1000
@@ -66,18 +70,18 @@ mammalmore    moose    2
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 true 3 true
 
 # Write another part to test backpressure
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "fish", "f2": 1001}
 
-> SELECT * from upsert
+> SELECT * from upsert_tbl
 key           f1       f2
 ---------------------------
 fish          fish     1001

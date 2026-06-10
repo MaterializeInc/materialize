@@ -7,31 +7,42 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::ops::Rem;
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::AsCollection;
+use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
-use mz_repr::Row;
+use itertools::Itertools;
+use mz_ore::cast::CastFrom;
+use mz_ore::iter::IteratorExt;
+use mz_ore::now::NowFn;
+use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{
-    Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
+    Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorOutput,
+    LoadGeneratorSourceConnection,
 };
-use mz_storage_types::sources::{MzOffset, SourceTimestamp};
-use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use mz_timely_util::containers::stack::AccountedStackBuilder;
-use timely::dataflow::operators::ToStream;
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
+use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
+use mz_timely_util::containers::stack::FueledBuilder;
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::core::Partition;
+use timely::dataflow::{Scope, StreamVec};
+use timely::progress::{Antichain, Timestamp};
+use tokio::time::{Instant, interval_at};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{
-    ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
-};
+use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod auction;
+mod clock;
 mod counter;
 mod datums;
 mod key_value;
@@ -39,6 +50,7 @@ mod marketing;
 mod tpch;
 
 pub use auction::Auction;
+pub use clock::Clock;
 pub use counter::Counter;
 pub use datums::Datums;
 pub use tpch::Tpch;
@@ -51,26 +63,32 @@ enum GeneratorKind {
         tick_micros: Option<u64>,
         as_of: u64,
         up_to: u64,
-        // Load generators cannot be rendered until all of their exports are
-        // present.
-        //
-        // TODO(#26765): can this limitation be removed?
-        required_exports: usize,
     },
     KeyValue(KeyValueLoadGenerator),
 }
 
 impl GeneratorKind {
     fn new(g: &LoadGenerator, tick_micros: Option<u64>, as_of: u64, up_to: u64) -> Self {
-        let required_exports = g.views().len() + 1;
-
         match g {
             LoadGenerator::Auction => GeneratorKind::Simple {
                 generator: Box::new(Auction {}),
                 tick_micros,
                 as_of,
                 up_to,
-                required_exports,
+            },
+            LoadGenerator::Clock => GeneratorKind::Simple {
+                generator: Box::new(Clock {
+                    tick_ms: tick_micros
+                        .map(Duration::from_micros)
+                        .unwrap_or(Duration::from_secs(1))
+                        .as_millis()
+                        .try_into()
+                        .expect("reasonable tick interval"),
+                    as_of_ms: as_of,
+                }),
+                tick_micros,
+                as_of,
+                up_to,
             },
             LoadGenerator::Counter { max_cardinality } => GeneratorKind::Simple {
                 generator: Box::new(Counter {
@@ -79,21 +97,18 @@ impl GeneratorKind {
                 tick_micros,
                 as_of,
                 up_to,
-                required_exports,
             },
             LoadGenerator::Datums => GeneratorKind::Simple {
                 generator: Box::new(Datums {}),
                 tick_micros,
                 as_of,
                 up_to,
-                required_exports,
             },
             LoadGenerator::Marketing => GeneratorKind::Simple {
                 generator: Box::new(Marketing {}),
                 tick_micros,
                 as_of,
                 up_to,
-                required_exports,
             },
             LoadGenerator::Tpch {
                 count_supplier,
@@ -115,40 +130,54 @@ impl GeneratorKind {
                 tick_micros,
                 as_of,
                 up_to,
-                required_exports,
             },
-            LoadGenerator::KeyValue(kv) => {
-                mz_ore::soft_assert_eq_or_log!(
-                    required_exports,
-                    1,
-                    "KeyValue generators should not have any additional views"
-                );
-
-                GeneratorKind::KeyValue(kv.clone())
-            }
+            LoadGenerator::KeyValue(kv) => GeneratorKind::KeyValue(kv.clone()),
         }
     }
 
-    fn render<G: Scope<Timestamp = MzOffset>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
-        config: RawSourceCreationConfig,
+        scope: Scope<'scope, MzOffset>,
+        config: &RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-        Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusMessage>,
-        Stream<G, ProgressStatisticsUpdate>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, MzOffset, Infallible>,
+        StreamVec<'scope, MzOffset, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
+        // figure out which output types from the generator belong to which output indexes
+        let mut output_map = BTreeMap::new();
+        // Maps the output index to export_id for statistics.
+        let mut idx_to_exportid = BTreeMap::new();
+        // Make sure that there's an entry for the default output, even if there are no exports
+        // that need data output. Certain implementations rely on it (at the time of this comment
+        // that includes the key-value load gen source).
+        output_map.insert(LoadGeneratorOutput::Default, Vec::new());
+        for (idx, (export_id, export)) in config.source_exports.iter().enumerate() {
+            let output_type = match &export.details {
+                SourceExportDetails::LoadGenerator(details) => details.output,
+                // This is an export that doesn't need any data output to it.
+                SourceExportDetails::None => continue,
+                _ => panic!("unexpected source export details: {:?}", export.details),
+            };
+            output_map
+                .entry(output_type)
+                .or_insert_with(Vec::new)
+                .push(idx);
+            idx_to_exportid.insert(idx, export_id.clone());
+        }
+
         match self {
             GeneratorKind::Simple {
                 tick_micros,
                 as_of,
                 up_to,
                 generator,
-                required_exports,
             } => render_simple_generator(
                 generator,
                 tick_micros,
@@ -157,11 +186,17 @@ impl GeneratorKind {
                 scope,
                 config,
                 committed_uppers,
-                required_exports,
+                output_map,
             ),
-            GeneratorKind::KeyValue(kv) => {
-                key_value::render(kv, scope, config, committed_uppers, start_signal)
-            }
+            GeneratorKind::KeyValue(kv) => key_value::render(
+                kv,
+                scope,
+                config.clone(),
+                committed_uppers,
+                start_signal,
+                output_map,
+                idx_to_exportid,
+            ),
         }
     }
 }
@@ -171,17 +206,19 @@ impl SourceRender for LoadGeneratorSourceConnection {
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Generator;
 
-    fn render<G: Scope<Timestamp = MzOffset>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
-        config: RawSourceCreationConfig,
+        scope: Scope<'scope, MzOffset>,
+        config: &RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-        Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusMessage>,
-        Stream<G, ProgressStatisticsUpdate>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, MzOffset, HealthStatusMessage>,
+        StreamVec<'scope, MzOffset, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         let generator_kind = GeneratorKind::new(
@@ -190,70 +227,119 @@ impl SourceRender for LoadGeneratorSourceConnection {
             self.as_of,
             self.up_to,
         );
-        generator_kind.render(scope, config, committed_uppers, start_signal)
+        let (updates, progress, health, button) =
+            generator_kind.render(scope, config, committed_uppers, start_signal);
+
+        let probe_stream = synthesize_probes(
+            config.id,
+            progress,
+            config.timestamp_interval,
+            config.now_fn.clone(),
+        );
+
+        (updates, health, probe_stream, button)
     }
 }
 
-fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
+fn render_simple_generator<'scope>(
     generator: Box<dyn Generator>,
     tick_micros: Option<u64>,
     as_of: MzOffset,
     up_to: MzOffset,
-    scope: &mut G,
-    config: RawSourceCreationConfig,
+    scope: Scope<'scope, MzOffset>,
+    config: &RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
-    required_exports: usize,
+    output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Option<Stream<G, Infallible>>,
-    Stream<G, HealthStatusMessage>,
-    Stream<G, ProgressStatisticsUpdate>,
+    BTreeMap<GlobalId, StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>>,
+    StreamVec<'scope, MzOffset, Infallible>,
+    StreamVec<'scope, MzOffset, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (data_output, stream) = builder.new_output::<FueledBuilder<
+        CapacityContainerBuilder<
+            Vec<(
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            )>,
+        >,
+    >>();
+    let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
+    let partition_count = u64::cast_from(export_ids.len());
+    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
+        partition_count,
+        |((output, data), time, diff): (
+            (usize, Result<SourceMessage, DataflowError>),
+            MzOffset,
+            Diff,
+        )| {
+            let output = u64::cast_from(output);
+            (output, (data, time, diff))
+        },
+    );
+    let mut data_collections = BTreeMap::new();
+    for (id, data_stream) in export_ids.iter().zip_eq(data_streams) {
+        data_collections.insert(*id, data_stream.as_collection());
+    }
+
+    let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let busy_signal = Arc::clone(&config.busy_signal);
+    let source_resume_uppers = config.source_resume_uppers.clone();
+    let is_active_worker = config.responsible_for(());
+    let source_statistics = config.statistics.clone();
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            // Do not run the load generator until we have all of our source
-            // exports. Waiting here is fine because we know that their creation and
-            // scheduling of this dataflow is imminent.
-            //
-            // TODO(#26765): can this limitation be removed?
-            if required_exports != config.source_exports.len() {
-                std::future::pending().await
-            }
+            let [mut cap, mut progress_cap, health_cap] = caps.try_into().unwrap();
 
-            let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
+            // We only need this until we reported ourselves as Running.
+            let mut health_cap = Some(health_cap);
 
-            if !config.responsible_for(()) {
+            if !is_active_worker {
                 // Emit 0, to mark this worker as having started up correctly.
-                stats_output.give(
-                    &stats_cap,
-                    ProgressStatisticsUpdate::SteadyState {
-                        offset_known: 0,
-                        offset_committed: 0,
-                    },
-                );
+                for stats in source_statistics.values() {
+                    stats.set_offset_known(0);
+                    stats.set_offset_committed(0);
+                }
                 return;
             }
 
             let resume_upper = Antichain::from_iter(
-                config.source_resume_uppers[&config.id]
-                    .iter()
-                    .map(MzOffset::decode_row),
+                source_resume_uppers
+                    .values()
+                    .flat_map(|f| f.iter().map(MzOffset::decode_row)),
             );
 
             let Some(resume_offset) = resume_upper.into_option() else {
                 return;
             };
 
-            let mut rows = generator.by_seed(mz_ore::now::SYSTEM_TIME.clone(), None, resume_offset);
+            let now_fn = mz_ore::now::SYSTEM_TIME.clone();
 
+            let start_instant = {
+                // We want to have our interval start at a nice round number...
+                // for example, if our tick interval is one minute, to start at a minute boundary.
+                // However, the `Interval` type from tokio can't be "floored" in that way.
+                // Instead, figure out the amount we should step forward based on the wall clock,
+                // then apply that to our monotonic clock to make things start at approximately the
+                // right time.
+                let now_millis = now_fn();
+                let now_instant = Instant::now();
+                let delay_millis = tick_micros
+                    .map(|tick_micros| tick_micros / 1000)
+                    .filter(|tick_millis| *tick_millis > 0)
+                    .map(|tick_millis| tick_millis - now_millis.rem(tick_millis))
+                    .unwrap_or(0);
+                now_instant + Duration::from_millis(delay_millis)
+            };
             let tick = Duration::from_micros(tick_micros.unwrap_or(1_000_000));
+            let mut tick_interval = interval_at(start_instant, tick);
+
+            let mut rows = generator.by_seed(now_fn, None, resume_offset);
 
             let mut committed_uppers = std::pin::pin!(committed_uppers);
 
@@ -264,7 +350,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                 None
             };
 
-            while let Some((output, event)) = rows.next() {
+            while let Some((output_type, event)) = rows.next() {
                 match event {
                     Event::Message(mut offset, (value, diff)) => {
                         // Fast forward any data before the requested as of.
@@ -281,23 +367,50 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                             continue;
                         }
 
-                        let message = (
-                            output,
-                            Ok(SourceMessage {
-                                key: Row::default(),
-                                value,
-                                metadata: Row::default(),
-                            }),
-                        );
+                        // Once we see the load generator start producing data for some offset,
+                        // we report progress beyond that offset, to ensure that a binding can be
+                        // minted for the data and it doesn't accumulate in reclocking.
+                        let _ = progress_cap.try_downgrade(&(offset + 1));
+
+                        let outputs = match output_map.get(&output_type) {
+                            Some(outputs) => outputs,
+                            // We don't have an output index for this output type, so drop it
+                            None => continue,
+                        };
+
+                        let message: Result<SourceMessage, DataflowError> = Ok(SourceMessage {
+                            key: Row::default(),
+                            value,
+                            metadata: Row::default(),
+                        });
 
                         // Some generators always reproduce their TVC from the beginning which can
                         // generate a significant amount of data that will overwhelm the dataflow.
                         // Since those are not required downstream we eagerly ignore them here.
                         if resume_offset <= offset {
-                            data_output.give_fueled(&cap, (message, offset, diff)).await;
+                            for (&output, message) in outputs.iter().repeat_clone(message) {
+                                let update = ((output, message), offset, diff);
+                                let size = update.fuel_size();
+                                data_output.give_fueled(&cap, update, size).await;
+                            }
                         }
                     }
                     Event::Progress(Some(offset)) => {
+                        if resume_offset <= offset && health_cap.is_some() {
+                            let health_cap = health_cap.take().expect("known to exist");
+                            let export_ids = export_ids.iter().copied();
+                            for id in export_ids.map(Some).chain(std::iter::once(None)) {
+                                health_output.give(
+                                    &health_cap,
+                                    HealthStatusMessage {
+                                        id,
+                                        namespace: StatusNamespace::Generator,
+                                        update: HealthStatusUpdate::running(),
+                                    },
+                                );
+                            }
+                        }
+
                         // If we've reached the requested maximum offset, cease.
                         if offset >= up_to {
                             break;
@@ -310,6 +423,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         }
 
                         cap.downgrade(&offset);
+                        let _ = progress_cap.try_downgrade(&offset);
 
                         // We only sleep if we have surpassed the resume offset so that we can
                         // quickly go over any historical updates that a generator might choose to
@@ -317,11 +431,9 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         // TODO(petrosagg): Remove the sleep below and make generators return an
                         // async stream so that they can drive the rate of production directly
                         if resume_offset < offset {
-                            let mut sleep = std::pin::pin!(tokio::time::sleep(tick));
-
                             loop {
                                 tokio::select! {
-                                    _ = &mut sleep => {
+                                    _tick = tick_interval.tick() => {
                                         break;
                                     }
                                     Some(frontier) = committed_uppers.next() => {
@@ -338,17 +450,14 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                             // we are not going to implement snapshot progress statistics for them
                             // right now, but will come back to it.
                             if let Some(offset_committed) = offset_committed {
-                                stats_output.give(
-                                    &stats_cap,
-                                    ProgressStatisticsUpdate::SteadyState {
-                                        // technically we could have _known_ a larger offset
-                                        // than the one that has been committed, but we can
-                                        // never recover that known amount on restart, so we
-                                        // just advance these in lock step.
-                                        offset_known: offset_committed,
-                                        offset_committed,
-                                    },
-                                );
+                                for stats in source_statistics.values() {
+                                    stats.set_offset_committed(offset_committed);
+                                    // technically we could have _known_ a larger offset
+                                    // than the one that has been committed, but we can
+                                    // never recover that known amount on restart, so we
+                                    // just advance these in lock step.
+                                    stats.set_offset_known(offset_committed);
+                                }
                             }
                         }
                     }
@@ -358,17 +467,72 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         })
     });
 
-    let status = [HealthStatusMessage {
-        index: 0,
-        namespace: StatusNamespace::Generator,
-        update: HealthStatusUpdate::running(),
-    }]
-    .to_stream(scope);
     (
-        stream.as_collection(),
-        None,
-        status,
-        stats_stream,
+        data_collections,
+        progress_stream,
+        health_stream,
         vec![button.press_on_drop()],
     )
+}
+
+/// Synthesizes a probe stream that produces the frontier of the given progress stream at the given
+/// interval.
+///
+/// This is used as a fallback for sources that don't support probing the frontier of the upstream
+/// system.
+fn synthesize_probes<'scope, T: timely::progress::Timestamp>(
+    source_id: GlobalId,
+    progress: StreamVec<'scope, T, Infallible>,
+    interval: Duration,
+    now_fn: NowFn,
+) -> StreamVec<'scope, T, Probe<T>> {
+    let scope = progress.scope();
+
+    let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();
+    let is_active_worker = active_worker == scope.index();
+
+    let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
+    let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
+    let mut input = op.new_input_for(progress, Pipeline, &output);
+
+    op.build(|caps| async move {
+        if !is_active_worker {
+            return;
+        }
+
+        let [cap] = caps.try_into().expect("one capability per output");
+
+        let mut ticker = super::probe::Ticker::new(move || interval, now_fn.clone());
+
+        let minimum_frontier = Antichain::from_elem(Timestamp::minimum());
+        let mut frontier = minimum_frontier.clone();
+        loop {
+            tokio::select! {
+                event = input.next() => match event {
+                    Some(AsyncEvent::Progress(progress)) => frontier = progress,
+                    Some(AsyncEvent::Data(..)) => unreachable!(),
+                    None => break,
+                },
+                // We only report a probe if the source upper frontier is not the minimum frontier.
+                // This makes it so the first remap binding corresponds to the snapshot of the
+                // source, and because the first binding always maps to the minimum *target*
+                // frontier we guarantee that the source will never appear empty.
+                probe_ts = ticker.tick(), if frontier != minimum_frontier => {
+                    let probe = Probe {
+                        probe_ts,
+                        upstream_frontier: frontier.clone(),
+                    };
+                    output.give(&cap, probe);
+                }
+            }
+        }
+
+        let probe = Probe {
+            probe_ts: now_fn().into(),
+            upstream_frontier: Antichain::new(),
+        };
+        output.give(&cap, probe);
+    });
+
+    output_stream
 }

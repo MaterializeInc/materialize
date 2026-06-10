@@ -14,6 +14,7 @@ documentation][user-docs].
 
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
+
 from collections.abc import Sequence
 from typing import (
     Any,
@@ -77,7 +78,7 @@ class ServiceConfig(TypedDict, total=False):
     host user.
 
     This is an mzcompose extension to Docker Compose. It is equivalent to
-    passing `--user $(id -u):$(id -g)` to `docker run`. The defualt is `False`.
+    passing `--user $(id -u):$(id -g)` to `docker run`. The default is `False`.
     """
 
     allow_host_ports: bool
@@ -134,7 +135,7 @@ class ServiceConfig(TypedDict, total=False):
     volumes: list[str]
     """Volumes to attach to the service."""
 
-    networks: dict[str, dict[str, list[str]]]
+    networks: dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | list[str]
     """Additional networks to join.
 
     TODO(benesch): this should use a nested TypedDict.
@@ -165,6 +166,24 @@ class ServiceConfig(TypedDict, total=False):
     platform: str
     """Target platform for service to run on. Syntax: os[/arch[/variant]]"""
 
+    publish: bool | None
+    """Override whether an image is publishable. Unpublishable images can be built during normal test runs in CI."""
+
+    stop_grace_period: str | None
+    """Time to wait when stopping a container."""
+
+    network_mode: str | None
+    """Network mode."""
+
+    user: str | None
+    """The user for the container."""
+
+    dns: list[str] | None
+    """The DNS servers to use for the container."""
+
+    security_opt: list[str] | None
+    """Additional security options to apply to the container."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.
@@ -172,8 +191,13 @@ class Service:
     Attributes:
         name: The name of the service.
         config: The definition of the service.
+        companions: Sibling services that should be registered in the
+            composition alongside this one. Lets a service pull in dependent
+            sidecar containers without each composition having to spell them
+            out.
     """
 
     def __init__(self, name: str, config: ServiceConfig) -> None:
         self.name = name
         self.config = config
+        self.companions: list["Service"] = []

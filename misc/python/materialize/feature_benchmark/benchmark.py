@@ -7,12 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from collections.abc import Iterable
-from typing import Any
+import time
 
-from materialize import ui
 from materialize.feature_benchmark.aggregation import Aggregation
-from materialize.feature_benchmark.comparator import Comparator
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.filter import Filter
 from materialize.feature_benchmark.measurement import (
@@ -23,7 +20,6 @@ from materialize.feature_benchmark.measurement import (
 )
 from materialize.feature_benchmark.measurement_source import MeasurementSource
 from materialize.feature_benchmark.scenario import Scenario
-from materialize.feature_benchmark.scenario_version import ScenarioVersion
 from materialize.feature_benchmark.termination import TerminationCondition
 from materialize.mz_version import MzVersion
 
@@ -51,7 +47,6 @@ class Benchmark:
         self._filter = filter
         self._termination_conditions = termination_conditions
         self._performance_aggregation = aggregation_class()
-        self._messages_aggregation = aggregation_class()
         self._default_size = default_size
         self._seed = seed
 
@@ -70,6 +65,9 @@ class Benchmark:
             elif float(self._scale) > 0:
                 scale = float(self._scale)
 
+        if self._scenario_cls.MAX_SCALE is not None:
+            scale = min(scale, self._scenario_cls.MAX_SCALE)
+
         scenario_class = self._scenario_cls
         return scenario_class(
             scale=scale,
@@ -81,9 +79,10 @@ class Benchmark:
     def run(self) -> list[Aggregation]:
         scenario = self.create_scenario_instance()
 
-        ui.header(
-            f"Running scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()}"
+        print(
+            f"--- Running scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()}"
         )
+        start_time = time.time()
 
         # Run the shared() section once for both Mzs under measurement
         self.run_shared(scenario)
@@ -99,9 +98,13 @@ class Benchmark:
             performance_measurement = self.run_measurement(scenario, i)
 
             if self.shall_terminate(performance_measurement):
+                duration = time.time() - start_time
+                print(
+                    f"Scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()} took {duration:.0f}s to run"
+                )
+
                 return [
                     self._performance_aggregation,
-                    self._messages_aggregation,
                     self._memory_mz_aggregation,
                     self._memory_clusterd_aggregation,
                 ]
@@ -172,7 +175,6 @@ class Benchmark:
         )
 
         self._collect_performance_measurement(i, performance_measurement)
-        self._collect_message_count(i)
 
         if self._memory_mz_aggregation:
             self._collect_memory_measurement(
@@ -204,84 +206,24 @@ class Benchmark:
     ) -> None:
         if not self._filter or not self._filter.filter(performance_measurement):
             print(f"{i} {performance_measurement}")
-            self._performance_aggregation.append(performance_measurement)
-
-    def _collect_message_count(self, i: int) -> None:
-        messages = self._executor.Messages()
-        if messages is not None:
-            messages_measurement = Measurement(
-                type=MeasurementType.MESSAGES,
-                value=messages,
-                unit=MeasurementUnit.COUNT,
-            )
-            print(f"{i}: {messages_measurement}")
-            self._messages_aggregation.append(messages_measurement)
+            self._performance_aggregation.append_measurement(performance_measurement)
 
     def _collect_memory_measurement(
         self, i: int, memory_measurement_type: MeasurementType, aggregation: Aggregation
     ) -> None:
+        if memory_measurement_type == MeasurementType.MEMORY_MZ:
+            value = self._executor.DockerMemMz()
+        elif memory_measurement_type == MeasurementType.MEMORY_CLUSTERD:
+            value = self._executor.DockerMemClusterd()
+        else:
+            raise ValueError(f"Unknown measurement type {memory_measurement_type}")
         memory_measurement = Measurement(
             type=memory_measurement_type,
-            value=self._executor.DockerMemMz() / 2**20,  # Convert to Mb
+            value=value / 2**20,  # Convert to Mb
             unit=MeasurementUnit.MEGABYTE,
         )
 
         if memory_measurement.value > 0:
             if not self._filter or not self._filter.filter(memory_measurement):
                 print(f"{i} {memory_measurement}")
-                aggregation.append(memory_measurement)
-
-
-class Report:
-    def __init__(self, cycle_number: int) -> None:
-        self.cycle_number = cycle_number
-        """ 1-based cycle number. """
-        self._comparisons: list[Comparator] = []
-
-    def append(self, comparison: Comparator) -> None:
-        self._comparisons.append(comparison)
-
-    def extend(self, comparisons: Iterable[Comparator]) -> None:
-        self._comparisons.extend(comparisons)
-
-    def as_string(self, use_colors: bool, limit_to_scenario: str | None = None) -> str:
-        output_lines = []
-
-        output_lines.append(
-            f"{'NAME':<35} | {'TYPE':<15} | {'THIS':^15} | {'OTHER':^15} | {'UNIT':^6} | {'THRESHOLD':^10} | {'Regression?':^13} | 'THIS' is"
-        )
-        output_lines.append("-" * 152)
-
-        for comparison in self._comparisons:
-            if not comparison.has_values():
-                continue
-
-            if limit_to_scenario is not None and comparison.name != limit_to_scenario:
-                continue
-
-            regression = "!!YES!!" if comparison.is_regression() else "no"
-            threshold = f"{(comparison.threshold * 100):.0f}%"
-            output_lines.append(
-                f"{comparison.name:<35} | {comparison.type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {comparison.unit():^6} | {threshold:^10} | {regression:^13} | {comparison.human_readable(use_colors)}"
-            )
-
-        return "\n".join(output_lines)
-
-    def __str__(self) -> str:
-        return self.as_string(use_colors=False)
-
-    def measurements_of_this(self, scenario_name: str) -> dict[MeasurementType, Any]:
-        result = dict()
-
-        for comparison in self._comparisons:
-            if comparison.name == scenario_name:
-                result[comparison.type] = comparison.this()
-
-        return result
-
-    def get_scenario_version(self, scenario_name: str) -> ScenarioVersion:
-        for comparison in self._comparisons:
-            if comparison.name == scenario_name:
-                return comparison.get_scenario_version()
-
-        raise RuntimeError(f"Scenario {scenario_name} not found!")
+                aggregation.append_measurement(memory_measurement)

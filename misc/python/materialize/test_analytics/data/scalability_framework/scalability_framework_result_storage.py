@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 @dataclass
@@ -35,8 +36,7 @@ class ScalabilityFrameworkResultStorage(BaseDataStorage):
         sql_statements = []
 
         for result_entry in results:
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                     INSERT INTO scalability_framework_result
                     (
                         build_job_id,
@@ -49,16 +49,15 @@ class ScalabilityFrameworkResultStorage(BaseDataStorage):
                         tps
                     )
                     SELECT
-                        '{job_id}',
-                        '{framework_version}',
-                        '{result_entry.workload_name}',
-                        '{result_entry.workload_group}',
-                        '{result_entry.workload_version}',
+                        {as_sanitized_literal(job_id)},
+                        {as_sanitized_literal(framework_version)},
+                        {as_sanitized_literal(result_entry.workload_name)},
+                        {as_sanitized_literal(result_entry.workload_group)},
+                        {as_sanitized_literal(result_entry.workload_version)},
                         {result_entry.concurrency},
                         {result_entry.count},
                         {result_entry.tps}
                     ;
-                    """
-            )
+                    """)
 
         self.database_connector.add_update_statements(sql_statements)

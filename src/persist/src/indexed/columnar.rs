@@ -14,15 +14,12 @@ use std::fmt;
 use std::mem::size_of;
 
 use ::arrow::array::{
-    make_array, Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, Int64Array,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, Int64Array, make_array,
 };
-use ::arrow::buffer::OffsetBuffer;
 use ::arrow::datatypes::ToByteSlice;
-use bytes::Bytes;
-use mz_persist_types::arrow::ProtoArrayData;
+use mz_persist_types::arrow::{ArrayOrd, ProtoArrayData};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
-use crate::gen::persist::ProtoColumnarRecords;
 use crate::indexed::columnar::arrow::realloc_array;
 use crate::metrics::ColumnarMetrics;
 
@@ -98,11 +95,30 @@ impl Default for ColumnarRecords {
 
 impl fmt::Debug for ColumnarRecords {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(&self.borrow(), fmt)
+        fmt.debug_list().entries(self.iter()).finish()
     }
 }
 
 impl ColumnarRecords {
+    /// Construct a columnar records instance from the given arrays, checking invariants.
+    pub fn new(
+        key_data: BinaryArray,
+        val_data: BinaryArray,
+        timestamps: Int64Array,
+        diffs: Int64Array,
+    ) -> Self {
+        let len = key_data.len();
+        let records = Self {
+            len,
+            key_data,
+            val_data,
+            timestamps,
+            diffs,
+        };
+        assert_eq!(records.validate(), Ok(()));
+        records
+    }
+
     /// The number of (potentially duplicated) ((Key, Val), Time, i64) records
     /// stored in Self.
     pub fn len(&self) -> usize {
@@ -119,6 +135,16 @@ impl ColumnarRecords {
         &self.val_data
     }
 
+    /// The timestamps in this columnar records as an array.
+    pub fn timestamps(&self) -> &Int64Array {
+        &self.timestamps
+    }
+
+    /// The diffs in this columnar records as an array.
+    pub fn diffs(&self) -> &Int64Array {
+        &self.diffs
+    }
+
     /// The number of logical bytes in the represented data, excluding offsets
     /// and lengths.
     pub fn goodbytes(&self) -> usize {
@@ -131,29 +157,26 @@ impl ColumnarRecords {
     /// Read the record at `idx`, if there is one.
     ///
     /// Returns None if `idx >= self.len()`.
-    pub fn get<'a>(&'a self, idx: usize) -> Option<((&'a [u8], &'a [u8]), [u8; 8], [u8; 8])> {
-        self.borrow().get(idx)
-    }
-
-    /// Borrow Self as a [ColumnarRecordsRef].
-    fn borrow<'a>(&'a self) -> ColumnarRecordsRef<'a> {
-        // The ColumnarRecords constructor already validates, so don't bother
-        // doing it again.
-        //
-        // TODO: Forcing everything through a `fn new` would make this more
-        // obvious.
-        ColumnarRecordsRef {
-            len: self.len,
-            key_data: &self.key_data,
-            val_data: &self.val_data,
-            timestamps: self.timestamps.values(),
-            diffs: self.diffs.values(),
+    pub fn get(&self, idx: usize) -> Option<((&[u8], &[u8]), [u8; 8], [u8; 8])> {
+        if idx >= self.len {
+            return None;
         }
+
+        // There used to be `debug_assert_eq!(self.validate(), Ok(()))`, but it
+        // resulted in accidentally O(n^2) behavior in debug mode. Instead, we
+        // push that responsibility to the ColumnarRecordsRef constructor.
+        let key = self.key_data.value(idx);
+        let val = self.val_data.value(idx);
+        let ts = i64::to_le_bytes(self.timestamps.values()[idx]);
+        let diff = i64::to_le_bytes(self.diffs.values()[idx]);
+        Some(((key, val), ts, diff))
     }
 
     /// Iterate through the records in Self.
-    pub fn iter<'a>(&'a self) -> ColumnarRecordsIter<'a> {
-        self.borrow().iter()
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = ((&[u8], &[u8]), [u8; 8], [u8; 8])> + ExactSizeIterator {
+        (0..self.len).map(move |idx| self.get(idx).unwrap())
     }
 
     /// Concatenate the given records together, column-by-column.
@@ -181,124 +204,6 @@ impl ColumnarRecords {
         }
     }
 }
-
-/// A reference to a [ColumnarRecords].
-#[derive(Clone)]
-struct ColumnarRecordsRef<'a> {
-    len: usize,
-    key_data: &'a BinaryArray,
-    val_data: &'a BinaryArray,
-    timestamps: &'a [i64],
-    diffs: &'a [i64],
-}
-
-impl<'a> fmt::Debug for ColumnarRecordsRef<'a> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.debug_list().entries(self.iter()).finish()
-    }
-}
-
-impl<'a> ColumnarRecordsRef<'a> {
-    fn validate(&self) -> Result<(), String> {
-        let validate_array = |name: &str, array: &dyn Array| {
-            let len = array.len();
-            if len != self.len {
-                return Err(format!("expected {} {name} got {len}", self.len));
-            }
-            let null_count = array.null_count();
-            if null_count > 0 {
-                return Err(format!("{null_count} unexpected nulls in {name} array"));
-            }
-            Ok(())
-        };
-
-        let key_data_size =
-            self.key_data.values().len() + self.key_data.offsets().inner().inner().len();
-        if key_data_size > KEY_VAL_DATA_MAX_LEN {
-            return Err(format!(
-                "expected encoded key offsets and data size to be less than or equal to {} got {}",
-                KEY_VAL_DATA_MAX_LEN, key_data_size
-            ));
-        }
-        validate_array("keys", &self.key_data)?;
-
-        let val_data_size =
-            self.val_data.values().len() + self.val_data.offsets().inner().inner().len();
-        if val_data_size > KEY_VAL_DATA_MAX_LEN {
-            return Err(format!(
-                "expected encoded val offsets and data size to be less than or equal to {} got {}",
-                KEY_VAL_DATA_MAX_LEN, val_data_size
-            ));
-        }
-        validate_array("vals", &self.val_data)?;
-
-        if self.diffs.len() != self.len {
-            return Err(format!(
-                "expected {} diffs got {}",
-                self.len,
-                self.diffs.len()
-            ));
-        }
-        if self.timestamps.len() != self.len {
-            return Err(format!(
-                "expected {} timestamps got {}",
-                self.len,
-                self.timestamps.len()
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Read the record at `idx`, if there is one.
-    ///
-    /// Returns None if `idx >= self.len()`.
-    fn get(&self, idx: usize) -> Option<((&'a [u8], &'a [u8]), [u8; 8], [u8; 8])> {
-        if idx >= self.len {
-            return None;
-        }
-
-        // There used to be `debug_assert_eq!(self.validate(), Ok(()))`, but it
-        // resulted in accidentally O(n^2) behavior in debug mode. Instead, we
-        // push that responsibility to the ColumnarRecordsRef constructor.
-        let key = self.key_data.value(idx);
-        let val = self.val_data.value(idx);
-        let ts = i64::to_le_bytes(self.timestamps[idx]);
-        let diff = i64::to_le_bytes(self.diffs[idx]);
-        Some(((key, val), ts, diff))
-    }
-
-    /// Iterate through the records in Self.
-    fn iter(&self) -> ColumnarRecordsIter<'a> {
-        ColumnarRecordsIter {
-            idx: 0,
-            records: self.clone(),
-        }
-    }
-}
-
-/// An [Iterator] over the records in a [ColumnarRecords].
-#[derive(Clone, Debug)]
-pub struct ColumnarRecordsIter<'a> {
-    idx: usize,
-    records: ColumnarRecordsRef<'a>,
-}
-
-impl<'a> Iterator for ColumnarRecordsIter<'a> {
-    type Item = ((&'a [u8], &'a [u8]), [u8; 8], [u8; 8]);
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.records.len, Some(self.records.len))
-    }
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = self.records.get(self.idx);
-        self.idx += 1;
-        ret
-    }
-}
-
-impl<'a> ExactSizeIterator for ColumnarRecordsIter<'a> {}
 
 /// An abstraction to incrementally add ((Key, Value), Time, i64) records
 /// in a columnar representation, and eventually get back a [ColumnarRecords].
@@ -408,7 +313,7 @@ impl ColumnarRecordsBuilder {
             timestamps: self.timestamps.into(),
             diffs: self.diffs.into(),
         };
-        debug_assert_eq!(ret.borrow().validate(), Ok(()));
+        debug_assert_eq!(ret.validate(), Ok(()));
         ret
     }
 
@@ -421,60 +326,55 @@ impl ColumnarRecordsBuilder {
 }
 
 impl ColumnarRecords {
-    /// See [RustType::into_proto].
-    pub fn into_proto(
-        &self,
-        structured_ext: Option<ColumnarRecordsStructuredExt>,
-    ) -> ProtoColumnarRecords {
-        let (k_struct, v_struct) = match structured_ext.map(|x| x.into_proto()) {
-            None => (None, None),
-            Some((k, v)) => (Some(k), Some(v)),
+    fn validate(&self) -> Result<(), String> {
+        let validate_array = |name: &str, array: &dyn Array| {
+            let len = array.len();
+            if len != self.len {
+                return Err(format!("expected {} {name} got {len}", self.len));
+            }
+            let null_count = array.null_count();
+            if null_count > 0 {
+                return Err(format!("{null_count} unexpected nulls in {name} array"));
+            }
+            Ok(())
         };
 
-        ProtoColumnarRecords {
-            len: self.len.into_proto(),
-            key_offsets: self.key_data.offsets().to_vec(),
-            key_data: Bytes::copy_from_slice(self.key_data.value_data()),
-            val_offsets: self.val_data.offsets().to_vec(),
-            val_data: Bytes::copy_from_slice(self.val_data.value_data()),
-            timestamps: self.timestamps.values().to_vec(),
-            diffs: self.diffs.values().to_vec(),
-            key_structured: k_struct,
-            val_structured: v_struct,
+        let key_data_size =
+            self.key_data.values().len() + self.key_data.offsets().inner().inner().len();
+        if key_data_size > KEY_VAL_DATA_MAX_LEN {
+            return Err(format!(
+                "expected encoded key offsets and data size to be less than or equal to {} got {}",
+                KEY_VAL_DATA_MAX_LEN, key_data_size
+            ));
         }
-    }
+        validate_array("keys", &self.key_data)?;
 
-    /// See [RustType::from_proto].
-    pub fn from_proto(
-        lgbytes: &ColumnarMetrics,
-        proto: ProtoColumnarRecords,
-    ) -> Result<(Self, Option<ColumnarRecordsStructuredExt>), TryFromProtoError> {
-        let binary_array = |data: Bytes, offsets: Vec<i32>| match BinaryArray::try_new(
-            OffsetBuffer::new(offsets.into()),
-            data.into(),
-            None,
-        ) {
-            Ok(data) => Ok(realloc_array(&data, lgbytes)),
-            Err(e) => Err(TryFromProtoError::InvalidFieldError(format!(
-                "Unable to decode binary array from repeated proto fields: {e:?}"
-            ))),
-        };
+        let val_data_size =
+            self.val_data.values().len() + self.val_data.offsets().inner().inner().len();
+        if val_data_size > KEY_VAL_DATA_MAX_LEN {
+            return Err(format!(
+                "expected encoded val offsets and data size to be less than or equal to {} got {}",
+                KEY_VAL_DATA_MAX_LEN, val_data_size
+            ));
+        }
+        validate_array("vals", &self.val_data)?;
 
-        let ret = ColumnarRecords {
-            len: proto.len.into_rust()?,
-            key_data: binary_array(proto.key_data, proto.key_offsets)?,
-            val_data: binary_array(proto.val_data, proto.val_offsets)?,
-            timestamps: realloc_array(&proto.timestamps.into(), lgbytes),
-            diffs: realloc_array(&proto.diffs.into(), lgbytes),
-        };
-        let () = ret
-            .borrow()
-            .validate()
-            .map_err(TryFromProtoError::InvalidPersistState)?;
-        let ext =
-            ColumnarRecordsStructuredExt::from_proto(proto.key_structured, proto.val_structured)?;
+        if self.diffs.len() != self.len {
+            return Err(format!(
+                "expected {} diffs got {}",
+                self.len,
+                self.diffs.len()
+            ));
+        }
+        if self.timestamps.len() != self.len {
+            return Err(format!(
+                "expected {} timestamps got {}",
+                self.len,
+                self.timestamps.len()
+            ));
+        }
 
-        Ok((ret, ext))
+        Ok(())
     }
 }
 
@@ -518,7 +418,7 @@ impl ColumnarRecordsStructuredExt {
     }
 
     /// See [`RustType::from_proto`].
-    fn from_proto(
+    pub fn from_proto(
         key: Option<ProtoArrayData>,
         val: Option<ProtoArrayData>,
     ) -> Result<Option<Self>, TryFromProtoError> {
@@ -534,6 +434,11 @@ impl ColumnarRecordsStructuredExt {
             (None, None) => None,
         };
         Ok(ext)
+    }
+
+    /// The "goodput" of these arrays, excluding overhead like offsets etc.
+    pub fn goodbytes(&self) -> usize {
+        ArrayOrd::new(self.key.as_ref()).goodbytes() + ArrayOrd::new(self.val.as_ref()).goodbytes()
     }
 }
 

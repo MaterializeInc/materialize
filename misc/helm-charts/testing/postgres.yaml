@@ -1,0 +1,84 @@
+---
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pv-claim
+  namespace: materialize
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: materialize
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: "materialize_db"
+        - name: POSTGRES_USER
+          value: "materialize_user"
+        - name: POSTGRES_PASSWORD
+          value: "materialize_pass"
+        args:
+        - "postgres"
+        - "-c"
+        - "max_connections=1000"
+        - "-c"
+        - "wal_level=logical"
+        - "-c"
+        - "max_wal_senders=10"
+        - "-c"
+        - "max_replication_slots=10"
+        - "-c"
+        - "shared_buffers=256MB"
+        - "-c"
+        - "work_mem=4MB"
+        - "-c"
+        - "maintenance_work_mem=64MB"
+        volumeMounts:
+        - mountPath: /var/lib/postgresql/data
+          name: postgres-storage
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-pv-claim
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: materialize
+spec:
+  selector:
+    app: postgres
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432

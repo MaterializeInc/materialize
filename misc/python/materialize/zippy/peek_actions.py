@@ -24,8 +24,7 @@ class PeekCancellation(Action):
 
     def run(self, c: Composition, state: State) -> None:
         c.testdrive(
-            dedent(
-                """
+            dedent("""
                     > DROP TABLE IF EXISTS peek_cancellation;
                     > CREATE TABLE IF NOT EXISTS peek_cancellation (f1 INTEGER);
                     > INSERT INTO peek_cancellation SELECT generate_series(1, 1000);
@@ -35,7 +34,6 @@ class PeekCancellation(Action):
                     ! INSERT INTO peek_cancellation
                       SELECT 1 FROM peek_cancellation AS a1, peek_cancellation AS a2, peek_cancellation AS a3;
                     contains: timeout
-                    """
-            ),
+                    """),
             mz_service=state.mz_service,
         )

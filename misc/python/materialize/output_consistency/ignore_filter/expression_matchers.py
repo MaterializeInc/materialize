@@ -39,7 +39,6 @@ from materialize.output_consistency.operation.operation import (
     DbOperation,
     match_function_by_name,
 )
-from materialize.output_consistency.query.query_template import QueryTemplate
 
 
 def matches_x_or_y(
@@ -111,25 +110,20 @@ def matches_any_expression_arg(
     return False
 
 
+def matches_recursively(
+    expression: Expression, matcher: Callable[[Expression], bool]
+) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        for arg_expression in expression.args:
+            is_match = matches_recursively(arg_expression, matcher)
+            if is_match:
+                return True
+
+    return matcher(expression)
+
+
 def matches_nested_expression(expression: Expression) -> bool:
     return not matches_expression_with_only_plain_arguments(expression)
-
-
-def is_function_invoked_only_with_non_nested_parameters(
-    query_template: QueryTemplate, function_name_in_lowercase: str
-) -> bool:
-    at_least_one_invocation_with_nested_args = query_template.matches_any_expression(
-        partial(
-            matches_x_and_y,
-            x=partial(
-                matches_fun_by_name,
-                function_name_in_lower_case=function_name_in_lowercase,
-            ),
-            y=matches_nested_expression,
-        ),
-        True,
-    )
-    return not at_least_one_invocation_with_nested_args
 
 
 def involves_data_type_category(
@@ -157,6 +151,7 @@ def is_known_to_involve_exact_data_types(
     if isinstance(expression, EnumConstant) and expression.is_tagged(
         TAG_DATA_TYPE_ENUM
     ):
+        # this matches castings to a certain type
         type_names = internal_type_identifiers_to_data_type_names(
             internal_data_type_identifiers
         )
@@ -215,10 +210,32 @@ def is_any_date_time_expression(expression: Expression) -> bool:
     )
 
 
+def is_timezone_conversion_expression(expression: Expression) -> bool:
+    return expression.matches(
+        partial(
+            matches_fun_by_any_name,
+            function_names_in_lower_case={"timezone"},
+        ),
+        True,
+    ) or expression.matches(
+        partial(
+            matches_op_by_any_pattern,
+            patterns={"$ AT TIME ZONE $::TEXT"},
+        ),
+        True,
+    )
+
+
 def is_known_to_return_non_integer_number(expression: Expression):
     return_type_spec = expression.resolve_return_type_spec()
 
     if isinstance(return_type_spec, NumericReturnTypeSpec):
         return return_type_spec.always_floating_type
 
+    return False
+
+
+def is_table_function(expression: Expression) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        return expression.operation.is_table_function
     return False

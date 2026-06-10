@@ -8,7 +8,7 @@ This means that sources should not re-read data that has already been written to
 This requires that Materialize _bound_ the information we need to restart a source.
 
 [source ingestion pipeline design doc]: https://github.com/MaterializeInc/materialize/pull/12109/files
-[Epic task]: https://github.com/MaterializeInc/materialize/issues/13534
+[Epic task]: https://github.com/MaterializeInc/database-issues/issues/3875
 
 ## Jargon
 

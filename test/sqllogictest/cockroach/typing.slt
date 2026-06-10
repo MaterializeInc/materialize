@@ -147,13 +147,13 @@ SELECT * FROM untyped
 ----
 false  42  4.2  4.20  2010-09-28 00:00:00 +0000 +0000  2010-09-28 12:00:00.1 +0000 +0000  2010-09-29 12:00:00.1 +0000 UTC  12:02:00
 
-# Issue #14527: support string literal coercion during overload resolution
+# Issue materialize#14527: support string literal coercion during overload resolution
 query T
 SELECT ts FROM untyped WHERE ts != '2015-09-18 00:00:00'
 ----
 2010-09-28 12:00:00.1 +0000 +0000
 
-# Regression tests for #15050
+# Regression tests for materialize#15050
 
 statement error unsupported comparison operator: <timestamptz> < <string>
 CREATE TABLE t15050a (c DECIMAL DEFAULT CASE WHEN now() < 'Not Timestamp' THEN 2 ELSE 2 END);
@@ -161,7 +161,7 @@ CREATE TABLE t15050a (c DECIMAL DEFAULT CASE WHEN now() < 'Not Timestamp' THEN 2
 statement error unsupported comparison operator: <timestamptz> < <string>
 CREATE TABLE t15050b (c DECIMAL DEFAULT IF(now() < 'Not Timestamp', 2, 2));
 
-# Regression tests for #15632
+# Regression tests for materialize#15632
 
 statement error incompatible IFNULL expressions: could not parse "foo" as type bool
 SELECT IFNULL('foo', false)
@@ -179,7 +179,7 @@ SELECT IFNULL('true', false)
 ----
 true
 
-# Regression tests for #19770
+# Regression tests for materialize#19770
 
 query B
 SELECT 1 in (SELECT 1)

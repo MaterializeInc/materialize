@@ -9,8 +9,8 @@
 import argparse
 import time
 
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
 from materialize.feature_flag_consistency.execution.multi_config_executors import (
     MultiConfigSqlExecutors,
@@ -202,7 +202,7 @@ def main() -> int:
         )
 
         test.evaluation_strategy_name = args.evaluation_strategy
-    except InterfaceError:
+    except OperationalError:
         return 1
 
     result = test.run_output_consistency_tests(

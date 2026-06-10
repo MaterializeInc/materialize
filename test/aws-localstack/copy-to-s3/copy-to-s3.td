@@ -10,7 +10,6 @@
 # Tests for COPY TO expr.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_copy_to_expr = true;
 
 # Prepare table data
 > CREATE TABLE t (a int);
@@ -50,7 +49,7 @@ contains:FORMAT BINARY not yet supported
     AWS CONNECTION = aws_conn,
     FORMAT = 'csv'
   );
-contains:only 's3://...' urls are supported as COPY TO target
+contains:only 's3://...' and 'gs://...' urls are supported as COPY TO target
 
 ! COPY t TO NULL
   WITH (
@@ -82,7 +81,7 @@ contains:ORDER BY is not supported in SELECT query for COPY statements
 contains:MAX FILE SIZE cannot be less than 16MB
 
 # Creating cluster with multiple replicas, each with multiple workers
-> CREATE CLUSTER c1 REPLICAS (r1 (size '2'), r2 (size '1'));
+> CREATE CLUSTER c1 REPLICAS (r1 (size 'scale=1,workers=2'), r2 (SIZE 'scale=1,workers=1'));
 > SET cluster = c1;
 
 # functions like now() should work in the s3 path

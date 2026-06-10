@@ -18,12 +18,16 @@ use crate::TransformCtx;
 pub struct Negate;
 
 impl crate::Transform for Negate {
+    fn name(&self) -> &'static str {
+        "NegateFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "negate_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

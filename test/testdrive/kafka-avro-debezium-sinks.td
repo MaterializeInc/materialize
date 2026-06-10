@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_envelope_materialize = true
@@ -124,28 +126,32 @@ $ kafka-create-topic topic=input
 # input is processed in consistency batches and not all at once
 
 > CREATE CLUSTER input_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE input
   IN CLUSTER input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
+
+> CREATE TABLE input_tbl FROM SOURCE input (REFERENCE "testdrive-input-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+> COMMIT
 
 > CREATE CLUSTER non_keyed_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK non_keyed_sink
   IN CLUSTER non_keyed_sink_cluster
-  FROM input
+  FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE VIEW max_view AS SELECT a, MAX(b) as b FROM input GROUP BY a
+> CREATE VIEW max_view AS SELECT a, MAX(b) as b FROM input_tbl GROUP BY a
 
 # the sinked relation has the natural primary key (a)
 
 > CREATE CLUSTER non_keyed_sink_of_keyed_relation_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK non_keyed_sink_of_keyed_relation
   IN CLUSTER non_keyed_sink_of_keyed_relation_cluster
-  FROM input
+  FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-of-keyed-relation-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -154,7 +160,7 @@ $ kafka-create-topic topic=input
 > CREATE CLUSTER keyed_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK keyed_sink
   IN CLUSTER keyed_sink_cluster
-  FROM input
+  FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -163,7 +169,7 @@ $ kafka-create-topic topic=input
 > CREATE CLUSTER keyed_sink_of_keyed_relation_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK keyed_sink_of_keyed_relation
   IN CLUSTER keyed_sink_of_keyed_relation_cluster
-  FROM input
+  FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-of-keyed-relation-${testdrive.seed}') KEY (b)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -172,7 +178,7 @@ $ kafka-create-topic topic=input
 > CREATE CLUSTER multi_keyed_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK multi_keyed_sink
   IN CLUSTER multi_keyed_sink_cluster
-  FROM input
+  FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'multi-keyed-sink-${testdrive.seed}') KEY (b, a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -186,7 +192,7 @@ $ kafka-ingest format=avro topic=input schema=${schema}
 {"array":[{"data":{"a":1,"b":7},"time":3,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[4],"counts":[{"time":1,"count":2},{"time":2,"count":2},{"time":3,"count":1}]}}
 
-> SELECT * FROM input;
+> SELECT * FROM input_tbl;
 a  b
 ------
 1  1

@@ -68,8 +68,7 @@ class CreateMySqlCdcTable(Action):
             assert self.mysql_cdc_table.mysql_table is not None
             name = self.mysql_cdc_table.name
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     > CREATE SECRET {name}_password AS '{MySql.DEFAULT_ROOT_PASSWORD}'
                     > CREATE CONNECTION {name}_conn TO MYSQL (
                         HOST mysql,
@@ -79,10 +78,10 @@ class CreateMySqlCdcTable(Action):
 
                     > CREATE SOURCE {name}_source
                       IN CLUSTER {self.cluster_name}
-                      FROM MYSQL CONNECTION {name}_conn
-                      FOR TABLES (public.{self.mysql_cdc_table.mysql_table.name} AS {name})
-                    """
-                ),
+                      FROM MYSQL CONNECTION {name}_conn;
+
+                    > CREATE TABLE {name} FROM SOURCE {name}_source (REFERENCE public.{self.mysql_cdc_table.mysql_table.name});
+                    """),
                 mz_service=state.mz_service,
             )
 

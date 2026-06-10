@@ -1,6 +1,6 @@
 # Source Metrics for Users, v2
 
-- Associated Epic: https://github.com/MaterializeInc/materialize/issues/23154
+- Associated Epic: https://github.com/MaterializeInc/database-issues/issues/6974
 
 
 ## The Problem
@@ -196,7 +196,7 @@ implement them in a feasible way. The attached example charts capture the desire
     - Rejected due to its complexity.
 - Expose more information to users about their sources.
     - This design document is intentionally constrained, to help users answer 2 well-known questions about their sources.
-- Replace the 2nd metric set with [Relocking the upstream frontier](https://github.com/MaterializeInc/materialize/issues/23345).
+- Replace the 2nd metric set with [Relocking the upstream frontier](https://github.com/MaterializeInc/database-issues/issues/7020).
     - Rejected to decouple this design with a reclocking policy decision.
     - Note that the schema and semantics of this design document are forward-compatible with that policy change.
 

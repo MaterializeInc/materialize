@@ -60,18 +60,28 @@ pub mod peek;
 pub mod subscribe;
 pub mod view;
 
-use std::panic::AssertUnwindSafe;
+use std::fmt::Debug;
 
+use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::PERSIST_FAST_PATH_ORDER;
+use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
+use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::SUBSCRIBE_SNAPSHOT_OPTIMIZATION;
 use mz_compute_types::plan::Plan;
+use mz_controller_types::ClusterId;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
-use mz_repr::GlobalId;
-use mz_sql::plan::PlanError;
+use mz_repr::{CatalogItemId, GlobalId};
+use mz_sql::names::{FullItemName, QualifiedItemName};
+use mz_sql::plan::{HirRelationExpr, PlanError};
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::SystemVars;
-use mz_transform::{TransformCtx, TransformError};
+use mz_transform::{MaybeShouldPanic, StatisticsOracle, TransformCtx, TransformError};
+
+use crate::TimestampContext;
 
 // Alias types
 // -----------
@@ -95,18 +105,8 @@ type LirDataflowDescription = DataflowDescription<Plan>;
 /// Each implementation represents a concrete optimization stage for a fixed
 /// statement type that consumes an input of type `From` and produces output of
 /// type `Self::To`.
-///
-/// The generic lifetime `'ctx` models the lifetime of the optimizer context and
-/// can be passed to the optimizer struct and the `Self::To` types.
-///
-/// The `'s: 'ctx` bound in the `optimize` method call ensures that an optimizer
-/// instance can run an optimization stage that produces a `Self::To` with
-/// `&'ctx` references.
-pub trait Optimize<From>: Send
-where
-    From: Send,
-{
-    type To: Send;
+pub trait Optimize<From> {
+    type To;
 
     /// Execute the optimization stage, transforming the input plan of type
     /// `From` to an output plan of type `To`.
@@ -115,38 +115,128 @@ where
     /// Like [`Self::optimize`], but additionally ensures that panics occurring
     /// in the [`Self::optimize`] call are caught and demoted to an
     /// [`OptimizerError::Internal`] error.
+    ///
+    /// Additionally, if the result of the optimization is an error (not a panic) that indicates we
+    /// should panic, then panic.
     #[mz_ore::instrument(target = "optimizer", level = "debug", name = "optimize")]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
-        match mz_ore::panic::catch_unwind(AssertUnwindSafe(|| self.optimize(plan))) {
-            Ok(result) => {
-                match result.map_err(Into::into) {
-                    Err(OptimizerError::TransformError(TransformError::CallerShouldPanic(msg))) => {
-                        // Promote a `CallerShouldPanic` error from the result
-                        // to a proper panic. This is needed in order to ensure
-                        // that `mz_unsafe.mz_panic('forced panic')` calls still
-                        // panic the caller.
-                        panic!("{}", msg)
-                    }
-                    result => result,
-                }
+        mz_transform::catch_unwind_optimize(|| self.optimize(plan))
+    }
+}
+
+// One-shot peek optimizer dispatch
+// --------------------------------
+
+/// The optimizer driving a one-shot statement through the peek sequencing state
+/// machine.
+///
+/// `SELECT` and `EXPLAIN` are optimized by the [`peek::Optimizer`], while `COPY
+/// TO` is optimized by the [`copy_to::Optimizer`]. Both share the same
+/// surrounding state machine (timestamp selection, read holds, off-thread
+/// optimization, …), so this enum lets that shared machinery carry either
+/// optimizer without caring which one it is. The variants are kept distinct
+/// (rather than abstracted behind a trait object) because the downstream stages
+/// need to recover the concrete optimizer and its statement-specific result.
+#[derive(Debug)]
+pub enum PeekOptimizer {
+    /// Optimizer for `SELECT` and `EXPLAIN` statements.
+    Select(peek::Optimizer),
+    /// Optimizer for `COPY TO` statements.
+    CopyTo(copy_to::Optimizer),
+}
+
+/// The global LIR plan produced by [`PeekOptimizer::optimize`], tagged with the
+/// path that produced it.
+#[derive(Debug)]
+pub enum PeekGlobalLirPlan {
+    /// The result of the `SELECT`/`EXPLAIN` pipeline.
+    Select(peek::GlobalLirPlan),
+    /// The result of the `COPY TO` pipeline.
+    CopyTo(copy_to::GlobalLirPlan),
+}
+
+impl PeekOptimizer {
+    /// The cluster that will run the optimized dataflow.
+    pub fn cluster_id(&self) -> ComputeInstanceId {
+        match self {
+            PeekOptimizer::Select(optimizer) => optimizer.cluster_id(),
+            PeekOptimizer::CopyTo(optimizer) => optimizer.cluster_id(),
+        }
+    }
+
+    /// Runs the full one-shot optimization pipeline end-to-end:
+    ///
+    /// 1. HIR ⇒ MIR lowering and local MIR optimization,
+    /// 2. timestamp resolution,
+    /// 3. global MIR optimization, MIR ⇒ LIR lowering, and global LIR
+    ///    optimization.
+    ///
+    /// The pipeline shape is identical for both variants; only the concrete
+    /// (statement-specific) plan types differ, so the steps are shared via
+    /// [`optimize_oneshot`].
+    pub fn optimize(
+        &mut self,
+        raw_expr: HirRelationExpr,
+        timestamp_ctx: TimestampContext,
+        session: &dyn SessionMetadata,
+        stats: Box<dyn StatisticsOracle>,
+    ) -> Result<PeekGlobalLirPlan, OptimizerError> {
+        match self {
+            PeekOptimizer::Select(optimizer) => {
+                let plan = optimize_oneshot(optimizer, raw_expr, |local_mir_plan| {
+                    local_mir_plan.resolve(timestamp_ctx, session, stats)
+                })?;
+                Ok(PeekGlobalLirPlan::Select(plan))
             }
-            Err(_) => {
-                let msg = "unexpected panic during query optimization".to_string();
-                Err(OptimizerError::Internal(msg))
+            PeekOptimizer::CopyTo(optimizer) => {
+                let plan = optimize_oneshot(optimizer, raw_expr, |local_mir_plan| {
+                    local_mir_plan.resolve(timestamp_ctx, session, stats)
+                })?;
+                Ok(PeekGlobalLirPlan::CopyTo(plan))
             }
         }
     }
 
-    /// Execute the optimization stage and panic if an error occurs.
-    ///
-    /// See [`Optimize::optimize`].
-    #[allow(dead_code)] // This function is never used, but it's useful to keep around.
-    fn must_optimize(&mut self, expr: From) -> Self::To {
-        match self.optimize(expr) {
-            Ok(ok) => ok,
-            Err(err) => panic!("must_optimize call failed: {err}"),
+    /// Consumes `self`, returning the inner [`peek::Optimizer`] if this is the
+    /// `SELECT`/`EXPLAIN` path and `None` otherwise.
+    pub fn into_select(self) -> Option<peek::Optimizer> {
+        match self {
+            PeekOptimizer::Select(optimizer) => Some(optimizer),
+            PeekOptimizer::CopyTo(_) => None,
         }
     }
+
+    /// Consumes `self`, returning the inner [`copy_to::Optimizer`] if this is
+    /// the `COPY TO` path and `None` otherwise.
+    pub fn into_copy_to(self) -> Option<copy_to::Optimizer> {
+        match self {
+            PeekOptimizer::CopyTo(optimizer) => Some(optimizer),
+            PeekOptimizer::Select(_) => None,
+        }
+    }
+}
+
+/// Runs the shared one-shot optimization pipeline for a single optimizer.
+///
+/// This factors out the (otherwise duplicated) HIR ⇒ local MIR ⇒ resolve ⇒
+/// global LIR sequence that is common to the `SELECT`/`EXPLAIN` and `COPY TO`
+/// paths. The `resolve` closure attaches the timestamp/session/stats context to
+/// the local plan; it is path-specific only in the concrete plan type it
+/// operates on.
+pub(crate) fn optimize_oneshot<O, LocalPlan, ResolvedPlan, GlobalPlan>(
+    optimizer: &mut O,
+    raw_expr: HirRelationExpr,
+    resolve: impl FnOnce(LocalPlan) -> ResolvedPlan,
+) -> Result<GlobalPlan, OptimizerError>
+where
+    O: Optimize<HirRelationExpr, To = LocalPlan> + Optimize<ResolvedPlan, To = GlobalPlan>,
+{
+    // HIR ⇒ MIR lowering and MIR optimization (local).
+    let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+    // Attach resolved context required to continue the pipeline.
+    let resolved_mir_plan = resolve(local_mir_plan);
+    // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global).
+    optimizer.catch_unwind_optimize(resolved_mir_plan)
 }
 
 // Optimizer configuration
@@ -190,6 +280,11 @@ pub struct OptimizerConfig {
     /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
     /// Enforced if `timing` is set.
     pub no_fast_path: bool,
+    // If set, allow some additional queries down the Persist fast path when we believe
+    // the orderings are compatible.
+    persist_fast_path_order: bool,
+    // Enable calculating with_snapshot metadata for subscribes.
+    subscribe_snapshot_optimization: bool,
     /// Optimizer feature flags.
     pub features: OptimizerFeatures,
 }
@@ -208,6 +303,8 @@ impl From<&SystemVars> for OptimizerConfig {
             mode: OptimizeMode::Execute,
             replan: None,
             no_fast_path: false,
+            persist_fast_path_order: PERSIST_FAST_PATH_ORDER.get(vars.dyncfgs()),
+            subscribe_snapshot_optimization: SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(vars.dyncfgs()),
             features: OptimizerFeatures::from(vars),
         }
     }
@@ -246,9 +343,33 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
         Self {
             enable_new_outer_join_lowering: config.features.enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering: config.features.enable_variadic_left_join_lowering,
-            enable_outer_join_null_filter: config.features.enable_outer_join_null_filter,
+            enable_cast_elimination: config.features.enable_cast_elimination,
+            enable_simplify_quantified_comparisons: config
+                .features
+                .enable_simplify_quantified_comparisons,
         }
     }
+}
+
+// OptimizerCatalog
+// ===============
+
+pub trait OptimizerCatalog: Debug + Send + Sync {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry;
+    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry;
+    fn resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> FullItemName;
+
+    /// Returns all indexes on the given object and cluster known in the
+    /// catalog.
+    fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        cluster: ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_>;
 }
 
 // OptimizerError
@@ -272,6 +393,14 @@ pub enum OptimizerError {
         func: UnmaterializableFunc,
         context: &'static str,
     },
+    #[error("access to function {0} is restricted")]
+    RestrictedFunction(UnmaterializableFunc),
+    #[error("{0}")]
+    UnsupportedTemporalExpression(String),
+    /// This is a specific kind of internal error. It's distinct from `Internal`, because we want to
+    /// catch it and swallow it in some cases.
+    #[error("internal optimizer error: MfpPlan couldn't be converted into SafeMfpPlan")]
+    InternalUnsafeMfpPlan(String),
     #[error("internal optimizer error: {0}")]
     Internal(String),
 }
@@ -288,6 +417,11 @@ impl OptimizerError {
             Self::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
                 Some("See: https://materialize.com/docs/sql/functions/now_and_mz_now/".into())
             }
+            Self::RestrictedFunction(_) => Some(
+                "Access to system catalog objects is restricted for this role. \
+                Contact your administrator if you need access."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -314,6 +448,17 @@ impl From<anyhow::Error> for OptimizerError {
     }
 }
 
+impl MaybeShouldPanic for OptimizerError {
+    fn should_panic(&self) -> Option<String> {
+        match self {
+            OptimizerError::TransformError(TransformError::CallerShouldPanic(msg)) => {
+                Some(msg.to_string())
+            }
+            _ => None,
+        }
+    }
+}
+
 // Tracing helpers
 // ---------------
 
@@ -330,6 +475,23 @@ fn optimize_mir_local(
     mz_repr::explain::trace_plan(expr.as_inner());
 
     Ok::<_, OptimizerError>(expr)
+}
+
+/// This is just a wrapper around [mz_transform::Optimizer::constant_optimizer],
+/// running it, and tracing the result plan.
+#[mz_ore::instrument(target = "optimizer", level = "debug", name = "constant")]
+fn optimize_mir_constant(
+    expr: MirRelationExpr,
+    ctx: &mut TransformCtx,
+    limit: bool,
+) -> Result<MirRelationExpr, OptimizerError> {
+    let optimizer = mz_transform::Optimizer::constant_optimizer(ctx, limit);
+    let expr = optimizer.optimize(expr, ctx)?;
+
+    // Trace the result of this phase.
+    mz_repr::explain::trace_plan(expr.as_inner());
+
+    Ok::<_, OptimizerError>(expr.0)
 }
 
 macro_rules! trace_plan {

@@ -14,47 +14,61 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::logging::LogVariant;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan as ComputePlan;
 use mz_controller::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp};
+use mz_repr::{
+    CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, RelationVersion,
+    RelationVersionSelector, SqlColumnType, Timestamp, VersionedRelationDesc,
+};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Expr, Raw, Statement, UnresolvedItemName, Value, WithOptionValue};
+use mz_sql::ast::{
+    ColumnDef, ColumnOption, ColumnOptionDef, ColumnVersioned, Expr, Raw, RawDataType, Statement,
+    UnresolvedItemName, Value, WithOptionValue,
+};
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogTypeDetails,
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, RoleAttributes, RoleMembership,
-    RoleVars, SystemObjectType,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
+    CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference,
+    RoleAttributes, RoleMembership, RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
-    Aug, CommentObjectId, DatabaseId, FullItemName, QualifiedItemName, QualifiedSchemaName,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
+    Aug, CommentObjectId, DatabaseId, DependencyIds, FullItemName, QualifiedItemName,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
     CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant, CreateSourcePlan,
-    HirRelationExpr, Ingestion as PlanIngestion, PlanError, WebhookBodyFormat, WebhookHeaders,
+    HirRelationExpr, NetworkPolicyRule, PlanError, WebhookBodyFormat, WebhookHeaders,
     WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection};
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sources::load_generator::LoadGenerator;
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, Timeline,
+    GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDataConfig,
+    SourceExportDetails, Timeline,
 };
-use once_cell::sync::Lazy;
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::OptimizerNotice;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
@@ -62,6 +76,7 @@ use tracing::debug;
 
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
+use crate::durable::objects::item_type;
 
 /// Used to update `self` from the input value while consuming the input value.
 pub trait UpdateFrom<T>: From<T> {
@@ -138,9 +153,9 @@ pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
     pub oid: u32,
-    pub items: BTreeMap<String, GlobalId>,
-    pub functions: BTreeMap<String, GlobalId>,
-    pub types: BTreeMap<String, GlobalId>,
+    pub items: BTreeMap<String, CatalogItemId>,
+    pub functions: BTreeMap<String, CatalogItemId>,
+    pub types: BTreeMap<String, CatalogItemId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
@@ -284,6 +299,47 @@ impl UpdateFrom<durable::Role> for Role {
     }
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct RoleAuth {
+    pub role_id: RoleId,
+    pub password_hash: Option<String>,
+    pub updated_at: u64,
+}
+
+impl From<RoleAuth> for durable::RoleAuth {
+    fn from(role_auth: RoleAuth) -> durable::RoleAuth {
+        durable::RoleAuth {
+            role_id: role_auth.role_id,
+            password_hash: role_auth.password_hash,
+            updated_at: role_auth.updated_at,
+        }
+    }
+}
+
+impl From<durable::RoleAuth> for RoleAuth {
+    fn from(
+        durable::RoleAuth {
+            role_id,
+            password_hash,
+            updated_at,
+        }: durable::RoleAuth,
+    ) -> RoleAuth {
+        RoleAuth {
+            role_id,
+            password_hash,
+            updated_at,
+        }
+    }
+}
+
+impl UpdateFrom<durable::RoleAuth> for RoleAuth {
+    fn update_from(&mut self, from: durable::RoleAuth) {
+        self.role_id = from.role_id;
+        self.password_hash = from.password_hash;
+        self.updated_at = from.updated_at;
+    }
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct Cluster {
     pub name: String,
@@ -293,7 +349,7 @@ pub struct Cluster {
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
-    pub bound_objects: BTreeSet<GlobalId>,
+    pub bound_objects: BTreeSet<CatalogItemId>,
     pub replica_id_by_name_: BTreeMap<String, ReplicaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub replicas_by_id_: BTreeMap<ReplicaId, ClusterReplica>,
@@ -356,7 +412,6 @@ impl Cluster {
                 availability_zones,
                 logging,
                 replication_factor,
-                disk,
                 optimizer_feature_overrides,
                 schedule,
             }) => {
@@ -379,7 +434,6 @@ impl Cluster {
                     size: size.clone(),
                     availability_zones: availability_zones.clone(),
                     compute,
-                    disk: disk.clone(),
                     optimizer_feature_overrides: optimizer_feature_overrides.clone(),
                     schedule: schedule.clone(),
                 })
@@ -389,7 +443,7 @@ impl Cluster {
                 // them before we have to implement this.
                 return Err(PlanError::Unsupported {
                     feature: "SHOW CREATE for unmanaged clusters".to_string(),
-                    issue_no: Some(15435),
+                    discussion_no: None,
                 });
             }
         };
@@ -484,21 +538,294 @@ pub struct ClusterReplicaProcessStatus {
     pub time: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct SourceReferences {
+    pub updated_at: u64,
+    pub references: Vec<SourceReference>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct SourceReference {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub columns: Vec<String>,
+}
+
+impl From<SourceReference> for durable::SourceReference {
+    fn from(source_reference: SourceReference) -> durable::SourceReference {
+        durable::SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl SourceReferences {
+    pub fn to_durable(self, source_id: CatalogItemId) -> durable::SourceReferences {
+        durable::SourceReferences {
+            source_id,
+            updated_at: self.updated_at,
+            references: self.references.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<durable::SourceReference> for SourceReference {
+    fn from(source_reference: durable::SourceReference) -> SourceReference {
+        SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl From<durable::SourceReferences> for SourceReferences {
+    fn from(source_references: durable::SourceReferences) -> SourceReferences {
+        SourceReferences {
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<mz_sql::plan::SourceReference> for SourceReference {
+    fn from(source_reference: mz_sql::plan::SourceReference) -> SourceReference {
+        SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl From<mz_sql::plan::SourceReferences> for SourceReferences {
+    fn from(source_references: mz_sql::plan::SourceReferences) -> SourceReferences {
+        SourceReferences {
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<SourceReferences> for mz_sql::plan::SourceReferences {
+    fn from(source_references: SourceReferences) -> mz_sql::plan::SourceReferences {
+        mz_sql::plan::SourceReferences {
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<SourceReference> for mz_sql::plan::SourceReference {
+    fn from(source_reference: SourceReference) -> mz_sql::plan::SourceReference {
+        mz_sql::plan::SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct CatalogEntry {
     pub item: CatalogItem,
     #[serde(skip)]
-    pub referenced_by: Vec<GlobalId>,
-    // TODO(#26794)––this should have an invariant tied to it that all
+    pub referenced_by: Vec<CatalogItemId>,
+    // TODO(database-issues#7922)––this should have an invariant tied to it that all
     // dependents (i.e. entries in this field) have IDs greater than this
     // entry's ID.
     #[serde(skip)]
-    pub used_by: Vec<GlobalId>,
-    pub id: GlobalId,
+    pub used_by: Vec<CatalogItemId>,
+    pub id: CatalogItemId,
     pub oid: u32,
     pub name: QualifiedItemName,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
+}
+
+/// A [`CatalogEntry`] that is associated with a specific "collection" of data.
+/// A single item in the catalog may be associated with multiple "collections".
+///
+/// Here "collection" generally means a pTVC, e.g. a Persist Shard, an Index, a
+/// currently running dataflow, etc.
+///
+/// Items in the Catalog have a stable name -> ID mapping, in other words for
+/// the entire lifetime of an object its [`CatalogItemId`] will _never_ change.
+/// Similarly, we need to maintain a stable mapping from [`GlobalId`] to pTVC.
+/// This presents a challenge when `ALTER`-ing an object, e.g. adding columns
+/// to a table. We can't just change the schema of the underlying Persist Shard
+/// because that would be rebinding the [`GlobalId`] of the pTVC. Instead we
+/// allocate a new [`GlobalId`] to refer to the new version of the table, and
+/// then the [`CatalogEntry`] tracks the [`GlobalId`] for each version.
+#[derive(Clone, Debug)]
+pub struct CatalogCollectionEntry {
+    pub entry: CatalogEntry,
+    pub version: RelationVersionSelector,
+}
+
+impl CatalogCollectionEntry {
+    pub fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item().relation_desc(self.version)
+    }
+}
+
+impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
+    fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item().relation_desc(self.version)
+    }
+
+    fn global_id(&self) -> GlobalId {
+        self.entry
+            .item()
+            .global_id_for_version(self.version)
+            .expect("catalog corruption, missing version!")
+    }
+}
+
+impl Deref for CatalogCollectionEntry {
+    type Target = CatalogEntry;
+
+    fn deref(&self) -> &CatalogEntry {
+        &self.entry
+    }
+}
+
+impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
+    fn name(&self) -> &QualifiedItemName {
+        self.entry.name()
+    }
+
+    fn id(&self) -> CatalogItemId {
+        self.entry.id()
+    }
+
+    fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+        Box::new(self.entry.global_ids())
+    }
+
+    fn oid(&self) -> u32 {
+        self.entry.oid()
+    }
+
+    fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
+        self.entry.func()
+    }
+
+    fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
+        self.entry.source_desc()
+    }
+
+    fn connection(
+        &self,
+    ) -> Result<mz_storage_types::connections::Connection<ReferencedConnection>, SqlCatalogError>
+    {
+        mz_sql::catalog::CatalogItem::connection(&self.entry)
+    }
+
+    fn create_sql(&self) -> &str {
+        self.entry.create_sql()
+    }
+
+    fn item_type(&self) -> SqlCatalogItemType {
+        self.entry.item_type()
+    }
+
+    fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)> {
+        self.entry.index_details()
+    }
+
+    fn writable_table_details(&self) -> Option<&[Expr<Aug>]> {
+        self.entry.writable_table_details()
+    }
+
+    fn replacement_target(&self) -> Option<CatalogItemId> {
+        self.entry.replacement_target()
+    }
+
+    fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>> {
+        self.entry.type_details()
+    }
+
+    fn references(&self) -> &ResolvedIds {
+        self.entry.references()
+    }
+
+    fn uses(&self) -> BTreeSet<CatalogItemId> {
+        self.entry.uses()
+    }
+
+    fn referenced_by(&self) -> &[CatalogItemId] {
+        self.entry.referenced_by()
+    }
+
+    fn used_by(&self) -> &[CatalogItemId] {
+        self.entry.used_by()
+    }
+
+    fn subsource_details(
+        &self,
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)> {
+        self.entry.subsource_details()
+    }
+
+    fn source_export_details(
+        &self,
+    ) -> Option<(
+        CatalogItemId,
+        &UnresolvedItemName,
+        &SourceExportDetails,
+        &SourceExportDataConfig<ReferencedConnection>,
+    )> {
+        self.entry.source_export_details()
+    }
+
+    fn is_progress_source(&self) -> bool {
+        self.entry.is_progress_source()
+    }
+
+    fn progress_id(&self) -> Option<CatalogItemId> {
+        self.entry.progress_id()
+    }
+
+    fn owner_id(&self) -> RoleId {
+        *self.entry.owner_id()
+    }
+
+    fn privileges(&self) -> &PrivilegeMap {
+        self.entry.privileges()
+    }
+
+    fn cluster_id(&self) -> Option<ClusterId> {
+        self.entry.item().cluster_id()
+    }
+
+    fn at_version(
+        &self,
+        version: RelationVersionSelector,
+    ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
+        Box::new(CatalogCollectionEntry {
+            entry: self.entry.clone(),
+            version,
+        })
+    }
+
+    fn latest_version(&self) -> Option<RelationVersion> {
+        self.entry.latest_version()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -518,53 +845,139 @@ pub enum CatalogItem {
 
 impl From<CatalogEntry> for durable::Item {
     fn from(entry: CatalogEntry) -> durable::Item {
+        let (create_sql, global_id, extra_versions) = entry.item.into_serialized();
         durable::Item {
             id: entry.id,
             oid: entry.oid,
+            global_id,
             schema_id: entry.name.qualifiers.schema_spec.into(),
             name: entry.name.item,
-            create_sql: entry.item.into_serialized(),
+            create_sql,
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
+            extra_versions,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Table {
+    /// Parse-able SQL that defines this table.
     pub create_sql: Option<String>,
-    pub desc: RelationDesc,
-    #[serde(skip)]
-    pub defaults: Vec<Expr<Aug>>,
+    /// [`VersionedRelationDesc`] of this table, derived from the `create_sql`.
+    pub desc: VersionedRelationDesc,
+    /// Versions of this table, and the [`GlobalId`]s that refer to them.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub collections: BTreeMap<RelationVersion, GlobalId>,
+    /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
+    /// Other catalog objects referenced by this table, e.g. custom types.
     pub resolved_ids: ResolvedIds,
+    /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
-    /// Whether the table's logical compaction window is controlled by
-    /// METRICS_RETENTION
+    /// Whether the table's logical compaction window is controlled by the ['metrics_retention']
+    /// session variable.
+    ///
+    /// ['metrics_retention']: mz_sql::session::vars::METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    /// Where data for this table comes from, e.g. `INSERT` statements or an upstream source.
+    pub data_source: TableDataSource,
 }
 
 impl Table {
-    // The Coordinator controls insertions for tables (including system tables),
-    // so they are realtime.
     pub fn timeline(&self) -> Timeline {
-        Timeline::EpochMilliseconds
+        match &self.data_source {
+            // The Coordinator controls insertions for writable tables
+            // (including system tables), so they are realtime.
+            TableDataSource::TableWrites { .. } => Timeline::EpochMilliseconds,
+            TableDataSource::DataSource { timeline, .. } => timeline.clone(),
+        }
+    }
+
+    /// Returns all of the [`GlobalId`]s that this [`Table`] can be referenced by.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.collections.values().copied()
+    }
+
+    /// Returns the latest [`GlobalId`] for this [`Table`] which should be used for writes.
+    pub fn global_id_writes(&self) -> GlobalId {
+        *self
+            .collections
+            .last_key_value()
+            .expect("at least one version of a table")
+            .1
+    }
+
+    /// Returns all of the collections and their [`RelationDesc`]s associated with this [`Table`].
+    pub fn collection_descs(
+        &self,
+    ) -> impl Iterator<Item = (GlobalId, RelationVersion, RelationDesc)> + '_ {
+        self.collections.iter().map(|(version, gid)| {
+            let desc = self
+                .desc
+                .at_version(RelationVersionSelector::Specific(*version));
+            (*gid, *version, desc)
+        })
+    }
+
+    /// Returns the [`RelationDesc`] for a specific [`GlobalId`].
+    pub fn desc_for(&self, id: &GlobalId) -> RelationDesc {
+        let (version, _gid) = self
+            .collections
+            .iter()
+            .find(|(_version, gid)| *gid == id)
+            .expect("GlobalId to exist");
+        self.desc
+            .at_version(RelationVersionSelector::Specific(*version))
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
+pub enum TableDataSource {
+    /// The table owns data created via INSERT/UPDATE/DELETE statements.
+    TableWrites {
+        #[serde(skip)]
+        defaults: Vec<Expr<Aug>>,
+    },
+
+    /// The table receives its data from the identified `DataSourceDesc`.
+    /// This table type does not support INSERT/UPDATE/DELETE statements.
+    DataSource {
+        desc: DataSourceDesc,
+        timeline: Timeline,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum DataSourceDesc {
     /// Receives data from an external system
     Ingestion {
-        ingestion_desc: PlanIngestion,
+        desc: SourceDesc<ReferencedConnection>,
         cluster_id: ClusterId,
+    },
+    /// Receives data from an external system
+    OldSyntaxIngestion {
+        desc: SourceDesc<ReferencedConnection>,
+        cluster_id: ClusterId,
+        // If we're dealing with an old syntax ingestion the progress id will be some other collection
+        // and the ingestion itself will have the data from an external reference
+        progress_subsource: CatalogItemId,
+        data_config: SourceExportDataConfig<ReferencedConnection>,
+        details: SourceExportDetails,
     },
     /// This source receives its data from the identified ingestion,
     /// specifically the output identified by `external_reference`.
+    /// N.B. that `external_reference` should not be used to identify
+    /// anything downstream of purification, as the purification process
+    /// encodes source-specific identifiers into the `details` struct.
+    /// The `external_reference` field is only used here for displaying
+    /// human-readable names in system tables.
     IngestionExport {
-        ingestion_id: GlobalId,
+        ingestion_id: CatalogItemId,
         external_reference: UnresolvedItemName,
+        details: SourceExportDetails,
+        data_config: SourceExportDataConfig<ReferencedConnection>,
     },
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
@@ -581,16 +994,107 @@ pub enum DataSourceDesc {
         /// The cluster which this source is associated with.
         cluster_id: ClusterId,
     },
+    /// Exposes the contents of the catalog shard.
+    Catalog,
+}
+
+impl From<IntrospectionType> for DataSourceDesc {
+    fn from(typ: IntrospectionType) -> Self {
+        Self::Introspection(typ)
+    }
+}
+
+impl DataSourceDesc {
+    /// The key and value formats of the data source.
+    pub fn formats(&self) -> (Option<&str>, Option<&str>) {
+        match &self {
+            DataSourceDesc::Ingestion { .. } => (None, None),
+            DataSourceDesc::OldSyntaxIngestion { data_config, .. } => {
+                match &data_config.encoding.as_ref() {
+                    Some(encoding) => match &encoding.key {
+                        Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
+                        None => (None, Some(encoding.value.type_())),
+                    },
+                    None => (None, None),
+                }
+            }
+            DataSourceDesc::IngestionExport { data_config, .. } => match &data_config.encoding {
+                Some(encoding) => match &encoding.key {
+                    Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
+                    None => (None, Some(encoding.value.type_())),
+                },
+                None => (None, None),
+            },
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Webhook { .. }
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => (None, None),
+        }
+    }
+
+    /// Envelope of the data source.
+    pub fn envelope(&self) -> Option<&str> {
+        // Note how "none"/"append-only" is different from `None`. Source
+        // sources don't have an envelope (internal logs, for example), while
+        // other sources have an envelope that we call the "NONE"-envelope.
+
+        fn envelope_string(envelope: &SourceEnvelope) -> &str {
+            match envelope {
+                SourceEnvelope::None(_) => "none",
+                SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
+                    mz_storage_types::sources::envelope::UpsertStyle::Default(_) => "upsert",
+                    mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
+                        // NOTE(aljoscha): Should we somehow mark that this is
+                        // using upsert internally? See note above about
+                        // DEBEZIUM.
+                        "debezium"
+                    }
+                    mz_storage_types::sources::envelope::UpsertStyle::ValueErrInline { .. } => {
+                        "upsert-value-err-inline"
+                    }
+                },
+                SourceEnvelope::CdcV2 => {
+                    // TODO(aljoscha): Should we even report this? It's
+                    // currently not exposed.
+                    "materialize"
+                }
+            }
+        }
+
+        match self {
+            // NOTE(aljoscha): We could move the block for ingestions into
+            // `SourceEnvelope` itself, but that one feels more like an internal
+            // thing and adapter should own how we represent envelopes as a
+            // string? It would not be hard to convince me otherwise, though.
+            DataSourceDesc::Ingestion { .. } => None,
+            DataSourceDesc::OldSyntaxIngestion { data_config, .. } => {
+                Some(envelope_string(&data_config.envelope))
+            }
+            DataSourceDesc::IngestionExport { data_config, .. } => {
+                Some(envelope_string(&data_config.envelope))
+            }
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Webhook { .. }
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
+    /// Parse-able SQL that defines this table.
     pub create_sql: Option<String>,
+    /// [`GlobalId`] used to reference this source from outside the catalog.
+    pub global_id: GlobalId,
     // TODO: Unskip: currently blocked on some inner BTreeMap<X, _> problems.
     #[serde(skip)]
     pub data_source: DataSourceDesc,
+    /// [`RelationDesc`] of this source, derived from the `create_sql`.
     pub desc: RelationDesc,
+    /// The timeline this source exists on.
     pub timeline: Timeline,
+    /// Other catalog objects referenced by this table, e.g. custom types.
     pub resolved_ids: ResolvedIds,
     /// This value is ignored for subsources, i.e. for
     /// [`DataSourceDesc::IngestionExport`]. Instead, it uses the primary
@@ -610,6 +1114,7 @@ impl Source {
     /// - If a non-ingestion-based source is given a cluster_id.
     pub fn new(
         plan: CreateSourcePlan,
+        global_id: GlobalId,
         resolved_ids: ResolvedIds,
         custom_logical_compaction_window: Option<CompactionWindow>,
         is_retained_metrics_object: bool,
@@ -617,14 +1122,26 @@ impl Source {
         Source {
             create_sql: Some(plan.source.create_sql),
             data_source: match plan.source.data_source {
-                mz_sql::plan::DataSourceDesc::Ingestion(ingestion_desc) => {
-                    DataSourceDesc::Ingestion {
-                        ingestion_desc,
-                        cluster_id: plan
-                            .in_cluster
-                            .expect("ingestion-based sources must be given a cluster ID"),
-                    }
-                }
+                mz_sql::plan::DataSourceDesc::Ingestion(desc) => DataSourceDesc::Ingestion {
+                    desc,
+                    cluster_id: plan
+                        .in_cluster
+                        .expect("ingestion-based sources must be given a cluster ID"),
+                },
+                mz_sql::plan::DataSourceDesc::OldSyntaxIngestion {
+                    desc,
+                    progress_subsource,
+                    data_config,
+                    details,
+                } => DataSourceDesc::OldSyntaxIngestion {
+                    desc,
+                    cluster_id: plan
+                        .in_cluster
+                        .expect("ingestion-based sources must be given a cluster ID"),
+                    progress_subsource,
+                    data_config,
+                    details,
+                },
                 mz_sql::plan::DataSourceDesc::Progress => {
                     assert!(
                         plan.in_cluster.is_none(),
@@ -635,6 +1152,8 @@ impl Source {
                 mz_sql::plan::DataSourceDesc::IngestionExport {
                     ingestion_id,
                     external_reference,
+                    details,
+                    data_config,
                 } => {
                     assert!(
                         plan.in_cluster.is_none(),
@@ -643,22 +1162,32 @@ impl Source {
                     DataSourceDesc::IngestionExport {
                         ingestion_id,
                         external_reference,
+                        details,
+                        data_config,
                     }
                 }
                 mz_sql::plan::DataSourceDesc::Webhook {
                     validate_using,
                     body_format,
                     headers,
-                } => DataSourceDesc::Webhook {
-                    validate_using,
-                    body_format,
-                    headers,
-                    cluster_id: plan
-                        .in_cluster
-                        .expect("webhook sources must be given a cluster ID"),
-                },
+                    cluster_id,
+                } => {
+                    mz_ore::soft_assert_or_log!(
+                        cluster_id.is_none(),
+                        "cluster_id set at Source level for Webhooks"
+                    );
+                    DataSourceDesc::Webhook {
+                        validate_using,
+                        body_format,
+                        headers,
+                        cluster_id: plan
+                            .in_cluster
+                            .expect("webhook sources must be given a cluster ID"),
+                    }
+                }
             },
             desc: plan.source.desc,
+            global_id,
             timeline: plan.timeline,
             resolved_ids,
             custom_logical_compaction_window: plan
@@ -672,115 +1201,61 @@ impl Source {
     /// Type of the source.
     pub fn source_type(&self) -> &str {
         match &self.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                ingestion_desc.desc.connection.name()
-            }
+            DataSourceDesc::Ingestion { desc, .. }
+            | DataSourceDesc::OldSyntaxIngestion { desc, .. } => desc.connection.name(),
             DataSourceDesc::Progress => "progress",
             DataSourceDesc::IngestionExport { .. } => "subsource",
-            DataSourceDesc::Introspection(_) => "source",
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Catalog => "source",
             DataSourceDesc::Webhook { .. } => "webhook",
         }
     }
 
-    /// The key and value formats of the source.
-    pub fn formats(&self) -> (Option<&str>, Option<&str>) {
-        match &self.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => match &ingestion_desc.desc.encoding
-            {
-                Some(encoding) => match &encoding.key {
-                    Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
-                    None => (None, Some(encoding.value.type_())),
-                },
-                None => (None, None),
-            },
-            DataSourceDesc::Introspection(_)
-            | DataSourceDesc::IngestionExport { .. }
-            | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => (None, None),
-        }
-    }
-
-    /// Envelope of the source.
-    pub fn envelope(&self) -> Option<&str> {
-        // Note how "none"/"append-only" is different from `None`. Source
-        // sources don't have an envelope (internal logs, for example), while
-        // other sources have an envelope that we call the "NONE"-envelope.
-
-        match &self.data_source {
-            // NOTE(aljoscha): We could move the block for ingestions into
-            // `SourceEnvelope` itself, but that one feels more like an internal
-            // thing and adapter should own how we represent envelopes as a
-            // string? It would not be hard to convince me otherwise, though.
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                match ingestion_desc.desc.envelope() {
-                    SourceEnvelope::None(_) => Some("none"),
-                    SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
-                        mz_storage_types::sources::envelope::UpsertStyle::Default(_) => {
-                            Some("upsert")
-                        }
-                        mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
-                            // NOTE(aljoscha): Should we somehow mark that this is
-                            // using upsert internally? See note above about
-                            // DEBEZIUM.
-                            Some("debezium")
-                        }
-                        mz_storage_types::sources::envelope::UpsertStyle::ValueErrInline {
-                            ..
-                        } => Some("upsert-value-err-inline"),
-                    },
-                    SourceEnvelope::CdcV2 => {
-                        // TODO(aljoscha): Should we even report this? It's
-                        // currently not exposed.
-                        Some("materialize")
-                    }
-                }
-            }
-            DataSourceDesc::IngestionExport { .. }
-            | DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => None,
-        }
-    }
-
     /// Connection ID of the source, if one exists.
-    pub fn connection_id(&self) -> Option<GlobalId> {
+    pub fn connection_id(&self) -> Option<CatalogItemId> {
         match &self.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                ingestion_desc.desc.connection.connection_id()
-            }
+            DataSourceDesc::Ingestion { desc, .. }
+            | DataSourceDesc::OldSyntaxIngestion { desc, .. } => desc.connection.connection_id(),
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => None,
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => None,
         }
+    }
+
+    /// The single [`GlobalId`] that refers to this Source.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
     }
 
     /// The expensive resource that each source consumes is persist shards. To
     /// prevent abuse, we want to prevent users from creating sources that use an
     /// unbounded number of persist shards. But we also don't want to count
-    /// persist shards that are mandated by teh system (e.g., the progress
+    /// persist shards that are mandated by the system (e.g., the progress
     /// shard) so that future versions of Materialize can introduce additional
     /// per-source shards (e.g., a per-source status shard) without impacting
     /// the limit calculation.
     pub fn user_controllable_persist_shard_count(&self) -> i64 {
         match &self.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                match &ingestion_desc.desc.connection {
+            DataSourceDesc::Ingestion { .. } => 0,
+            DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                match &desc.connection {
                     // These multi-output sources do not use their primary
                     // source's data shard, so we don't include it in accounting
                     // for users.
-                    GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_) => 0,
-                    GenericSourceConnection::LoadGenerator(lg) => {
-                        // TODO: make this a method on the load generator.
-                        if lg.load_generator.views().is_empty() {
-                            // Load generator writes directly to its persist shard
-                            1
-                        } else {
-                            // Load generator has 1 persist shard per output,
-                            // which will be accounted for by `SourceExport`.
-                            0
-                        }
-                    }
+                    GenericSourceConnection::Postgres(_)
+                    | GenericSourceConnection::MySql(_)
+                    | GenericSourceConnection::SqlServer(_) => 0,
+                    GenericSourceConnection::LoadGenerator(lg) => match lg.load_generator {
+                        // Load generators that output data in their primary shard
+                        LoadGenerator::Clock
+                        | LoadGenerator::Counter { .. }
+                        | LoadGenerator::Datums
+                        | LoadGenerator::KeyValue(_) => 1,
+                        LoadGenerator::Auction
+                        | LoadGenerator::Marketing
+                        | LoadGenerator::Tpch { .. } => 0,
+                    },
                     GenericSourceConnection::Kafka(_) => 1,
                 }
             }
@@ -788,30 +1263,54 @@ impl Source {
             //  use a data shard.
             DataSourceDesc::IngestionExport { .. } => 1,
             DataSourceDesc::Webhook { .. } => 1,
-            // Introspection and progress subsources are not under the user's control, so shouldn't
-            // count toward their quota.
-            DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => 0,
+            // Introspection, catalog, and progress subsources are not under the user's control, so
+            // shouldn't count toward their quota.
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => 0,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Log {
+    /// The category of data this log stores.
     pub variant: LogVariant,
+    /// [`GlobalId`] used to reference this log from outside the catalog.
+    pub global_id: GlobalId,
+}
+
+impl Log {
+    /// The single [`GlobalId`] that refers to this Log.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Sink {
+    /// Parse-able SQL that defines this sink.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this sink from outside the catalog, e.g storage.
+    pub global_id: GlobalId,
+    /// Collection we read into this sink.
     pub from: GlobalId,
+    /// Connection to the external service we're sinking into, e.g. Kafka.
     pub connection: StorageSinkConnection<ReferencedConnection>,
-    // TODO(guswynn): this probably should just be in the `connection`.
+    /// Envelope we use to sink into the external system.
+    ///
+    /// TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
-    pub partition_strategy: SinkPartitionStrategy,
+    /// Emit an initial snapshot into the sink.
     pub with_snapshot: bool,
+    /// Used to fence other writes into this sink as we evolve the upstream materialized view.
     pub version: u64,
+    /// Other catalog objects this sink references.
     pub resolved_ids: ResolvedIds,
+    /// Cluster this sink runs on.
     pub cluster_id: ClusterId,
+    /// Commit interval for the sink.
+    pub commit_interval: Option<Duration>,
 }
 
 impl Sink {
@@ -824,6 +1323,7 @@ impl Sink {
         match &self.envelope {
             SinkEnvelope::Debezium => Some("debezium"),
             SinkEnvelope::Upsert => Some("upsert"),
+            SinkEnvelope::Append => Some("append"),
         }
     }
 
@@ -831,120 +1331,502 @@ impl Sink {
     /// if the key-format is none or the key & value formats are
     /// both the same (either avro or json), we return the value format name,
     /// otherwise we return a composite name.
-    pub fn combined_format(&self) -> Cow<'_, str> {
-        let StorageSinkConnection::Kafka(connection) = &self.connection;
-        connection.format.get_format_name()
+    pub fn combined_format(&self) -> Option<Cow<'_, str>> {
+        match &self.connection {
+            StorageSinkConnection::Kafka(connection) => Some(connection.format.get_format_name()),
+            StorageSinkConnection::Iceberg(_) => None,
+        }
     }
 
     /// Output distinct key_format and value_format of the sink.
-    pub fn formats(&self) -> (Option<&str>, &str) {
-        let StorageSinkConnection::Kafka(connection) = &self.connection;
-        let key_format = connection
-            .format
-            .key_format
-            .as_ref()
-            .map(|format| format.get_format_name());
-        let value_format = connection.format.value_format.get_format_name();
-        (key_format, value_format)
+    pub fn formats(&self) -> Option<(Option<&str>, &str)> {
+        match &self.connection {
+            StorageSinkConnection::Kafka(connection) => {
+                let key_format = connection
+                    .format
+                    .key_format
+                    .as_ref()
+                    .map(|f| f.get_format_name());
+                let value_format = connection.format.value_format.get_format_name();
+                Some((key_format, value_format))
+            }
+            StorageSinkConnection::Iceberg(_) => None,
+        }
     }
 
-    pub fn connection_id(&self) -> Option<GlobalId> {
+    pub fn connection_id(&self) -> Option<CatalogItemId> {
         self.connection.connection_id()
+    }
+
+    /// The single [`GlobalId`] that this Sink can be referenced by.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
+    /// Parse-able SQL that defines this view.
     pub create_sql: String,
-    pub raw_expr: HirRelationExpr,
-    pub optimized_expr: OptimizedMirRelationExpr,
+    /// [`GlobalId`] used to reference this view from outside the catalog, e.g. compute.
+    pub global_id: GlobalId,
+    /// Unoptimized high-level expression from parsing the `create_sql`.
+    pub raw_expr: Arc<HirRelationExpr>,
+    /// Optimized mid-level expression from (locally) optimizing the `raw_expr`.
+    pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// Columns of this view.
     pub desc: RelationDesc,
+    /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     pub conn_id: Option<ConnectionId>,
+    /// Other catalog objects that are referenced by this view, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// All of the catalog objects that are referenced by this view.
+    pub dependencies: DependencyIds,
+}
+
+impl View {
+    /// The single [`GlobalId`] this [`View`] can be referenced by.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MaterializedView {
+    /// Parse-able SQL that defines this materialized view.
     pub create_sql: String,
-    pub raw_expr: HirRelationExpr,
-    pub optimized_expr: OptimizedMirRelationExpr,
-    pub desc: RelationDesc,
+    /// Versions of this materialized view, and the [`GlobalId`]s that refer to them.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub collections: BTreeMap<RelationVersion, GlobalId>,
+    /// Raw high-level expression from planning, derived from the `create_sql`.
+    pub raw_expr: Arc<HirRelationExpr>,
+    /// Optimized mid-level expression, derived from the `raw_expr`.
+    pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// [`VersionedRelationDesc`] of this materialized view, derived from the `create_sql`.
+    pub desc: VersionedRelationDesc,
+    /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// All of the catalog objects that are referenced by this view.
+    pub dependencies: DependencyIds,
+    /// ID of the materialized view this materialized view is intended to replace.
+    pub replacement_target: Option<CatalogItemId>,
+    /// Cluster that this materialized view runs on.
     pub cluster_id: ClusterId,
+    /// If set, only install this materialized view's dataflow on the specified replica.
+    pub target_replica: Option<ReplicaId>,
+    /// Column indexes that we assert are not `NULL`.
+    ///
+    /// TODO(parkmycar): Switch this to use the `ColumnIdx` type.
     pub non_null_assertions: Vec<usize>,
+    /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
+    /// Schedule to refresh this materialized view, e.g. set via `REFRESH EVERY` option.
     pub refresh_schedule: Option<RefreshSchedule>,
     /// The initial `as_of` of the storage collection associated with the materialized view.
-    /// Note that this doesn't change upon restarts.
+    ///
+    /// Note: This doesn't change upon restarts.
     /// (The dataflow's initial `as_of` can be different.)
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
+    // The catalog `dump` method uses serde to serialize catalog state, e.g., Testdrive catalog
+    // consistency checks do two dumps and compare them. One of these states comes from the durable
+    // catalog, but the following fields are not restored when the consistency check loads the
+    // durable catalog, hence we need `#[serde(skip)]`.
+    /// Optimized global MIR plan, set after global optimization.
+    #[serde(skip)]
+    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    /// Physical (LIR) plan, set after physical optimization.
+    #[serde(skip)]
+    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
+    #[serde(skip)]
+    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
+}
+
+impl MaterializedView {
+    /// Returns all [`GlobalId`]s that this [`MaterializedView`] can be referenced by.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.collections.values().copied()
+    }
+
+    /// The latest [`GlobalId`] for this [`MaterializedView`] which represents the writing
+    /// version.
+    pub fn global_id_writes(&self) -> GlobalId {
+        *self
+            .collections
+            .last_key_value()
+            .expect("at least one version of a materialized view")
+            .1
+    }
+
+    /// Returns all collections and their [`RelationDesc`]s associated with this [`MaterializedView`].
+    pub fn collection_descs(
+        &self,
+    ) -> impl Iterator<Item = (GlobalId, RelationVersion, RelationDesc)> + '_ {
+        self.collections.iter().map(|(version, gid)| {
+            let desc = self
+                .desc
+                .at_version(RelationVersionSelector::Specific(*version));
+            (*gid, *version, desc)
+        })
+    }
+
+    /// Returns the [`RelationDesc`] for a specific [`GlobalId`].
+    pub fn desc_for(&self, id: &GlobalId) -> RelationDesc {
+        let (version, _gid) = self
+            .collections
+            .iter()
+            .find(|(_version, gid)| *gid == id)
+            .expect("GlobalId to exist");
+        self.desc
+            .at_version(RelationVersionSelector::Specific(*version))
+    }
+
+    /// Apply the given replacement materialized view to this [`MaterializedView`].
+    pub fn apply_replacement(&mut self, replacement: Self) {
+        let target_id = replacement
+            .replacement_target
+            .expect("replacement has target");
+
+        fn parse(create_sql: &str) -> mz_sql::ast::CreateMaterializedViewStatement<Raw> {
+            let res = mz_sql::parse::parse(create_sql).unwrap_or_else(|e| {
+                panic!("invalid create_sql persisted in catalog: {e}\n{create_sql}");
+            });
+            if let Statement::CreateMaterializedView(cmvs) = res.into_element().ast {
+                cmvs
+            } else {
+                panic!("invalid MV create_sql persisted in catalog\n{create_sql}");
+            }
+        }
+
+        let old_stmt = parse(&self.create_sql);
+        let rpl_stmt = parse(&replacement.create_sql);
+        let new_stmt = mz_sql::ast::CreateMaterializedViewStatement {
+            if_exists: old_stmt.if_exists,
+            name: old_stmt.name,
+            columns: rpl_stmt.columns,
+            replacement_for: None,
+            in_cluster: rpl_stmt.in_cluster,
+            in_cluster_replica: rpl_stmt.in_cluster_replica,
+            query: rpl_stmt.query,
+            as_of: rpl_stmt.as_of,
+            with_options: rpl_stmt.with_options,
+        };
+        let create_sql = new_stmt.to_ast_string_stable();
+
+        let mut collections = std::mem::take(&mut self.collections);
+        // Note: We can't use `self.desc.latest_version` here because a replacement doesn't
+        // necessary evolve the relation schema, so that version might be lower than the actual
+        // latest version.
+        let latest_version = collections.keys().max().expect("at least one version");
+        let new_version = latest_version.bump();
+        collections.insert(new_version, replacement.global_id_writes());
+
+        let mut resolved_ids = replacement.resolved_ids;
+        resolved_ids.remove_item(&target_id);
+        let mut dependencies = replacement.dependencies;
+        dependencies.0.remove(&target_id);
+
+        *self = Self {
+            create_sql,
+            collections,
+            raw_expr: replacement.raw_expr,
+            locally_optimized_expr: replacement.locally_optimized_expr,
+            desc: replacement.desc,
+            resolved_ids,
+            dependencies,
+            replacement_target: None,
+            cluster_id: replacement.cluster_id,
+            target_replica: replacement.target_replica,
+            non_null_assertions: replacement.non_null_assertions,
+            custom_logical_compaction_window: replacement.custom_logical_compaction_window,
+            refresh_schedule: replacement.refresh_schedule,
+            initial_as_of: replacement.initial_as_of,
+            optimized_plan: replacement.optimized_plan,
+            physical_plan: replacement.physical_plan,
+            dataflow_metainfo: replacement.dataflow_metainfo,
+        };
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Index {
+    /// Parse-able SQL that defines this table.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this index from outside the catalog, e.g. compute.
+    pub global_id: GlobalId,
+    /// The [`GlobalId`] this Index is on.
     pub on: GlobalId,
-    pub keys: Vec<MirScalarExpr>,
+    /// Keys of the index.
+    pub keys: Arc<[MirScalarExpr]>,
+    /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     pub conn_id: Option<ConnectionId>,
+    /// Other catalog objects referenced by this index, e.g. the object we're indexing.
     pub resolved_ids: ResolvedIds,
+    /// Cluster this index is installed on.
     pub cluster_id: ClusterId,
+    /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
+    /// Whether the table's logical compaction window is controlled by the ['metrics_retention']
+    /// session variable.
+    ///
+    /// ['metrics_retention']: mz_sql::session::vars::METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    // The catalog `dump` method uses serde to serialize catalog state, e.g., Testdrive catalog
+    // consistency checks do two dumps and compare them. One of these states comes from the durable
+    // catalog, but the following fields are not restored when the consistency check loads the
+    // durable catalog, hence we need `#[serde(skip)]`.
+    /// Optimized global MIR plan, set after global optimization.
+    #[serde(skip)]
+    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    /// Physical (LIR) plan, set after physical optimization.
+    #[serde(skip)]
+    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
+    #[serde(skip)]
+    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
+}
+
+impl Index {
+    /// The [`GlobalId`] that refers to this Index.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
+    /// Parse-able SQL that defines this type.
     pub create_sql: Option<String>,
+    /// [`GlobalId`] used to reference this type from outside the catalog.
+    pub global_id: GlobalId,
     #[serde(skip)]
     pub details: CatalogTypeDetails<IdReference>,
-    pub desc: Option<RelationDesc>,
+    /// Other catalog objects referenced by this type.
     pub resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
+    /// Static definition of the function.
     #[serde(skip)]
     pub inner: &'static mz_sql::func::Func,
+    /// [`GlobalId`] used to reference this function from outside the catalog.
+    pub global_id: GlobalId,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Secret {
+    /// Parse-able SQL that defines this secret.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this secret from outside the catalog.
+    pub global_id: GlobalId,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
+    /// Parse-able SQL that defines this connection.
     pub create_sql: String,
-    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
+    /// [`GlobalId`] used to reference this connection from the storage layer.
+    pub global_id: GlobalId,
+    /// The kind of connection.
+    pub details: ConnectionDetails,
+    /// Other objects this connection depends on.
     pub resolved_ids: ResolvedIds,
+}
+
+impl Connection {
+    /// The single [`GlobalId`] used to reference this connection.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct NetworkPolicy {
+    pub name: String,
+    pub id: NetworkPolicyId,
+    pub oid: u32,
+    pub rules: Vec<NetworkPolicyRule>,
+    pub owner_id: RoleId,
+    pub privileges: PrivilegeMap,
+}
+
+impl From<NetworkPolicy> for durable::NetworkPolicy {
+    fn from(policy: NetworkPolicy) -> durable::NetworkPolicy {
+        durable::NetworkPolicy {
+            id: policy.id,
+            oid: policy.oid,
+            name: policy.name,
+            rules: policy.rules,
+            owner_id: policy.owner_id,
+            privileges: policy.privileges.into_all_values().collect(),
+        }
+    }
+}
+
+impl From<durable::NetworkPolicy> for NetworkPolicy {
+    fn from(
+        durable::NetworkPolicy {
+            id,
+            oid,
+            name,
+            rules,
+            owner_id,
+            privileges,
+        }: durable::NetworkPolicy,
+    ) -> Self {
+        NetworkPolicy {
+            id,
+            oid,
+            name,
+            rules,
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+        }
+    }
+}
+
+impl UpdateFrom<durable::NetworkPolicy> for NetworkPolicy {
+    fn update_from(
+        &mut self,
+        durable::NetworkPolicy {
+            id,
+            oid,
+            name,
+            rules,
+            owner_id,
+            privileges,
+        }: durable::NetworkPolicy,
+    ) {
+        self.id = id;
+        self.oid = oid;
+        self.name = name;
+        self.rules = rules;
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+    }
 }
 
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
     pub fn typ(&self) -> mz_sql::catalog::CatalogItemType {
         match self {
-            CatalogItem::Table(_) => mz_sql::catalog::CatalogItemType::Table,
-            CatalogItem::Source(_) => mz_sql::catalog::CatalogItemType::Source,
-            CatalogItem::Log(_) => mz_sql::catalog::CatalogItemType::Source,
-            CatalogItem::Sink(_) => mz_sql::catalog::CatalogItemType::Sink,
-            CatalogItem::View(_) => mz_sql::catalog::CatalogItemType::View,
-            CatalogItem::MaterializedView(_) => mz_sql::catalog::CatalogItemType::MaterializedView,
-            CatalogItem::Index(_) => mz_sql::catalog::CatalogItemType::Index,
-            CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
-            CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
-            CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
-            CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
+            CatalogItem::Table(_) => CatalogItemType::Table,
+            CatalogItem::Source(_) => CatalogItemType::Source,
+            CatalogItem::Log(_) => CatalogItemType::Source,
+            CatalogItem::Sink(_) => CatalogItemType::Sink,
+            CatalogItem::View(_) => CatalogItemType::View,
+            CatalogItem::MaterializedView(_) => CatalogItemType::MaterializedView,
+            CatalogItem::Index(_) => CatalogItemType::Index,
+            CatalogItem::Type(_) => CatalogItemType::Type,
+            CatalogItem::Func(_) => CatalogItemType::Func,
+            CatalogItem::Secret(_) => CatalogItemType::Secret,
+            CatalogItem::Connection(_) => CatalogItemType::Connection,
+        }
+    }
+
+    /// Returns the [`GlobalId`]s that reference this item, if any.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        let gid = match self {
+            CatalogItem::Source(source) => source.global_id,
+            CatalogItem::Log(log) => log.global_id,
+            CatalogItem::Sink(sink) => sink.global_id,
+            CatalogItem::View(view) => view.global_id,
+            CatalogItem::MaterializedView(mv) => {
+                return itertools::Either::Left(mv.collections.values().copied());
+            }
+            CatalogItem::Index(index) => index.global_id,
+            CatalogItem::Func(func) => func.global_id,
+            CatalogItem::Type(ty) => ty.global_id,
+            CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::Table(table) => {
+                return itertools::Either::Left(table.collections.values().copied());
+            }
+        };
+        itertools::Either::Right(std::iter::once(gid))
+    }
+
+    /// Returns the most up-to-date [`GlobalId`] for this item.
+    ///
+    /// Note: The only type of object that can have multiple [`GlobalId`]s are tables.
+    pub fn latest_global_id(&self) -> GlobalId {
+        match self {
+            CatalogItem::Source(source) => source.global_id,
+            CatalogItem::Log(log) => log.global_id,
+            CatalogItem::Sink(sink) => sink.global_id,
+            CatalogItem::View(view) => view.global_id,
+            CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
+            CatalogItem::Index(index) => index.global_id,
+            CatalogItem::Func(func) => func.global_id,
+            CatalogItem::Type(ty) => ty.global_id,
+            CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::Table(table) => table.global_id_writes(),
+        }
+    }
+
+    /// Returns the optimized global MIR plan, if this item has one.
+    pub fn optimized_plan(&self) -> Option<&Arc<DataflowDescription<OptimizedMirRelationExpr>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.optimized_plan.as_ref(),
+            CatalogItem::MaterializedView(mv) => mv.optimized_plan.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Returns the physical (LIR) plan, if this item has one.
+    pub fn physical_plan(&self) -> Option<&Arc<DataflowDescription<ComputePlan>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.physical_plan.as_ref(),
+            CatalogItem::MaterializedView(mv) => mv.physical_plan.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Returns the dataflow metainfo, if this item has one.
+    pub fn dataflow_metainfo(&self) -> Option<&DataflowMetainfo<Arc<OptimizerNotice>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.dataflow_metainfo.as_ref(),
+            CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Returns mutable references to the plan fields (`optimized_plan`,
+    /// `physical_plan`, `dataflow_metainfo`) on plan-bearing items
+    /// (`Index`, `MaterializedView`), or `None` for
+    /// other item kinds.
+    pub fn plan_fields_mut(
+        &mut self,
+    ) -> Option<(
+        &mut Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+        &mut Option<Arc<DataflowDescription<ComputePlan>>>,
+        &mut Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
+    )> {
+        match self {
+            CatalogItem::Index(idx) => Some((
+                &mut idx.optimized_plan,
+                &mut idx.physical_plan,
+                &mut idx.dataflow_metainfo,
+            )),
+            CatalogItem::MaterializedView(mv) => Some((
+                &mut mv.optimized_plan,
+                &mut mv.physical_plan,
+                &mut mv.dataflow_metainfo,
+            )),
+            _ => None,
         }
     }
 
     /// Whether this item represents a storage collection.
     pub fn is_storage_collection(&self) -> bool {
         match self {
-            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::MaterializedView(_) => {
-                true
-            }
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_) => true,
             CatalogItem::Log(_)
-            | CatalogItem::Sink(_)
             | CatalogItem::View(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
@@ -954,26 +1836,29 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.desc_opt().ok_or(SqlCatalogError::InvalidDependency {
-            name: name.to_string(),
-            typ: self.typ(),
-        })
-    }
-
-    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
+    /// Returns the [`RelationDesc`] for items that yield rows, at the requested
+    /// version.
+    ///
+    /// Some item types honor `version` so callers can ask for the schema that
+    /// matches a specific [`GlobalId`] or historical definition. Other relation
+    /// types ignore `version` because they have a single shape. Non-relational
+    /// items ( for example functions, indexes, sinks, secrets, and connections)
+    /// return `None`.
+    pub fn relation_desc(&self, version: RelationVersionSelector) -> Option<Cow<'_, RelationDesc>> {
         match &self {
             CatalogItem::Source(src) => Some(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Some(Cow::Owned(log.variant.desc())),
-            CatalogItem::Table(tbl) => Some(Cow::Borrowed(&tbl.desc)),
+            CatalogItem::Table(tbl) => Some(Cow::Owned(tbl.desc.at_version(version))),
             CatalogItem::View(view) => Some(Cow::Borrowed(&view.desc)),
-            CatalogItem::MaterializedView(mview) => Some(Cow::Borrowed(&mview.desc)),
-            CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
+            CatalogItem::MaterializedView(mview) => {
+                Some(Cow::Owned(mview.desc.at_version(version)))
+            }
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Type(_) => None,
         }
     }
 
@@ -997,11 +1882,13 @@ impl CatalogItem {
     ) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion { ingestion_desc, .. } => Ok(Some(&ingestion_desc.desc)),
+                DataSourceDesc::Ingestion { desc, .. }
+                | DataSourceDesc::OldSyntaxIngestion { desc, .. } => Ok(Some(desc)),
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
-                | DataSourceDesc::Progress => Ok(None),
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Catalog => Ok(None),
             },
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: entry.name().item.to_string(),
@@ -1022,10 +1909,10 @@ impl CatalogItem {
         )
     }
 
-    /// Collects the identifiers of the objects that were encountered when
-    /// resolving names in the item's DDL statement.
+    /// Collects the identifiers of the objects that were encountered when resolving names in the
+    /// item's DDL statement.
     pub fn references(&self) -> &ResolvedIds {
-        static EMPTY: Lazy<ResolvedIds> = Lazy::new(|| ResolvedIds(BTreeSet::new()));
+        static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(ResolvedIds::empty);
         match self {
             CatalogItem::Func(_) => &*EMPTY,
             CatalogItem::Index(idx) => &idx.resolved_ids,
@@ -1046,8 +1933,8 @@ impl CatalogItem {
     /// Like [`CatalogItem::references()`] but also includes objects that are not directly
     /// referenced. For example this will include any catalog objects used to implement functions
     /// and casts in the item.
-    pub fn uses(&self) -> BTreeSet<GlobalId> {
-        let mut uses = self.references().0.clone();
+    pub fn uses(&self) -> BTreeSet<CatalogItemId> {
+        let mut uses: BTreeSet<_> = self.references().items().copied().collect();
         match self {
             // TODO(jkosh44) This isn't really correct for functions. They may use other objects in
             // their implementation. However, currently there's no way to get that information.
@@ -1058,8 +1945,10 @@ impl CatalogItem {
             CatalogItem::Log(_) => {}
             CatalogItem::Table(_) => {}
             CatalogItem::Type(_) => {}
-            CatalogItem::View(view) => uses.extend(view.raw_expr.depends_on()),
-            CatalogItem::MaterializedView(mview) => uses.extend(mview.raw_expr.depends_on()),
+            CatalogItem::View(view) => uses.extend(view.dependencies.0.iter().copied()),
+            CatalogItem::MaterializedView(mview) => {
+                uses.extend(mview.dependencies.0.iter().copied())
+            }
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
         }
@@ -1081,6 +1970,24 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_) => None,
+        }
+    }
+
+    /// Sets the connection ID that this item belongs to, which makes it a
+    /// temporary item.
+    pub fn set_conn_id(&mut self, conn_id: Option<ConnectionId>) {
+        match self {
+            CatalogItem::View(view) => view.conn_id = conn_id,
+            CatalogItem::Index(index) => index.conn_id = conn_id,
+            CatalogItem::Table(table) => table.conn_id = conn_id,
+            CatalogItem::Log(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Connection(_) => (),
         }
     }
 
@@ -1233,6 +2140,67 @@ impl CatalogItem {
         }
     }
 
+    /// Returns a clone of `self` with all instances of `old_id` replaced with `new_id`.
+    pub fn replace_item_refs(&self, old_id: CatalogItemId, new_id: CatalogItemId) -> CatalogItem {
+        let do_rewrite = |create_sql: String| -> String {
+            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element()
+                .ast;
+            mz_sql::ast::transform::create_stmt_replace_ids(
+                &mut create_stmt,
+                &[(old_id, new_id)].into(),
+            );
+            create_stmt.to_ast_string_stable()
+        };
+
+        match self {
+            CatalogItem::Table(i) => {
+                let mut i = i.clone();
+                i.create_sql = i.create_sql.map(do_rewrite);
+                CatalogItem::Table(i)
+            }
+            CatalogItem::Log(i) => CatalogItem::Log(i.clone()),
+            CatalogItem::Source(i) => {
+                let mut i = i.clone();
+                i.create_sql = i.create_sql.map(do_rewrite);
+                CatalogItem::Source(i)
+            }
+            CatalogItem::Sink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Sink(i)
+            }
+            CatalogItem::View(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::View(i)
+            }
+            CatalogItem::MaterializedView(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::MaterializedView(i)
+            }
+            CatalogItem::Index(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Index(i)
+            }
+            CatalogItem::Secret(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Secret(i)
+            }
+            CatalogItem::Func(_) | CatalogItem::Type(_) => {
+                unreachable!("references of {}s cannot be replaced", self.typ())
+            }
+            CatalogItem::Connection(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Connection(i)
+            }
+        }
+    }
     /// Updates the retain history for an item. Returns the previous retain history value. Returns
     /// an error if this item does not support retain history.
     pub fn update_retain_history(
@@ -1240,7 +2208,7 @@ impl CatalogItem {
         value: Option<Value>,
         window: CompactionWindow,
     ) -> Result<Option<WithOptionValue<Raw>>, ()> {
-        let update = |ast: &mut Statement<Raw>| {
+        let update = |mut ast: &mut Statement<Raw>| {
             // Each statement type has unique option types. This macro handles them commonly.
             macro_rules! update_retain_history {
                 ( $stmt:ident, $opt:ident, $name:ident ) => {{
@@ -1272,17 +2240,17 @@ impl CatalogItem {
                     }
                 }};
             }
-            let previous = match ast {
-                Statement::CreateTable(ref mut stmt) => {
+            let previous = match &mut ast {
+                Statement::CreateTable(stmt) => {
                     update_retain_history!(stmt, TableOption, TableOptionName)
                 }
-                Statement::CreateIndex(ref mut stmt) => {
+                Statement::CreateIndex(stmt) => {
                     update_retain_history!(stmt, IndexOption, IndexOptionName)
                 }
-                Statement::CreateSource(ref mut stmt) => {
+                Statement::CreateSource(stmt) => {
                     update_retain_history!(stmt, CreateSourceOption, CreateSourceOptionName)
                 }
-                Statement::CreateMaterializedView(ref mut stmt) => {
+                Statement::CreateMaterializedView(stmt) => {
                     update_retain_history!(stmt, MaterializedViewOption, MaterializedViewOptionName)
                 }
                 _ => {
@@ -1298,6 +2266,99 @@ impl CatalogItem {
             .expect("item must have compaction window");
         *cw = Some(window);
         Ok(res)
+    }
+
+    /// Updates the timestamp interval for a source. Returns the previous timestamp interval
+    /// value, if any. Returns an error if this item is not a source.
+    pub fn update_timestamp_interval(
+        &mut self,
+        value: Option<Value>,
+        interval: Duration,
+    ) -> Result<Option<WithOptionValue<Raw>>, ()> {
+        let update = |ast: &mut Statement<Raw>| match ast {
+            Statement::CreateSource(stmt) => {
+                let pos = stmt.with_options.iter().rposition(|o| {
+                    o.name == mz_sql_parser::ast::CreateSourceOptionName::TimestampInterval
+                });
+                let previous = if let Some(value) = value {
+                    let next = mz_sql_parser::ast::CreateSourceOption {
+                        name: mz_sql_parser::ast::CreateSourceOptionName::TimestampInterval,
+                        value: Some(WithOptionValue::Value(value)),
+                    };
+                    if let Some(idx) = pos {
+                        let previous = stmt.with_options[idx].clone();
+                        stmt.with_options[idx] = next;
+                        previous.value
+                    } else {
+                        stmt.with_options.push(next);
+                        None
+                    }
+                } else if let Some(idx) = pos {
+                    stmt.with_options.swap_remove(idx).value
+                } else {
+                    None
+                };
+                Ok(previous)
+            }
+            _ => Err(()),
+        };
+
+        let previous = self.update_sql(update)?;
+
+        // Update the in-memory SourceDesc timestamp_interval.
+        match self {
+            CatalogItem::Source(source) => {
+                match &mut source.data_source {
+                    DataSourceDesc::Ingestion { desc, .. }
+                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                        desc.timestamp_interval = interval;
+                    }
+                    _ => return Err(()),
+                }
+                Ok(previous)
+            }
+            _ => Err(()),
+        }
+    }
+
+    pub fn add_column(
+        &mut self,
+        name: ColumnName,
+        typ: SqlColumnType,
+        sql: RawDataType,
+    ) -> Result<RelationVersion, PlanError> {
+        let CatalogItem::Table(table) = self else {
+            return Err(PlanError::Unsupported {
+                feature: "adding columns to a non-Table".to_string(),
+                discussion_no: None,
+            });
+        };
+        let next_version = table.desc.add_column(name.clone(), typ);
+
+        let update = |mut ast: &mut Statement<Raw>| match &mut ast {
+            Statement::CreateTable(stmt) => {
+                let version = ColumnOptionDef {
+                    name: None,
+                    option: ColumnOption::Versioned {
+                        action: ColumnVersioned::Added,
+                        version: next_version.into(),
+                    },
+                };
+                let column = ColumnDef {
+                    name: name.into(),
+                    data_type: sql,
+                    collation: None,
+                    options: vec![version],
+                };
+                stmt.columns.push(column);
+                Ok(())
+            }
+            _ => Err(()),
+        };
+
+        self.update_sql(update)
+            .map_err(|()| PlanError::Unstructured("expected CREATE TABLE statement".to_string()))?;
+        Ok(next_version)
     }
 
     /// Updates the create_sql field of this item. Returns an error if this is a builtin item,
@@ -1359,13 +2420,16 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion { cluster_id, .. } => Some(*cluster_id),
+                DataSourceDesc::Ingestion { cluster_id, .. }
+                | DataSourceDesc::OldSyntaxIngestion { cluster_id, .. } => Some(*cluster_id),
                 // This is somewhat of a lie because the export runs on the same
                 // cluster as its ingestion but we don't yet have a way of
                 // cross-referencing the items
                 DataSourceDesc::IngestionExport { .. } => None,
                 DataSourceDesc::Webhook { cluster_id, .. } => Some(*cluster_id),
-                DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => None,
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
             CatalogItem::Table(_)
@@ -1461,83 +2525,145 @@ impl CatalogItem {
         }
     }
 
-    pub fn to_serialized(&self) -> String {
+    pub fn to_serialized(&self) -> (String, GlobalId, BTreeMap<RelationVersion, GlobalId>) {
         match self {
-            CatalogItem::Table(table) => table
-                .create_sql
-                .as_ref()
-                .expect("builtin tables cannot be serialized")
-                .clone(),
+            CatalogItem::Table(table) => {
+                let create_sql = table
+                    .create_sql
+                    .clone()
+                    .expect("builtin tables cannot be serialized");
+                let mut collections = table.collections.clone();
+                let global_id = collections
+                    .remove(&RelationVersion::root())
+                    .expect("at least one version");
+                (create_sql, global_id, collections)
+            }
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => {
                 assert!(
                     !matches!(source.data_source, DataSourceDesc::Introspection(_)),
                     "cannot serialize introspection/builtin sources",
                 );
-                source
+                let create_sql = source
                     .create_sql
-                    .as_ref()
-                    .expect("builtin sources cannot be serialized")
                     .clone()
+                    .expect("builtin sources cannot be serialized");
+                (create_sql, source.global_id, BTreeMap::new())
             }
-            CatalogItem::View(view) => view.create_sql.clone(),
-            CatalogItem::MaterializedView(mview) => mview.create_sql.clone(),
-            CatalogItem::Index(index) => index.create_sql.clone(),
-            CatalogItem::Sink(sink) => sink.create_sql.clone(),
-            CatalogItem::Type(typ) => typ
-                .create_sql
-                .as_ref()
-                .expect("builtin types cannot be serialized")
-                .clone(),
-            CatalogItem::Secret(secret) => secret.create_sql.clone(),
-            CatalogItem::Connection(connection) => connection.create_sql.clone(),
+            CatalogItem::View(view) => (view.create_sql.clone(), view.global_id, BTreeMap::new()),
+            CatalogItem::MaterializedView(mview) => {
+                let mut collections = mview.collections.clone();
+                let global_id = collections
+                    .remove(&RelationVersion::root())
+                    .expect("at least one version");
+                (mview.create_sql.clone(), global_id, collections)
+            }
+            CatalogItem::Index(index) => {
+                (index.create_sql.clone(), index.global_id, BTreeMap::new())
+            }
+            CatalogItem::Sink(sink) => (sink.create_sql.clone(), sink.global_id, BTreeMap::new()),
+            CatalogItem::Type(typ) => {
+                let create_sql = typ
+                    .create_sql
+                    .clone()
+                    .expect("builtin types cannot be serialized");
+                (create_sql, typ.global_id, BTreeMap::new())
+            }
+            CatalogItem::Secret(secret) => {
+                (secret.create_sql.clone(), secret.global_id, BTreeMap::new())
+            }
+            CatalogItem::Connection(connection) => (
+                connection.create_sql.clone(),
+                connection.global_id,
+                BTreeMap::new(),
+            ),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         }
     }
 
-    pub fn into_serialized(self) -> String {
+    pub fn into_serialized(self) -> (String, GlobalId, BTreeMap<RelationVersion, GlobalId>) {
         match self {
-            CatalogItem::Table(table) => table
-                .create_sql
-                .expect("builtin tables cannot be serialized"),
+            CatalogItem::Table(mut table) => {
+                let create_sql = table
+                    .create_sql
+                    .expect("builtin tables cannot be serialized");
+                let global_id = table
+                    .collections
+                    .remove(&RelationVersion::root())
+                    .expect("at least one version");
+                (create_sql, global_id, table.collections)
+            }
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => {
                 assert!(
                     !matches!(source.data_source, DataSourceDesc::Introspection(_)),
                     "cannot serialize introspection/builtin sources",
                 );
-                source
+                let create_sql = source
                     .create_sql
-                    .expect("builtin sources cannot be serialized")
+                    .expect("builtin sources cannot be serialized");
+                (create_sql, source.global_id, BTreeMap::new())
             }
-            CatalogItem::View(view) => view.create_sql,
-            CatalogItem::MaterializedView(mview) => mview.create_sql,
-            CatalogItem::Index(index) => index.create_sql,
-            CatalogItem::Sink(sink) => sink.create_sql,
-            CatalogItem::Type(typ) => typ.create_sql.expect("builtin types cannot be serialized"),
-            CatalogItem::Secret(secret) => secret.create_sql,
-            CatalogItem::Connection(connection) => connection.create_sql,
+            CatalogItem::View(view) => (view.create_sql, view.global_id, BTreeMap::new()),
+            CatalogItem::MaterializedView(mut mview) => {
+                let global_id = mview
+                    .collections
+                    .remove(&RelationVersion::root())
+                    .expect("at least one version");
+                (mview.create_sql, global_id, mview.collections)
+            }
+            CatalogItem::Index(index) => (index.create_sql, index.global_id, BTreeMap::new()),
+            CatalogItem::Sink(sink) => (sink.create_sql, sink.global_id, BTreeMap::new()),
+            CatalogItem::Type(typ) => {
+                let create_sql = typ.create_sql.expect("builtin types cannot be serialized");
+                (create_sql, typ.global_id, BTreeMap::new())
+            }
+            CatalogItem::Secret(secret) => (secret.create_sql, secret.global_id, BTreeMap::new()),
+            CatalogItem::Connection(connection) => {
+                (connection.create_sql, connection.global_id, BTreeMap::new())
+            }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+        }
+    }
+
+    /// Returns a global ID for a specific version selector. Returns `None` if the item does
+    /// not have versions or if the version does not exist.
+    pub fn global_id_for_version(&self, version: RelationVersionSelector) -> Option<GlobalId> {
+        let collections = match self {
+            CatalogItem::MaterializedView(mv) => &mv.collections,
+            CatalogItem::Table(table) => &table.collections,
+            CatalogItem::Source(source) => return Some(source.global_id),
+            CatalogItem::Log(log) => return Some(log.global_id),
+            CatalogItem::View(view) => return Some(view.global_id),
+            CatalogItem::Sink(sink) => return Some(sink.global_id),
+            CatalogItem::Index(index) => return Some(index.global_id),
+            CatalogItem::Type(ty) => return Some(ty.global_id),
+            CatalogItem::Func(func) => return Some(func.global_id),
+            CatalogItem::Secret(secret) => return Some(secret.global_id),
+            CatalogItem::Connection(conn) => return Some(conn.global_id),
+        };
+        match version {
+            RelationVersionSelector::Latest => collections.values().last().copied(),
+            RelationVersionSelector::Specific(version) => collections.get(&version).copied(),
         }
     }
 }
 
 impl CatalogEntry {
-    /// Like [`CatalogEntry::desc_opt`], but returns an error if the catalog
-    /// entry is not of a type that has a description.
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.item.desc(name)
-    }
-
-    /// Reports the description of the rows produced by this catalog entry, if
-    /// this catalog entry produces rows.
-    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
-        self.item.desc_opt()
+    /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`], if it
+    /// produces rows.
+    pub fn relation_desc_latest(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item.relation_desc(RelationVersionSelector::Latest)
     }
 
     /// Reports if the item has columns.
     pub fn has_columns(&self) -> bool {
-        self.item.desc_opt().is_some()
+        match self.item() {
+            CatalogItem::Type(Type { details, .. }) => {
+                matches!(details.typ, CatalogType::Record { .. })
+            }
+            _ => self.relation_desc_latest().is_some(),
+        }
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
@@ -1549,6 +2675,22 @@ impl CatalogEntry {
     pub fn index(&self) -> Option<&Index> {
         match self.item() {
             CatalogItem::Index(idx) => Some(idx),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner [`MaterializedView`] if this entry is a materialized view, else `None`.
+    pub fn materialized_view(&self) -> Option<&MaterializedView> {
+        match self.item() {
+            CatalogItem::MaterializedView(mv) => Some(mv),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner [`Table`] if this entry is a table, else `None`.
+    pub fn table(&self) -> Option<&Table> {
+        match self.item() {
+            CatalogItem::Table(tbl) => Some(tbl),
             _ => None,
         }
     }
@@ -1620,14 +2762,55 @@ impl CatalogEntry {
     }
 
     /// Reports whether this catalog entry is a subsource and, if it is, the
-    /// ingestion it is a subsource of, as well as the item it exports.
-    pub fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName)> {
+    /// ingestion it is an export of, as well as the item it exports.
+    pub fn subsource_details(
+        &self,
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::IngestionExport {
                     ingestion_id,
                     external_reference,
-                } => Some((*ingestion_id, external_reference)),
+                    details,
+                    data_config: _,
+                } => Some((*ingestion_id, external_reference, details)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Reports whether this catalog entry is a source export and, if it is, the
+    /// ingestion it is an export of, as well as the item it exports.
+    pub fn source_export_details(
+        &self,
+    ) -> Option<(
+        CatalogItemId,
+        &UnresolvedItemName,
+        &SourceExportDetails,
+        &SourceExportDataConfig<ReferencedConnection>,
+    )> {
+        match &self.item() {
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                    details,
+                    data_config,
+                } => Some((*ingestion_id, external_reference, details, data_config)),
+                _ => None,
+            },
+            CatalogItem::Table(table) => match &table.data_source {
+                TableDataSource::DataSource {
+                    desc:
+                        DataSourceDesc::IngestionExport {
+                            ingestion_id,
+                            external_reference,
+                            details,
+                            data_config,
+                        },
+                    timeline: _,
+                } => Some((*ingestion_id, external_reference, details, data_config)),
                 _ => None,
             },
             _ => None,
@@ -1640,16 +2823,18 @@ impl CatalogEntry {
     }
 
     /// Returns the `GlobalId` of all of this entry's progress ID.
-    pub fn progress_id(&self) -> Option<GlobalId> {
+    pub fn progress_id(&self) -> Option<CatalogItemId> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                    Some(ingestion_desc.progress_subsource)
-                }
+                DataSourceDesc::Ingestion { .. } => Some(self.id),
+                DataSourceDesc::OldSyntaxIngestion {
+                    progress_subsource, ..
+                } => Some(*progress_subsource),
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
-                | DataSourceDesc::Webhook { .. } => None,
+                | DataSourceDesc::Webhook { .. }
+                | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
@@ -1710,7 +2895,7 @@ impl CatalogEntry {
     /// Like [`CatalogEntry::references()`] but also includes objects that are not directly
     /// referenced. For example this will include any catalog objects used to implement functions
     /// and casts in the item.
-    pub fn uses(&self) -> BTreeSet<GlobalId> {
+    pub fn uses(&self) -> BTreeSet<CatalogItemId> {
         self.item.uses()
     }
 
@@ -1719,9 +2904,24 @@ impl CatalogEntry {
         &self.item
     }
 
-    /// Returns the global ID of this catalog entry.
-    pub fn id(&self) -> GlobalId {
+    /// Returns a mutable reference to the `CatalogItem` associated with this
+    /// catalog entry.
+    pub fn item_mut(&mut self) -> &mut CatalogItem {
+        &mut self.item
+    }
+
+    /// Returns the [`CatalogItemId`] of this catalog entry.
+    pub fn id(&self) -> CatalogItemId {
         self.id
+    }
+
+    /// Returns all of the [`GlobalId`]s associated with this item.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.item().global_ids()
+    }
+
+    pub fn latest_global_id(&self) -> GlobalId {
+        self.item().latest_global_id()
     }
 
     /// Returns the OID of this catalog entry.
@@ -1735,12 +2935,12 @@ impl CatalogEntry {
     }
 
     /// Returns the identifiers of the dataflows that are directly referenced by this dataflow.
-    pub fn referenced_by(&self) -> &[GlobalId] {
+    pub fn referenced_by(&self) -> &[CatalogItemId] {
         &self.referenced_by
     }
 
     /// Returns the identifiers of the dataflows that depend upon this dataflow.
-    pub fn used_by(&self) -> &[GlobalId] {
+    pub fn used_by(&self) -> &[CatalogItemId] {
         &self.used_by
     }
 
@@ -1758,6 +2958,23 @@ impl CatalogEntry {
     /// Returns the privileges of the entry.
     pub fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
+    }
+
+    /// Returns the comment object ID for this entry.
+    pub fn comment_object_id(&self) -> CommentObjectId {
+        use CatalogItemType::*;
+        match self.item_type() {
+            Table => CommentObjectId::Table(self.id),
+            Source => CommentObjectId::Source(self.id),
+            Sink => CommentObjectId::Sink(self.id),
+            View => CommentObjectId::View(self.id),
+            MaterializedView => CommentObjectId::MaterializedView(self.id),
+            Index => CommentObjectId::Index(self.id),
+            Func => CommentObjectId::Func(self.id),
+            Connection => CommentObjectId::Connection(self.id),
+            Type => CommentObjectId::Type(self.id),
+            Secret => CommentObjectId::Secret(self.id),
+        }
     }
 }
 
@@ -2071,7 +3288,6 @@ pub struct ClusterVariantManaged {
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
     pub replication_factor: u32,
-    pub disk: bool,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
 }
@@ -2083,7 +3299,6 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             availability_zones: managed.availability_zones,
             logging: managed.logging,
             replication_factor: managed.replication_factor,
-            disk: managed.disk,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
             schedule: managed.schedule,
         }
@@ -2097,7 +3312,6 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             availability_zones: managed.availability_zones,
             logging: managed.logging,
             replication_factor: managed.replication_factor,
-            disk: managed.disk,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
             schedule: managed.schedule,
         }
@@ -2180,7 +3394,7 @@ impl mz_sql::catalog::CatalogSchema for Schema {
         !self.items.is_empty()
     }
 
-    fn item_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+    fn item_ids(&self) -> Box<dyn Iterator<Item = CatalogItemId> + '_> {
         Box::new(
             self.items
                 .values()
@@ -2221,6 +3435,24 @@ impl mz_sql::catalog::CatalogRole for Role {
     }
 }
 
+impl mz_sql::catalog::CatalogNetworkPolicy for NetworkPolicy {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn id(&self) -> NetworkPolicyId {
+        self.id
+    }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
+    }
+
+    fn privileges(&self) -> &PrivilegeMap {
+        &self.privileges
+    }
+}
+
 impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     fn name(&self) -> &str {
         &self.name
@@ -2230,7 +3462,7 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         self.id
     }
 
-    fn bound_objects(&self) -> &BTreeSet<GlobalId> {
+    fn bound_objects(&self) -> &BTreeSet<CatalogItemId> {
         &self.bound_objects
     }
 
@@ -2240,13 +3472,13 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
 
     // `as` is ok to use to cast to a trait object.
     #[allow(clippy::as_conversions)]
-    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica> {
+    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>> {
         self.replicas()
             .map(|replica| replica as &dyn CatalogClusterReplica)
             .collect()
     }
 
-    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica {
+    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica<'_> {
         self.replica(id).expect("catalog out of sync")
     }
 
@@ -2265,14 +3497,14 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     fn managed_size(&self) -> Option<&str> {
         match &self.config.variant {
             ClusterVariant::Managed(ClusterVariantManaged { size, .. }) => Some(size),
-            _ => None,
+            ClusterVariant::Unmanaged => None,
         }
     }
 
     fn schedule(&self) -> Option<&ClusterSchedule> {
         match &self.config.variant {
             ClusterVariant::Managed(ClusterVariantManaged { schedule, .. }) => Some(schedule),
-            _ => None,
+            ClusterVariant::Unmanaged => None,
         }
     }
 
@@ -2308,16 +3540,16 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.name()
     }
 
-    fn id(&self) -> GlobalId {
+    fn id(&self) -> CatalogItemId {
         self.id()
+    }
+
+    fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+        Box::new(self.global_ids())
     }
 
     fn oid(&self) -> u32 {
         self.oid()
-    }
-
-    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.desc(name)
     }
 
     fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
@@ -2330,9 +3562,9 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn connection(
         &self,
-    ) -> Result<&mz_storage_types::connections::Connection<ReferencedConnection>, SqlCatalogError>
+    ) -> Result<mz_storage_types::connections::Connection<ReferencedConnection>, SqlCatalogError>
     {
-        Ok(&self.connection()?.connection)
+        Ok(self.connection()?.details.to_connection())
     }
 
     fn create_sql(&self) -> &str {
@@ -2369,9 +3601,21 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn table_details(&self) -> Option<&[Expr<Aug>]> {
-        if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
-            Some(defaults)
+    fn writable_table_details(&self) -> Option<&[Expr<Aug>]> {
+        if let CatalogItem::Table(Table {
+            data_source: TableDataSource::TableWrites { defaults },
+            ..
+        }) = self.item()
+        {
+            Some(defaults.as_slice())
+        } else {
+            None
+        }
+    }
+
+    fn replacement_target(&self) -> Option<CatalogItemId> {
+        if let CatalogItem::MaterializedView(mv) = self.item() {
+            mv.replacement_target
         } else {
             None
         }
@@ -2389,27 +3633,40 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.references()
     }
 
-    fn uses(&self) -> BTreeSet<GlobalId> {
+    fn uses(&self) -> BTreeSet<CatalogItemId> {
         self.uses()
     }
 
-    fn referenced_by(&self) -> &[GlobalId] {
+    fn referenced_by(&self) -> &[CatalogItemId] {
         self.referenced_by()
     }
 
-    fn used_by(&self) -> &[GlobalId] {
+    fn used_by(&self) -> &[CatalogItemId] {
         self.used_by()
     }
 
-    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName)> {
+    fn subsource_details(
+        &self,
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)> {
         self.subsource_details()
+    }
+
+    fn source_export_details(
+        &self,
+    ) -> Option<(
+        CatalogItemId,
+        &UnresolvedItemName,
+        &SourceExportDetails,
+        &SourceExportDataConfig<ReferencedConnection>,
+    )> {
+        self.source_export_details()
     }
 
     fn is_progress_source(&self) -> bool {
         self.is_progress_source()
     }
 
-    fn progress_id(&self) -> Option<GlobalId> {
+    fn progress_id(&self) -> Option<CatalogItemId> {
         self.progress_id()
     }
 
@@ -2424,10 +3681,24 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn cluster_id(&self) -> Option<ClusterId> {
         self.item().cluster_id()
     }
+
+    fn at_version(
+        &self,
+        version: RelationVersionSelector,
+    ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
+        Box::new(CatalogCollectionEntry {
+            entry: self.clone(),
+            version,
+        })
+    }
+
+    fn latest_version(&self) -> Option<RelationVersion> {
+        self.table().map(|t| t.desc.latest_version())
+    }
 }
 
 /// A single update to the catalog state.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
     pub ts: Timestamp,
@@ -2437,32 +3708,35 @@ pub struct StateUpdate {
 /// The contents of a single state update.
 ///
 /// Variants are listed in dependency order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateUpdateKind {
     Role(durable::objects::Role),
+    RoleAuth(durable::objects::RoleAuth),
     Database(durable::objects::Database),
     Schema(durable::objects::Schema),
     DefaultPrivilege(durable::objects::DefaultPrivilege),
     SystemPrivilege(MzAclItem),
     SystemConfiguration(durable::objects::SystemConfiguration),
     Cluster(durable::objects::Cluster),
+    NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
+    SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
-    // Temporary items are not actually updated via the durable catalog, but this allows us to
-    // model them the same way as all other items.
+    // Temporary items are not actually updated via the durable catalog, but
+    // this allows us to model them the same way as all other items in parts of
+    // the pipeline.
     TemporaryItem(TemporaryItem),
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
     AuditLog(durable::objects::AuditLog),
-    StorageUsage(durable::objects::StorageUsage),
     // Storage updates.
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
 }
 
 /// Valid diffs for catalog state updates.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub enum StateDiff {
     Retraction,
     Addition,
@@ -2471,8 +3745,8 @@ pub enum StateDiff {
 impl From<StateDiff> for Diff {
     fn from(diff: StateDiff) -> Self {
         match diff {
-            StateDiff::Retraction => -1,
-            StateDiff::Addition => 1,
+            StateDiff::Retraction => Diff::MINUS_ONE,
+            StateDiff::Addition => Diff::ONE,
         }
     }
 }
@@ -2481,34 +3755,51 @@ impl TryFrom<Diff> for StateDiff {
 
     fn try_from(diff: Diff) -> Result<Self, Self::Error> {
         match diff {
-            -1 => Ok(Self::Retraction),
-            1 => Ok(Self::Addition),
+            Diff::MINUS_ONE => Ok(Self::Retraction),
+            Diff::ONE => Ok(Self::Addition),
             diff => Err(format!("invalid diff {diff}")),
         }
     }
 }
 
 /// Information needed to process an update to a temporary item.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct TemporaryItem {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub oid: u32,
-    pub name: QualifiedItemName,
-    pub item: CatalogItem,
+    pub global_id: GlobalId,
+    pub schema_id: SchemaId,
+    pub name: String,
+    pub conn_id: Option<ConnectionId>,
+    pub create_sql: String,
     pub owner_id: RoleId,
-    pub privileges: PrivilegeMap,
+    pub privileges: Vec<MzAclItem>,
+    pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl From<CatalogEntry> for TemporaryItem {
     fn from(entry: CatalogEntry) -> Self {
+        let conn_id = entry.conn_id().cloned();
+        let (create_sql, global_id, extra_versions) = entry.item.to_serialized();
+
         TemporaryItem {
             id: entry.id,
             oid: entry.oid,
-            name: entry.name,
-            item: entry.item,
+            global_id,
+            schema_id: entry.name.qualifiers.schema_spec.into(),
+            name: entry.name.item,
+            conn_id,
+            create_sql,
             owner_id: entry.owner_id,
-            privileges: entry.privileges,
+            privileges: entry.privileges.into_all_values().collect(),
+            extra_versions,
         }
+    }
+}
+
+impl TemporaryItem {
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
     }
 }
 
@@ -2516,19 +3807,21 @@ impl From<CatalogEntry> for TemporaryItem {
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum BootstrapStateUpdateKind {
     Role(durable::objects::Role),
+    RoleAuth(durable::objects::RoleAuth),
     Database(durable::objects::Database),
     Schema(durable::objects::Schema),
     DefaultPrivilege(durable::objects::DefaultPrivilege),
     SystemPrivilege(MzAclItem),
     SystemConfiguration(durable::objects::SystemConfiguration),
     Cluster(durable::objects::Cluster),
+    NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
+    SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
     AuditLog(durable::objects::AuditLog),
-    StorageUsage(durable::objects::StorageUsage),
     // Storage updates.
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
@@ -2538,6 +3831,7 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
     fn from(value: BootstrapStateUpdateKind) -> Self {
         match value {
             BootstrapStateUpdateKind::Role(kind) => StateUpdateKind::Role(kind),
+            BootstrapStateUpdateKind::RoleAuth(kind) => StateUpdateKind::RoleAuth(kind),
             BootstrapStateUpdateKind::Database(kind) => StateUpdateKind::Database(kind),
             BootstrapStateUpdateKind::Schema(kind) => StateUpdateKind::Schema(kind),
             BootstrapStateUpdateKind::DefaultPrivilege(kind) => {
@@ -2549,7 +3843,11 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
             BootstrapStateUpdateKind::SystemConfiguration(kind) => {
                 StateUpdateKind::SystemConfiguration(kind)
             }
+            BootstrapStateUpdateKind::SourceReferences(kind) => {
+                StateUpdateKind::SourceReferences(kind)
+            }
             BootstrapStateUpdateKind::Cluster(kind) => StateUpdateKind::Cluster(kind),
+            BootstrapStateUpdateKind::NetworkPolicy(kind) => StateUpdateKind::NetworkPolicy(kind),
             BootstrapStateUpdateKind::IntrospectionSourceIndex(kind) => {
                 StateUpdateKind::IntrospectionSourceIndex(kind)
             }
@@ -2560,7 +3858,6 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
             BootstrapStateUpdateKind::Item(kind) => StateUpdateKind::Item(kind),
             BootstrapStateUpdateKind::Comment(kind) => StateUpdateKind::Comment(kind),
             BootstrapStateUpdateKind::AuditLog(kind) => StateUpdateKind::AuditLog(kind),
-            BootstrapStateUpdateKind::StorageUsage(kind) => StateUpdateKind::StorageUsage(kind),
             BootstrapStateUpdateKind::StorageCollectionMetadata(kind) => {
                 StateUpdateKind::StorageCollectionMetadata(kind)
             }
@@ -2577,6 +3874,7 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
     fn try_from(value: StateUpdateKind) -> Result<Self, Self::Error> {
         match value {
             StateUpdateKind::Role(kind) => Ok(BootstrapStateUpdateKind::Role(kind)),
+            StateUpdateKind::RoleAuth(kind) => Ok(BootstrapStateUpdateKind::RoleAuth(kind)),
             StateUpdateKind::Database(kind) => Ok(BootstrapStateUpdateKind::Database(kind)),
             StateUpdateKind::Schema(kind) => Ok(BootstrapStateUpdateKind::Schema(kind)),
             StateUpdateKind::DefaultPrivilege(kind) => {
@@ -2589,11 +3887,17 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
                 Ok(BootstrapStateUpdateKind::SystemConfiguration(kind))
             }
             StateUpdateKind::Cluster(kind) => Ok(BootstrapStateUpdateKind::Cluster(kind)),
+            StateUpdateKind::NetworkPolicy(kind) => {
+                Ok(BootstrapStateUpdateKind::NetworkPolicy(kind))
+            }
             StateUpdateKind::IntrospectionSourceIndex(kind) => {
                 Ok(BootstrapStateUpdateKind::IntrospectionSourceIndex(kind))
             }
             StateUpdateKind::ClusterReplica(kind) => {
                 Ok(BootstrapStateUpdateKind::ClusterReplica(kind))
+            }
+            StateUpdateKind::SourceReferences(kind) => {
+                Ok(BootstrapStateUpdateKind::SourceReferences(kind))
             }
             StateUpdateKind::SystemObjectMapping(kind) => {
                 Ok(BootstrapStateUpdateKind::SystemObjectMapping(kind))
@@ -2602,7 +3906,6 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
             StateUpdateKind::Item(kind) => Ok(BootstrapStateUpdateKind::Item(kind)),
             StateUpdateKind::Comment(kind) => Ok(BootstrapStateUpdateKind::Comment(kind)),
             StateUpdateKind::AuditLog(kind) => Ok(BootstrapStateUpdateKind::AuditLog(kind)),
-            StateUpdateKind::StorageUsage(kind) => Ok(BootstrapStateUpdateKind::StorageUsage(kind)),
             StateUpdateKind::StorageCollectionMetadata(kind) => {
                 Ok(BootstrapStateUpdateKind::StorageCollectionMetadata(kind))
             }

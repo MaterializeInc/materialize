@@ -20,6 +20,7 @@ INSERT INTO insert_multi_table1 VALUES (0);
 CREATE TABLE insert_multi_table2 (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE insert_multi_table2 REPLICA IDENTITY FULL;
 INSERT INTO insert_multi_table2 VALUES (0);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.insert_multi_table1
 
@@ -31,15 +32,23 @@ $ schema-registry-wait topic=postgres.public.insert_multi_table2
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE insert_multi_table1
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.insert_multi_table1')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM;
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.insert_multi_table1');
 
-> CREATE SOURCE insert_multi_table2
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.insert_multi_table2')
+> CREATE TABLE insert_multi_table1_tbl FROM SOURCE insert_multi_table1 (REFERENCE "postgres.public.insert_multi_table1")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
+
+> BEGIN
+> CREATE SOURCE insert_multi_table2
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.insert_multi_table2');
+
+> CREATE TABLE insert_multi_table2_tbl FROM SOURCE insert_multi_table2 (REFERENCE "postgres.public.insert_multi_table2")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM;
+> COMMIT
 
 $ postgres-connect name=conn1 url=postgres://postgres:postgres@postgres
 
@@ -61,12 +70,12 @@ $ postgres-execute connection=conn2
 INSERT INTO insert_multi_table2 VALUES (4);
 COMMIT;
 
-> SELECT * FROM insert_multi_table1;
+> SELECT * FROM insert_multi_table1_tbl;
 0
 1
 3
 
-> SELECT * FROM insert_multi_table2;
+> SELECT * FROM insert_multi_table2_tbl;
 0
 2
 4

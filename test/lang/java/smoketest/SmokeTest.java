@@ -125,7 +125,7 @@ class SmokeTest {
         stmt.close();
     }
 
-    // Regression for #4117.
+    // Regression for materialize#4117.
     @Test
     void testBinaryTimestamp() throws SQLException, ClassNotFoundException {
         Class.forName("org.postgresql.jdbc.PgConnection");
@@ -178,5 +178,13 @@ class SmokeTest {
         stmt = conn.createStatement();
         stmt.execute("DROP TABLE materialize.public.getpks");
         stmt.close();
+    }
+
+    // We test for getCatalog due to a regression caused by (database-issues#9530)
+    @Test
+    void testPgJDBCgetCatalog() throws SQLException, ClassNotFoundException {
+        //Retrieving the current catalog name
+        String catalogName = conn.getCatalog();
+        Assertions.assertEquals("materialize", catalogName);
     }
 }

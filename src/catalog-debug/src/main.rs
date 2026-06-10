@@ -15,73 +15,102 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Instant;
 
 use anyhow::Context;
 use clap::Parser;
 use futures::future::FutureExt;
 use mz_adapter::catalog::{Catalog, InitializeStateResult};
-use mz_build_info::{build_info, BuildInfo};
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
+use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
-    StorageCollectionMetadataCollection, StorageUsageCollection, SystemConfigurationCollection,
+    IdAllocatorCollection, ItemCollection, NetworkPolicyCollection, RoleAuthCollection,
+    RoleCollection, SchemaCollection, SettingCollection, SourceReferencesCollection,
+    StorageCollectionMetadataCollection, SystemConfigurationCollection,
     SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
     UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
-    persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
+    BootstrapArgs, OpenableDurableCatalogState, persist_backed_catalog_state,
 };
+use mz_catalog::memory::objects::CatalogItem;
+use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::collections::HashSet;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
-use mz_persist_client::PersistLocation;
+use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
 use mz_repr::{Diff, Timestamp};
-use mz_secrets::InMemorySecretsController;
+use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::ConnectionCounter;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::connections::ConnectionContext;
-use once_cell::sync::Lazy;
+use mz_storage_types::controller::StorageError;
+use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
-use tracing::{error, Instrument};
-use url::Url;
-use uuid::Uuid;
+use tracing::{Instrument, error};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
-pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
+pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
+
+fn parse_json(s: &str) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::from_str(s)
+}
 
 #[derive(Parser, Debug)]
 #[clap(name = "catalog", next_line_help = true, version = VERSION.as_str())]
 pub struct Args {
     // === Persist options. ===
-    /// The organization ID of the environment.
-    #[clap(long, env = "ORG_ID")]
-    organization_id: Uuid,
+    /// An opaque identifier for the environment in which this process is
+    /// running.
+    #[clap(long, env = "ENVIRONMENT_ID")]
+    environment_id: EnvironmentId,
     /// Where the persist library should store its blob data.
     #[clap(long, env = "PERSIST_BLOB_URL")]
-    persist_blob_url: Url,
+    persist_blob_url: SensitiveUrl,
     /// Where the persist library should perform consensus.
     #[clap(long, env = "PERSIST_CONSENSUS_URL")]
-    persist_consensus_url: Url,
+    persist_consensus_url: SensitiveUrl,
+    // === Cloud options. ===
+    /// An external ID to be supplied to all AWS AssumeRole operations.
+    ///
+    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+    #[clap(long, env = "AWS_EXTERNAL_ID", value_name = "ID", value_parser = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable)]
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
+
+    /// The ARN for a Materialize-controlled role to assume before assuming
+    /// a customer's requested role for an AWS connection.
+    #[clap(long, env = "AWS_CONNECTION_ROLE_ARN")]
+    aws_connection_role_arn: Option<String>,
+    // === Tracing options. ===
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
+    // === Other options. ===
+    #[clap(long)]
+    deploy_generation: Option<u64>,
 
     #[clap(subcommand)]
     action: Action,
-
-    #[clap(flatten)]
-    tracing: TracingCliArgs,
 }
 
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, Clone, clap::Subcommand)]
 enum Action {
     /// Dumps the catalog contents to stdout in a human-readable format.
     /// Includes JSON for each key and value that can be hand edited and
@@ -114,8 +143,10 @@ enum Action {
         /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to edit.
+        #[clap(value_parser = parse_json)]
         key: serde_json::Value,
         /// The new JSON-encoded value for the item.
+        #[clap(value_parser = parse_json)]
         value: serde_json::Value,
     },
     /// Deletes a single item in a collection in the catalog
@@ -123,6 +154,7 @@ enum Action {
         /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to delete.
+        #[clap(value_parser = parse_json)]
         key: serde_json::Value,
     },
     /// Checks if the specified catalog could be upgraded from its state to the
@@ -131,8 +163,10 @@ enum Action {
     /// non-zero. Can be used on a running environmentd. Operates without
     /// interfering with it or committing any data to that catalog.
     UpgradeCheck {
+        #[clap(flatten)]
+        secrets: SecretsReaderCliArgs,
         /// Map of cluster name to resource specification. Check the README for latest values.
-        cluster_replica_sizes: Option<String>,
+        cluster_replica_sizes: String,
     },
 }
 
@@ -143,8 +177,7 @@ async fn main() {
         enable_version_flag: true,
     });
 
-    let (_, _tracing_guard) = args
-        .tracing
+    args.tracing
         .configure_tracing(
             StaticTracingConfig {
                 service_name: "catalog-debug",
@@ -175,21 +208,22 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         PubSubClientConnection::noop()
     });
     let persist_location = PersistLocation {
-        blob_uri: args.persist_blob_url.to_string(),
-        consensus_uri: args.persist_consensus_url.to_string(),
+        blob_uri: args.persist_blob_url.clone(),
+        consensus_uri: args.persist_consensus_url.clone(),
     };
     let persist_client = persist_clients.open(persist_location).await?;
-    let organization_id = args.organization_id;
+    let organization_id = args.environment_id.organization_id();
     let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
     let openable_state = persist_backed_catalog_state(
-        persist_client,
+        persist_client.clone(),
         organization_id,
         BUILD_INFO.semver_version(),
+        args.deploy_generation,
         metrics,
     )
     .await?;
 
-    match args.action {
+    match args.action.clone() {
         Action::Dump {
             ignore_large_collections,
             ignore,
@@ -228,13 +262,21 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         } => edit(openable_state, collection, key, value).await,
         Action::Delete { collection, key } => delete(openable_state, collection, key).await,
         Action::UpgradeCheck {
+            secrets,
             cluster_replica_sizes,
         } => {
-            let cluster_replica_sizes: ClusterReplicaSizeMap = match cluster_replica_sizes {
-                None => Default::default(),
-                Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
-            };
-            upgrade_check(openable_state, cluster_replica_sizes, start).await
+            let cluster_replica_sizes =
+                ClusterReplicaSizeMap::parse_from_str(&cluster_replica_sizes, false)
+                    .context("parsing replica size map")?;
+            upgrade_check(
+                args,
+                openable_state,
+                persist_client,
+                secrets,
+                cluster_replica_sizes,
+                start,
+            )
+            .await
         }
     }
 }
@@ -246,23 +288,39 @@ macro_rules! for_collection {
         match $collection_type {
             CollectionType::AuditLog => $fn::<AuditLogCollection>($($arg),*).await?,
             CollectionType::ComputeInstance => $fn::<ClusterCollection>($($arg),*).await?,
-            CollectionType::ComputeIntrospectionSourceIndex => $fn::<ClusterIntrospectionSourceIndexCollection>($($arg),*).await?,
+            CollectionType::ComputeIntrospectionSourceIndex => {
+                $fn::<ClusterIntrospectionSourceIndexCollection>($($arg),*).await?
+            }
             CollectionType::ComputeReplicas => $fn::<ClusterReplicaCollection>($($arg),*).await?,
             CollectionType::Comments => $fn::<CommentCollection>($($arg),*).await?,
             CollectionType::Config => $fn::<ConfigCollection>($($arg),*).await?,
             CollectionType::Database => $fn::<DatabaseCollection>($($arg),*).await?,
-            CollectionType::DefaultPrivileges => $fn::<DefaultPrivilegeCollection>($($arg),*).await?,
+            CollectionType::DefaultPrivileges => {
+                $fn::<DefaultPrivilegeCollection>($($arg),*).await?
+            }
             CollectionType::IdAlloc => $fn::<IdAllocatorCollection>($($arg),*).await?,
             CollectionType::Item => $fn::<ItemCollection>($($arg),*).await?,
+            CollectionType::NetworkPolicy => $fn::<NetworkPolicyCollection>($($arg),*).await?,
             CollectionType::Role => $fn::<RoleCollection>($($arg),*).await?,
+            CollectionType::RoleAuth => $fn::<RoleAuthCollection>($($arg),*).await?,
             CollectionType::Schema => $fn::<SchemaCollection>($($arg),*).await?,
             CollectionType::Setting => $fn::<SettingCollection>($($arg),*).await?,
-            CollectionType::StorageUsage => $fn::<StorageUsageCollection>($($arg),*).await?,
-            CollectionType::SystemConfiguration => $fn::<SystemConfigurationCollection>($($arg),*).await?,
-            CollectionType::SystemGidMapping => $fn::<SystemItemMappingCollection>($($arg),*).await?,
-            CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
-            CollectionType::StorageCollectionMetadata => $fn::<StorageCollectionMetadataCollection>($($arg),*).await?,
-            CollectionType::UnfinalizedShard => $fn::<UnfinalizedShardsCollection>($($arg),*).await?,
+            CollectionType::SourceReferences => $fn::<SourceReferencesCollection>($($arg),*).await?,
+            CollectionType::SystemConfiguration => {
+                $fn::<SystemConfigurationCollection>($($arg),*).await?
+            }
+            CollectionType::SystemGidMapping => {
+                $fn::<SystemItemMappingCollection>($($arg),*).await?
+            }
+            CollectionType::SystemPrivileges => {
+                $fn::<SystemPrivilegeCollection>($($arg),*).await?
+            }
+            CollectionType::StorageCollectionMetadata => {
+                $fn::<StorageCollectionMetadataCollection>($($arg),*).await?
+            }
+            CollectionType::UnfinalizedShard => {
+                $fn::<UnfinalizedShardsCollection>($($arg),*).await?
+            }
             CollectionType::TxnWalShard => $fn::<TxnWalShardCollection>($($arg),*).await?,
         }
     };
@@ -360,8 +418,14 @@ async fn dump(
             .collect();
 
         let total_count = entries.len();
-        let addition_count = entries.iter().filter(|entry| entry.diff == 1).count();
-        let retraction_count = entries.iter().filter(|entry| entry.diff == -1).count();
+        let addition_count = entries
+            .iter()
+            .filter(|entry| entry.diff == Diff::ONE)
+            .count();
+        let retraction_count = entries
+            .iter()
+            .filter(|entry| entry.diff == Diff::MINUS_ONE)
+            .count();
         let entries = if stats_only { None } else { Some(entries) };
         let dumped_col = DumpedCollection {
             total_count,
@@ -372,7 +436,9 @@ async fn dump(
         let name = T::name();
 
         if consolidate && retraction_count != 0 {
-            error!("{name} catalog collection has corrupt entries, there should be no retractions in a consolidated catalog, but there are {retraction_count} retractions");
+            error!(
+                "{name} catalog collection has corrupt entries, there should be no retractions in a consolidated catalog, but there are {retraction_count} retractions"
+            );
         }
 
         data.insert(name, dumped_col);
@@ -390,10 +456,12 @@ async fn dump(
         default_privileges,
         id_allocator,
         items,
+        network_policies,
         roles,
+        role_auth,
         schemas,
         settings,
-        storage_usage,
+        source_references,
         system_object_mappings,
         system_configurations,
         system_privileges,
@@ -436,12 +504,24 @@ async fn dump(
     );
     dump_col(&mut data, id_allocator, &ignore, stats_only, consolidate);
     dump_col(&mut data, items, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        network_policies,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
     dump_col(&mut data, roles, &ignore, stats_only, consolidate);
+    dump_col(&mut data, role_auth, &ignore, stats_only, consolidate);
     dump_col(&mut data, schemas, &ignore, stats_only, consolidate);
     dump_col(&mut data, settings, &ignore, stats_only, consolidate);
-    if !ignore_large_collections {
-        dump_col(&mut data, storage_usage, &ignore, stats_only, consolidate);
-    }
+    dump_col(
+        &mut data,
+        source_references,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
     dump_col(
         &mut data,
         system_configurations,
@@ -493,24 +573,29 @@ async fn epoch(
 }
 
 async fn upgrade_check(
+    args: Args,
     openable_state: Box<dyn OpenableDurableCatalogState>,
+    persist_client: PersistClient,
+    secrets: SecretsReaderCliArgs,
     cluster_replica_sizes: ClusterReplicaSizeMap,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
-    let deploy_generation = 0;
+    let secrets_reader = secrets.load().await.context("loading secrets reader")?;
+
     let now = SYSTEM_TIME.clone();
     let mut storage = openable_state
         .open_savepoint(
-            now(),
+            now().into(),
             &BootstrapArgs {
                 default_cluster_replica_size:
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),
+                default_cluster_replication_factor: 1,
                 bootstrap_role: None,
+                cluster_replica_size_map: cluster_replica_sizes.clone(),
             },
-            deploy_generation,
-            None,
         )
-        .await?;
+        .await?
+        .0;
 
     // If this upgrade has new builtin replicas, then we need to assign some size to it. It doesn't
     // really matter what size since it's not persisted, so we pick a random valid one.
@@ -522,41 +607,77 @@ async fn upgrade_check(
         .clone();
 
     let boot_ts = now().into();
+    let read_only = true;
     // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
     // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     // Because of that we purposefully move this Future onto the heap (i.e. Box it).
     let InitializeStateResult {
-        state: _state,
-        storage_collections_to_drop: _,
+        state,
         migrated_storage_collections_0dt: _,
+        new_builtin_collections: _,
         builtin_table_updates: _,
         last_seen_version,
+        expr_cache_handle: _,
+        cached_global_exprs: _,
+        uncached_local_exprs: _,
     } = Catalog::initialize_state(
         StateConfig {
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,
-            environment_id: EnvironmentId::for_tests(),
+            environment_id: args.environment_id.clone(),
+            read_only,
             now,
             boot_ts,
             skip_migrations: false,
             cluster_replica_sizes,
-            builtin_system_cluster_replica_size: builtin_clusters_replica_size.clone(),
-            builtin_catalog_server_cluster_replica_size: builtin_clusters_replica_size.clone(),
-            builtin_probe_cluster_replica_size: builtin_clusters_replica_size.clone(),
-            builtin_support_cluster_replica_size: builtin_clusters_replica_size,
+            builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                size: builtin_clusters_replica_size.clone(),
+                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                size: builtin_clusters_replica_size.clone(),
+                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                size: builtin_clusters_replica_size.clone(),
+                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                size: builtin_clusters_replica_size.clone(),
+                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                size: builtin_clusters_replica_size.clone(),
+                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
             system_parameter_defaults: Default::default(),
             remote_system_parameters: None,
             availability_zones: vec![],
-            egress_ips: vec![],
+            egress_addresses: vec![],
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
             http_host_name: None,
-            connection_context: ConnectionContext::for_tests(Arc::new(
-                InMemorySecretsController::new(),
-            )),
-            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
-            builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
+            connection_context: ConnectionContext::from_cli_args(
+                args.environment_id.to_string(),
+                &args.tracing.startup_log_filter,
+                args.aws_external_id_prefix,
+                args.aws_connection_role_arn,
+                secrets_reader,
+                None,
+            ),
+            builtin_item_migration_config: BuiltinItemMigrationConfig {
+                // We don't actually want to write anything down, so use an in-memory persist
+                // client.
+                persist_client: PersistClient::new_for_tests().await,
+                read_only,
+                force_migration: None,
+            },
+            persist_client: persist_client.clone(),
+            enable_expression_cache_override: None,
+            helm_chart_version: None,
+            external_login_password_mz_system: None,
+            license_key: ValidatedLicenseKey::for_tests(),
         },
         &mut storage,
     )
@@ -568,11 +689,84 @@ async fn upgrade_check(
     let msg = format!(
         "catalog upgrade from {} to {} would succeed in about {} ms",
         last_seen_version,
-        &BUILD_INFO.human_version(),
+        &BUILD_INFO.human_version(None),
         dur.as_millis(),
     );
     println!("{msg}");
-    Ok(())
+
+    // Check that we can evolve the schema for all Persist shards.
+    let storage_entries = state
+        .get_entries()
+        .filter_map(|(_item_id, entry)| match entry.item() {
+            // TODO(alter_table): Handle multiple versions of tables.
+            CatalogItem::Table(table) => Some((table.global_id_writes(), table.desc.latest())),
+            CatalogItem::Source(source) => Some((source.global_id(), source.desc.clone())),
+            CatalogItem::MaterializedView(mv) => Some((mv.global_id_writes(), mv.desc.latest())),
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
+        });
+
+    let mut storage_errors = BTreeMap::default();
+    for (gid, item_desc) in storage_entries {
+        // If a new version adds a BuiltinTable or BuiltinSource, we won't have created the shard
+        // yet so there isn't anything to check.
+        let maybe_shard_id = state.storage_metadata().get_collection_shard(gid);
+        let shard_id = match maybe_shard_id {
+            Ok(shard_id) => shard_id,
+            Err(StorageError::IdentifierMissing(_)) => {
+                println!("no shard_id found for {gid}, continuing...");
+                continue;
+            }
+            Err(err) => {
+                // Collect errors instead of bailing on the first one.
+                storage_errors.insert(gid, err.to_string());
+                continue;
+            }
+        };
+        println!("checking Persist schema info for {gid}: {shard_id}");
+
+        let diagnostics = Diagnostics {
+            shard_name: gid.to_string(),
+            handle_purpose: "catalog upgrade check".to_string(),
+        };
+        let persisted_schema = persist_client
+            .latest_schema::<SourceData, (), Timestamp, StorageDiff>(shard_id, diagnostics)
+            .await
+            .expect("invalid persist usage");
+        // If in the new version a BuiltinTable or BuiltinSource is changed (e.g. a new
+        // column is added) then we'll potentially have a new shard, but no writes will
+        // have occurred so no schema will be registered.
+        let Some((_schema_id, persisted_relation_desc, _)) = persisted_schema else {
+            println!("no schema found for {gid} '{shard_id}', continuing...");
+            continue;
+        };
+
+        let persisted_data_type =
+            mz_persist_types::columnar::data_type::<SourceData>(&persisted_relation_desc)?;
+        let new_data_type = mz_persist_types::columnar::data_type::<SourceData>(&item_desc)?;
+
+        let migration =
+            mz_persist_types::schema::backward_compatible(&persisted_data_type, &new_data_type);
+        if migration.is_none() {
+            let msg = format!(
+                "invalid Persist schema migration!\nshard_id: {}\npersisted: {:?}\n{:?}\nnew: {:?}\n{:?}",
+                shard_id, persisted_relation_desc, persisted_data_type, item_desc, new_data_type,
+            );
+            storage_errors.insert(gid, msg);
+        }
+    }
+
+    if !storage_errors.is_empty() {
+        anyhow::bail!("validation of storage objects failed! errors: {storage_errors:?}")
+    } else {
+        Ok(())
+    }
 }
 
 struct DumpedCollection {

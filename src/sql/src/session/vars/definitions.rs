@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -25,6 +27,7 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ident;
+use mz_storage_types::parameters::REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT;
 use mz_storage_types::parameters::{
     DEFAULT_PG_SOURCE_CONNECT_TIMEOUT, DEFAULT_PG_SOURCE_TCP_CONFIGURE_SERVER,
     DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE, DEFAULT_PG_SOURCE_TCP_KEEPALIVES_INTERVAL,
@@ -32,19 +35,18 @@ use mz_storage_types::parameters::{
     DEFAULT_PG_SOURCE_WAL_SENDER_TIMEOUT, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
 };
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
-use once_cell::sync::Lazy;
 use uncased::UncasedStr;
 
-use crate::session::user::{User, SUPPORT_USER, SYSTEM_USER};
+use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
-    DomainConstraint, ValueConstraint, BYTESIZE_AT_LEAST_1MB, NUMERIC_BOUNDED_0_1_INCLUSIVE,
-    NUMERIC_NON_NEGATIVE,
+    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION, NUMERIC_BOUNDED_0_1_INCLUSIVE,
+    NUMERIC_NON_NEGATIVE, ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
-use crate::session::vars::polyfill::{lazy_value, value, LazyValueFn};
+use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
 use crate::session::vars::value::{
-    ClientEncoding, ClientSeverity, Failpoints, IntervalStyle, IsolationLevel, TimeZone, Value,
-    DEFAULT_DATE_STYLE,
+    ClientEncoding, ClientSeverity, DEFAULT_DATE_STYLE, Failpoints, IntervalStyle, IsolationLevel,
+    TimeZone, Value,
 };
 use crate::session::vars::{FeatureFlag, Var, VarInput, VarParseError};
 use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
@@ -57,15 +59,16 @@ pub struct VarDefinition {
     pub name: &'static UncasedStr,
     /// Description of the variable.
     pub description: &'static str,
-    /// TODO(parkmcar): What does internal mean?
-    pub internal: bool,
+    /// Is the variable visible to users, when false only visible to system users.
+    pub user_visible: bool,
 
     /// Default compiled in value for this variable.
     pub value: VarDefaultValue,
     /// Constraint that must be upheld for this variable to be valid.
     pub constraint: Option<ValueConstraint>,
-    /// Optionally hides this variable if it's related to a feature flag being enabled.
-    pub feature_flag: Option<&'static FeatureFlag>,
+    /// When set, prevents getting or setting the variable unless the specified
+    /// feature flag is enabled.
+    pub require_feature_flag: Option<&'static FeatureFlag>,
 
     /// Method to parse [`VarInput`] into a type that implements [`Value`].
     ///
@@ -91,57 +94,60 @@ pub struct VarDefinition {
 static_assertions::assert_impl_all!(VarDefinition: Send, Sync);
 
 impl VarDefinition {
+    /// Create a new [`VarDefinition`] in a const context with a value known at compile time.
     pub const fn new<V: Value>(
         name: &'static str,
         value: &'static V,
         description: &'static str,
-        internal: bool,
+        user_visible: bool,
     ) -> Self {
         VarDefinition {
             name: UncasedStr::new(name),
             description,
             value: VarDefaultValue::Static(value),
-            internal,
+            user_visible,
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
+    /// Create a new [`VarDefinition`] in a const context with a lazily evaluated value.
     pub const fn new_lazy<V: Value, L: LazyValueFn<V>>(
         name: &'static str,
         _value: L,
         description: &'static str,
-        internal: bool,
+        user_visible: bool,
     ) -> Self {
         VarDefinition {
             name: UncasedStr::new(name),
             description,
             value: VarDefaultValue::Lazy(L::LAZY_VALUE_FN),
-            internal,
+            user_visible,
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
+    /// Create a new [`VarDefinition`] with a value known at runtime.
     pub fn new_runtime<V: Value>(
         name: &'static str,
         value: V,
         description: &'static str,
-        internal: bool,
+        user_visible: bool,
     ) -> Self {
         VarDefinition {
             name: UncasedStr::new(name),
             description,
             value: VarDefaultValue::Runtime(Arc::new(value)),
-            internal,
+            user_visible,
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
@@ -166,7 +172,7 @@ impl VarDefinition {
     }
 
     pub const fn with_feature_flag(mut self, feature_flag: &'static FeatureFlag) -> Self {
-        self.feature_flag = Some(feature_flag);
+        self.require_feature_flag = Some(feature_flag);
         self
     }
 
@@ -196,23 +202,14 @@ impl Var for VarDefinition {
         (self.type_name)()
     }
 
-    fn visible(
-        &self,
-        user: &User,
-        system_vars: Option<&super::SystemVars>,
-    ) -> Result<(), VarError> {
-        if self.internal && user != &*SYSTEM_USER && user != &*SUPPORT_USER {
+    fn visible(&self, user: &User, system_vars: &super::SystemVars) -> Result<(), VarError> {
+        if !self.user_visible && user != &*SYSTEM_USER && user != &*SUPPORT_USER {
             Err(VarError::UnknownParameter(self.name().to_string()))
-        } else if self.name().starts_with("unsafe")
-            && match system_vars {
-                None => true,
-                Some(system_vars) => !system_vars.allow_unsafe(),
-            }
-        {
+        } else if self.is_unsafe() && !system_vars.allow_unsafe() {
             Err(VarError::RequiresUnsafeMode(self.name()))
         } else {
-            if let Some(flag) = self.feature_flag {
-                flag.enabled(system_vars, None, None)?;
+            if let Some(flag) = self.require_feature_flag {
+                flag.require(system_vars)?;
             }
 
             Ok(())
@@ -262,42 +259,49 @@ pub static APPLICATION_NAME: VarDefinition = VarDefinition::new(
     "application_name",
     value!(String; String::new()),
     "Sets the application name to be reported in statistics and logs (PostgreSQL).",
-    false,
+    true,
 );
 
 pub static CLIENT_ENCODING: VarDefinition = VarDefinition::new(
     "client_encoding",
     value!(ClientEncoding; ClientEncoding::Utf8),
     "Sets the client's character set encoding (PostgreSQL).",
-    false,
+    true,
 );
 
 pub static CLIENT_MIN_MESSAGES: VarDefinition = VarDefinition::new(
     "client_min_messages",
     value!(ClientSeverity; ClientSeverity::Notice),
     "Sets the message levels that are sent to the client (PostgreSQL).",
-    false,
+    true,
 );
 
 pub static CLUSTER: VarDefinition = VarDefinition::new_lazy(
     "cluster",
     lazy_value!(String; || "quickstart".to_string()),
     "Sets the current cluster (Materialize).",
-    false,
+    true,
 );
 
 pub static CLUSTER_REPLICA: VarDefinition = VarDefinition::new(
     "cluster_replica",
     value!(Option<String>; None),
     "Sets a target cluster replica for SELECT queries (Materialize).",
-    false,
+    true,
+);
+
+pub static CURRENT_OBJECT_MISSING_WARNINGS: VarDefinition = VarDefinition::new(
+    "current_object_missing_warnings",
+    value!(bool; true),
+    "Whether to emit warnings when the current database, schema, or cluster is missing (Materialize).",
+    true,
 );
 
 pub static DATABASE: VarDefinition = VarDefinition::new_lazy(
     "database",
     lazy_value!(String; || DEFAULT_DATABASE_NAME.to_string()),
     "Sets the current database (CockroachDB).",
-    false,
+    true,
 );
 
 pub static DATE_STYLE: VarDefinition = VarDefinition::new(
@@ -305,28 +309,35 @@ pub static DATE_STYLE: VarDefinition = VarDefinition::new(
     "DateStyle",
     &DEFAULT_DATE_STYLE,
     "Sets the display format for date and time values (PostgreSQL).",
-    false,
+    true,
+);
+
+pub static DEFAULT_CLUSTER_REPLICATION_FACTOR: VarDefinition = VarDefinition::new(
+    "default_cluster_replication_factor",
+    value!(u32; 1),
+    "Default cluster replication factor (Materialize).",
+    true,
 );
 
 pub static EXTRA_FLOAT_DIGITS: VarDefinition = VarDefinition::new(
     "extra_float_digits",
     value!(i32; 3),
     "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
-    false,
+    true,
 );
 
 pub static FAILPOINTS: VarDefinition = VarDefinition::new(
     "failpoints",
     value!(Failpoints; Failpoints),
     "Allows failpoints to be dynamically activated.",
-    false,
+    true,
 );
 
 pub static INTEGER_DATETIMES: VarDefinition = VarDefinition::new(
     "integer_datetimes",
     value!(bool; true),
     "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
-    false,
+    true,
 )
 .fixed();
 
@@ -335,7 +346,7 @@ pub static INTERVAL_STYLE: VarDefinition = VarDefinition::new(
     "IntervalStyle",
     value!(IntervalStyle; IntervalStyle::Postgres),
     "Sets the display format for interval values (PostgreSQL).",
-    false,
+    true,
 );
 
 pub const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
@@ -347,15 +358,15 @@ pub static SEARCH_PATH: VarDefinition = VarDefinition::new_lazy(
     "search_path",
     lazy_value!(Vec<Ident>; || vec![ident!(DEFAULT_SCHEMA)]),
     "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
-    false,
+    true,
 );
 
 pub static STATEMENT_TIMEOUT: VarDefinition = VarDefinition::new(
     "statement_timeout",
-    value!(Duration; Duration::from_secs(10)),
+    value!(Duration; Duration::from_secs(60)),
     "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. \
     If this value is specified without units, it is taken as milliseconds.",
-    false,
+    true,
 );
 
 pub static IDLE_IN_TRANSACTION_SESSION_TIMEOUT: VarDefinition = VarDefinition::new(
@@ -364,7 +375,7 @@ pub static IDLE_IN_TRANSACTION_SESSION_TIMEOUT: VarDefinition = VarDefinition::n
     "Sets the maximum allowed duration that a session can sit idle in a transaction before \
     being terminated. If this value is specified without units, it is taken as milliseconds. \
     A value of zero disables the timeout (PostgreSQL).",
-    false,
+    true,
 );
 
 pub static SERVER_VERSION: VarDefinition = VarDefinition::new_lazy(
@@ -373,7 +384,7 @@ pub static SERVER_VERSION: VarDefinition = VarDefinition::new_lazy(
         format!("{SERVER_MAJOR_VERSION}.{SERVER_MINOR_VERSION}.{SERVER_PATCH_VERSION}")
     }),
     "Shows the PostgreSQL compatible server version (PostgreSQL).",
-    false,
+    true,
 )
 .read_only();
 
@@ -383,7 +394,7 @@ pub static SERVER_VERSION_NUM: VarDefinition = VarDefinition::new(
         + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
         + cast::u8_to_i32(SERVER_PATCH_VERSION)),
     "Shows the PostgreSQL compatible server version as an integer (PostgreSQL).",
-    false,
+    true,
 )
 .read_only();
 
@@ -391,14 +402,14 @@ pub static SQL_SAFE_UPDATES: VarDefinition = VarDefinition::new(
     "sql_safe_updates",
     value!(bool; false),
     "Prohibits SQL statements that may be overly destructive (CockroachDB).",
-    false,
+    true,
 );
 
 pub static STANDARD_CONFORMING_STRINGS: VarDefinition = VarDefinition::new(
     "standard_conforming_strings",
     value!(bool; true),
     "Causes '...' strings to treat backslashes literally (PostgreSQL).",
-    false,
+    true,
 )
 .fixed();
 
@@ -407,7 +418,7 @@ pub static TIMEZONE: VarDefinition = VarDefinition::new(
     "TimeZone",
     value!(TimeZone; TimeZone::UTC),
     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
-    false,
+    true,
 );
 
 pub const TRANSACTION_ISOLATION_VAR_NAME: &str = "transaction_isolation";
@@ -415,84 +426,91 @@ pub static TRANSACTION_ISOLATION: VarDefinition = VarDefinition::new(
     TRANSACTION_ISOLATION_VAR_NAME,
     value!(IsolationLevel; IsolationLevel::StrictSerializable),
     "Sets the current transaction's isolation level (PostgreSQL).",
-    false,
+    true,
 );
 
 pub static MAX_KAFKA_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_kafka_connections",
     value!(u32; 1000),
     "The maximum number of Kafka connections in the region, across all schemas (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_POSTGRES_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_postgres_connections",
     value!(u32; 1000),
     "The maximum number of PostgreSQL connections in the region, across all schemas (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_MYSQL_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_mysql_connections",
     value!(u32; 1000),
     "The maximum number of MySQL connections in the region, across all schemas (Materialize).",
-    false,
+    true,
+);
+
+pub static MAX_SQL_SERVER_CONNECTIONS: VarDefinition = VarDefinition::new(
+    "max_sql_server_connections",
+    value!(u32; 1000),
+    "The maximum number of SQL Server connections in the region, across all schemas (Materialize).",
+    true,
 );
 
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
     value!(u32; 0),
-     "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
-    false
+    "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
+    true,
 );
 
 pub static MAX_TABLES: VarDefinition = VarDefinition::new(
     "max_tables",
-    value!(u32; 25),
+    value!(u32; 200),
     "The maximum number of tables in the region, across all schemas (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_SOURCES: VarDefinition = VarDefinition::new(
     "max_sources",
-    value!(u32; 25),
+    value!(u32; 200),
     "The maximum number of sources in the region, across all schemas (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_SINKS: VarDefinition = VarDefinition::new(
     "max_sinks",
-    value!(u32; 25),
+    value!(u32; 1000),
     "The maximum number of sinks in the region, across all schemas (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_MATERIALIZED_VIEWS: VarDefinition = VarDefinition::new(
     "max_materialized_views",
-    value!(u32; 100),
+    value!(u32; 500),
     "The maximum number of materialized views in the region, across all schemas (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_CLUSTERS: VarDefinition = VarDefinition::new(
     "max_clusters",
-    value!(u32; 10),
+    value!(u32; 25),
     "The maximum number of clusters in the region (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_REPLICAS_PER_CLUSTER: VarDefinition = VarDefinition::new(
     "max_replicas_per_cluster",
     value!(u32; 5),
     "The maximum number of replicas of a single cluster (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_CREDIT_CONSUMPTION_RATE: VarDefinition = VarDefinition::new_lazy(
     "max_credit_consumption_rate",
     lazy_value!(Numeric; || 1024.into()),
     "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize).",
-    false,
+    true,
 )
 .with_constraint(&NUMERIC_NON_NEGATIVE);
 
@@ -500,49 +518,63 @@ pub static MAX_DATABASES: VarDefinition = VarDefinition::new(
     "max_databases",
     value!(u32; 1000),
     "The maximum number of databases in the region (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_SCHEMAS_PER_DATABASE: VarDefinition = VarDefinition::new(
     "max_schemas_per_database",
     value!(u32; 1000),
     "The maximum number of schemas in a database (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_OBJECTS_PER_SCHEMA: VarDefinition = VarDefinition::new(
     "max_objects_per_schema",
     value!(u32; 1000),
     "The maximum number of objects in a schema (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_SECRETS: VarDefinition = VarDefinition::new(
     "max_secrets",
     value!(u32; 100),
     "The maximum number of secrets in the region, across all schemas (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_ROLES: VarDefinition = VarDefinition::new(
     "max_roles",
     value!(u32; 1000),
     "The maximum number of roles in the region (Materialize).",
-    false,
+    true,
+);
+
+pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
+    "max_network_policies",
+    value!(u32; 25),
+    "The maximum number of network policies in the region.",
+    true,
+);
+
+pub static MAX_RULES_PER_NETWORK_POLICY: VarDefinition = VarDefinition::new(
+    "max_rules_per_network_policy",
+    value!(u32; 25),
+    "The maximum number of rules per network policies.",
+    true,
 );
 
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
 // query.
 //
 // We constrain this parameter to a minimum of 1MB, to avoid accidental usage of values that will
-// interfer with queries executed by the system itself.
+// interfere with queries executed by the system itself.
 //
 // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
 pub static MAX_RESULT_SIZE: VarDefinition = VarDefinition::new(
     "max_result_size",
     value!(ByteSize; ByteSize::gb(1)),
     "The maximum size in bytes for an internal query result (Materialize).",
-    false,
+    true,
 )
 .with_constraint(&BYTESIZE_AT_LEAST_1MB);
 
@@ -550,29 +582,28 @@ pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     "max_query_result_size",
     value!(ByteSize; ByteSize::gb(1)),
     "The maximum size in bytes for a single query's result (Materialize).",
-    false,
+    true,
 );
 
-pub static MAX_COPY_FROM_SIZE: VarDefinition = VarDefinition::new(
-    "max_copy_from_size",
-    // 1 GiB, this limit is noted in the docs, if you change it make sure to update our docs.
-    value!(u32; 1_073_741_824),
-    "The maximum size in bytes we buffer for COPY FROM statements (Materialize).",
-    false,
+pub static MAX_COPY_FROM_ROW_SIZE: VarDefinition = VarDefinition::new(
+    "max_copy_from_row_size",
+    value!(ByteSize; ByteSize::mb(128)),
+    "The maximum size in bytes for a single COPY FROM STDIN row (Materialize).",
+    true,
 );
 
 pub static MAX_IDENTIFIER_LENGTH: VarDefinition = VarDefinition::new(
     "max_identifier_length",
     value!(usize; mz_sql_lexer::lexer::MAX_IDENTIFIER_LENGTH),
     "The maximum length of object identifiers in bytes (PostgreSQL).",
-    false,
+    true,
 );
 
 pub static WELCOME_MESSAGE: VarDefinition = VarDefinition::new(
     "welcome_message",
     value!(bool; true),
     "Whether to send a notice with a welcome message after a successful connection (Materialize).",
-    false,
+    true,
 );
 
 /// The logical compaction window for builtin tables and sources that have the
@@ -585,14 +616,14 @@ pub static METRICS_RETENTION: VarDefinition = VarDefinition::new(
     // 30 days
     value!(Duration; Duration::from_secs(30 * 24 * 60 * 60)),
     "The time to retain cluster utilization metrics (Materialize).",
-    true,
+    false,
 );
 
 pub static ALLOWED_CLUSTER_REPLICA_SIZES: VarDefinition = VarDefinition::new(
     "allowed_cluster_replica_sizes",
     value!(Vec<Ident>; Vec::new()),
     "The allowed sizes when creating a new cluster replica (Materialize).",
-    false,
+    true,
 );
 
 pub static PERSIST_FAST_PATH_LIMIT: VarDefinition = VarDefinition::new(
@@ -601,7 +632,7 @@ pub static PERSIST_FAST_PATH_LIMIT: VarDefinition = VarDefinition::new(
     "An exclusive upper bound on the number of results we may return from a Persist fast-path peek; \
     queries that may return more results will follow the normal / slow path. \
     Setting this to 0 disables the feature.",
-    true,
+    false,
 );
 
 /// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_max_size`.
@@ -609,7 +640,7 @@ pub static PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE: VarDefinition = VarDefi
     "pg_timestamp_oracle_connection_pool_max_size",
     value!(usize; DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE),
     "Maximum size of the Postgres/CRDB connection pool, used by the Postgres/CRDB timestamp oracle.",
-    true,
+    false,
 );
 
 /// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_max_wait`.
@@ -617,7 +648,7 @@ pub static PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT: VarDefinition = VarDefi
     "pg_timestamp_oracle_connection_pool_max_wait",
     value!(Option<Duration>; Some(DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT)),
     "The maximum time to wait when attempting to obtain a connection from the Postgres/CRDB connection pool, used by the Postgres/CRDB timestamp oracle.",
-    true,
+    false,
 );
 
 /// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_ttl`.
@@ -625,7 +656,7 @@ pub static PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL: VarDefinition = VarDefinitio
     "pg_timestamp_oracle_connection_pool_ttl",
     value!(Duration; DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL),
     "The minimum TTL of a Consensus connection to Postgres/CRDB before it is proactively terminated",
-    true,
+    false,
 );
 
 /// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_ttl_stagger`.
@@ -633,15 +664,7 @@ pub static PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER: VarDefinition = VarD
     "pg_timestamp_oracle_connection_pool_ttl_stagger",
     value!(Duration; DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER),
     "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
-    true,
-);
-
-/// The default for the `DISK` option when creating managed clusters and cluster replicas.
-pub static DISK_CLUSTER_REPLICAS_DEFAULT: VarDefinition = VarDefinition::new(
-    "disk_cluster_replicas_default",
-    value!(bool; false),
-    "Whether the disk option for managed clusters and cluster replicas should be enabled by default.",
-    true,
+    false,
 );
 
 pub static UNSAFE_NEW_TRANSACTION_WALL_TIME: VarDefinition = VarDefinition::new(
@@ -649,11 +672,21 @@ pub static UNSAFE_NEW_TRANSACTION_WALL_TIME: VarDefinition = VarDefinition::new(
     value!(Option<CheckedTimestamp<DateTime<Utc>>>; None),
     "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. \
     If not set, uses the system's clock.",
-    // This needs to be false because `internal: true` things are only modifiable by the mz_system
+    // This needs to be true because `user_visible: false` things are only modifiable by the mz_system
     // and mz_support users, and we want sqllogictest to have access with its user. Because the name
     // starts with "unsafe" it still won't be visible or changeable by users unless unsafe mode is
     // enabled.
-    false,
+    true,
+);
+
+pub static SCRAM_ITERATIONS: VarDefinition = VarDefinition::new(
+    "scram_iterations",
+    // / The default iteration count as suggested by
+    // / <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
+    value!(NonZeroU32; NonZeroU32::new(600_000).unwrap()),
+    "Iterations to use when hashing passwords. Higher iterations are more secure, but take longer to validated. \
+    Please consider the security risks before reducing this below the default value.",
+    true,
 );
 
 /// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
@@ -667,7 +700,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
+        false,
     );
 
     pub static UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: VarDefinition =
@@ -677,7 +710,7 @@ pub mod upsert_rocksdb {
             "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-            true,
+            false,
         );
 
     pub static UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: VarDefinition =
@@ -687,7 +720,7 @@ pub mod upsert_rocksdb {
             "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-            true,
+            false,
         );
 
     pub static UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO: VarDefinition = VarDefinition::new(
@@ -696,7 +729,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
+        false,
     );
 
     pub static UPSERT_ROCKSDB_PARALLELISM: VarDefinition = VarDefinition::new(
@@ -705,7 +738,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
+        false,
     );
 
     pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: VarDefinition = VarDefinition::new(
@@ -714,7 +747,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
+        false,
     );
 
     pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: VarDefinition = VarDefinition::new(
@@ -723,7 +756,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
+        false,
     );
 
     pub static UPSERT_ROCKSDB_BATCH_SIZE: VarDefinition = VarDefinition::new(
@@ -732,7 +765,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Can be changed dynamically (Materialize).",
-        true,
+        false,
     );
 
     pub static UPSERT_ROCKSDB_RETRY_DURATION: VarDefinition = VarDefinition::new(
@@ -741,24 +774,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
-    );
-
-    /// Controls whether automatic spill to disk should be turned on when using `DISK`.
-    pub static UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK: VarDefinition = VarDefinition::new(
-        "upsert_rocksdb_auto_spill_to_disk",
-        value!(bool; false),
-        "Controls whether automatic spill to disk should be turned on when using `DISK`",
-        true,
-    );
-
-    /// The upsert in memory state size threshold after which it will spill to disk.
-    /// The default is 85 MiB = 89128960 bytes
-    pub static UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES: VarDefinition = VarDefinition::new(
-        "upsert_rocksdb_auto_spill_threshold_bytes",
-        value!(usize; mz_rocksdb_types::defaults::DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD),
-        "The upsert in-memory state size threshold in bytes after which it will spill to disk",
-        true,
+        false,
     );
 
     pub static UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS: VarDefinition = VarDefinition::new(
@@ -767,7 +783,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
+        false,
     );
 
     pub static UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS: VarDefinition = VarDefinition::new(
@@ -776,7 +792,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
+        false,
     );
 
     pub static UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB: VarDefinition = VarDefinition::new(
@@ -785,7 +801,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
+        false,
     );
 
     /// The number of times by which allocated buffers will be shrinked in upsert rocksdb.
@@ -794,7 +810,7 @@ pub mod upsert_rocksdb {
         "upsert_rocksdb_shrink_allocated_buffers_by_ratio",
         value!(usize; mz_rocksdb_types::defaults::DEFAULT_SHRINK_BUFFERS_BY_RATIO),
         "The number of times by which allocated buffers will be shrinked in upsert rocksdb.",
-        true,
+        false,
     );
 
     /// Only used if `upsert_rocksdb_write_buffer_manager_memory_bytes` is also set
@@ -806,7 +822,7 @@ pub mod upsert_rocksdb {
             "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-            true,
+            false,
         );
 
     /// `upsert_rocksdb_write_buffer_manager_memory_bytes` needs to be set for write buffer manager to be
@@ -817,7 +833,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
+        false,
     );
 
     pub static UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL: VarDefinition = VarDefinition::new(
@@ -826,7 +842,7 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        true,
+        false,
     );
 }
 
@@ -834,14 +850,14 @@ pub static LOGGING_FILTER: VarDefinition = VarDefinition::new_lazy(
     "log_filter",
     lazy_value!(CloneableEnvFilter; || CloneableEnvFilter::from_str("info").expect("valid EnvFilter")),
     "Sets the filter to apply to stderr logging.",
-    true,
+    false,
 );
 
 pub static OPENTELEMETRY_FILTER: VarDefinition = VarDefinition::new_lazy(
     "opentelemetry_filter",
     lazy_value!(CloneableEnvFilter; || CloneableEnvFilter::from_str("info").expect("valid EnvFilter")),
     "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
-    true,
+    false,
 );
 
 pub static LOGGING_FILTER_DEFAULTS: VarDefinition = VarDefinition::new_lazy(
@@ -855,7 +871,7 @@ pub static LOGGING_FILTER_DEFAULTS: VarDefinition = VarDefinition::new_lazy(
     "Sets additional default directives to apply to stderr logging. \
         These apply to all variations of `log_filter`. Directives other than \
         `module=off` are likely incorrect.",
-    true,
+    false,
 );
 
 pub static OPENTELEMETRY_FILTER_DEFAULTS: VarDefinition = VarDefinition::new_lazy(
@@ -870,7 +886,7 @@ pub static OPENTELEMETRY_FILTER_DEFAULTS: VarDefinition = VarDefinition::new_laz
         distributed tracing. \
         These apply to all variations of `opentelemetry_filter`. Directives other than \
         `module=off` are likely incorrect.",
-    true,
+    false,
 );
 
 pub static SENTRY_FILTERS: VarDefinition = VarDefinition::new_lazy(
@@ -884,25 +900,23 @@ pub static SENTRY_FILTERS: VarDefinition = VarDefinition::new_lazy(
     "Sets additional default directives to apply to sentry logging. \
         These apply on top of a default `info` directive. Directives other than \
         `module=off` are likely incorrect.",
-    true,
+    false,
 );
 
 pub static WEBHOOKS_SECRETS_CACHING_TTL_SECS: VarDefinition = VarDefinition::new_lazy(
     "webhooks_secrets_caching_ttl_secs",
     lazy_value!(usize; || {
-        usize::cast_from(
-            mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed),
-        )
+        usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS)
     }),
     "Sets the time-to-live for values in the Webhooks secrets cache.",
-    true,
+    false,
 );
 
 pub static COORD_SLOW_MESSAGE_WARN_THRESHOLD: VarDefinition = VarDefinition::new(
     "coord_slow_message_warn_threshold",
     value!(Duration; Duration::from_secs(30)),
     "Sets the threshold at which we will error! for a coordinator message being slow.",
-    true,
+    false,
 );
 
 /// Controls the connect_timeout setting when connecting to PG via `mz_postgres_util`.
@@ -911,7 +925,7 @@ pub static PG_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
     value!(Duration; DEFAULT_PG_SOURCE_CONNECT_TIMEOUT),
     "Sets the timeout applied to socket-level connection attempts for PG \
     replication connections (Materialize).",
-    true,
+    false,
 );
 
 /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
@@ -921,7 +935,7 @@ pub static PG_SOURCE_TCP_KEEPALIVES_RETRIES: VarDefinition = VarDefinition::new(
     value!(u32; DEFAULT_PG_SOURCE_TCP_KEEPALIVES_RETRIES),
     "Sets the maximum number of TCP keepalive probes that will be sent before dropping \
     a connection when connecting to PG via `mz_postgres_util` (Materialize).",
-    true,
+    false,
 );
 
 /// Sets the amount of idle time before a keepalive packet is sent on the connection when connecting
@@ -931,7 +945,7 @@ pub static PG_SOURCE_TCP_KEEPALIVES_IDLE: VarDefinition = VarDefinition::new(
     value!(Duration; DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE),
     "Sets the amount of idle time before a keepalive packet is sent on the connection \
         when connecting to PG via `mz_postgres_util` (Materialize).",
-    true,
+    false,
 );
 
 /// Sets the time interval between TCP keepalive probes when connecting to PG via `mz_postgres_util`.
@@ -940,7 +954,7 @@ pub static PG_SOURCE_TCP_KEEPALIVES_INTERVAL: VarDefinition = VarDefinition::new
     value!(Duration; DEFAULT_PG_SOURCE_TCP_KEEPALIVES_INTERVAL),
     "Sets the time interval between TCP keepalive probes when connecting to PG via \
         replication (Materialize).",
-    true,
+    false,
 );
 
 /// Sets the TCP user timeout when connecting to PG via `mz_postgres_util`.
@@ -948,7 +962,7 @@ pub static PG_SOURCE_TCP_USER_TIMEOUT: VarDefinition = VarDefinition::new(
     "pg_source_tcp_user_timeout",
     value!(Duration; DEFAULT_PG_SOURCE_TCP_USER_TIMEOUT),
     "Sets the TCP user timeout when connecting to PG via `mz_postgres_util` (Materialize).",
-    true,
+    false,
 );
 
 /// Sets whether to apply the TCP configuration parameters on the server when
@@ -957,7 +971,7 @@ pub static PG_SOURCE_TCP_CONFIGURE_SERVER: VarDefinition = VarDefinition::new(
     "pg_source_tcp_configure_server",
     value!(bool; DEFAULT_PG_SOURCE_TCP_CONFIGURE_SERVER),
     "Sets whether to apply the TCP configuration parameters on the server when connecting to PG via `mz_postgres_util` (Materialize).",
-    true,
+    false,
 );
 
 /// Sets the `statement_timeout` value to use during the snapshotting phase of
@@ -966,7 +980,7 @@ pub static PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: VarDefinition = VarDefinition::
     "pg_source_snapshot_statement_timeout",
     value!(Duration; mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT),
     "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
-    true,
+    false,
 );
 
 /// Sets the `wal_sender_timeout` value to use during the replication phase of
@@ -975,7 +989,7 @@ pub static PG_SOURCE_WAL_SENDER_TIMEOUT: VarDefinition = VarDefinition::new(
     "pg_source_wal_sender_timeout",
     value!(Option<Duration>; DEFAULT_PG_SOURCE_WAL_SENDER_TIMEOUT),
     "Sets the `wal_sender_timeout` value to use during the replication phase of PG sources (Materialize)",
-    true,
+    false,
 );
 
 /// Please see `PgSourceSnapshotConfig`.
@@ -985,27 +999,7 @@ pub static PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT: VarDefinition = VarDefinitio
     "Please see <https://dev.materialize.com/api/rust-private\
         /mz_storage_types/parameters\
         /struct.PgSourceSnapshotConfig.html#structfield.collect_strict_count>",
-    true,
-);
-
-/// Please see `PgSourceSnapshotConfig`.
-pub static PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT: VarDefinition = VarDefinition::new(
-    "pg_source_snapshot_fallback_to_strict_count",
-    value!(bool; mz_storage_types::parameters::PgSourceSnapshotConfig::new().fallback_to_strict_count),
-    "Please see <https://dev.materialize.com/api/rust-private\
-        /mz_storage_types/parameters\
-        /struct.PgSourceSnapshotConfig.html#structfield.fallback_to_strict_count>",
-    true,
-);
-
-/// Please see `PgSourceSnapshotConfig`.
-pub static PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT: VarDefinition = VarDefinition::new(
-    "pg_source_snapshot_wait_for_count",
-    value!(bool; mz_storage_types::parameters::PgSourceSnapshotConfig::new().wait_for_count),
-    "Please see <https://dev.materialize.com/api/rust-private\
-        /mz_storage_types/parameters\
-        /struct.PgSourceSnapshotConfig.html#structfield.wait_for_count>",
-    true,
+    false,
 );
 
 /// Sets the time between TCP keepalive probes when connecting to MySQL via `mz_mysql_util`.
@@ -1013,7 +1007,7 @@ pub static MYSQL_SOURCE_TCP_KEEPALIVE: VarDefinition = VarDefinition::new(
     "mysql_source_tcp_keepalive",
     value!(Duration; mz_mysql_util::DEFAULT_TCP_KEEPALIVE),
     "Sets the time between TCP keepalive probes when connecting to MySQL",
-    true,
+    false,
 );
 
 /// Sets the `max_execution_time` value to use during the snapshotting phase of
@@ -1022,7 +1016,7 @@ pub static MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME: VarDefinition = VarDefiniti
     "mysql_source_snapshot_max_execution_time",
     value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME),
     "Sets the `max_execution_time` value to use during the snapshotting phase of MySQL sources (Materialize)",
-    true,
+    false,
 );
 
 /// Sets the `lock_wait_timeout` value to use during the snapshotting phase of
@@ -1031,7 +1025,15 @@ pub static MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT: VarDefinition = VarDefinitio
     "mysql_source_snapshot_lock_wait_timeout",
     value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT),
     "Sets the `lock_wait_timeout` value to use during the snapshotting phase of MySQL sources (Materialize)",
-    true,
+    false,
+);
+
+/// Sets the timeout for establishing an authenticated connection to MySQL
+pub static MYSQL_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
+    "mysql_source_connect_timeout",
+    value!(Duration; mz_mysql_util::DEFAULT_CONNECT_TIMEOUT),
+    "Sets the timeout for establishing an authenticated connection to MySQL",
+    false,
 );
 
 /// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
@@ -1039,7 +1041,7 @@ pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     "ssh_check_interval",
     value!(Duration; mz_ssh_util::tunnel::DEFAULT_CHECK_INTERVAL),
     "Controls the check interval for connections to SSH bastions via `mz_ssh_util`.",
-    true,
+    false,
 );
 
 /// Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.
@@ -1047,7 +1049,7 @@ pub static SSH_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
     "ssh_connect_timeout",
     value!(Duration; mz_ssh_util::tunnel::DEFAULT_CONNECT_TIMEOUT),
     "Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.",
-    true,
+    false,
 );
 
 /// Controls the keepalive idle interval for connections to SSH bastions via `mz_ssh_util`.
@@ -1055,7 +1057,7 @@ pub static SSH_KEEPALIVES_IDLE: VarDefinition = VarDefinition::new(
     "ssh_keepalives_idle",
     value!(Duration; mz_ssh_util::tunnel::DEFAULT_KEEPALIVES_IDLE),
     "Controls the keepalive idle interval for connections to SSH bastions via `mz_ssh_util`.",
-    true,
+    false,
 );
 
 /// Enables `socket.keepalive.enable` for rdkafka client connections. Defaults to true.
@@ -1063,7 +1065,7 @@ pub static KAFKA_SOCKET_KEEPALIVE: VarDefinition = VarDefinition::new(
     "kafka_socket_keepalive",
     value!(bool; mz_kafka_util::client::DEFAULT_KEEPALIVE),
     "Enables `socket.keepalive.enable` for rdkafka client connections. Defaults to true.",
-    true,
+    false,
 );
 
 /// Controls `socket.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default
@@ -1071,12 +1073,13 @@ pub static KAFKA_SOCKET_KEEPALIVE: VarDefinition = VarDefinition::new(
 /// `kafka_transaction_timeout`, or less than 10ms.
 pub static KAFKA_SOCKET_TIMEOUT: VarDefinition = VarDefinition::new(
     "kafka_socket_timeout",
-    value!(Duration; mz_kafka_util::client::DEFAULT_SOCKET_TIMEOUT),
+    value!(Option<Duration>; None),
     "Controls `socket.timeout.ms` for rdkafka \
-        client connections. Defaults to the rdkafka default (60000ms). \
+        client connections. Defaults to the rdkafka default (60000ms) or \
+        the set transaction timeout + 100ms, whichever one is smaller. \
         Cannot be greater than 300000ms, more than 100ms greater than \
         `kafka_transaction_timeout`, or less than 10ms.",
-    true,
+    false,
 );
 
 /// Controls `transaction.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default
@@ -1085,9 +1088,9 @@ pub static KAFKA_TRANSACTION_TIMEOUT: VarDefinition = VarDefinition::new(
     "kafka_transaction_timeout",
     value!(Duration; mz_kafka_util::client::DEFAULT_TRANSACTION_TIMEOUT),
     "Controls `transaction.timeout.ms` for rdkafka \
-        client connections. Defaults to the rdkafka default (60000ms). \
+        client connections. Defaults to the 10min. \
         Cannot be greater than `i32::MAX` or less than 1000ms.",
-    true,
+    false,
 );
 
 /// Controls `socket.connection.setup.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default
@@ -1098,7 +1101,7 @@ pub static KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT: VarDefinition = VarDefinition:
     "Controls `socket.connection.setup.timeout.ms` for rdkafka \
         client connections. Defaults to the rdkafka default (30000ms). \
         Cannot be greater than `i32::MAX` or less than 1000ms",
-    true,
+    false,
 );
 
 /// Controls the timeout when fetching kafka metadata. Defaults to 10s.
@@ -1107,25 +1110,16 @@ pub static KAFKA_FETCH_METADATA_TIMEOUT: VarDefinition = VarDefinition::new(
     value!(Duration; mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT),
     "Controls the timeout when fetching kafka metadata. \
         Defaults to 10s.",
-    true,
+    false,
 );
 
 /// Controls the timeout when fetching kafka progress records. Defaults to 60s.
 pub static KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT: VarDefinition = VarDefinition::new(
     "kafka_progress_record_fetch_timeout",
-    value!(Duration; mz_kafka_util::client::DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT),
+    value!(Option<Duration>; None),
     "Controls the timeout when fetching kafka progress records. \
-        Defaults to 60s.",
-    true,
-);
-
-/// The interval we will fetch metadata from, unless overridden by the source.
-pub static KAFKA_DEFAULT_METADATA_FETCH_INTERVAL: VarDefinition = VarDefinition::new(
-    "kafka_default_metadata_fetch_interval",
-    value!(Duration; mz_kafka_util::client::DEFAULT_METADATA_FETCH_INTERVAL),
-    "The interval we will fetch metadata from, unless overridden by the source. \
-        Defaults to 60s.",
-    true,
+        Defaults to 60s or the transaction timeout, whichever one is larger.",
+    false,
 );
 
 /// The maximum number of in-flight bytes emitted by persist_sources feeding _storage
@@ -1138,7 +1132,7 @@ pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: VarDefinition = VarDefinition::n
     value!(Option<usize>; Some(256 * 1024 * 1024)),
     "The maximum number of in-flight bytes emitted by persist_sources feeding \
         storage dataflows. Defaults to backpressure enabled (Materialize).",
-    true,
+    false,
 );
 
 /// Configuration ratio to shrink unusef buffers in upsert by.
@@ -1148,7 +1142,7 @@ pub static STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO: VarDefinition = VarDef
     "storage_shrink_upsert_unused_buffers_by_ratio",
     value!(usize; 0),
     "Configuration ratio to shrink unusef buffers in upsert by",
-    true,
+    false,
 );
 
 /// The fraction of the cluster replica size to be used as the maximum number of
@@ -1158,11 +1152,11 @@ pub static STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO: VarDefinition = VarDef
 pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: VarDefinition =
     VarDefinition::new_lazy(
         "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction",
-        lazy_value!(Option<Numeric>; || Some(0.0025.into())),
+        lazy_value!(Option<Numeric>; || Some(0.01.into())),
         "The fraction of the cluster replica size to be used as the maximum number of \
             in-flight bytes emitted by persist_sources feeding storage dataflows. \
             If not configured, the storage_dataflow_max_inflight_bytes value will be used.",
-        true,
+        false,
     );
 
 pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: VarDefinition = VarDefinition::new(
@@ -1170,7 +1164,7 @@ pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: VarDefinition = VarDef
     value!(bool; true),
     "Whether or not `storage_dataflow_max_inflight_bytes` applies only to \
         upsert dataflows using disks. Defaults to true (Materialize).",
-    true,
+    false,
 );
 
 /// The interval to submit statistics to `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker`.
@@ -1179,7 +1173,7 @@ pub static STORAGE_STATISTICS_INTERVAL: VarDefinition = VarDefinition::new(
     value!(Duration; mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT),
     "The interval to submit statistics to `mz_source_statistics_per_worker` \
         and `mz_sink_statistics` (Materialize).",
-    true,
+    false,
 );
 
 /// The interval to collect statistics for `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker` in
@@ -1190,14 +1184,14 @@ pub static STORAGE_STATISTICS_COLLECTION_INTERVAL: VarDefinition = VarDefinition
     "The interval to collect statistics for `mz_source_statistics_per_worker` \
         and `mz_sink_statistics_per_worker` in clusterd. Controls the accuracy of metrics \
         (Materialize).",
-    true,
+    false,
 );
 
 pub static STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS: VarDefinition = VarDefinition::new(
     "storage_record_source_sink_namespaced_errors",
     value!(bool; true),
     "Whether or not to record namespaced errors in the status history tables",
-    true,
+    false,
 );
 
 /// Boolean flag indicating whether to enable syncing from
@@ -1207,7 +1201,7 @@ pub static ENABLE_LAUNCHDARKLY: VarDefinition = VarDefinition::new(
     "enable_launchdarkly",
     value!(bool; true),
     "Boolean flag indicating whether flag synchronization from LaunchDarkly should be enabled (Materialize).",
-    true
+    false,
 );
 
 /// Feature flag indicating whether real time recency is enabled. Not that
@@ -1217,7 +1211,7 @@ pub static REAL_TIME_RECENCY: VarDefinition = VarDefinition::new(
     "real_time_recency",
     value!(bool; false),
     "Feature flag indicating whether real time recency is enabled (Materialize).",
-    false,
+    true,
 )
 .with_feature_flag(&ALLOW_REAL_TIME_RECENCY);
 
@@ -1227,7 +1221,7 @@ pub static REAL_TIME_RECENCY_TIMEOUT: VarDefinition = VarDefinition::new(
     "Sets the maximum allowed duration of SELECTs that actively use real-time \
     recency, i.e. reach out to an external system to determine their most recencly exposed \
     data (Materialize).",
-    false,
+    true,
 )
 .with_feature_flag(&ALLOW_REAL_TIME_RECENCY);
 
@@ -1235,28 +1229,28 @@ pub static EMIT_PLAN_INSIGHTS_NOTICE: VarDefinition = VarDefinition::new(
     "emit_plan_insights_notice",
     value!(bool; false),
     "Boolean flag indicating whether to send a NOTICE with JSON-formatted plan insights before executing a SELECT statement (Materialize).",
-    false,
+    true,
 );
 
 pub static EMIT_TIMESTAMP_NOTICE: VarDefinition = VarDefinition::new(
     "emit_timestamp_notice",
     value!(bool; false),
     "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize).",
-    false,
+    true,
 );
 
 pub static EMIT_TRACE_ID_NOTICE: VarDefinition = VarDefinition::new(
     "emit_trace_id_notice",
     value!(bool; false),
     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize).",
-    false,
+    true,
 );
 
 pub static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: VarDefinition = VarDefinition::new(
     "unsafe_mock_audit_event_timestamp",
     value!(Option<mz_repr::Timestamp>; None),
     "Mocked timestamp to use for audit events for testing purposes",
-    true,
+    false,
 );
 
 pub static ENABLE_RBAC_CHECKS: VarDefinition = VarDefinition::new(
@@ -1264,23 +1258,31 @@ pub static ENABLE_RBAC_CHECKS: VarDefinition = VarDefinition::new(
     value!(bool; true),
     "User facing global boolean flag indicating whether to apply RBAC checks before \
         executing statements (Materialize).",
-    false,
+    true,
 );
 
 pub static ENABLE_SESSION_RBAC_CHECKS: VarDefinition = VarDefinition::new(
     "enable_session_rbac_checks",
-    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
+    // TODO(jkosh44) Once RBAC is enabled in all environments, change this to `true`.
     value!(bool; false),
     "User facing session boolean flag indicating whether to apply RBAC checks before \
         executing statements (Materialize).",
-    false,
+    true,
+);
+
+pub static RESTRICT_TO_USER_OBJECTS: VarDefinition = VarDefinition::new(
+    "restrict_to_user_objects",
+    value!(bool; false),
+    "When enabled, queries are restricted from accessing system catalog objects. \
+        Useful for MCP tool queries that should only access user-created data products.",
+    true,
 );
 
 pub static EMIT_INTROSPECTION_QUERY_NOTICE: VarDefinition = VarDefinition::new(
     "emit_introspection_query_notice",
     value!(bool; true),
     "Whether to print a notice when querying per-replica introspection sources.",
-    false,
+    true,
 );
 
 // TODO(mgree) change this to a SelectOption
@@ -1289,7 +1291,7 @@ pub static ENABLE_SESSION_CARDINALITY_ESTIMATES: VarDefinition = VarDefinition::
     value!(bool; false),
     "Feature flag indicating whether to use cardinality estimates when optimizing queries; \
         does not affect EXPLAIN WITH(cardinality) (Materialize).",
-    false,
+    true,
 )
 .with_feature_flag(&ENABLE_CARDINALITY_ESTIMATES);
 
@@ -1298,15 +1300,15 @@ pub static OPTIMIZER_STATS_TIMEOUT: VarDefinition = VarDefinition::new(
     value!(Duration; Duration::from_millis(250)),
     "Sets the timeout applied to the optimizer's statistics collection from storage; \
         applied to non-oneshot, i.e., long-lasting queries, like CREATE MATERIALIZED VIEW (Materialize).",
-    true,
+    false,
 );
 
 pub static OPTIMIZER_ONESHOT_STATS_TIMEOUT: VarDefinition = VarDefinition::new(
     "optimizer_oneshot_stats_timeout",
-    value!(Duration; Duration::from_millis(20)),
+    value!(Duration; Duration::from_millis(10)),
     "Sets the timeout applied to the optimizer's statistics collection from storage; \
         applied to oneshot queries, like SELECT (Materialize).",
-    true,
+    false,
 );
 
 pub static PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE: VarDefinition = VarDefinition::new(
@@ -1314,7 +1316,7 @@ pub static PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE: VarDefinition = VarDefini
     value!(u32; 20),
     "Sets the per-minute quota for privatelink vpc status updates to be written to \
         the storage-collection-backed system table. This value implies the total and burst quota per-minute.",
-    true,
+    false,
 );
 
 pub static STATEMENT_LOGGING_SAMPLE_RATE: VarDefinition = VarDefinition::new_lazy(
@@ -1322,75 +1324,75 @@ pub static STATEMENT_LOGGING_SAMPLE_RATE: VarDefinition = VarDefinition::new_laz
     lazy_value!(Numeric; || 0.1.into()),
     "User-facing session variable indicating how many statement executions should be \
         logged, subject to constraint by the system variable `statement_logging_max_sample_rate` (Materialize).",
-    false,
-).with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
-
-pub static ARRANGEMENT_EXERT_PROPORTIONALITY: VarDefinition = VarDefinition::new(
-    "arrangement_exert_proportionality",
-    value!(u32; 16),
-    "Value that controls how much merge effort to exert on arrangements.",
     true,
-);
+).with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
 
 pub static ENABLE_DEFAULT_CONNECTION_VALIDATION: VarDefinition = VarDefinition::new(
     "enable_default_connection_validation",
     value!(bool; true),
     "LD facing global boolean flag that allows turning default connection validation off for everyone (Materialize).",
-    true,
+    false,
 );
 
 pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: VarDefinition = VarDefinition::new(
     "statement_logging_max_data_credit",
-    value!(Option<usize>; None),
+    value!(Option<usize>; Some(50 * 1024 * 1024)),
     // The idea is that during periods of low logging, tokens can accumulate up to this value,
     // and then be depleted during periods of high logging.
     "The maximum number of bytes that can be logged for statement logging in short burts, or NULL if unlimited (Materialize).",
-    true,
+    false,
 );
 
 pub static STATEMENT_LOGGING_TARGET_DATA_RATE: VarDefinition = VarDefinition::new(
     "statement_logging_target_data_rate",
-    value!(Option<usize>; None),
+    value!(Option<usize>; Some(2071)),
     "The maximum sustained data rate of statement logging, in bytes per second, or NULL if unlimited (Materialize).",
-    true,
+    false,
 );
 
 pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: VarDefinition = VarDefinition::new_lazy(
     "statement_logging_max_sample_rate",
-    lazy_value!(Numeric; || 0.0.into()),
+    lazy_value!(Numeric; || 0.99.into()),
     "The maximum rate at which statements may be logged. If this value is less than \
         that of `statement_logging_sample_rate`, the latter is ignored (Materialize).",
-    false,
+    true,
 )
 .with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
 
 pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: VarDefinition = VarDefinition::new_lazy(
     "statement_logging_default_sample_rate",
-    lazy_value!(Numeric; || 0.0.into()),
+    lazy_value!(Numeric; || 0.99.into()),
     "The default value of `statement_logging_sample_rate` for new sessions (Materialize).",
-    false,
+    true,
 )
 .with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
+
+pub static ENABLE_INTERNAL_STATEMENT_LOGGING: VarDefinition = VarDefinition::new(
+    "enable_internal_statement_logging",
+    value!(bool; false),
+    "Whether to log statements from the `mz_system` user.",
+    false,
+);
 
 pub static AUTO_ROUTE_CATALOG_QUERIES: VarDefinition = VarDefinition::new(
     "auto_route_catalog_queries",
     value!(bool; true),
     "Whether to force queries that depend only on system tables, to run on the mz_catalog_server cluster (Materialize).",
-    false,
+    true,
 );
 
 pub static MAX_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_connections",
     value!(u32; 5000),
     "The maximum number of concurrent connections (PostgreSQL).",
-    false,
+    true,
 );
 
 pub static SUPERUSER_RESERVED_CONNECTIONS: VarDefinition = VarDefinition::new(
     "superuser_reserved_connections",
     value!(u32; 3),
     "The number of connections that are reserved for superusers (PostgreSQL).",
-    false,
+    true,
 );
 
 /// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_source_status_history_entries`].
@@ -1398,7 +1400,7 @@ pub static KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: VarDefinition = VarDefinition::
     "keep_n_source_status_history_entries",
     value!(usize; 5),
     "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
-    true,
+    false,
 );
 
 /// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_sink_status_history_entries`].
@@ -1406,7 +1408,7 @@ pub static KEEP_N_SINK_STATUS_HISTORY_ENTRIES: VarDefinition = VarDefinition::ne
     "keep_n_sink_status_history_entries",
     value!(usize; 5),
     "On reboot, truncate all but the last n entries per ID in the sink_status_history collection (Materialize).",
-    true,
+    false,
 );
 
 /// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_privatelink_status_history_entries`].
@@ -1415,48 +1417,83 @@ pub static KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES: VarDefinition = VarDefinit
     value!(usize; 5),
     "On reboot, truncate all but the last n entries per ID in the mz_aws_privatelink_connection_status_history \
         collection (Materialize).",
-    true,
+    false,
+);
+
+/// Controls [`mz_storage_types::parameters::StorageParameters::replica_status_history_retention_window`].
+pub static REPLICA_STATUS_HISTORY_RETENTION_WINDOW: VarDefinition = VarDefinition::new(
+    "replica_status_history_retention_window",
+    value!(Duration; REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT),
+    "On reboot, truncate up all entries past the retention window in the mz_cluster_replica_status_history \
+        collection (Materialize).",
+    false,
 );
 
 pub static ENABLE_STORAGE_SHARD_FINALIZATION: VarDefinition = VarDefinition::new(
     "enable_storage_shard_finalization",
     value!(bool; true),
     "Whether to allow the storage client to finalize shards (Materialize).",
-    true,
-);
-
-pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition::new(
-    "enable_consolidate_after_union_negate",
-    value!(bool; true),
-    "consolidation after Unions that have a Negated input (Materialize).",
     false,
 );
+
+pub static DEFAULT_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
+    "default_timestamp_interval",
+    value!(Duration; Duration::from_millis(1000)),
+    "The interval at which timestamps are assigned to data from sources and tables.",
+    false,
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 pub static MIN_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "min_timestamp_interval",
     value!(Duration; Duration::from_millis(1000)),
     "Minimum timestamp interval",
-    true,
+    false,
 );
 
 pub static MAX_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "max_timestamp_interval",
     value!(Duration; Duration::from_millis(1000)),
     "Maximum timestamp interval",
-    true,
+    false,
 );
 
 pub static WEBHOOK_CONCURRENT_REQUEST_LIMIT: VarDefinition = VarDefinition::new(
     "webhook_concurrent_request_limit",
     value!(usize; WEBHOOK_CONCURRENCY_LIMIT),
     "Maximum number of concurrent requests for appending to a webhook source.",
-    true,
+    false,
 );
 
 pub static USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION: VarDefinition = VarDefinition::new(
     "user_storage_managed_collections_batch_duration",
     value!(Duration; STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT),
     "Duration which we'll wait to collect a batch of events for a webhook source.",
+    false,
+);
+
+// This system var will need to point to the name of an existing network policy
+// this will be enforced on alter_system_set
+pub static NETWORK_POLICY: VarDefinition = VarDefinition::new_lazy(
+    "network_policy",
+    lazy_value!(String; || "default".to_string()),
+    "Sets the fallback network policy applied to all users without an explicit policy.",
+    true,
+);
+
+pub static FORCE_SOURCE_TABLE_SYNTAX: VarDefinition = VarDefinition::new(
+    "force_source_table_syntax",
+    value!(bool; false),
+    "Force use of new source model (CREATE TABLE .. FROM SOURCE) and migrate existing sources",
+    true,
+);
+
+pub static OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD: VarDefinition = VarDefinition::new(
+    "optimizer_e2e_latency_warning_threshold",
+    value!(Duration; Duration::from_millis(500)),
+    "Sets the duration that a query can take to compile; queries that take longer \
+        will trigger a warning. If this value is specified without units, it is taken as \
+        milliseconds. A value of zero disables the timeout (Materialize).",
     true,
 );
 
@@ -1468,21 +1505,21 @@ pub mod grpc_client {
         "grpc_client_connect_timeout",
         value!(Duration; Duration::from_secs(5)),
         "Timeout to apply to initial gRPC client connection establishment.",
-        true,
+        false,
     );
 
     pub static HTTP2_KEEP_ALIVE_INTERVAL: VarDefinition = VarDefinition::new(
         "grpc_client_http2_keep_alive_interval",
         value!(Duration; Duration::from_secs(3)),
         "Idle time to wait before sending HTTP/2 PINGs to maintain established gRPC client connections.",
-        true,
+        false,
     );
 
     pub static HTTP2_KEEP_ALIVE_TIMEOUT: VarDefinition = VarDefinition::new(
         "grpc_client_http2_keep_alive_timeout",
-        value!(Duration; Duration::from_secs(5)),
+        value!(Duration; Duration::from_secs(60)),
         "Time to wait for HTTP/2 pong response before terminating a gRPC client connection.",
-        true,
+        false,
     );
 }
 
@@ -1496,7 +1533,7 @@ pub mod cluster_scheduling {
         value!(Option<i32>; DEFAULT_POD_AZ_AFFINITY_WEIGHT),
         "Whether or not to add an availability zone affinity between instances of \
             multi-process replicas. Either an affinity weight or empty (off) (Materialize).",
-        true,
+        false,
     );
 
     pub static CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY: VarDefinition = VarDefinition::new(
@@ -1504,42 +1541,55 @@ pub mod cluster_scheduling {
         value!(bool; DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY),
         "Whether or not to turn the node-scope anti affinity between replicas \
             in the same cluster into a preference (Materialize).",
-        true,
+        false,
     );
 
     pub static CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT: VarDefinition = VarDefinition::new(
         "cluster_soften_replication_anti_affinity_weight",
         value!(i32; DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT),
         "The preference weight for `cluster_soften_replication_anti_affinity` (Materialize).",
-        true,
+        false,
     );
 
     pub static CLUSTER_ENABLE_TOPOLOGY_SPREAD: VarDefinition = VarDefinition::new(
         "cluster_enable_topology_spread",
         value!(bool; DEFAULT_TOPOLOGY_SPREAD_ENABLED),
         "Whether or not to add topology spread constraints among replicas in the same cluster (Materialize).",
-        true,
+        false,
     );
 
-    pub static CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: VarDefinition = VarDefinition::new(
-        "cluster_topology_spread_ignore_non_singular_scale",
-        value!(bool; DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE),
-        "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
-        true,
-    );
+    pub static CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: VarDefinition =
+        VarDefinition::new(
+            "cluster_topology_spread_ignore_non_singular_scale",
+            value!(bool; DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE),
+            "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
+            false,
+        );
 
     pub static CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW: VarDefinition = VarDefinition::new(
         "cluster_topology_spread_max_skew",
         value!(i32; DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW),
         "The `maxSkew` for replica topology spread constraints (Materialize).",
-        true,
+        false,
+    );
+
+    // `minDomains`, like maxSkew, is used to spread across a topology
+    // key. Unlike max skew, minDomains will force node creation to ensure
+    // distribution across a minimum number of keys.
+    // https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/#spread-constraint-definition
+    pub static CLUSTER_TOPOLOGY_SPREAD_MIN_DOMAINS: VarDefinition = VarDefinition::new(
+        "cluster_topology_spread_min_domains",
+        value!(Option<i32>; None),
+        "`minDomains` for replica topology spread constraints. \
+            Should be set to the number of Availability Zones (Materialize).",
+        false,
     );
 
     pub static CLUSTER_TOPOLOGY_SPREAD_SOFT: VarDefinition = VarDefinition::new(
         "cluster_topology_spread_soft",
         value!(bool; DEFAULT_TOPOLOGY_SPREAD_SOFT),
         "If true, soften the topology spread constraints for replicas (Materialize).",
-        true,
+        false,
     );
 
     pub static CLUSTER_SOFTEN_AZ_AFFINITY: VarDefinition = VarDefinition::new(
@@ -1547,21 +1597,23 @@ pub mod cluster_scheduling {
         value!(bool; DEFAULT_SOFTEN_AZ_AFFINITY),
         "Whether or not to turn the az-scope node affinity for replicas. \
             Note this could violate requests from the user (Materialize).",
-        true,
+        false,
     );
 
     pub static CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT: VarDefinition = VarDefinition::new(
         "cluster_soften_az_affinity_weight",
         value!(i32; DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT),
         "The preference weight for `cluster_soften_az_affinity` (Materialize).",
-        true,
+        false,
     );
 
-    pub static CLUSTER_ALWAYS_USE_DISK: VarDefinition = VarDefinition::new(
-        "cluster_always_use_disk",
-        value!(bool; DEFAULT_ALWAYS_USE_DISK),
-        "Always provisions a replica with disk, regardless of `DISK` DDL option.",
-        true,
+    const DEFAULT_CLUSTER_ALTER_CHECK_READY_INTERVAL: Duration = Duration::from_secs(3);
+
+    pub static CLUSTER_ALTER_CHECK_READY_INTERVAL: VarDefinition = VarDefinition::new(
+        "cluster_alter_check_ready_interval",
+        value!(Duration; DEFAULT_CLUSTER_ALTER_CHECK_READY_INTERVAL),
+        "How often to poll readiness checks for cluster alter",
+        false,
     );
 
     const DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL: Duration = Duration::from_secs(3);
@@ -1571,14 +1623,27 @@ pub mod cluster_scheduling {
         value!(Duration; DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL),
         "How often policies are invoked to automatically start/stop clusters, e.g., \
             for REFRESH EVERY materialized views.",
-        true,
+        false,
     );
 
     pub static CLUSTER_SECURITY_CONTEXT_ENABLED: VarDefinition = VarDefinition::new(
         "cluster_security_context_enabled",
         value!(bool; DEFAULT_SECURITY_CONTEXT_ENABLED),
         "Enables SecurityContext for clusterd instances, restricting capabilities to improve security.",
-        true,
+        false,
+    );
+
+    const DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: Duration = Duration::from_secs(1200);
+
+    pub static CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: VarDefinition = VarDefinition::new(
+        "cluster_refresh_mv_compaction_estimate",
+        value!(Duration; DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE),
+        "How much time to wait for compaction after a REFRESH MV completes a refresh \
+            before turning off the refresh cluster. This is needed because Persist does compaction \
+            only after a write, but refresh MVs do writes only at their refresh times. \
+            (In the long term, we'd like to remove this configuration and instead wait exactly \
+            until compaction has settled. We'd need some new Persist API for this.)",
+        false,
     );
 }
 
@@ -1586,12 +1651,11 @@ pub mod cluster_scheduling {
 /// availability of features.
 ///
 /// The arguments to `feature_flags!` are:
-/// - `$name`, which will be the name of the feature flag, in snake_case,
-/// - `$feature_desc`, a human-readable description of the feature,
-/// - `$value`, which if not provided, defaults to `false` and also defaults `$internal` to `true`.
-/// - `$internal`, which if not provided, defaults to `true`. Requires `$value`.
+/// - `$name`, which will be the name of the feature flag, in snake_case
+/// - `$feature_desc`, a human-readable description of the feature
+/// - `$value`, which if not provided, defaults to `false`
 ///
-/// Note that not all `ServerVar<bool>` are feature flags. Feature flags are for variables that:
+/// Note that not all `VarDefinition<bool>` are feature flags. Feature flags are for variables that:
 /// - Belong to `SystemVars`, _not_ `SessionVars`
 /// - Default to false and must be explicitly enabled, or default to `true` and can be explicitly disabled.
 ///
@@ -1617,7 +1681,7 @@ pub mod cluster_scheduling {
 /// Ensuring that all syntax-related feature flags *enable* behavior means that setting all such
 /// feature flags to `on` during catalog boot has the desired effect.
 macro_rules! feature_flags {
-    // Match `$name, $feature_desc, $value, $internal`.
+    // Match `$name, $feature_desc, $value`.
     (@inner
         // The feature flag name.
         name: $name:expr,
@@ -1625,8 +1689,6 @@ macro_rules! feature_flags {
         desc: $desc:literal,
         // The feature flag default value.
         default: $value:expr,
-        // Should this feature be visible only internally.
-        internal: $internal:expr,
     ) => {
         paste::paste!{
             // Note that the ServerVar is not directly exported; we expect these to be
@@ -1635,7 +1697,7 @@ macro_rules! feature_flags {
                 stringify!($name),
                 value!(bool; $value),
                 concat!("Whether ", $desc, " is allowed (Materialize)."),
-                $internal
+                false,
             );
 
             pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
@@ -1651,8 +1713,6 @@ macro_rules! feature_flags {
         desc: $desc:literal,
         // The feature flag default value.
         default: $value:expr,
-        // Should this feature be visible only internally.
-        internal: $internal:expr,
         // Should the feature be turned on during catalog rehydration when
         // parsing a catalog item.
         enable_for_item_parsing: $enable_for_item_parsing:expr,
@@ -1661,7 +1721,6 @@ macro_rules! feature_flags {
             name: $name,
             desc: $desc,
             default: $value,
-            internal: $internal,
         })+
 
         paste::paste!{
@@ -1704,7 +1763,6 @@ feature_flags!(
         name: allow_real_time_recency,
         desc: "real time recency",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     // Actual feature flags
@@ -1712,77 +1770,54 @@ feature_flags!(
         name: enable_binary_date_bin,
         desc: "the binary version of date_bin function",
         default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_create_sink_denylist_with_options,
-        desc: "CREATE SINK with unsafe options",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_create_source_denylist_with_options,
-        desc: "CREATE SOURCE with unsafe options",
-        default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_date_bin_hopping,
         desc: "the date_bin_hopping function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_envelope_debezium_in_subscribe,
         desc: "`ENVELOPE DEBEZIUM (KEY (..))`",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_envelope_materialize,
         desc: "ENVELOPE MATERIALIZE",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_explain_pushdown,
         desc: "EXPLAIN FILTER PUSHDOWN",
-        default: false,
-        internal: true,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_index_options,
         desc: "INDEX OPTIONS",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_list_length_max,
         desc: "the list_length_max function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_list_n_layers,
         desc: "the list_n_layers function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_list_remove,
         desc: "the list_remove function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
@@ -1790,210 +1825,222 @@ feature_flags!(
         name: enable_logical_compaction_window,
         desc: "RETAIN HISTORY",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_primary_key_not_enforced,
         desc: "PRIMARY KEY NOT ENFORCED",
         default: false,
-        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_collection_partition_by,
+        desc: "PARTITION BY",
+        default: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_multi_worker_storage_persist_sink,
         desc: "multi-worker storage persist sink",
         default: true,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_persist_streaming_snapshot_and_fetch,
         desc: "use the new streaming consolidate for snapshot_and_fetch",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_persist_streaming_compaction,
         desc: "use the new streaming consolidate for compaction",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_raise_statement,
         desc: "RAISE statement",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_repeat_row,
         desc: "the repeat_row function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_table_check_constraint,
+        name: enable_repeat_row_non_negative,
+        desc: "the repeat_row_non_negative function",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_replica_targeted_materialized_views,
+        desc: "replica-targeted materialized views",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: unsafe_enable_table_check_constraint,
         desc: "CREATE TABLE with a check constraint",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_table_foreign_key,
+        name: unsafe_enable_table_foreign_key,
         desc: "CREATE TABLE with a foreign key",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_table_keys,
+        name: unsafe_enable_table_keys,
         desc: "CREATE TABLE with a primary key or unique constraint",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unorchestrated_cluster_replicas,
+        name: unsafe_enable_unorchestrated_cluster_replicas,
         desc: "unorchestrated cluster replicas",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unstable_dependencies,
+        name: unsafe_enable_unstable_dependencies,
         desc: "depending on unstable objects",
         default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_disk_cluster_replicas,
-        desc: "`WITH (DISK)` for cluster replicas",
-        default: true,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_within_timestamp_order_by_in_subscribe,
         desc: "`WITHIN TIMESTAMP ORDER BY ..`",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_cardinality_estimates,
         desc: "join planning with cardinality estimates",
         default: false,
-        internal: true,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_connection_validation_syntax,
         desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
         default: true,
-        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_kafka_broker_matching_rules,
+        desc: "MATCHING broker rules in BROKERS for Kafka PrivateLink connections",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_glue_schema_registry,
+        desc: "CREATE CONNECTION ... TO AWS GLUE SCHEMA REGISTRY",
+        default: false,
         enable_for_item_parsing: true,
     },
     {
         name: enable_alter_set_cluster,
         desc: "ALTER ... SET CLUSTER syntax",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unsafe_functions,
+        name: unsafe_enable_unsafe_functions,
         desc: "executing potentially dangerous functions",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_managed_cluster_availability_zones,
         desc: "MANAGED, AVAILABILITY ZONES syntax",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: statement_logging_use_reproducible_rng,
         desc: "statement logging with reproducible RNG",
         default: false,
-        internal: true,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_notices_for_index_already_exists,
         desc: "emitting notices for IndexAlreadyExists (doesn't affect EXPLAIN)",
         default: true,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_notices_for_index_too_wide_for_literal_constraints,
         desc: "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_notices_for_index_empty_key,
         desc: "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
         default: true,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_comment,
-        desc: "the COMMENT ON feature for objects",
+        name: enable_notices_for_equals_null,
+        desc: "emitting notices for `= NULL` and `<> NULL` comparisons (doesn't affect EXPLAIN)",
         default: true,
-        internal: false,
         enable_for_item_parsing: true,
     },
     {
         name: enable_alter_swap,
         desc: "the ALTER SWAP feature for objects",
         default: true,
-        internal: false,
         enable_for_item_parsing: true,
     },
     {
         name: enable_new_outer_join_lowering,
         desc: "new outer join lowering",
         default: true,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_time_at_time_zone,
         desc: "use of AT TIME ZONE or timezone() with time type",
         default: false,
-        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_load_generator_counter,
+        desc: "Create a LOAD GENERATOR COUNTER",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_load_generator_clock,
+        desc: "Create a LOAD GENERATOR CLOCK",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_load_generator_datums,
+        desc: "Create a LOAD GENERATOR DATUMS",
+        default: false,
         enable_for_item_parsing: true,
     },
     {
         name: enable_load_generator_key_value,
         desc: "Create a LOAD GENERATOR KEY VALUE",
         default: false,
-        internal: true,
-        enable_for_item_parsing: false,
+        enable_for_item_parsing: true,
     },
     {
         name: enable_expressions_in_limit_syntax,
         desc: "LIMIT <expr> syntax",
-        default: false,
-        internal: true,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_mz_notices,
         desc: "Populate the contents of `mz_internal.mz_notices`",
         default: true,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2001,143 +2048,305 @@ feature_flags!(
         desc:
             "eager delta joins",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_off_thread_optimization,
         desc: "use off-thread optimization in `CREATE` statements",
         default: true,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_refresh_every_mvs,
         desc: "REFRESH EVERY and REFRESH AT materialized views",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_cluster_schedule_refresh,
         desc: "`SCHEDULE = ON REFRESH` cluster option",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_reduce_mfp_fusion,
         desc: "fusion of MFPs in reductions",
-        default: false,
-        internal: true,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_worker_core_affinity,
         desc: "set core affinity for replica worker threads",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
-        name: enable_copy_to_expr,
-        desc: "COPY ... TO 's3://...'",
+        name: enable_storage_introspection_logs,
+        desc: "forward storage timely logging events into compute's introspection dataflow",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_session_timelines,
         desc: "strong session serializable isolation levels",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_variadic_left_join_lowering,
         desc: "Enable joint HIR ⇒ MIR lowering of stacks of left joins",
-        default: false,
-        internal: true,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_redacted_test_option,
         desc: "Enable useless option to test value redaction",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_letrec_fixpoint_analysis,
         desc: "Enable Lattice-based fixpoint iteration on LetRec nodes in the Analysis framework",
-        default: true, // This is just a failsafe switch for the deployment of #25591.
-        internal: true,
+        default: true, // This is just a failsafe switch for the deployment of materialize#25591.
         enable_for_item_parsing: false,
     },
     {
         name: enable_kafka_sink_headers,
         desc: "Enable the HEADERS option for Kafka sinks",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_unlimited_retain_history,
         desc: "Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction).",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_envelope_upsert_inline_errors,
         desc: "The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_outer_join_null_filter,
-        desc: "Add an extra null filter to the semi-join part of outer join lowering",
         default: true,
-        internal: true,
-        enable_for_item_parsing: false,
+        enable_for_item_parsing: true,
     },
     {
         name: enable_alter_table_add_column,
         desc: "Enable ALTER TABLE ... ADD COLUMN ...",
         default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_graceful_cluster_reconfiguration,
-        desc: "Enable graceful reconfiguration for alter cluster",
-        default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
-        name: enable_aws_msk_iam_auth,
-        desc: "Enable AWS MSK IAM authentication for Kafka connections",
+        name: enable_zero_downtime_cluster_reconfiguration,
+        desc: "Enable zero-downtime reconfiguration for alter cluster",
         default: false,
-        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_network_policies,
+        desc: "ENABLE NETWORK POLICIES",
+        default: true,
         enable_for_item_parsing: true,
+    },
+    {
+        name: enable_create_table_from_source,
+        desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_join_prioritize_arranged,
+        desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_projection_pushdown_after_relation_cse,
+        desc: "Run ProjectionPushdown one more time after the last RelationCSE.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_less_reduce_in_eqprop,
+        desc: "Run MSE::reduce in EquivalencePropagation only if reduce_expr changed something.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_dequadratic_eqprop_map,
+        desc: "Skip the quadratic part of EquivalencePropagation's handling of Map.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eq_classes_withholding_errors,
+        desc: "Use `EquivalenceClassesWithholdingErrors` instead of raw `EquivalenceClasses` during eq prop for joins.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_fast_path_plan_insights,
+        desc: "Enables those plan insight notices that help with getting fast path queries. Don't turn on before #9492 is fixed!",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_with_ordinality_legacy_fallback,
+        desc: "When the new WITH ORDINALITY implementation can't be used with a table func, whether to fall back to the legacy implementation or error out.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_frontend_peek_sequencing, // currently, changes only take effect for new sessions
+        desc: "Enables the new peek sequencing code, which does most of its work in the Adapter Frontend instead of the Coordinator main task.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_replacement_materialized_views,
+        desc: "Whether to enable replacement materialized views.",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_cast_elimination,
+        desc: "Allow the optimizer to eliminate noop casts between values of equivalent representation types.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        // Just an escape hatch for the unlikely case that we have some user who is doing such
+        // queries. Can be removed after one week in prod.
+        // https://github.com/MaterializeInc/database-issues/issues/10004
+        name: disallow_unmaterializable_functions_as_of,
+        desc: "Prohibits calling unmaterializable functions (except `mz_now`) in AS OF queries.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_case_literal_transform,
+        desc: "Allow the optimizer to rewrite If-chains matching a single expression against literals into a CaseLiteral lookup.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_simplify_quantified_comparisons,
+        desc: "Allow the optimizer to simplify quantified comparisons in JOIN ON clauses into semi/anti-join EXISTS form during HIR-to-MIR lowering.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_coalesce_case_transform,
+        desc: "Allow the optimizer to push `COALESCE` into `CASE WHEN`.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    // Disposition: added 2026-05-29, default on; remove after several weeks of observation.
+    {
+        name: enable_will_distinct_propagation,
+        desc: "Allow the WillDistinct transform to propagate a pending distinct through Map, Filter, FlatMap, Threshold, Negate, non-negative Project, and TopK with limit 1 and offset 0.",
+        default: true,
+        enable_for_item_parsing: false,
     },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
-            enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
-            enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
+            enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
+            enable_projection_pushdown_after_relation_cse: vars
+                .enable_projection_pushdown_after_relation_cse(),
+            enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
+            enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
+            enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
+            enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
+            enable_cast_elimination: vars.enable_cast_elimination(),
+            enable_case_literal_transform: vars.enable_case_literal_transform(),
+            enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
+            enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
+            enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::vars::SystemVars;
+
+    /// Ensure that all vars used for optimizer features have `enable_for_item_parsing = false`.
+    ///
+    /// This is important to ensure that plan caching works as intended during item parsing. Cached
+    /// plans include the optimizer features they were produced with, and if they don't match on
+    /// lookup, that results in a cache miss.
+    #[mz_ore::test]
+    fn optimizer_features_no_enable_for_item_parsing() {
+        // Construct a `SystemVars` where all optimizer features are `false`.
+        //
+        // We do this in a roundabout way, by first constructing all-false `OptimizerFeatures` and
+        // then assigning them to their respective system vars, to ensure we don't forget to update
+        // this test when new optimizer features are added.
+        let false_features = OptimizerFeatures::default();
+        let OptimizerFeatures {
+            enable_eq_classes_withholding_errors,
+            enable_eager_delta_joins,
+            enable_letrec_fixpoint_analysis,
+            enable_new_outer_join_lowering,
+            enable_reduce_mfp_fusion,
+            enable_variadic_left_join_lowering,
+            enable_cardinality_estimates,
+            persist_fast_path_limit,
+            reoptimize_imported_views,
+            enable_join_prioritize_arranged,
+            enable_projection_pushdown_after_relation_cse,
+            enable_less_reduce_in_eqprop,
+            enable_dequadratic_eqprop_map,
+            enable_fast_path_plan_insights,
+            enable_cast_elimination,
+            enable_case_literal_transform,
+            enable_simplify_quantified_comparisons,
+            enable_coalesce_case_transform,
+            enable_will_distinct_propagation,
+        } = false_features;
+
+        let mut vars = SystemVars::new();
+
+        macro_rules! set_var {
+            ($var:ident) => {
+                vars.set(stringify!($var), VarInput::Flat(&$var.to_string()))
+                    .unwrap();
+            };
+        }
+
+        set_var!(enable_eq_classes_withholding_errors);
+        set_var!(enable_eager_delta_joins);
+        set_var!(enable_letrec_fixpoint_analysis);
+        set_var!(enable_new_outer_join_lowering);
+        set_var!(enable_reduce_mfp_fusion);
+        set_var!(enable_variadic_left_join_lowering);
+        set_var!(enable_cardinality_estimates);
+        set_var!(persist_fast_path_limit);
+        let _ = reoptimize_imported_views; // no corresponding var
+        set_var!(enable_join_prioritize_arranged);
+        set_var!(enable_projection_pushdown_after_relation_cse);
+        set_var!(enable_less_reduce_in_eqprop);
+        set_var!(enable_dequadratic_eqprop_map);
+        set_var!(enable_fast_path_plan_insights);
+        set_var!(enable_cast_elimination);
+        set_var!(enable_case_literal_transform);
+        set_var!(enable_simplify_quantified_comparisons);
+        set_var!(enable_coalesce_case_transform);
+        set_var!(enable_will_distinct_propagation);
+
+        // Enable for item parsing, then ensure we still get the same optimizer features.
+        vars.enable_for_item_parsing();
+        let features_for_item_parsing = OptimizerFeatures::from(&vars);
+        assert_eq!(features_for_item_parsing, false_features);
     }
 }

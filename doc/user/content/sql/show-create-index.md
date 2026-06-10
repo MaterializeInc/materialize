@@ -10,11 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-index.svg" >}}
+```sql
+SHOW [REDACTED] CREATE INDEX <index_name>;
+```
 
-Field | Use
-------|-----
-_index&lowbar;name_ | The index you want use. You can find available index names through [`SHOW INDEXES`](../show-indexes).
+{{< yaml-table data="show_create_redacted_option" >}}
+
+For available index names, see [`SHOW INDEXES`](/sql/show-indexes).
 
 ## Examples
 
@@ -42,7 +44,7 @@ SHOW CREATE INDEX my_view_idx;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the index.
+{{% include-headless "/headless/sql-command-privileges/show-create-index" %}}
 
 ## Related pages
 

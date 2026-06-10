@@ -10,9 +10,10 @@
 MZFROM ubuntu-base
 
 RUN apt-get update -o Acquire::Languages=none \
-    && apt-get install -qy --no-install-recommends \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -qy --no-install-recommends \
         less postgresql-client \
     && apt-get autoremove -qy \
+    && apt-get clean \
     && rm -rf \
         /var/cache/apt/archives \
         /var/lib/apt/lists/* \

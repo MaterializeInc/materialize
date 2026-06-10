@@ -16,7 +16,11 @@ as a [`mz_timestamp`] value.
 
 ## Details
 
-### Common patterns
+### `mz_now()` clause
+
+{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+
+### Usage patterns
 
 The typical uses of `now()` and `mz_now()` are:
 
@@ -33,33 +37,41 @@ The typical uses of `now()` and `mz_now()` are:
 
 ### Logical timestamp selection
 
-When using the [serializable](/get-started/isolation-level#serializable)
-isolation level, the logical timestamp may be arbitrarily ahead of or behind the
-system clock. For example, at a wall clock time of 9pm, Materialize may choose
-to execute a serializable query as of logical time 8:30pm, perhaps because data
-for 8:30–9pm has not yet arrived. In this scenario, `now()` would return 9pm,
-while `mz_now()` would return 8:30pm.
+{{% include-headless "/headless/logical-timestamp-selection-serializable" %}}
 
-When using the [strict serializable](/get-started/isolation-level#strict-serializable)
-isolation level, Materialize attempts to keep the logical timestamp reasonably
-close to wall clock time. In most cases, the logical timestamp of a query will
-be within a few seconds of the wall clock time. For example, when executing
-a strict serializable query at a wall clock time of 9pm, Materialize will choose
-a logical timestamp within a few seconds of 9pm, even if data for 8:30–9pm has
-not yet arrived and the query will need to block until the data for 9pm arrives.
-In this scenario, both `now()` and `mz_now()` would return 9pm.
+{{% include-headless "/headless/logical-timestamp-selection-strict-serializable"
+%}}
 
 ### Limitations
 
-  * Queries that use `now()` cannot be materialized. In other words, you cannot
-    create an index or a materialized view on a query that calls `now()`.
+#### Materialization
 
-  * Queries that use `mz_now()` can only be materialized if the call to
-    `mz_now()` is used in a [temporal filter](/sql/patterns/temporal-filters).
+* Queries that use `now()` cannot be materialized. In other words, you cannot
+  create an index or a materialized view on a query that calls `now()`.
+
+* Queries that use `mz_now()` can only be materialized if the call to
+  `mz_now()` is used in a [temporal filter](/sql/patterns/temporal-filters).
 
 These limitations are in place because `now()` changes every microsecond and
 `mz_now()` changes every millisecond. Allowing these functions to be
 materialized would be resource prohibitive.
+
+#### `mz_now()` restrictions
+
+The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
+restrictions:
+
+- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+
+  For example:
+
+  {{< yaml-table data="mz_now/mz_now_combination" >}}
+
+  For alternatives, see [Disjunction (OR)
+  alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).
+
+- If part of a  `WHERE` clause, the `WHERE` clause cannot be an [aggregate
+ `FILTER` expression](/sql/functions/filters).
 
 ## Examples
 

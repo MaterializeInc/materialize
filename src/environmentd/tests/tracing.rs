@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use mz_environmentd::test_util;
 use mz_ore::collections::CollectionExt;
 use tracing_capture::SharedStorage;
@@ -37,6 +39,13 @@ async fn test_expected_spans() {
         .with_capture(storage.clone())
         .with_system_parameter_default("opentelemetry_filter".to_string(), "info".to_string())
         .start()
+        .await;
+
+    // This test checks for specific functions of the old peek sequencing, so we disable the new
+    // peek sequencing for now.
+    // TODO(peek-seq): Modify the test to check for the new peek sequencing instead of the old one.
+    server
+        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
         .await;
 
     let client = server.connect().await.unwrap();

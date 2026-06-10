@@ -38,7 +38,6 @@ class MeasurementType(Enum):
     WALLCLOCK = auto()
     MEMORY_MZ = auto()
     MEMORY_CLUSTERD = auto()
-    MESSAGES = auto()
 
     def __str__(self) -> str:
         return self.name.lower()
@@ -47,7 +46,6 @@ class MeasurementType(Enum):
         return self in {
             MeasurementType.MEMORY_MZ,
             MeasurementType.MEMORY_CLUSTERD,
-            MeasurementType.MESSAGES,
         }
 
     def is_lower_value_better(self) -> bool:

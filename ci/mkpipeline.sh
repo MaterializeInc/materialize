@@ -20,32 +20,58 @@
 set -euo pipefail
 
 pipeline=${1:-test}
+if [ "$#" -gt 0 ]; then
+  shift
+fi
 bootstrap_steps=
+tmpfile=$(mktemp)
 
 for arch in x86_64 aarch64; do
-    for toolchain in stable nightly; do
-        if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $toolchain; then
-            queue=builder-linux-x86_64
-            if [[ $arch = aarch64 ]]; then
-                queue=builder-linux-aarch64
-            fi
-            bootstrap_steps+="
-  - label: bootstrap $toolchain $arch
-    command: bin/ci-builder push $toolchain
+  for flavor in stable nightly min console; do
+    (
+      if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $flavor; then
+        echo "$arch:$flavor" >> "$tmpfile"
+      fi
+    ) &
+  done
+done
+wait
+
+while IFS=: read -r arch flavor; do
+    queue=builder-linux-x86_64
+    if [[ $arch == aarch64 ]]; then
+        queue=builder-linux-aarch64-mem
+    fi
+    tag=$(MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder tag "$flavor")
+    bootstrap_steps+="
+  - label: bootstrap $flavor $arch
+    command: bin/ci-builder exists $flavor || bin/ci-builder push $flavor
+    concurrency: 1
+    concurrency_group: \"ci-builder:$tag\"
     agents:
       queue: $queue
 "
-        fi
-    done
-done
+done < "$tmpfile"
+rm "$tmpfile"
 
-exec buildkite-agent pipeline upload <<EOF
+if [ -n "$bootstrap_steps" ]; then
+  exec buildkite-agent pipeline upload <<EOF
 steps:
   $bootstrap_steps
   - wait
   - label: mkpipeline
-    command: bin/ci-builder run stable bin/pyactivate -m ci.mkpipeline $pipeline $@
-    priority: 2
+    command: bin/ci-builder run min bin/pyactivate -m ci.mkpipeline $pipeline $@
+    priority: 200
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-x86-64-4cpu-8gb-mkpipeline
+    retry:
+      automatic:
+        - exit_status: -1
+          signal_reason: none
+          limit: 2
+        - signal_reason: agent_stop
+          limit: 2
 EOF
+else
+  exec bin/ci-builder run min bin/pyactivate -m ci.mkpipeline "$pipeline" "$@"
+fi

@@ -19,8 +19,8 @@ use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use pprof_util::{StackProfile, WeightedStack};
 use prost::Message;
@@ -124,7 +124,8 @@ mz_fg_version: 1
             .try_into()
             .expect("the year 2554 is far away");
 
-        for (mapping, mapping_id) in self.mappings.iter().zip(1..) {
+        for (idx, mapping) in self.mappings.iter().enumerate() {
+            let mapping_id = u64::cast_from(idx + 1);
             let pathname = mapping.pathname.to_string_lossy();
             let filename_idx = strings.insert(&pathname);
 

@@ -1,0 +1,20 @@
+[package]
+name = "mz-expr-derive"
+description = "Derives for the core expression language for Materialize."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+mz-expr-derive-impl = { path = "../expr-derive-impl" }
+
+[features]
+default = []
+test = ["mz-expr-derive-impl/test"]

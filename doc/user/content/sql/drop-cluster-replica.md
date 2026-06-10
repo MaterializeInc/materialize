@@ -7,26 +7,26 @@ menu:
 
 ---
 
-{{< warning >}}
-`DROP CLUSTER REPLICA` is deprecated.
-
-We recommend migrating to a [managed
-cluster](/sql/alter-cluster/#converting-unmanaged-to-managed-clusters) instead
-of manually creating and dropping replicas.
-{{< /warning >}}
-
-`DROP CLUSTER REPLICA` deprovisions an existing replica of the specified cluster. To remove
+`DROP CLUSTER REPLICA` deprovisions an existing replica of the specified
+[unmanaged cluster](/sql/create-cluster/#unmanaged-clusters). To remove
 the cluster itself, use the [`DROP CLUSTER`](/sql/drop-cluster) command.
+
+{{< tip >}}
+When getting started with Materialize, we recommend starting with managed
+clusters.
+{{</ tip >}}
 
 ## Syntax
 
-{{< diagram "drop-cluster-replica.svg" >}}
+```mzsql
+DROP CLUSTER REPLICA [IF EXISTS] <cluster_name>.<replica_name>;
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the specified cluster replica does not exist.
-_cluster_name_ | The cluster you want to remove a replica from. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
-_replica&lowbar;name_ | The cluster replica you want to drop. For available cluster replicas, see [`SHOW CLUSTER REPLICAS`](../show-cluster-replicas).
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the specified cluster replica does not exist.
+`<cluster_name>` | The cluster you want to remove a replica from. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
+`<replica_name>` | The cluster replica you want to drop. For available cluster replicas, see [`SHOW CLUSTER REPLICAS`](../show-cluster-replicas).
 
 ## Examples
 
@@ -48,10 +48,11 @@ DROP CLUSTER REPLICA auction_house.bigger;
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped cluster replica.
-- `USAGE` privileges on the containing cluster.
+{{% include-headless "/headless/sql-command-privileges/drop-cluster-replica" %}}
+
 
 ## Related pages
 
+- [`CREATE CLUSTER REPLICA`](../create-cluster-replica)
 - [`SHOW CLUSTER REPLICAS`](../show-cluster-replicas)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)

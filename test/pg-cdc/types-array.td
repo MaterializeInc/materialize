@@ -104,6 +104,8 @@ ALTER TABLE t_timestamptz_array REPLICA IDENTITY FULL;
 
 INSERT INTO t_timestamptz_array VALUES ('{''2007-02-01 15:04:05+06'',''2007-02-01 15:04:06+06''}');
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SECRET pgpass AS 'postgres'
@@ -114,9 +116,24 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
     PASSWORD SECRET pgpass
   )
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+> BEGIN
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE t_boolean_array FROM SOURCE mz_source (REFERENCE t_boolean_array);
+> CREATE TABLE t_smallint_array FROM SOURCE mz_source (REFERENCE t_smallint_array);
+> CREATE TABLE t_integer_array FROM SOURCE mz_source (REFERENCE t_integer_array);
+> CREATE TABLE t_bigint_array FROM SOURCE mz_source (REFERENCE t_bigint_array);
+> CREATE TABLE t_date_array FROM SOURCE mz_source (REFERENCE t_date_array);
+> CREATE TABLE t_double_precision_array FROM SOURCE mz_source (REFERENCE t_double_precision_array);
+> CREATE TABLE t_interval_array FROM SOURCE mz_source (REFERENCE t_interval_array);
+> CREATE TABLE t_numeric_array FROM SOURCE mz_source (REFERENCE t_numeric_array);
+> CREATE TABLE t_oid_array FROM SOURCE mz_source (REFERENCE t_oid_array);
+> CREATE TABLE t_real_array FROM SOURCE mz_source (REFERENCE t_real_array);
+> CREATE TABLE t_text_array FROM SOURCE mz_source (REFERENCE t_text_array);
+> CREATE TABLE t_time_array FROM SOURCE mz_source (REFERENCE t_time_array);
+> CREATE TABLE t_timestamp_array FROM SOURCE mz_source (REFERENCE t_timestamp_array);
+> CREATE TABLE t_timestamptz_array FROM SOURCE mz_source (REFERENCE t_timestamptz_array);
+> COMMIT
 
 # Insert the same data post-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres

@@ -10,6 +10,6 @@
 > ALTER SECRET secret2 RENAME TO secret3;
 
 > SHOW SECRETS;
-pgpass
-secret1
-secret3
+pgpass ""
+secret1 ""
+secret3 ""

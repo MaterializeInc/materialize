@@ -50,7 +50,7 @@ false
 
 reduce
 (call_unary is_null
-    (call_binary (jsonb_get_int64 false) #1 #0))
+    (call_binary (jsonb_get_int64) #1 #0))
 [(jsonb false) (int64 false)]
 ----
 ((#1 -> #0)) IS NULL
@@ -615,7 +615,7 @@ reduce
 ----
 #0
 
-### Regression test for #9995.
+### Regression test for materialize#9995.
 ### The inner if statement can be replaced by its `condition`, but we must
 ### ensure that we keep the type of the `then` and `els` clauses.
 ### The type of the error should be int32 instead of bool.
@@ -815,8 +815,8 @@ canonicalize-join
 
 canonicalize-join
 [
-    [(call_unary not #0) (call_binary (is_regexp_match true) #1 #2)]
-    [false (call_unary not (call_binary (is_regexp_match true) #1 #2))]
+    [(call_unary not #0) (call_binary is_regexp_match_case_insensitive #1 #2)]
+    [false (call_unary not (call_binary is_regexp_match_case_insensitive #1 #2))]
 ]
 [bool string string]
 ----

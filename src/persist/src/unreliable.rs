@@ -90,13 +90,13 @@ impl UnreliableHandle {
     fn should_happen(&self) -> bool {
         let mut core = self.core.lock().expect("mutex poisoned");
         let should_happen = core.should_happen;
-        core.rng.gen_bool(should_happen)
+        core.rng.random_bool(should_happen)
     }
 
     fn should_timeout(&self) -> bool {
         let mut core = self.core.lock().expect("mutex poisoned");
         let should_timeout = core.should_timeout;
-        core.rng.gen_bool(should_timeout)
+        core.rng.random_bool(should_timeout)
     }
 
     async fn run_op<R, F, WorkFn>(&self, name: &str, work_fn: WorkFn) -> Result<R, ExternalError>
@@ -107,9 +107,7 @@ impl UnreliableHandle {
         let (should_happen, should_timeout) = (self.should_happen(), self.should_timeout());
         trace!(
             "unreliable {} should_happen={} should_timeout={}",
-            name,
-            should_happen,
-            should_timeout,
+            name, should_happen, should_timeout,
         );
         match (should_happen, should_timeout) {
             (true, true) => {
@@ -190,7 +188,7 @@ impl UnreliableConsensus {
 
 #[async_trait]
 impl Consensus for UnreliableConsensus {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         // TODO: run_op for streams
         self.consensus.list_keys()
     }
@@ -204,12 +202,11 @@ impl Consensus for UnreliableConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         self.handle
             .run_op("compare_and_set", || {
-                self.consensus.compare_and_set(key, expected, new)
+                self.consensus.compare_and_set(key, new)
             })
             .await
     }
@@ -225,7 +222,7 @@ impl Consensus for UnreliableConsensus {
             .await
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         self.handle
             .run_op("truncate", || self.consensus.truncate(key, seqno))
             .await

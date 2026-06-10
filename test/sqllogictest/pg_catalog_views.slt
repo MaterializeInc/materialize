@@ -34,7 +34,7 @@ query TT
 SHOW CREATE VIEW pg_views
 ----
 pg_catalog.pg_views
-CREATE VIEW "pg_catalog"."pg_views" AS SELECT "s"."name" AS "schemaname", "v"."name" AS "viewname", "role_owner"."oid" AS "viewowner", "v"."definition" AS "definition" FROM "mz_catalog"."mz_views" AS "v" LEFT JOIN "mz_catalog"."mz_schemas" AS "s" ON "s"."id" = "v"."schema_id" LEFT JOIN "mz_catalog"."mz_databases" AS "d" ON "d"."id" = "s"."database_id" JOIN "mz_catalog"."mz_roles" AS "role_owner" ON "role_owner"."id" = "v"."owner_id" WHERE "s"."database_id" IS NULL OR "d"."name" = "pg_catalog"."current_database"()
+CREATE VIEW⏎    pg_catalog.pg_views⏎    AS⏎        SELECT⏎            s.name AS schemaname,⏎            v.name AS viewname,⏎            role_owner.oid AS viewowner,⏎            v.definition AS definition⏎        FROM⏎            mz_catalog.mz_views AS v⏎                LEFT JOIN mz_catalog.mz_schemas AS s ON s.id = v.schema_id⏎                LEFT JOIN mz_catalog.mz_databases AS d ON d.id = s.database_id⏎                JOIN mz_catalog.mz_roles AS role_owner ON role_owner.id = v.owner_id⏎        WHERE s.database_id IS NULL OR d.name = pg_catalog.current_database();
 
 # test that nothing in the pg_catalog or information_schema schemas use unsinged ints
 query ITITTITT

@@ -1,0 +1,49 @@
+columns:
+  - column: "Option"
+  - column: "Description"
+rows:
+  - Option: "`--dump-heap-profiles <boolean>`"
+    Description: |
+
+      <a name="dump-heap-profiles"></a> If `true`, dump heap profiles (.pprof.gz) from
+      your Materialize instance.
+
+      Defaults to `true`.
+  - Option: "`--dump-prometheus-metrics <boolean>`"
+    Description: |
+
+      <a name="dump-prometheus-metrics"></a> If `true`, dump prometheus metrics from
+      your Materialize instance.
+
+      Defaults to `true`.
+
+  - Option: "`--dump-system-catalog <boolean>`"
+    Description: |
+
+      <a name="dump-system-catalog"></a> If `true`, dump the system catalog from
+      your Materialize instance.
+
+      Defaults to `true`.
+
+  - Option: "`--mz-username <USERNAME>`"
+    Description: |
+
+      <a name="mz-username"></a> The username to use to connect to Materialize.
+
+      Can also be set via the `MZ_USERNAME` environment variable.
+
+  - Option: "`--mz-password <PASSWORD>`"
+    Description: |
+
+      <a name="mz-password"></a> The password to use to connect to Materialize if password authentication is enabled.
+
+      Can also be set via the `MZ_PASSWORD` environment variable.
+
+  - Option: "`--mz-connection-url <URL>`"
+    Description: |
+
+      <a name="mz-connection-url"></a>The Materialize instance's [PostgreSQL
+      connection
+      URL](https://www.postgresql.org/docs/14/libpq-connect.html#LIBPQ-CONNSTRING).
+
+      Defaults to `postgres://127.0.0.1:6875/materialize?sslmode=prefer`.

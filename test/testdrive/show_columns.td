@@ -13,7 +13,7 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 > CREATE TABLE t(a int)
 
 > SHOW COLUMNS FROM t
-a true integer
+a true integer ""
 
 $ postgres-execute connection=mz_support
 SHOW COLUMNS FROM t
@@ -33,7 +33,7 @@ REVOKE SELECT ON TABLE priv FROM materialize
 contains:permission denied for TABLE "materialize.public.priv"
 
 > SHOW COLUMNS FROM priv
-a true integer
+a true integer ""
 
 # Make sure we can't exfiltrate data by supplying a where expression
 # that references the underlying table

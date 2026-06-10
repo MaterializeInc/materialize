@@ -4,6 +4,7 @@ await-holding-invalid-types = [
 ]
 
 disallowed-methods = [
+    { path = "std::iter::Iterator::zip", reason = "use `Itertools::zip_eq` instead" },
     { path = "std::panic::catch_unwind", reason = "use `mz_ore::panic::catch_unwind` instead" },
     { path = "futures::FutureExt::catch_unwind", reason = "use `mz_ore::future::FutureExt::catch_unwind` instead" },
 
@@ -31,16 +32,19 @@ disallowed-methods = [
     { path = "tokio::task::JoinSet::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
 
     # These are banned because we want to ensure people don't forget to use .name(...), so we require the use of `mz_ore`
-    { path = "tokio::task::Builder::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::Builder::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::Builder::spawn_blocking_on", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::join_set::Builder::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::join_set::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
+    # We allow invalid because these paths only exist with tokio_unstable and feature tracing.
+    # When these features are disabled, clippy warns about the path not existing. We don't use tokio_unstable in the cloud
+    # repo, so clippy gives erroneous warnings about the path not referring to an existing function.
+    { path = "tokio::task::Builder::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::Builder::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::Builder::spawn_blocking_on", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::join_set::Builder::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::join_set::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
+    { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
 
     { path = "rdkafka::config::ClientConfig::new", reason = "use the `client::create_new_client_config` wrapper in `kafka_util` instead" },
 
@@ -56,36 +60,34 @@ disallowed-methods = [
     { path = "differential_dataflow::Collection::consolidate_named", reason = "use the `mz_timely_util::operator::CollectionExt::consolidate_named` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::Arrange::arrange", reason = "use the `MzArrange::mz_arrange_named` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::Arrange::arrange_named", reason = "use the `MzArrange::mz_arrange_named` function instead" },
-    { path = "differential_dataflow::operators::arrange::arrangement::Arrange::arrange_core", reason = "use the `MzArrange::mz_arrange_core` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::arrange_core", reason = "use the `MzArrange::mz_arrange_core` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::Arranged::reduce_abelian", reason = "use the `MzArrange::mz_arrange_core` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::Arranged::reduce_core", reason = "use the `MzArrange::mz_arrange_core` function instead" },
-    { path = "differential_dataflow::operators::arrange::arrangement::ArrangeByKey::arrange_by_key", reason = "use the `MzArrange::mz_arrange_named` function instead" },
-    { path = "differential_dataflow::operators::arrange::arrangement::ArrangeByKey::arrange_by_key_named", reason = "use the `MzArrange::mz_arrange_named` function instead" },
-    { path = "differential_dataflow::operators::arrange::arrangement::ArrangeBySelf::arrange_by_self", reason = "use the `MzArrange::mz_arrange_named` function instead" },
-    { path = "differential_dataflow::operators::arrange::arrangement::ArrangeBySelf::arrange_by_self_named", reason = "use the `MzArrange::mz_arrange_named` function instead" },
-    { path = "differential_dataflow::operators::reduce::Count::count", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
-    { path = "differential_dataflow::operators::reduce::Count::count_core", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
-    { path = "differential_dataflow::operators::reduce::Reduce::reduce", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
-    { path = "differential_dataflow::operators::reduce::Reduce::reduce_named", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
-    { path = "differential_dataflow::operators::reduce::ReduceCore::reduce_abelian", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
-    { path = "differential_dataflow::operators::reduce::ReduceCore::reduce_core", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
-    { path = "differential_dataflow::operators::reduce::Threshold::distinct", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
-    { path = "differential_dataflow::operators::reduce::Threshold::distinct_core", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
-    { path = "differential_dataflow::operators::reduce::Threshold::threshold", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
-    { path = "differential_dataflow::operators::reduce::Threshold::threshold_named", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
-    { path = "differential_dataflow::operators::reduce::join::Join::antijoin", reason = "use the `differential_dataflow::operators::join::Join::join_core` function instead" },
-    { path = "differential_dataflow::operators::reduce::join::Join::join_map", reason = "use the `differential_dataflow::operators::join::Join::join_core` function instead" },
-    { path = "differential_dataflow::operators::reduce::join::Join::semijoin", reason = "use the `differential_dataflow::operators::join::Join::join_core` function instead" },
-
-    # Prevent access to Timely APIs with untested semantics.
-    { path = "timely::worker::Worker::drop_dataflow", reason = "Might break logging dataflows, check with #team-compute." },
+    { path = "differential_dataflow::Collection::arrange_by_key", reason = "use the `MzArrange::mz_arrange` function instead" },
+    { path = "differential_dataflow::Collection::arrange_by_key_named", reason = "use the `MzArrange::mz_arrange` function instead" },
+    { path = "differential_dataflow::Collection::arrange_by_self", reason = "use the `MzArrange::mz_arrange` function instead" },
+    { path = "differential_dataflow::Collection::arrange_by_self_named", reason = "use the `MzArrange::mz_arrange` function instead" },
+    { path = "differential_dataflow::Collection::count", reason = "use `Arranged::reduce_abelian` instead" },
+    { path = "differential_dataflow::Collection::count_core", reason = "use `Arranged::reduce_abelian` instead" },
+    { path = "differential_dataflow::Collection::reduce", reason = "use `Arranged::reduce_abelian` instead" },
+    { path = "differential_dataflow::Collection::reduce_named", reason = "use `Arranged::reduce_abelian` instead" },
+    { path = "differential_dataflow::Collection::distinct", reason = "use `Arranged::reduce_abelian` instead" },
+    { path = "differential_dataflow::Collection::distinct_core", reason = "use `Arranged::reduce_abelian` instead" },
+    { path = "differential_dataflow::Collection::threshold", reason = "use `Arranged::reduce_abelian` instead" },
+    { path = "differential_dataflow::Collection::threshold_named", reason = "use `Arranged::reduce_abelian` instead" },
+    { path = "differential_dataflow::Collection::antijoin", reason = "use `Arranged::join_core` instead" },
+    { path = "differential_dataflow::Collection::join_map", reason = "use `Arranged::join_core` instead" },
+    { path = "differential_dataflow::Collection::semijoin", reason = "use `Arranged::join_core` instead" },
+    # Panic when formatting the same value more than once, like our tracing macros do.
+    { path = "itertools::Itertools::format", reason = "panics when passed to tracing macros; consider the methods in mz_ore::str instead" },
+    { path = "itertools::Itertools::format_with", reason = "panics when passed to tracing macros; consider the methods in mz_ore::str instead" },
 ]
 
 disallowed-macros = [
     { path = "proptest::prop_oneof", reason = "use `proptest::strategy::Union::new` instead" },
-    { path = "log::log", reason = "use the macros provided by `tracing` instead (#9992)" },
-    { path = "tracing::instrument", reason = "use `mz_ore::instrument` instead" },
+    { path = "log::log", reason = "use the macros provided by `tracing` instead (database-issues#3001)" },
+    # TODO: Re-enable once <https://github.com/rust-lang/rust-clippy/issues/13521> is fixed.
+    # { path = "tracing::instrument", reason = "use `mz_ore::instrument` instead" },
 ]
 
 disallowed-types = [

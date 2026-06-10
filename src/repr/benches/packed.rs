@@ -8,10 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveTime;
 use mz_proto::{ProtoType, RustType};
+use mz_repr::ProtoNumeric;
 use mz_repr::adt::datetime::PackedNaiveTime;
 use mz_repr::adt::interval::{Interval, PackedInterval, ProtoInterval};
 use mz_repr::adt::mz_acl_item::{
@@ -21,7 +22,6 @@ use mz_repr::adt::numeric::{Numeric, PackedNumeric};
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::PackedNaiveDateTime;
 use mz_repr::role_id::RoleId;
-use mz_repr::ProtoNumeric;
 use prost::Message;
 
 fn bench_interval(c: &mut Criterion) {

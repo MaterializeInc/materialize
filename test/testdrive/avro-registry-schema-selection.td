@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 # Tests that precisely manipulate which schema to select from the
 # Confluent Schema Registry.
@@ -32,56 +32,72 @@ $ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-sch
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER schema_strategy_test_inline_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE schema_strategy_test_inline
   IN CLUSTER schema_strategy_test_inline_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
+
+> CREATE TABLE schema_strategy_test_inline_tbl FROM SOURCE schema_strategy_test_inline (REFERENCE "testdrive-schema-strategy-test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY INLINE '${reader-schema}'
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM schema_strategy_test_inline
+> SELECT * FROM schema_strategy_test_inline_tbl
 a
 ---
 0
 2
 
 > CREATE CLUSTER schema_strategy_test_id_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE schema_strategy_test_id
   IN CLUSTER schema_strategy_test_id_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
+
+> CREATE TABLE schema_strategy_test_id_tbl FROM SOURCE schema_strategy_test_id (REFERENCE "testdrive-schema-strategy-test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY ID ${id1}
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM schema_strategy_test_id
+> SELECT * FROM schema_strategy_test_id_tbl
 a b
 ---
 0 1
 2 3
 
 > CREATE CLUSTER schema_strategy_test_id2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE schema_strategy_test_id2
   IN CLUSTER schema_strategy_test_id2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
+
+> CREATE TABLE schema_strategy_test_id2_tbl FROM SOURCE schema_strategy_test_id2 (REFERENCE "testdrive-schema-strategy-test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY ID ${id2}
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM schema_strategy_test_id2
+> SELECT * FROM schema_strategy_test_id2_tbl
 a b c
 -----
 0 1 <null>
 2 3 4
 
 > CREATE CLUSTER schema_strategy_test_latest_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE schema_strategy_test_latest
   IN CLUSTER schema_strategy_test_latest_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
+
+> CREATE TABLE schema_strategy_test_latest_tbl FROM SOURCE schema_strategy_test_latest (REFERENCE "testdrive-schema-strategy-test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY LATEST
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM schema_strategy_test_latest
+> SELECT * FROM schema_strategy_test_latest_tbl
 a b c
 -----
 0 1 <null>

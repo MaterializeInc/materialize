@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInner, IdAllocatorInnerBitSet};
 
 fn bench_id_gen(c: &mut Criterion) {
@@ -35,6 +35,8 @@ fn bench_id_allocator<A: IdAllocatorInner>(
         let permanent = (0..initial_conns)
             .map(|_| allocator.alloc().unwrap())
             .collect::<Vec<_>>();
+        // Holds allocations during the benchmark iteration; read via push/clear.
+        #[allow(clippy::collection_is_never_read)]
         let mut tmp = Vec::with_capacity(bench_conns);
         b.iter(|| {
             for _ in 0..bench_conns {

@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 #
@@ -32,14 +31,14 @@ USE public;
 # Insert data pre-snapshot
 CREATE TABLE empty_table (f1 BOOLEAN);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> BEGIN
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE empty_table FROM SOURCE mz_source (REFERENCE public.empty_table);
+> COMMIT
 
 > SELECT COUNT(*) FROM empty_table;
 0
 
-# TODO: #25774 (subsource remains starting)
-> SELECT name, type, status FROM mz_internal.mz_source_statuses WHERE name in ('empty_table', 'mz_source');
-empty_table subsource starting
+> SELECT name, type, status FROM mz_internal.mz_source_statuses WHERE name in ('mz_source');
 mz_source mysql running

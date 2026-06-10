@@ -19,30 +19,24 @@ class CreateCluster(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATECLUSTER ON SYSTEM TO materialize
 
-                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                ALTER ROLE materialize CREATECLUSTER
-
-                > CREATE CLUSTER create_cluster1 REPLICAS (replica1 (SIZE '2-2'));
+                > CREATE CLUSTER create_cluster1 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
                 """,
                 """
-                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATECLUSTER ON SYSTEM TO materialize
 
-                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                ALTER ROLE materialize CREATECLUSTER
-
-                > CREATE CLUSTER create_cluster2 (SIZE '2-2');
+                > CREATE CLUSTER create_cluster2 (SIZE 'scale=2,workers=2', REPLICATION FACTOR 1);
                 """,
             ]
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
+                $ set-sql-timeout duration=240s
+
                 > CREATE TABLE create_cluster1_table (f1 INTEGER);
                 > CREATE TABLE create_cluster2_table (f1 INTEGER);
 
@@ -67,17 +61,18 @@ class CreateCluster(Check):
                 > SELECT * FROM create_cluster2_view;
                 234
 
-                ![version>10600] SHOW CREATE CLUSTER create_cluster1;
+                ! SHOW CREATE CLUSTER create_cluster1;
                 contains: SHOW CREATE for unmanaged clusters not yet supported
 
-                >[version>10600] SHOW CREATE CLUSTER create_cluster2;
-                create_cluster2 "CREATE CLUSTER \\"create_cluster2\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '2-2', SCHEDULE = MANUAL)"
+                >[version<15500] SHOW CREATE CLUSTER create_cluster2;
+                create_cluster2 "CREATE CLUSTER \\"create_cluster2\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                >[version>=15500] SHOW CREATE CLUSTER create_cluster2;
+                create_cluster2 "CREATE CLUSTER \\"create_cluster2\\" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
 
                 > DROP TABLE create_cluster1_table CASCADE;
                 > DROP TABLE create_cluster2_table CASCADE;
-           """
-            )
-        )
+           """))
 
 
 class AlterCluster(Check):
@@ -86,13 +81,7 @@ class AlterCluster(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                GRANT CREATECLUSTER ON SYSTEM TO materialize
-
-                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                ALTER ROLE materialize CREATECLUSTER
-
-                > CREATE CLUSTER alter_cluster1 REPLICAS (r1 (SIZE '2-2'));
+                > CREATE CLUSTER alter_cluster1 REPLICAS (r1 (SIZE 'scale=2,workers=2'));
 
                 > CREATE TABLE alter_cluster1_table (f1 INTEGER);
                 > INSERT INTO alter_cluster1_table VALUES (123);
@@ -104,15 +93,13 @@ class AlterCluster(Check):
                 """
                 > ALTER CLUSTER alter_cluster1 SET (MANAGED);
 
-                >[version>10600] ALTER CLUSTER alter_cluster1 SET (introspection debugging = TRUE, introspection interval = '45s');
+                > ALTER CLUSTER alter_cluster1 SET (introspection debugging = TRUE, introspection interval = '45s');
                 """,
             ]
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=default
 
                 > SELECT * FROM alter_cluster1_table;
@@ -127,14 +114,15 @@ class AlterCluster(Check):
                 > SELECT * FROM alter_cluster1_view;
                 123
 
-                >[version>10600] SHOW CREATE CLUSTER alter_cluster1;
-                alter_cluster1 "CREATE CLUSTER \\"alter_cluster1\\" (DISK = true, INTROSPECTION DEBUGGING = true, INTROSPECTION INTERVAL = INTERVAL '00:00:45', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '2-2', SCHEDULE = MANUAL)"
+                >[version<15500] SHOW CREATE CLUSTER alter_cluster1;
+                alter_cluster1 "CREATE CLUSTER \\"alter_cluster1\\" (DISK = true, INTROSPECTION DEBUGGING = true, INTROSPECTION INTERVAL = INTERVAL '00:00:45', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
 
-                >[version>10600] SELECT name, introspection_debugging, introspection_interval FROM mz_catalog.mz_clusters WHERE name = 'alter_cluster1';
+                >[version>=15500] SHOW CREATE CLUSTER alter_cluster1;
+                alter_cluster1 "CREATE CLUSTER \\"alter_cluster1\\" (INTROSPECTION DEBUGGING = true, INTROSPECTION INTERVAL = INTERVAL '00:00:45', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                > SELECT name, introspection_debugging, introspection_interval FROM mz_catalog.mz_clusters WHERE name = 'alter_cluster1';
                 alter_cluster1 true "00:00:45"
-           """
-            )
-        )
+           """))
 
 
 class DropCluster(Check):
@@ -149,8 +137,8 @@ class DropCluster(Check):
                 > INSERT INTO drop_cluster1_table VALUES (123);
                 > INSERT INTO drop_cluster2_table VALUES (234);
 
-                > CREATE CLUSTER drop_cluster1 REPLICAS (replica1 (SIZE '2-2'));
-                > CREATE CLUSTER drop_cluster2 REPLICAS (replica1 (SIZE '2-2'));
+                > CREATE CLUSTER drop_cluster1 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
+                > CREATE CLUSTER drop_cluster2 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
 
                 > SET cluster=drop_cluster1
                 > CREATE DEFAULT INDEX ON drop_cluster1_table;
@@ -170,9 +158,7 @@ class DropCluster(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=drop_cluster1
 
                 > SET cluster=drop_cluster2
@@ -190,6 +176,41 @@ class DropCluster(Check):
 
                 ! SELECT * FROM drop_cluster2_view;
                 contains: unknown catalog item 'drop_cluster2_view'
-           """
-            )
-        )
+           """))
+
+
+class CreateClusterRF0(Check):
+    def manipulate(self) -> list[Testdrive]:
+        # This list MUST be of length 2.
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+                > CREATE CLUSTER create_cluster_rf0_1 (SIZE 'scale=2,workers=2', REPLICATION FACTOR 0);
+                """,
+                """
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+                > CREATE CLUSTER create_cluster_rf0_2 (SIZE 'scale=2,workers=2', REPLICATION FACTOR 0);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                >[version<15500] SHOW CREATE CLUSTER create_cluster_rf0_1;
+                create_cluster_rf0_1 "CREATE CLUSTER \\"create_cluster_rf0_1\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                >[version>=15500] SHOW CREATE CLUSTER create_cluster_rf0_1;
+                create_cluster_rf0_1 "CREATE CLUSTER \\"create_cluster_rf0_1\\" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                >[version<15500] SHOW CREATE CLUSTER create_cluster_rf0_2;
+                create_cluster_rf0_2 "CREATE CLUSTER \\"create_cluster_rf0_2\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                >[version>=15500] SHOW CREATE CLUSTER create_cluster_rf0_2;
+                create_cluster_rf0_2 "CREATE CLUSTER \\"create_cluster_rf0_2\\" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+           """))

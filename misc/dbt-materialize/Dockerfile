@@ -7,9 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM python:3.8.6
+FROM python:3.10.14
 
 COPY . dbt-materialize/
 
-RUN pip install pytest
-RUN pip install ./dbt-materialize[dev]
+RUN pip install --no-cache-dir -r dbt-materialize/requirements.txt --find-links /dbt-materialize

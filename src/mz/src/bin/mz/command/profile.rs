@@ -96,7 +96,7 @@ pub async fn run(cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
         }
         ProfileSubcommand::List => mz::command::profile::list(&cx),
         ProfileSubcommand::Remove => mz::command::profile::remove(&cx).await,
-        _ => {
+        ProfileSubcommand::Config(_) => {
             let cx = cx.activate_profile()?;
 
             match &cmd.subcommand {

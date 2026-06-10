@@ -18,11 +18,14 @@
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::SystemTime;
 
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, TimeZone, Utc};
-use once_cell::sync::Lazy;
+
+#[cfg(feature = "id_gen")]
+use uuid::{NoContext, Uuid};
 
 /// A type representing the number of milliseconds since the Unix epoch.
 pub type EpochMillis = u64;
@@ -42,6 +45,19 @@ pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
             panic!("Ambiguous timestamp: {millis} millis")
         }
     }
+}
+
+/// A function that converts an epoch timestamp to a UUID v7.
+#[cfg(feature = "id_gen")]
+pub fn epoch_to_uuid_v7(epoch: &EpochMillis) -> Uuid {
+    let remainder: u32 = (*epoch % 1000)
+        .try_into()
+        .expect("modulo 1000 of prepared at millis is always within a 32bit unsigned integer.");
+    Uuid::new_v7(uuid::Timestamp::from_unix(
+        NoContext,
+        *epoch / 1000,
+        remainder * 1_000_000,
+    ))
 }
 
 /// A function that returns system or mocked time.
@@ -97,12 +113,12 @@ fn now_zero() -> EpochMillis {
 }
 
 /// A [`NowFn`] that returns the actual system time.
-pub static SYSTEM_TIME: Lazy<NowFn> = Lazy::new(|| NowFn::from(system_time));
+pub static SYSTEM_TIME: LazyLock<NowFn> = LazyLock::new(|| NowFn::from(system_time));
 
 /// A [`NowFn`] that always returns zero.
 ///
 /// For use in tests.
-pub static NOW_ZERO: Lazy<NowFn> = Lazy::new(|| NowFn::from(now_zero));
+pub static NOW_ZERO: LazyLock<NowFn> = LazyLock::new(|| NowFn::from(now_zero));
 
 #[cfg(feature = "chrono")]
 #[cfg(test)]

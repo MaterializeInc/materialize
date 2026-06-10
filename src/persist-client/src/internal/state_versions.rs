@@ -17,20 +17,21 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use bytes::Bytes;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{
-    Blob, CaSResult, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
+    Blob, CaSResult, Consensus, Indeterminate, SCAN_ALL, SeqNo, VersionedData,
 };
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use prost::Message;
 use timely::progress::Timestamp;
-use tracing::{debug, debug_span, trace, warn, Instrument};
+use tracing::{Instrument, debug, debug_span, trace, warn};
 
+use crate::cfg::STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT;
 use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::machine::{retry_determinate, retry_external};
@@ -39,7 +40,7 @@ use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
 use crate::internal::state::{
-    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
+    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, RunPart, State, TypedState,
 };
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
@@ -54,7 +55,7 @@ use crate::{Metrics, PersistConfig, ShardId};
 /// The following invariants are maintained at all times:
 /// - A shard is initialized iff there is at least one version of it in
 ///   Consensus.
-/// - The first version of state is written to `SeqNo(1)`. Each successive state
+/// - The first version of state is written to `SeqNo(0)`. Each successive state
 ///   version is assigned its predecessor's SeqNo +1.
 /// - `current`: The latest version of state. By definition, the largest SeqNo
 ///   present in Consensus.
@@ -106,9 +107,6 @@ pub struct StateVersions {
 pub struct RecentLiveDiffs(pub Vec<VersionedData>);
 
 #[derive(Debug, Clone)]
-pub struct AllLiveDiffs(pub Vec<VersionedData>);
-
-#[derive(Debug, Clone)]
 pub struct EncodedRollup {
     pub(crate) shard_id: ShardId,
     pub(crate) seqno: SeqNo,
@@ -151,7 +149,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let shard_id = shard_metrics.shard_id;
 
@@ -166,12 +164,16 @@ impl StateVersions {
 
         // Shard is not initialized, try initializing it.
         let (initial_state, initial_diff) = self.write_initial_rollup(shard_metrics).await;
+        assert_eq!(
+            initial_state.seqno(),
+            SeqNo::minimum(),
+            "initial state should have the initial seqno"
+        );
         let (cas_res, _diff) =
             retry_external(&self.metrics.retries.external.maybe_init_cas, || async {
                 self.try_compare_and_set_current(
                     "maybe_init_shard",
                     shard_metrics,
-                    None,
                     &initial_state,
                     &initial_diff,
                 )
@@ -223,7 +225,6 @@ impl StateVersions {
         &self,
         cmd_name: &str,
         shard_metrics: &ShardMetrics,
-        expected: Option<SeqNo>,
         new_state: &TypedState<K, V, T, D>,
         diff: &StateDiff<T>,
     ) -> Result<(CaSResult, VersionedData), Indeterminate>
@@ -231,7 +232,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         assert_eq!(shard_metrics.shard_id, new_state.shard_id);
         let path = new_state.shard_id.to_string();
@@ -255,11 +256,7 @@ impl StateVersions {
         let payload_len = new.data.len();
         let cas_res = retry_determinate(
             &self.metrics.retries.determinate.apply_unbatched_cmd_cas,
-            || async {
-                self.consensus
-                    .compare_and_set(&path, expected, new.clone())
-                    .await
-            },
+            || async { self.consensus.compare_and_set(&path, new.clone()).await },
         )
         .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
         .await
@@ -283,7 +280,7 @@ impl StateVersions {
                     new_state
                         .seqno
                         .0
-                        .saturating_sub(new_state.latest_rollup().0 .0),
+                        .saturating_sub(new_state.latest_rollup().0.0),
                 );
                 shard_metrics
                     .spine_batch_count
@@ -334,6 +331,19 @@ impl StateVersions {
                 shard_metrics
                     .inline_part_bytes
                     .set(u64::cast_from(size_metrics.inline_part_bytes));
+                shard_metrics.stale_version.set(
+                    if new_state
+                        .state
+                        .collections
+                        .version
+                        .cmp_precedence(&self.cfg.build_version)
+                        .is_lt()
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                );
 
                 let spine_metrics = new_state.collections.trace.spine_metrics();
                 shard_metrics
@@ -351,20 +361,20 @@ impl StateVersions {
                     .trace
                     .batches()
                     .flat_map(|x| x.parts.iter())
-                    .flat_map(|x| match x {
-                        BatchPart::Hollow(x) => {
-                            // Carefully avoid any String allocs by splitting.
-                            let writer_key =
-                                x.key.0.split_once('/').map(|(writer_key, _)| writer_key);
-                            writer_key.and_then(|s| match &s[..1] {
-                                "w" => Some(("old", x.encoded_size_bytes)),
-                                "n" => Some((&s[1..], x.encoded_size_bytes)),
-                                _ => None,
-                            })
+                    .flat_map(|part| {
+                        let key = match part {
+                            RunPart::Many(x) => Some(&x.key),
+                            RunPart::Single(BatchPart::Hollow(x)) => Some(&x.key),
+                            // TODO: Would be nice to include these too, but we lose the info atm.
+                            RunPart::Single(BatchPart::Inline { .. }) => None,
+                        }?;
+                        // Carefully avoid any String allocs by splitting.
+                        let (writer_key, _) = key.0.split_once('/')?;
+                        match &writer_key[..1] {
+                            "w" => Some(("old", part.encoded_size_bytes())),
+                            "n" => Some((&writer_key[1..], part.encoded_size_bytes())),
+                            _ => None,
                         }
-                        // TODO: Would be nice to include these too, but we lose the
-                        // info atm.
-                        BatchPart::Inline { .. } => None,
                     });
                 shard_metrics.set_batch_part_versions(batch_parts_by_version);
 
@@ -375,7 +385,7 @@ impl StateVersions {
                     "apply_unbatched_cmd {} {} lost the CaS race, retrying: {:?}",
                     new_state.shard_id(),
                     cmd_name,
-                    expected,
+                    new_state.seqno.previous(),
                 );
                 Ok((CaSResult::ExpectationMismatch, new))
             }
@@ -439,12 +449,15 @@ impl StateVersions {
                         .expect("initialized shard should have at least one diff")
                         .seqno;
                     if earliest_before_refetch >= earliest_after_refetch {
-                        warn!(concat!(
-                            "fetch_current_state refetch expects earliest live diff to advance: {} vs {}. ",
-                            "In dev and testing, this happens when persist's Blob (files in mzdata) ",
-                            "is deleted out from under it or when two processes are talking to ",
-                            "different Blobs (e.g. docker containers without it shared)."),
-                            earliest_before_refetch, earliest_after_refetch)
+                        warn!(
+                            concat!(
+                                "fetch_current_state refetch expects earliest live diff to advance: {} vs {}. ",
+                                "In dev and testing, this happens when persist's Blob (files in mzdata) ",
+                                "is deleted out from under it or when two processes are talking to ",
+                                "different Blobs (e.g. docker containers without it shared)."
+                            ),
+                            earliest_before_refetch, earliest_after_refetch
+                        )
                     }
                     continue;
                 }
@@ -472,16 +485,12 @@ impl StateVersions {
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         let mut all_live_diffs = self.fetch_all_live_diffs(&shard_id).await;
         loop {
-            let earliest_live_diff = match all_live_diffs.0.first() {
+            let earliest_live_diff = match all_live_diffs.first() {
                 Some(x) => x,
                 None => return None,
             };
             let state = match self
-                .fetch_rollup_at_seqno(
-                    &shard_id,
-                    all_live_diffs.0.clone(),
-                    earliest_live_diff.seqno,
-                )
+                .fetch_rollup_at_seqno(&shard_id, all_live_diffs.clone(), earliest_live_diff.seqno)
                 .await
             {
                 Some(x) => x,
@@ -503,17 +512,19 @@ impl StateVersions {
                     // TODO: Make this an assert once we're 100% sure the above
                     // is always true.
                     let earliest_after_refetch = all_live_diffs
-                        .0
                         .first()
                         .expect("initialized shard should have at least one diff")
                         .seqno;
                     if earliest_before_refetch >= earliest_after_refetch {
-                        warn!(concat!(
-                            "fetch_all_live_states refetch expects earliest live diff to advance: {} vs {}. ",
-                            "In dev and testing, this happens when persist's Blob (files in mzdata) ",
-                            "is deleted out from under it or when two processes are talking to ",
-                            "different Blobs (e.g. docker containers without it shared)."),
-                            earliest_before_refetch, earliest_after_refetch)
+                        warn!(
+                            concat!(
+                                "fetch_all_live_states refetch expects earliest live diff to advance: {} vs {}. ",
+                                "In dev and testing, this happens when persist's Blob (files in mzdata) ",
+                                "is deleted out from under it or when two processes are talking to ",
+                                "different Blobs (e.g. docker containers without it shared)."
+                            ),
+                            earliest_before_refetch, earliest_after_refetch
+                        )
                     }
                     continue;
                 }
@@ -524,7 +535,7 @@ impl StateVersions {
                 cfg: self.cfg.clone(),
                 metrics: Arc::clone(&self.metrics),
                 state,
-                diffs: all_live_diffs.0,
+                diffs: all_live_diffs,
             });
         }
     }
@@ -534,14 +545,72 @@ impl StateVersions {
     /// the caller simply needs to fetch the latest state.
     ///
     /// Returns an empty Vec iff called on an uninitialized shard.
-    pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> AllLiveDiffs {
+    pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> Vec<VersionedData> {
         let path = shard_id.to_string();
         let diffs = retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
             self.consensus.scan(&path, SeqNo::minimum(), SCAN_ALL).await
         })
         .instrument(debug_span!("fetch_state::scan"))
         .await;
-        AllLiveDiffs(diffs)
+        diffs
+    }
+
+    /// Fetches live diffs for a shard. This is a thin wrapper around [Consensus::scan] with the
+    /// right retry policy and instrumentation.
+    async fn fetch_live_diffs(
+        &self,
+        shard_id: &ShardId,
+        from: SeqNo,
+        limit: usize,
+    ) -> Vec<VersionedData> {
+        let path = shard_id.to_string();
+        retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+            self.consensus.scan(&path, from, limit).await
+        })
+        .instrument(debug_span!("fetch_state::scan"))
+        .await
+    }
+
+    /// Fetches all live_diffs for a shard up to and including a given threshold, allowing us to
+    /// reconstruct states up to and including that version.
+    pub async fn fetch_live_diffs_through(
+        &self,
+        shard_id: &ShardId,
+        through: SeqNo,
+    ) -> Vec<VersionedData> {
+        // Get an initial set of versions from consensus.
+        let scan_limit = STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT.get(&self.cfg);
+        let mut versions = self
+            .fetch_live_diffs(shard_id, SeqNo::minimum(), scan_limit)
+            .await;
+
+        if versions.len() == scan_limit {
+            // Loop until our version range either covers the full set, or we stop getting data.
+            loop {
+                let Some(last_seqno) = versions.last().map(|v| v.seqno) else {
+                    break;
+                };
+                if through <= last_seqno {
+                    break;
+                }
+                let from = last_seqno.next();
+                let limit = usize::cast_from(through.0 - last_seqno.0).clamp(1, 10 * scan_limit);
+                let more_versions = self.fetch_live_diffs(shard_id, from, limit).await;
+                let more_versions_len = more_versions.len();
+                if let Some(first) = more_versions.first() {
+                    assert!(last_seqno < first.seqno);
+                }
+                versions.extend(more_versions);
+                if more_versions_len < limit {
+                    break;
+                }
+            }
+        }
+        // We may have fetched more versions than requested; find the index past the last
+        // requested version and truncate there.
+        let partition_index = versions.partition_point(|v| v.seqno <= through);
+        versions.truncate(partition_index);
+        versions
     }
 
     /// Fetches recent live_diffs for a shard. Intended for when a caller needs to fetch
@@ -555,7 +624,7 @@ impl StateVersions {
         T: Timestamp + Lattice + Codec64,
     {
         let path = shard_id.to_string();
-        let scan_limit = self.cfg.dynamic.state_versions_recent_live_diffs_limit();
+        let scan_limit = STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT.get(&self.cfg);
         let oldest_diffs =
             retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
                 self.consensus
@@ -655,7 +724,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let empty_state = TypedState::new(
             self.cfg.build_version.clone(),
@@ -663,7 +732,8 @@ impl StateVersions {
             self.cfg.hostname.clone(),
             (self.cfg.now)(),
         );
-        let rollup_seqno = empty_state.seqno.next();
+        let mut initial_state = empty_state.clone_for_rollup();
+        let rollup_seqno = initial_state.seqno();
         let rollup = HollowRollup {
             key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
             // Chicken-and-egg problem here. We don't know the size of the
@@ -671,10 +741,10 @@ impl StateVersions {
             // itself.
             encoded_size_bytes: None,
         };
-        let (applied, initial_state) = match empty_state
-            .clone_apply(&self.cfg, &mut |_, _, state| {
-                state.add_rollup((rollup_seqno, &rollup))
-            }) {
+        let applied = match initial_state
+            .collections
+            .add_rollup((rollup_seqno, &rollup))
+        {
             Continue(x) => x,
             Break(NoOpStateTransition(_)) => {
                 panic!("initial state transition should not be a no-op")
@@ -708,7 +778,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let (latest_rollup_seqno, _rollup) = state.latest_rollup();
         let seqno = state.seqno();
@@ -786,7 +856,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let shard_id = state.shard_id;
         let rollup_seqno = state.seqno;
@@ -905,7 +975,7 @@ impl StateVersions {
     }
 
     /// Fetches the rollup at the given key, if it exists.
-    async fn fetch_rollup_at_key<T>(
+    pub async fn fetch_rollup_at_key<T>(
         &self,
         shard_id: &ShardId,
         rollup_key: &PartialRollupKey,
@@ -945,6 +1015,22 @@ pub struct UntypedStateVersionsIter<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> UntypedStateVersionsIter<T> {
+    pub(crate) fn new(
+        shard_id: ShardId,
+        cfg: PersistConfig,
+        metrics: Arc<Metrics>,
+        state: UntypedState<T>,
+        diffs: Vec<VersionedData>,
+    ) -> Self {
+        Self {
+            shard_id,
+            cfg,
+            metrics,
+            state,
+            diffs,
+        }
+    }
+
     pub(crate) fn check_ts_codec(self) -> Result<StateVersionsIter<T>, CodecMismatchT> {
         let key_codec = self.state.key_codec.clone();
         let val_codec = self.state.val_codec.clone();
@@ -1064,10 +1150,9 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
         &self.state
     }
 
-    pub fn into_rollup_proto_without_diffs(&self) -> impl serde::Serialize {
+    pub fn into_rollup_proto_without_diffs(&self) -> impl serde::Serialize + use<T> {
         Rollup::from_state_without_diffs(
             State {
-                applier_version: self.state.applier_version.clone(),
                 shard_id: self.state.shard_id.clone(),
                 seqno: self.state.seqno.clone(),
                 walltime_ms: self.state.walltime_ms.clone(),
@@ -1097,7 +1182,7 @@ impl<T: Timestamp + Lattice + Codec64> InspectDiff<'_, T> {
     /// A callback invoked for each blob added this state transition.
     ///
     /// Blob removals, along with all other diffs, are ignored.
-    pub fn referenced_blobs(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
+    pub fn referenced_blobs(&self) -> impl Iterator<Item = HollowBlobRef<'_, T>> {
         let (state, diff) = match self {
             InspectDiff::FromInitial(x) => (Some(x), None),
             InspectDiff::Diff(x) => (None, Some(x)),
@@ -1136,7 +1221,10 @@ impl<T> Default for ReferencedBlobValidator<T> {
 impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
     fn add_inc_blob(&mut self, x: HollowBlobRef<'_, T>) {
         match x {
-            HollowBlobRef::Batch(x) => assert!(self.inc_batches.insert(x.clone())),
+            HollowBlobRef::Batch(x) => assert!(
+                self.inc_batches.insert(x.clone()) || x.desc.lower() == x.desc.upper(),
+                "non-empty batches should only be appended once; duplicate: {x:?}"
+            ),
             HollowBlobRef::Rollup(x) => assert!(self.inc_rollups.insert(x.clone())),
         }
     }
@@ -1176,19 +1264,22 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         assert_eq!(inc_lower, full_lower);
         assert_eq!(inc_upper, full_upper);
 
-        fn part_unique<T: Hash>(x: &BatchPart<T>) -> String {
+        fn part_unique<T: Codec64>(x: &RunPart<T>) -> String {
             match x {
-                BatchPart::Hollow(x) => x.key.to_string(),
-                BatchPart::Inline {
+                RunPart::Single(BatchPart::Inline {
                     updates,
                     ts_rewrite,
                     ..
-                } => {
+                }) => {
                     let mut h = DefaultHasher::new();
                     updates.hash(&mut h);
-                    ts_rewrite.as_ref().map(|x| x.elements()).hash(&mut h);
+                    if let Some(frontier) = &ts_rewrite {
+                        h.write_usize(frontier.len());
+                        frontier.iter().for_each(|t| t.encode().hash(&mut h));
+                    }
                     h.finish().to_string()
                 }
+                other => other.printable_name().to_string(),
             }
         }
 
@@ -1220,7 +1311,7 @@ mod tests {
 
     use super::*;
 
-    /// Regression test for (part of) #17752, where an interrupted
+    /// Regression test for (part of) database-issues#5170, where an interrupted
     /// `bin/environmentd --reset` resulted in panic in persist usage code.
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
@@ -1232,9 +1323,11 @@ mod tests {
             Arc::clone(&client.blob),
             Arc::clone(&client.metrics),
         );
-        assert!(state_versions
-            .fetch_all_live_states::<u64>(ShardId::new())
-            .await
-            .is_none());
+        assert!(
+            state_versions
+                .fetch_all_live_states::<u64>(ShardId::new())
+                .await
+                .is_none()
+        );
     }
 }

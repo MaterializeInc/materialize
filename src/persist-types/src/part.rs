@@ -9,363 +9,177 @@
 
 //! A columnar representation of one blob's worth of data
 
+use std::mem;
 use std::sync::Arc;
 
-use arrow::array::{Array, Int64Array, PrimitiveArray, StructArray};
-use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{Field, Int64Type};
-use mz_ore::assert_none;
-use mz_ore::iter::IteratorExt;
+use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
+use arrow::datatypes::ToByteSlice;
+use mz_ore::result::ResultExt;
 
-use crate::columnar::sealed::{ColumnMut, ColumnRef};
-use crate::columnar::{ColumnEncoder, PartEncoder, Schema, Schema2};
-use crate::dyn_col::DynColumnRef;
-use crate::dyn_struct::{ColumnsRef, DynStructCfg, DynStructCol, DynStructMut, ValidityRef};
-use crate::stats::{ColumnarStats, DynStats, StructStats};
 use crate::Codec64;
+use crate::arrow::{ArrayIdx, ArrayOrd};
+use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 
 /// A structured columnar representation of one blob's worth of data.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Part {
-    len: usize,
-    key: DynStructCol,
-    val: DynStructCol,
-    ts: ScalarBuffer<i64>,
-    diff: ScalarBuffer<i64>,
+    /// The 'k' values from a Part, generally `SourceData`.
+    pub key: Arc<dyn Array>,
+    /// The 'v' values from a Part, generally `()`.
+    pub val: Arc<dyn Array>,
+    /// The `ts` values from a Part.
+    pub time: Int64Array,
+    /// The `diff` values from a Part.
+    pub diff: Int64Array,
 }
 
 impl Part {
-    /// The number of updates contained.
+    /// The length of each of the arrays in the part.
     pub fn len(&self) -> usize {
-        debug_assert_eq!(self.validate(), Ok(()));
-        self.len
+        self.key.len()
     }
 
-    /// Returns a [ColumnsRef] for the key columns.
-    pub fn key_ref(&self) -> ColumnsRef {
-        self.key.as_ref()
+    /// See [ArrayOrd::goodbytes].
+    pub fn goodbytes(&self) -> usize {
+        ArrayOrd::new(&self.key).goodbytes()
+            + ArrayOrd::new(&self.val).goodbytes()
+            + self.time.values().to_byte_slice().len()
+            + self.diff.values().to_byte_slice().len()
     }
 
-    /// Returns a [ColumnsRef] for the val columns.
-    pub fn val_ref(&self) -> ColumnsRef {
-        self.val.as_ref()
-    }
+    fn combine(
+        parts: &[Part],
+        mut combine_fn: impl FnMut(&[&dyn Array]) -> anyhow::Result<ArrayRef>,
+    ) -> anyhow::Result<Self> {
+        let mut field_array = Vec::with_capacity(parts.len());
+        let mut combine = |get: fn(&Part) -> &dyn Array| {
+            field_array.extend(parts.iter().map(get));
+            let res = combine_fn(&field_array);
+            field_array.clear();
+            res
+        };
 
-    /// Computes a [StructStats] for the key columns.
-    pub fn key_stats(&self) -> Result<StructStats, String> {
-        let stats = self.key.stats(ValidityRef(None))?;
-        Ok(stats.some)
-    }
-
-    /// Returns an [`arrow`] array representing the `key` column.
-    pub fn to_key_arrow(&self) -> Option<(Field, StructArray)> {
-        self.key.to_arrow_struct().map(|array| {
-            let field = Field::new("k_s", array.data_type().clone(), false);
-            (field, array)
+        Ok(Self {
+            key: combine(|p| &p.key)?,
+            val: combine(|p| &p.val)?,
+            time: combine(|p| &p.time)?.as_primitive().clone(),
+            diff: combine(|p| &p.diff)?.as_primitive().clone(),
         })
     }
 
-    /// Returns an [`arrow`] array representing the `val` column.
-    pub fn to_val_arrow(&self) -> Option<(Field, StructArray)> {
-        self.val.to_arrow_struct().map(|array| {
-            let field = Field::new("v_s", array.data_type().clone(), false);
-            (field, array)
+    /// Executes [::arrow::compute::concat] columnwise, or returns `None` if no parts are given.
+    pub fn concat(parts: &[Part]) -> anyhow::Result<Option<Self>> {
+        match parts.len() {
+            0 => return Ok(None),
+            1 => return Ok(Some(parts[0].clone())),
+            _ => {}
+        }
+        let combined = Part::combine(parts, |cols| ::arrow::compute::concat(cols).err_into())?;
+        Ok(Some(combined))
+    }
+
+    /// Executes [::arrow::compute::interleave] columnwise.
+    pub fn interleave(parts: &[Part], indices: &[(usize, usize)]) -> anyhow::Result<Self> {
+        Part::combine(parts, |cols| {
+            ::arrow::compute::interleave(cols, indices).err_into()
         })
     }
 
-    /// Returns [`arrow`] types representing this [`Part`].
-    pub fn to_arrow(&self) -> (Vec<Field>, Vec<Arc<dyn Array>>) {
-        let (mut fields, mut arrays) = (Vec::new(), Vec::<Arc<dyn Array>>::new());
-
-        {
-            // arrow doesn't allow empty struct arrays. To make a future schema
-            // migration for <no columns> <-> <one optional column> easier, we
-            // model this as a missing column (rather than something like
-            // NullArray). This also matches how we'd do the same for nested
-            // structs.
-            if let Some((field, key_array)) = self.to_key_arrow() {
-                fields.push(field);
-                arrays.push(Arc::new(key_array));
-            }
-        }
-
-        {
-            // arrow doesn't allow empty struct arrays. To make a future schema
-            // migration for <no columns> <-> <one optional column> easier, we
-            // model this as a missing column (rather than something like
-            // NullArray). This also matches how we'd do the same for nested
-            // structs.
-            if let Some((field, val_array)) = self.to_val_arrow() {
-                fields.push(field);
-                arrays.push(Arc::new(val_array));
-            }
-        }
-
-        {
-            let ts = Int64Array::new(self.ts.clone(), None);
-            fields.push(Field::new("t", ts.data_type().clone(), false));
-            arrays.push(Arc::new(ts));
-        }
-
-        {
-            let diff = Int64Array::new(self.diff.clone(), None);
-            fields.push(Field::new("d", diff.data_type().clone(), false));
-            arrays.push(Arc::new(diff));
-        }
-
-        (fields, arrays)
+    /// Iterate over the contents of this part, decoding as we go.
+    pub fn decode_iter<
+        'a,
+        K: Default + Clone + 'static,
+        V: Default + Clone + 'static,
+        T: Codec64,
+        D: Codec64,
+    >(
+        &'a self,
+        key_schema: &'a impl Schema<K>,
+        val_schema: &'a impl Schema<V>,
+    ) -> anyhow::Result<impl Iterator<Item = ((K, V), T, D)> + 'a> {
+        let key_decoder = key_schema.decoder_any(&*self.key)?;
+        let val_decoder = val_schema.decoder_any(&*self.val)?;
+        let mut key = K::default();
+        let mut val = V::default();
+        let iter = (0..self.len()).map(move |i| {
+            key_decoder.decode(i, &mut key);
+            val_decoder.decode(i, &mut val);
+            let time = T::decode(self.time.value(i).to_le_bytes());
+            let diff = D::decode(self.diff.value(i).to_le_bytes());
+            ((key.clone(), val.clone()), time, diff)
+        });
+        Ok(iter)
     }
 
-    pub(crate) fn from_arrow<K, KS: Schema<K>, V, VS: Schema<V>>(
-        key_schema: &KS,
-        val_schema: &VS,
-        arrays: &[Arc<dyn Array>],
-    ) -> Result<Self, String> {
-        let key_schema = key_schema.columns();
-        let val_schema = val_schema.columns();
-
-        if !arrays.iter().map(|a| a.len()).all_equal() {
-            return Err("arrays do not have equal lengths".to_string());
+    /// Convert the key/value columns to `ArrayOrd`.
+    pub fn as_ord(&self) -> PartOrd {
+        PartOrd {
+            key: ArrayOrd::new(&*self.key),
+            val: ArrayOrd::new(&*self.val),
+            time: self.time.clone(),
+            diff: self.diff.clone(),
         }
-        let len = arrays
-            .get(0)
-            .ok_or("should have at least 3 arrays, found none")
-            .map(|a| a.len())?;
-        let mut arrays = arrays.into_iter();
-        let key = if key_schema.cols.is_empty() {
-            None
-        } else {
-            let key = arrays
-                .next()
-                .ok_or_else(|| "missing key column".to_owned())?;
-            Some(key)
-        };
-        let val = if val_schema.cols.is_empty() {
-            None
-        } else {
-            let val = arrays
-                .next()
-                .ok_or_else(|| "missing val column".to_owned())?;
-            Some(val)
-        };
-        let ts = arrays
-            .next()
-            .ok_or_else(|| "missing ts column".to_owned())?;
-        let diff = arrays
-            .next()
-            .ok_or_else(|| "missing diff column".to_owned())?;
-        if let Some(_) = arrays.next() {
-            return Err("too many columns".to_owned());
-        }
-
-        let key = match key {
-            None => DynStructCol::empty(key_schema),
-            Some(key) => DynStructCol::from_arrow(key_schema, &*key)?,
-        };
-
-        let val = match val {
-            None => DynStructCol::empty(val_schema),
-            Some(val) => DynStructCol::from_arrow(val_schema, &*val)?,
-        };
-
-        let diff = diff
-            .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
-            .ok_or_else(|| {
-                format!(
-                    "expected diff to be PrimitiveArray<Int64Type> got {:?}",
-                    diff.data_type()
-                )
-            })?;
-        assert_none!(diff.logical_nulls());
-        let diff = diff.values().clone();
-
-        let ts = ts
-            .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
-            .ok_or_else(|| {
-                format!(
-                    "expected ts to be PrimitiveArray<Int64Type> got {:?}",
-                    ts.data_type()
-                )
-            })?;
-        assert_none!(ts.logical_nulls());
-        let ts = ts.values().clone();
-
-        let part = Part {
-            len,
-            key,
-            val,
-            ts,
-            diff,
-        };
-        let () = part.validate()?;
-        Ok(part)
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        let () = self.key.validate()?;
-        if !self.key.cols.is_empty() && self.len != self.key.len() {
-            return Err(format!(
-                "key len {} didn't match part len {}",
-                self.key.len(),
-                self.len
-            ));
-        }
-        let () = self.val.validate()?;
-        if !self.val.cols.is_empty() && self.len != self.val.len() {
-            return Err(format!(
-                "val len {} didn't match part len {}",
-                self.val.len(),
-                self.len
-            ));
-        }
-        if self.len != self.ts.len() {
-            return Err(format!(
-                "ts col len {} didn't match part len {}",
-                self.ts.len(),
-                self.len
-            ));
-        }
-        if self.len != self.diff.len() {
-            return Err(format!(
-                "diff col len {} didn't match part len {}",
-                self.diff.len(),
-                self.len
-            ));
-        }
-        // TODO: Also validate the col types match schema.
-        Ok(())
     }
 }
 
-/// An in-progress columnar constructor for one blob's worth of data.
+/// A part with the key/value arrays downcast to `ArrayOrd` for convenience.
+#[derive(Debug, Clone)]
+pub struct PartOrd {
+    key: ArrayOrd,
+    val: ArrayOrd,
+    time: Int64Array,
+    diff: Int64Array,
+}
+
+impl PartOrd {
+    /// Iterate over the contents of the part in their un-decoded form.
+    pub fn iter(&self) -> impl Iterator<Item = (ArrayIdx<'_>, ArrayIdx<'_>, [u8; 8], [u8; 8])> {
+        (0..self.time.len()).map(move |i| {
+            let key = self.key.at(i);
+            let val = self.val.at(i);
+            let time = self.time.value(i).to_le_bytes();
+            let diff = self.diff.value(i).to_le_bytes();
+            (key, val, time, diff)
+        })
+    }
+}
+
+impl PartialEq for Part {
+    fn eq(&self, other: &Self) -> bool {
+        let Part {
+            key,
+            val,
+            time,
+            diff,
+        } = self;
+        let Part {
+            key: other_key,
+            val: other_val,
+            time: other_time,
+            diff: other_diff,
+        } = other;
+        key == other_key && val == other_val && time == other_time && diff == other_diff
+    }
+}
+
+/// A builder for [`Part`].
 #[derive(Debug)]
 pub struct PartBuilder<K, KS: Schema<K>, V, VS: Schema<V>> {
-    /// Configuration for the `key` column.
-    key_cfg: DynStructCfg,
-    /// Encoder for the `key` column.
-    key_encoder: KS::Encoder,
-    /// Configuration for the `val` column.
-    val_cfg: DynStructCfg,
-    /// Encoder for the val column.
-    val_encoder: VS::Encoder,
-
-    /// The ts column.
-    ts: Codec64Mut,
-    /// The diff column.
+    key: KS::Encoder,
+    val: VS::Encoder,
+    time: Codec64Mut,
     diff: Codec64Mut,
 }
 
 impl<K, KS: Schema<K>, V, VS: Schema<V>> PartBuilder<K, KS, V, VS> {
-    /// Returns a new [`PartBuilder`] that can be used to build a [`Part`].
-    pub fn new(key_schema: &KS, val_schema: &VS) -> Result<Self, String> {
-        let key = DynStructMut::new(&key_schema.columns());
-        let key_cfg = key.cfg().clone();
-        let key_encoder = key_schema.encoder(key.as_mut())?;
-
-        let val = DynStructMut::new(&val_schema.columns());
-        let val_cfg = val.cfg().clone();
-        let val_encoder = val_schema.encoder(val.as_mut())?;
-
-        let ts = Codec64Mut(Vec::new());
-        let diff = Codec64Mut(Vec::new());
-
-        let builder = PartBuilder {
-            key_cfg,
-            key_encoder,
-            val_cfg,
-            val_encoder,
-            ts,
-            diff,
-        };
-
-        Ok(builder)
-    }
-
-    /// Push a new row onto this [`PartBuilder`].
-    pub fn push<T: Codec64, D: Codec64>(&mut self, k: &K, v: &V, t: T, d: D) {
-        self.key_encoder.encode(k);
-        self.val_encoder.encode(v);
-        self.ts.push(t);
-        self.diff.push(d);
-    }
-
-    /// Consumes self returning a [`Part`].
-    pub fn finish(self) -> Part {
-        let Self {
-            key_cfg,
-            key_encoder,
-            val_cfg,
-            val_encoder,
-            ts,
-            diff,
-        } = self;
-
-        let (key_len, key_cols) = key_encoder.finish();
-        let (val_len, val_cols) = val_encoder.finish();
-
-        assert!(key_len == val_len);
-        assert!(key_len == ts.len());
-        assert!(key_len == diff.len());
-
-        let key = DynStructCol {
-            len: key_len,
-            cfg: key_cfg,
-            validity: None,
-            cols: key_cols.into_iter().map(DynColumnRef::from).collect(),
-        };
-
-        let val = DynStructCol {
-            len: val_len,
-            cfg: val_cfg,
-            validity: None,
-            cols: val_cols.into_iter().map(DynColumnRef::from).collect(),
-        };
-
-        Part {
-            len: key_len,
-            key,
-            val,
-            ts: ScalarBuffer::from(ts.0),
-            diff: ScalarBuffer::from(diff.0),
-        }
-    }
-}
-
-/// A structured columnar representation of one blob's worth of data.
-pub struct Part2 {
-    /// The 'k' values from a Part, generally `SourceData`.
-    pub key: Arc<dyn Array>,
-    /// Statistics for the `key` values.
-    pub key_stats: ColumnarStats,
-    /// The 'v' values from a Part, generally `()`.
-    pub val: Arc<dyn Array>,
-    /// Statistics for the `val` values.
-    pub val_stats: ColumnarStats,
-    /// The `ts` values from a Part.
-    pub time: ScalarBuffer<i64>,
-    /// The `diff` values from a Part.
-    pub diff: ScalarBuffer<i64>,
-}
-
-/// A builder for [`Part2`].
-pub struct PartBuilder2<K, KS: Schema2<K>, V, VS: Schema2<V>> {
-    key: KS::Encoder,
-    val: VS::Encoder,
-    time: Vec<i64>,
-    diff: Vec<i64>,
-}
-
-impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
-    /// Returns a new [`PartBuilder2`].
+    /// Returns a new [`PartBuilder`].
     pub fn new(key_schema: &KS, val_schema: &VS) -> Self {
         let key = key_schema.encoder().unwrap();
         let val = val_schema.encoder().unwrap();
-        let time = Vec::new();
-        let diff = Vec::new();
+        let time = Codec64Mut(Vec::new());
+        let diff = Codec64Mut(Vec::new());
 
-        PartBuilder2 {
+        PartBuilder {
             key,
             val,
             time,
@@ -373,36 +187,45 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
         }
     }
 
-    /// Pushes a new value onto [`PartBuilder2`].
-    pub fn push(&mut self, key: &K, val: &V, time: i64, diff: i64) {
-        self.key.append(key);
-        self.val.append(val);
-        self.time.push(time);
-        self.diff.push(diff);
+    /// Estimate the size of the part this builder will build.
+    pub fn goodbytes(&self) -> usize {
+        self.key.goodbytes() + self.val.goodbytes() + self.time.goodbytes() + self.diff.goodbytes()
     }
 
-    /// Finishes the builder returning a [`Part2`].
-    pub fn finish(self) -> Part2 {
-        let PartBuilder2 {
+    /// Push a new row onto this [`PartBuilder`].
+    pub fn push<T: Codec64, D: Codec64>(&mut self, key: &K, val: &V, t: T, d: D) {
+        self.key.append(key);
+        self.val.append(val);
+        self.time.push(&t);
+        self.diff.push(&d);
+    }
+
+    /// Finishes the builder returning a [`Part`].
+    pub fn finish(self) -> Part {
+        let PartBuilder {
             key,
             val,
             time,
             diff,
         } = self;
 
-        let (key_col, key_stats) = key.finish();
-        let (val_col, val_stats) = val.finish();
-        let time = ScalarBuffer::from(time);
-        let diff = ScalarBuffer::from(diff);
+        let key_col = key.finish();
+        let val_col = val.finish();
+        let time = Int64Array::from(time.0);
+        let diff = Int64Array::from(diff.0);
 
-        Part2 {
+        Part {
             key: Arc::new(key_col),
-            key_stats: key_stats.into_columnar_stats(),
             val: Arc::new(val_col),
-            val_stats: val_stats.into_columnar_stats(),
             time,
             diff,
         }
+    }
+
+    /// Finish the builder and replace it with an empty one.
+    pub fn finish_and_replace(&mut self, key_schema: &KS, val_schema: &VS) -> Part {
+        let builder = mem::replace(self, PartBuilder::new(key_schema, val_schema));
+        builder.finish()
     }
 }
 
@@ -411,14 +234,34 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
 pub struct Codec64Mut(Vec<i64>);
 
 impl Codec64Mut {
+    /// Create a builder, pre-sized to an expected number of elements.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Codec64Mut(Vec::with_capacity(capacity))
+    }
+
+    /// Returns the overall size of the stored data in bytes.
+    pub fn goodbytes(&self) -> usize {
+        self.0.len() * size_of::<i64>()
+    }
+
     /// Returns the length of the column.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Pushes the given value into this column.
-    pub fn push<X: Codec64>(&mut self, val: X) {
-        self.0.push(i64::from_le_bytes(Codec64::encode(&val)));
+    pub fn push(&mut self, val: &impl Codec64) {
+        self.push_raw(val.encode());
+    }
+
+    /// Pushes the given encoded value into this column.
+    pub fn push_raw(&mut self, val: [u8; 8]) {
+        self.0.push(i64::from_le_bytes(val));
+    }
+
+    /// Return the allocated array.
+    pub fn finish(self) -> Int64Array {
+        self.0.into()
     }
 }
 

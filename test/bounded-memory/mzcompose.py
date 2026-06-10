@@ -6,32 +6,59 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+"""
+Tests with limited amount of memory, makes sure that the scenarios keep working
+and do not regress. Contains tests for large data ingestions.
+"""
+
+import argparse
 import math
 from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
 
+from materialize import buildkite
 from materialize.buildkite import shard_list
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_dummy_test_analytics_config,
+    create_test_analytics_config,
+)
+from materialize.test_analytics.data.bounded_memory.bounded_memory_minimal_search_storage import (
+    BOUNDED_MEMORY_STATUS_CONFIGURED,
+    BOUNDED_MEMORY_STATUS_FAILURE,
+    BOUNDED_MEMORY_STATUS_SUCCESS,
+    BoundedMemoryMinimalSearchEntry,
+)
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
 # Those defaults have been carefully chosen to avoid known OOMs
-# such as #15093 and #15044 while hopefully catching any further
+# such as materialize#15093 and database-issues#4297 while hopefully catching any further
 # regressions in memory usage
 PAD_LEN = 1024
 STRING_PAD = "x" * PAD_LEN
 REPEAT = 16 * 1024
 ITERATIONS = 128
 
+BOUNDED_MEMORY_FRAMEWORK_VERSION = "1.0.0"
+
 SERVICES = [
-    Cockroach(setup_materialize=True),
-    Materialized(external_cockroach=True),
+    Materialized(support_external_clusterd=True),  # overridden below
     Testdrive(
         no_reset=True,
         seed=1,
@@ -45,6 +72,11 @@ SERVICES = [
     Postgres(),
     MySql(),
     Clusterd(),
+    Mz(app_password=""),
+    Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Mc(),
+    PolarisBootstrap(),
+    Polaris(),
 ]
 
 
@@ -56,11 +88,11 @@ class Scenario:
     materialized_memory: str
     clusterd_memory: str
     disabled: bool = False
+    needs_iceberg: bool = False
 
 
 class PgCdcScenario(Scenario):
-    PG_SETUP = dedent(
-        """
+    PG_SETUP = dedent("""
         > CREATE SECRET pgpass AS 'postgres'
         > CREATE CONNECTION pg FOR POSTGRES
           HOST postgres,
@@ -75,23 +107,20 @@ class PgCdcScenario(Scenario):
         ALTER TABLE t1 REPLICA IDENTITY FULL;
 
         CREATE PUBLICATION mz_source FOR ALL TABLES;
-        """
-    )
-    MZ_SETUP = dedent(
-        """
+        """)
+    MZ_SETUP = dedent("""
         > CREATE SOURCE mz_source
           IN CLUSTER clusterd
-          FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-          FOR ALL TABLES;
+          FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+        > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
-        """
-    )
+        """)
 
 
 class MySqlCdcScenario(Scenario):
-    MYSQL_SETUP = dedent(
-        f"""
+    MYSQL_SETUP = dedent(f"""
         > CREATE SECRET mysqlpass AS '${{arg.mysql-root-password}}'
         > CREATE CONNECTION mysql_conn TO MYSQL (
             HOST mysql,
@@ -118,23 +147,20 @@ class MySqlCdcScenario(Scenario):
         INSERT INTO series_helper (i) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {REPEAT};
 
         CREATE TABLE t1 (f1 SERIAL PRIMARY KEY, f2 INTEGER DEFAULT 0, f3 TEXT);
-        """
-    )
-    MZ_SETUP = dedent(
-        """
+        """)
+    MZ_SETUP = dedent("""
         > CREATE SOURCE mz_source
           IN CLUSTER clusterd
-          FROM MYSQL CONNECTION mysql_conn
-          FOR ALL TABLES;
+          FROM MYSQL CONNECTION mysql_conn;
+
+        > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
-        """
-    )
+        """)
 
 
 class KafkaScenario(Scenario):
-    SCHEMAS = dedent(
-        """
+    SCHEMAS = dedent("""
         $ set key-schema={
             "type": "string"
           }
@@ -146,11 +172,9 @@ class KafkaScenario(Scenario):
             {"name":"f1", "type":"string"}
           ]
           }
-        """
-    )
+        """)
 
-    CONNECTIONS = dedent(
-        """
+    CONNECTIONS = dedent("""
         $ kafka-create-topic topic=topic1
 
         $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${value-schema} key-schema=${key-schema}
@@ -162,30 +186,26 @@ class KafkaScenario(Scenario):
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn
           FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
-        """
-    )
+        """)
 
-    SOURCE = dedent(
-        """
+    SOURCE = dedent("""
         > CREATE SOURCE s1
           IN CLUSTER clusterd
-          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}');
+
+        > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-topic1-${testdrive.seed}")
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE UPSERT;
 
-        > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1;
-        """
-    )
+        > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1_tbl;
+        """)
 
-    END_MARKER = dedent(
-        """
+    END_MARKER = dedent("""
         $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${value-schema} key-schema=${key-schema}
         "ZZZ" {"f1": "END MARKER"}
-        """
-    )
+        """)
 
-    POST_RESTART = dedent(
-        f"""
+    POST_RESTART = dedent(f"""
         # Delete all rows except markers
         $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
         "${{kafka-ingest.iteration}}"
@@ -196,8 +216,7 @@ class KafkaScenario(Scenario):
         # Expect that only markers are left
         > SELECT * FROM v1;
         2
-        """
-    )
+        """)
 
 
 SCENARIOS = [
@@ -205,55 +224,44 @@ SCENARIOS = [
         name="pg-cdc-snapshot",
         pre_restart=PgCdcScenario.PG_SETUP
         + "$ postgres-execute connection=postgres://postgres:postgres@postgres\n"
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     INSERT INTO t1 (f3) SELECT '{i}' || REPEAT('a', {PAD_LEN}) FROM generate_series(1, {REPEAT});
-                    """
-                )
-                for i in range(0, ITERATIONS)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS * 10)])
         + PgCdcScenario.MZ_SETUP
         + dedent(
             f"""
-            > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
-            {ITERATIONS * REPEAT}
+            > SELECT * FROM v1; /* expect {ITERATIONS * 10 * REPEAT} */
+            {ITERATIONS * 10 * REPEAT}
+
+            > SELECT COUNT(*) FROM t1; /* expect {ITERATIONS * 10 * REPEAT} */
+            {ITERATIONS * 10 * REPEAT}
             """
         ),
-        post_restart=dedent(
-            f"""
-            # We do not do DELETE post-restart, as it will cause OOM for clusterd
-            > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
-            {ITERATIONS * REPEAT}
-            """
-        ),
+        post_restart=dedent(f"""
+            # We do not do DELETE post-restart, as it will cause postgres to go out of disk
+
+            > SELECT * FROM v1; /* expect {ITERATIONS * 10 * REPEAT} */
+            {ITERATIONS * 10 * REPEAT}
+
+            > SELECT COUNT(*) FROM t1; /* expect {ITERATIONS * 10 * REPEAT} */
+            {ITERATIONS * 10 * REPEAT}
+            """),
         materialized_memory="4.5Gb",
-        clusterd_memory="3.5Gb",
+        clusterd_memory="1Gb",
     ),
     PgCdcScenario(
         name="pg-cdc-update",
         pre_restart=PgCdcScenario.PG_SETUP
-        + dedent(
-            f"""
+        + dedent(f"""
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             INSERT INTO t1 (f3) VALUES ('START');
             INSERT INTO t1 (f3) SELECT REPEAT('a', {PAD_LEN}) FROM generate_series(1, {REPEAT});
-            """
-        )
+            """)
         + PgCdcScenario.MZ_SETUP
-        + "\n".join(
-            [
-                dedent(
-                    """
+        + "\n".join([dedent("""
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
                     UPDATE t1 SET f2 = f2 + 1;
-                    """
-                )
-                for letter in ascii_lowercase[:ITERATIONS]
-            ]
-        )
+                    """) for letter in ascii_lowercase[:ITERATIONS]])
         + dedent(
             f"""
             $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -261,24 +269,27 @@ SCENARIOS = [
 
             > SELECT * FROM v1 /* expect: {REPEAT + 2} */;
             {REPEAT + 2}
+
+            > SELECT COUNT(*) FROM t1 /* expect: {REPEAT + 2} */;
+            {REPEAT + 2}
             """
         ),
-        post_restart=dedent(
-            """
+        post_restart=dedent("""
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             DELETE FROM t1;
 
             > SELECT * FROM v1;
             0
-            """
-        ),
+
+            > SELECT COUNT(*) FROM t1;
+            0
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="pg-cdc-gh-15044",
-        pre_restart=dedent(
-            f"""
+        pre_restart=dedent(f"""
             > CREATE SECRET pgpass AS 'postgres'
             > CREATE CONNECTION pg FOR POSTGRES
               HOST postgres,
@@ -302,8 +313,8 @@ SCENARIOS = [
             CREATE PUBLICATION mz_source FOR ALL TABLES;
 
             > CREATE SOURCE mz_source
-              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-              FOR TABLES (t1);
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+            > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
             > SELECT COUNT(*) > 0 FROM t1;
             true
@@ -320,20 +331,25 @@ SCENARIOS = [
 
             > SELECT * FROM v2;
             17
-            """
-        ),
-        post_restart=dedent(
-            """
+
+            > SELECT COUNT(*) FROM t2;
+            """),
+        post_restart=dedent("""
             > SELECT * FROM v2;
             17
+
+            > SELECT COUNT(*) FROM t2;
+            0
 
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             DELETE FROM t1;
 
             > SELECT * FROM v2;
             0
-            """
-        ),
+
+            > SELECT COUNT(*) FROM t2;
+            0
+            """),
         materialized_memory="8Gb",
         clusterd_memory="6Gb",
         disabled=True,
@@ -344,86 +360,90 @@ SCENARIOS = [
         + PgCdcScenario.MZ_SETUP
         + "$ postgres-execute connection=postgres://postgres:postgres@postgres\n"
         + "BEGIN;\n"
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     INSERT INTO t1 (f3) SELECT '{i}' || REPEAT('a', {PAD_LEN}) FROM generate_series(1, {int(REPEAT / 16)});
-                    """
-                )
-                for i in range(0, ITERATIONS * 20)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS * 20)])
         + "COMMIT;\n"
         + dedent(
             f"""
             > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
             {int(ITERATIONS * 20 * REPEAT / 16)}
-            """
-        ),
-        post_restart=dedent(
-            f"""
-            # We do not do DELETE post-restart, as it will cause OOM for clusterd
-            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+
+            > SELECT COUNT(*) FROM t1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
             {int(ITERATIONS * 20 * REPEAT / 16)}
             """
         ),
+        post_restart=dedent(f"""
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+            {int(ITERATIONS * 20 * REPEAT / 16)}
+
+            > SELECT COUNT(*) FROM t1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+            {int(ITERATIONS * 20 * REPEAT / 16)}
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            DELETE FROM t1;
+
+            > SELECT * FROM v1;
+            0
+
+            > SELECT COUNT(*) FROM t1;
+            0
+            """),
         materialized_memory="4.5Gb",
-        clusterd_memory="1Gb",
+        # TODO: Reduce to 1Gb when https://github.com/MaterializeInc/database-issues/issues/9515 is fixed
+        clusterd_memory="2Gb",
     ),
     MySqlCdcScenario(
         name="mysql-cdc-snapshot",
         pre_restart=MySqlCdcScenario.MYSQL_SETUP
         + "$ mysql-execute name=mysql\n"
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper;
-                    """
-                )
-                for i in range(0, ITERATIONS)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS)])
         + MySqlCdcScenario.MZ_SETUP
         + dedent(
             f"""
             > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
             {ITERATIONS * REPEAT}
-            """
-        ),
-        post_restart=dedent(
-            f"""
-            # We do not do DELETE post-restart, as it will cause OOM for clusterd
-            > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
+
+            > SELECT COUNT(*) FROM t1; /* expect {ITERATIONS * REPEAT} */
             {ITERATIONS * REPEAT}
             """
         ),
+        post_restart=dedent(f"""
+            > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
+            {ITERATIONS * REPEAT}
+
+            > SELECT COUNT(*) FROM t1; /* expect {ITERATIONS * REPEAT} */
+            {ITERATIONS * REPEAT}
+
+            $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+            $ mysql-execute name=mysql
+            USE public;
+            DELETE FROM t1;
+
+            > SELECT * FROM v1;
+            0
+
+            > SELECT COUNT(*) FROM t1;
+            0
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
     MySqlCdcScenario(
         name="mysql-cdc-update",
         pre_restart=MySqlCdcScenario.MYSQL_SETUP
-        + dedent(
-            f"""
+        + dedent(f"""
             $ mysql-execute name=mysql
             INSERT INTO t1 (f3) VALUES ('START');
             INSERT INTO t1 (f3) SELECT REPEAT('a', {PAD_LEN}) FROM series_helper;
-            """
-        )
+            """)
         + MySqlCdcScenario.MZ_SETUP
-        + "\n".join(
-            [
-                dedent(
-                    """
+        + "\n".join([dedent("""
                     $ mysql-execute name=mysql
                     UPDATE t1 SET f2 = f2 + 1;
-                    """
-                )
-                for letter in ascii_lowercase[:ITERATIONS]
-            ]
-        )
+                    """) for letter in ascii_lowercase[:ITERATIONS]])
         + dedent(
             f"""
             $ mysql-execute name=mysql
@@ -431,10 +451,12 @@ SCENARIOS = [
 
             > SELECT * FROM v1 /* expect: {REPEAT + 2} */;
             {REPEAT + 2}
+
+            > SELECT COUNT(*) FROM t1 /* expect: {REPEAT + 2} */;
+            {REPEAT + 2}
             """
         ),
-        post_restart=dedent(
-            """
+        post_restart=dedent("""
             $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
             $ mysql-execute name=mysql
             USE public;
@@ -442,8 +464,10 @@ SCENARIOS = [
 
             > SELECT * FROM v1;
             0
-            """
-        ),
+
+            > SELECT COUNT(*) FROM t1;
+            0
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
@@ -453,30 +477,37 @@ SCENARIOS = [
         + MySqlCdcScenario.MZ_SETUP
         + "$ mysql-execute name=mysql\n"
         + "SET AUTOCOMMIT = FALSE;\n"
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper LIMIT {int(REPEAT / 128)};
-                    """
-                )
-                for i in range(0, ITERATIONS * 10)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS * 10)])
         + "COMMIT;\n"
         + dedent(
             f"""
             > SELECT * FROM v1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
             {int(ITERATIONS * 10) * int(REPEAT / 128)}
-            """
-        ),
-        post_restart=dedent(
-            f"""
-            # We do not do DELETE post-restart, as it will cause OOM for clusterd
-            > SELECT * FROM v1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
+
+            > SELECT COUNT(*) FROM t1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
             {int(ITERATIONS * 10) * int(REPEAT / 128)}
             """
         ),
+        post_restart=dedent(f"""
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
+            {int(ITERATIONS * 10) * int(REPEAT / 128)}
+
+            > SELECT COUNT(*) FROM t1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
+            {int(ITERATIONS * 10) * int(REPEAT / 128)}
+
+            $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+            $ mysql-execute name=mysql
+            USE public;
+            DELETE FROM t1;
+
+            > SELECT * FROM v1;
+            0
+
+            > SELECT COUNT(*) FROM t1;
+            0
+            """),
         materialized_memory="3.5Gb",
         clusterd_memory="8.5Gb",
     ),
@@ -484,31 +515,25 @@ SCENARIOS = [
         name="upsert-snapshot",
         pre_restart=KafkaScenario.SCHEMAS
         + KafkaScenario.CONNECTIONS
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
                     "MMM" {{"f1": "{i}{STRING_PAD}"}}
-                    """
-                )
-                for i in range(0, ITERATIONS)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS)])
         + KafkaScenario.END_MARKER
         # Ensure this config works.
-        + dedent(
-            """
+        + dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET storage_upsert_max_snapshot_batch_buffering = 2;
-            """
-        )
+            """)
         + KafkaScenario.SOURCE
         + dedent(
             """
             # Expect all ingested data + two MARKERs
             > SELECT * FROM v1;
+            3
+
+            > SELECT COUNT(*) FROM s1_tbl;
             3
             """
         ),
@@ -522,22 +547,18 @@ SCENARIOS = [
         pre_restart=KafkaScenario.SCHEMAS
         + KafkaScenario.CONNECTIONS
         + KafkaScenario.SOURCE
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
                     "${{kafka-ingest.iteration}}" {{"f1": "{i}{STRING_PAD}"}}
-                    """
-                )
-                for i in range(0, ITERATIONS)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS)])
         + KafkaScenario.END_MARKER
         + dedent(
             f"""
             # Expect all ingested data + two MARKERs
             > SELECT * FROM v1;
+            {REPEAT + 2}
+
+            > SELECT COUNT(*) FROM s1_tbl;
             {REPEAT + 2}
             """
         ),
@@ -551,25 +572,21 @@ SCENARIOS = [
         pre_restart=KafkaScenario.SCHEMAS
         + KafkaScenario.CONNECTIONS
         + KafkaScenario.SOURCE
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
                     "${{kafka-ingest.iteration}}" {{"f1": "{letter}{STRING_PAD}"}}
 
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
                     "${{kafka-ingest.iteration}}"
-                    """
-                )
-                for letter in ascii_lowercase[:ITERATIONS]
-            ]
-        )
+                    """) for letter in ascii_lowercase[:ITERATIONS]])
         + KafkaScenario.END_MARKER
         + dedent(
             """
             # Expect just the two MARKERs
             > SELECT * FROM v1;
+            2
+
+            > SELECT COUNT(*) FROM s1_tbl;
             2
             """
         ),
@@ -579,48 +596,40 @@ SCENARIOS = [
     ),
     Scenario(
         name="table-insert-delete",
-        pre_restart=dedent(
-            """
-            > SET statement_timeout = '600 s';
-
+        pre_restart=dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET max_result_size = 2147483648;
 
             > CREATE TABLE t1 (f1 STRING, f2 STRING)
             > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
-            """
-        )
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+            """)
+        + "\n".join([dedent(f"""
                     > INSERT INTO t1 (f1, f2) SELECT '{letter}', REPEAT('a', {PAD_LEN}) || generate_series::text FROM generate_series(1, {REPEAT});
                     > DELETE FROM t1 WHERE f1 = '{letter}';
-                    """
-                )
-                for letter in ascii_lowercase[:ITERATIONS]
-            ]
-        )
+                    """) for letter in ascii_lowercase[:ITERATIONS]])
         + dedent(
             """
             > SELECT * FROM v1;
             0
+
+            > SELECT COUNT(*) FROM t1;
+            0
             """
         ),
-        post_restart=dedent(
-            """
+        post_restart=dedent("""
            > SELECT * FROM v1;
            0
-           """
-        ),
+
+           > SELECT COUNT(*) FROM t1;
+           0
+           """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="table-index-hydration",
-        pre_restart=dedent(
-            """
+        pre_restart=dedent("""
             > DROP CLUSTER REPLICA clusterd.r1;
 
             > CREATE TABLE t (a bigint, b bigint);
@@ -653,30 +662,26 @@ SCENARIOS = [
 
             > SET CLUSTER = clusterd
 
-            > SELECT count(*) FROM t;
+            > SELECT COUNT(*) FROM t;
             2000000
-            """
-        ),
-        post_restart=dedent(
-            """
+            """),
+        post_restart=dedent("""
             > SET CLUSTER = clusterd
 
-            > SELECT count(*) FROM t;
+            > SELECT COUNT(*) FROM t;
             2000000
-            """
-        ),
+            """),
         materialized_memory="10Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="accumulate-reductions",
-        pre_restart=dedent(
-            """
+        pre_restart=dedent("""
             > DROP TABLE IF EXISTS t CASCADE;
             > CREATE TABLE t (a int, b int, c int, d int);
 
             > CREATE MATERIALIZED VIEW data AS
-              SELECT a, a AS b FROM generate_series(1, 10000000) AS a
+              SELECT a, a AS b FROM generate_series(1, 1000000) AS a
               UNION ALL
               SELECT a, b FROM t;
 
@@ -684,13 +689,13 @@ SCENARIOS = [
             > INSERT INTO t (a, b) VALUES (0, 0);
 
             > DROP CLUSTER IF EXISTS idx_cluster CASCADE;
-            > CREATE CLUSTER idx_cluster SIZE '1-8G', REPLICATION FACTOR 1;
+            > CREATE CLUSTER idx_cluster SIZE 'scale=1,workers=1,mem=8GiB', REPLICATION FACTOR 2;
 
             > CREATE VIEW accumulable AS
               SELECT
                 a,
-                sum(a) AS sum_a, count(a) as cnt_a,
-                sum(b) AS sum_b, count(b) as cnt_b
+                sum(a) AS sum_a, COUNT(a) as cnt_a,
+                sum(b) AS sum_b, COUNT(b) as cnt_b
               FROM data
               GROUP BY a;
 
@@ -698,18 +703,15 @@ SCENARIOS = [
 
             > SET CLUSTER = idx_cluster;
 
-            > SELECT count(*) FROM accumulable;
-            10000001
-            """
-        ),
-        post_restart=dedent(
-            """
+            > SELECT COUNT(*) FROM accumulable;
+            1000001
+            """),
+        post_restart=dedent("""
             > SET CLUSTER = idx_cluster;
 
-            > SELECT count(*) FROM accumulable;
-            10000001
-            """
-        ),
+            > SELECT COUNT(*) FROM accumulable;
+            1000001
+            """),
         materialized_memory="8.5Gb",
         clusterd_memory="3.5Gb",
     ),
@@ -717,29 +719,27 @@ SCENARIOS = [
         name="upsert-index-hydration",
         pre_restart=KafkaScenario.SCHEMAS
         + KafkaScenario.CONNECTIONS
-        + dedent(
-            f"""
+        + dedent(f"""
             $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={90 * REPEAT}
             "${{kafka-ingest.iteration}}" {{"f1": "{STRING_PAD}"}}
-            """
-        )
+            """)
         + KafkaScenario.END_MARKER
         + dedent(
             """
             > CREATE SOURCE s1
               IN CLUSTER clusterd
-              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}');
+
+            > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-topic1-${testdrive.seed}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
 
             > DROP CLUSTER REPLICA clusterd.r1;
 
-            > CREATE INDEX i1 IN CLUSTER clusterd ON s1 (f1);
+            > CREATE INDEX i1 IN CLUSTER clusterd ON s1_tbl (f1);
             """
         ),
-        post_restart=KafkaScenario.SCHEMAS
-        + dedent(
-            f"""
+        post_restart=KafkaScenario.SCHEMAS + dedent(f"""
             > CREATE CLUSTER REPLICA clusterd.r1
               STORAGECTL ADDRESSES ['clusterd:2100'],
               STORAGE ADDRESSES ['clusterd:2103'],
@@ -748,20 +748,18 @@ SCENARIOS = [
 
             > SET CLUSTER = clusterd;
 
-            > SELECT count(*) FROM s1;
+            > SELECT COUNT(*) FROM s1_tbl;
             {90 * REPEAT + 2}
             # Delete all rows except markers
             $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
             "${{kafka-ingest.iteration}}"
-            """
-        ),
+            """),
         materialized_memory="7.2Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="table-aggregate",
-        pre_restart=dedent(
-            f"""
+        pre_restart=dedent(f"""
             > SET statement_timeout = '600 s';
 
             > CREATE TABLE t1 (key1 INTEGER, key2 INTEGER, key3 INTEGER, key4 INTEGER)
@@ -794,10 +792,8 @@ SCENARIOS = [
             true
             > SELECT COUNT(*) > 0 FROM v4;
             true
-            """
-        ),
-        post_restart=dedent(
-            """
+            """),
+        post_restart=dedent("""
             > SELECT COUNT(*) > 0 FROM v1;
             true
             > SELECT COUNT(*) > 0 FROM v2;
@@ -806,15 +802,13 @@ SCENARIOS = [
             true
             > SELECT COUNT(*) > 0 FROM v4;
             true
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="5.5Gb",
     ),
     Scenario(
         name="table-outer-join",
-        pre_restart=dedent(
-            f"""
+        pre_restart=dedent(f"""
             > SET statement_timeout = '600 s';
 
             > CREATE TABLE t1 (key1 INTEGER, f1 STRING DEFAULT 'abcdefghi')
@@ -854,24 +848,20 @@ SCENARIOS = [
 
             > SELECT COUNT(*) > 0 FROM v2;
             true
-            """
-        ),
-        post_restart=dedent(
-            """
+            """),
+        post_restart=dedent("""
             > SELECT COUNT(*) > 0 FROM v1;
             true
 
             > SELECT COUNT(*) > 0 FROM v2;
             true
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="cardinality-estimate-disjunction",
-        pre_restart=dedent(
-            """
+        pre_restart=dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET ENABLE_CARDINALITY_ESTIMATES TO TRUE;
@@ -922,8 +912,92 @@ SCENARIOS = [
             8
             9
 
-            ? EXPLAIN WITH(cardinality) SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
+            ?[version>=14400] EXPLAIN OPTIMIZED PLAN WITH(cardinality) AS VERBOSE TEXT FOR SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
             Explained Query:
+              With
+                cte l0 =
+                  Distinct project=[#0] // { cardinality: \"<UNKNOWN>\" }
+                    Project (#1) // { cardinality: \"<UNKNOWN>\" }
+                      ReadStorage materialize.public.tab0 // { cardinality: \"<UNKNOWN>\" }
+                cte l1 =
+                  Reduce group_by=[#0] aggregates=[any((#0{col0} = #1{right_col0_0}))] // { cardinality: \"<UNKNOWN>\" }
+                    CrossJoin type=differential // { cardinality: \"<UNKNOWN>\" }
+                      ArrangeBy keys=[[]] // { cardinality: \"<UNKNOWN>\" }
+                        Get l0 // { cardinality: \"<UNKNOWN>\" }
+                      ArrangeBy keys=[[]] // { cardinality: \"<UNKNOWN>\" }
+                        Project (#4) // { cardinality: \"<UNKNOWN>\" }
+                          Filter (#5{col4} <= 97.63) AND (#5{col4} >= 20.3) // { cardinality: \"<UNKNOWN>\" }
+                            ReadStorage materialize.public.tab0 // { cardinality: \"<UNKNOWN>\" }
+                cte l2 =
+                  Union // { cardinality: \"<UNKNOWN>\" }
+                    Get l1 // { cardinality: \"<UNKNOWN>\" }
+                    Map (false) // { cardinality: \"<UNKNOWN>\" }
+                      Union // { cardinality: \"<UNKNOWN>\" }
+                        Negate // { cardinality: \"<UNKNOWN>\" }
+                          Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                            Get l1 // { cardinality: \"<UNKNOWN>\" }
+                        Get l0 // { cardinality: \"<UNKNOWN>\" }
+              Return // { cardinality: \"<UNKNOWN>\" }
+                Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                  Filter ((#1{col0} > 3) OR ((#1{col0} <= 88) AND (#1{col0} > 5) AND ((#1{col0} = 98) OR (#1{col0} >= 30) OR (#6 AND (#2{col1}) IS NULL AND (#3{col3} < 48) AND (#4{col4} < 86.27) AND (#1{col0} <= 45) AND (#2{col1} <= 10.7) AND (#3{col3} > 49) AND (#3{col3} > 66) AND (#4{col4} > 42.2) AND (#1{col0} >= 25) AND (#3{col3} >= 49) AND (#3{col3} >= 77) AND ((#1{col0} = 67) OR (#1{col0} = 81) OR (#1{col0} = 86) OR (#1{col0} = 94) OR (#1{col0} = 97)) AND ((#2{col1} < 20.99) OR (#2{col1} <= 30.14) OR (#1{col0} > 79) OR (#1{col0} >= 89) OR (#3{col3} >= 12) OR ((#3{col3} > 77) AND (#2{col1} >= 74.51)))) OR (#7 AND (#3{col3} <= 88)) OR ((#1{col0} < 68) AND (#1{col0} <= 35)) OR ((#2{col1} <= 17.96) AND (#7 OR ((#4{col4} <= 2.63) AND (#1{col0} > 2) AND (#3{col3} > 8)))) OR ((#4{col4} <= 97.11) AND ((#1{col0} = 11) OR (#1{col0} = 63) OR (#1{col0} = 85) OR (#1{col0} = 87) OR (#1{col0} = 88)))))) // { cardinality: \"<UNKNOWN>\" }
+                    Map ((#1{col0}) IS NULL) // { cardinality: \"<UNKNOWN>\" }
+                      Join on=(#1 = #5) type=differential // { cardinality: \"<UNKNOWN>\" }
+                        ArrangeBy keys=[[#1]] // { cardinality: \"<UNKNOWN>\" }
+                          Project (#0..=#2, #4, #5) // { cardinality: \"<UNKNOWN>\" }
+                            Filter ((#1{col0} > 3) OR ((#1{col0} <= 88) AND (#1{col0} > 5) AND ((#1{col0} = 98) OR (#1{col0} >= 30) OR (#7 AND (#4{col3} <= 88)) OR ((#2{col1}) IS NULL AND (#4{col3} < 48) AND (#5{col4} < 86.27) AND (#1{col0} <= 45) AND (#2{col1} <= 10.7) AND (#4{col3} > 49) AND (#4{col3} > 66) AND (#5{col4} > 42.2) AND (#1{col0} >= 25) AND (#4{col3} >= 49) AND (#4{col3} >= 77) AND ((#1{col0} = 67) OR (#1{col0} = 81) OR (#1{col0} = 86) OR (#1{col0} = 94) OR (#1{col0} = 97)) AND ((#2{col1} < 20.99) OR (#2{col1} <= 30.14) OR (#1{col0} > 79) OR (#1{col0} >= 89) OR (#4{col3} >= 12) OR ((#4{col3} > 77) AND (#2{col1} >= 74.51)))) OR ((#1{col0} < 68) AND (#1{col0} <= 35)) OR ((#2{col1} <= 17.96) AND (#7 OR ((#5{col4} <= 2.63) AND (#1{col0} > 2) AND (#4{col3} > 8)))) OR ((#5{col4} <= 97.11) AND ((#1{col0} = 11) OR (#1{col0} = 63) OR (#1{col0} = 85) OR (#1{col0} = 87) OR (#1{col0} = 88)))))) // { cardinality: \"<UNKNOWN>\" }
+                              Map ((#1{col0}) IS NULL) // { cardinality: \"<UNKNOWN>\" }
+                                ReadStorage materialize.public.tab0 // { cardinality: \"<UNKNOWN>\" }
+                        ArrangeBy keys=[[#0]] // { cardinality: \"<UNKNOWN>\" }
+                          Union // { cardinality: \"<UNKNOWN>\" }
+                            Filter ((#0 > 3) OR ((#0 <= 88) AND (#0 > 5) AND ((#0) IS NULL OR (#0 = 11) OR (#0 = 63) OR (#0 = 85) OR (#0 = 87) OR (#0 = 88) OR (#0 = 98) OR (#0 > 2) OR (#0 >= 30) OR (#1 AND (#0 <= 45) AND (#0 >= 25) AND ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97))) OR ((#0 < 68) AND (#0 <= 35))))) // { cardinality: \"<UNKNOWN>\" }
+                              Get l2 // { cardinality: \"<UNKNOWN>\" }
+                            Project (#0, #18) // { cardinality: \"<UNKNOWN>\" }
+                              Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: \"<UNKNOWN>\" }
+                                Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35)), null) // { cardinality: \"<UNKNOWN>\" }
+                                  Join on=(#0 = #1) type=differential // { cardinality: \"<UNKNOWN>\" }
+                                    ArrangeBy keys=[[#0]] // { cardinality: \"<UNKNOWN>\" }
+                                      Union // { cardinality: \"<UNKNOWN>\" }
+                                        Negate // { cardinality: \"<UNKNOWN>\" }
+                                          Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                                            Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: \"<UNKNOWN>\" }
+                                              Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: \"<UNKNOWN>\" }
+                                                Get l2 // { cardinality: \"<UNKNOWN>\" }
+                                        Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                                          Filter (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15)))) AND (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15 AND null)))) // { cardinality: \"<UNKNOWN>\" }
+                                            Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: \"<UNKNOWN>\" }
+                                              Get l0 // { cardinality: \"<UNKNOWN>\" }
+                                    ArrangeBy keys=[[#0]] // { cardinality: \"<UNKNOWN>\" }
+                                      Get l0 // { cardinality: \"<UNKNOWN>\" }
+
+            Source materialize.public.tab0
+
+            Target cluster: quickstart
+
+            ?[version<14400] EXPLAIN OPTIMIZED PLAN WITH(cardinality) AS VERBOSE TEXT FOR SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
+            Explained Query:
+              With
+                cte l0 =
+                  Distinct project=[#0] // { cardinality: "<UNKNOWN>" }
+                    Project (#1) // { cardinality: "<UNKNOWN>" }
+                      ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                cte l1 =
+                  Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { cardinality: "<UNKNOWN>" }
+                    CrossJoin type=differential // { cardinality: "<UNKNOWN>" }
+                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
+                        Get l0 // { cardinality: "<UNKNOWN>" }
+                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
+                        Project (#4) // { cardinality: "<UNKNOWN>" }
+                          Filter (#5 <= 97.63) AND (#5 >= 20.3) // { cardinality: "<UNKNOWN>" }
+                            ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                cte l2 =
+                  Union // { cardinality: "<UNKNOWN>" }
+                    Get l1 // { cardinality: "<UNKNOWN>" }
+                    Map (false) // { cardinality: "<UNKNOWN>" }
+                      Union // { cardinality: "<UNKNOWN>" }
+                        Negate // { cardinality: "<UNKNOWN>" }
+                          Project (#0) // { cardinality: "<UNKNOWN>" }
+                            Get l1 // { cardinality: "<UNKNOWN>" }
+                        Get l0 // { cardinality: "<UNKNOWN>" }
               Return // { cardinality: "<UNKNOWN>" }
                 Project (#0) // { cardinality: "<UNKNOWN>" }
                   Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#6 AND (#2) IS NULL AND (#3 < 48) AND (#4 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#3 > 49) AND (#3 > 66) AND (#4 > 42.2) AND (#1 >= 25) AND (#3 >= 49) AND (#3 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#3 >= 12) OR ((#3 > 77) AND (#2 >= 74.51)))) OR (#7 AND (#3 <= 88)) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#4 <= 2.63) AND (#1 > 2) AND (#3 > 8)))) OR ((#4 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: "<UNKNOWN>" }
@@ -955,37 +1029,12 @@ SCENARIOS = [
                                               Get l0 // { cardinality: "<UNKNOWN>" }
                                     ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
                                       Get l0 // { cardinality: "<UNKNOWN>" }
-              With
-                cte l2 =
-                  Union // { cardinality: "<UNKNOWN>" }
-                    Get l1 // { cardinality: "<UNKNOWN>" }
-                    Map (false) // { cardinality: "<UNKNOWN>" }
-                      Union // { cardinality: "<UNKNOWN>" }
-                        Negate // { cardinality: "<UNKNOWN>" }
-                          Project (#0) // { cardinality: "<UNKNOWN>" }
-                            Get l1 // { cardinality: "<UNKNOWN>" }
-                        Get l0 // { cardinality: "<UNKNOWN>" }
-                cte l1 =
-                  Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { cardinality: "<UNKNOWN>" }
-                    CrossJoin type=differential // { cardinality: "<UNKNOWN>" }
-                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
-                        Get l0 // { cardinality: "<UNKNOWN>" }
-                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
-                        Project (#4) // { cardinality: "<UNKNOWN>" }
-                          Filter (#5 <= 97.63) AND (#5 >= 20.3) // { cardinality: "<UNKNOWN>" }
-                            ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
-                cte l0 =
-                  Distinct project=[#0] // { cardinality: "<UNKNOWN>" }
-                    Project (#1) // { cardinality: "<UNKNOWN>" }
-                      ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
 
             Source materialize.public.tab0
 
             Target cluster: quickstart
-            """
-        ),
-        post_restart=dedent(
-            """
+            """),
+        post_restart=dedent("""
             > SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
             0
             1
@@ -998,8 +1047,92 @@ SCENARIOS = [
             8
             9
 
-            ? EXPLAIN WITH(cardinality) SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
+            ?[version>=14400] EXPLAIN OPTIMIZED PLAN WITH(cardinality) AS VERBOSE TEXT FOR SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
             Explained Query:
+              With
+                cte l0 =
+                  Distinct project=[#0] // { cardinality: \"<UNKNOWN>\" }
+                    Project (#1) // { cardinality: \"<UNKNOWN>\" }
+                      ReadStorage materialize.public.tab0 // { cardinality: \"<UNKNOWN>\" }
+                cte l1 =
+                  Reduce group_by=[#0] aggregates=[any((#0{col0} = #1{right_col0_0}))] // { cardinality: \"<UNKNOWN>\" }
+                    CrossJoin type=differential // { cardinality: \"<UNKNOWN>\" }
+                      ArrangeBy keys=[[]] // { cardinality: \"<UNKNOWN>\" }
+                        Get l0 // { cardinality: \"<UNKNOWN>\" }
+                      ArrangeBy keys=[[]] // { cardinality: \"<UNKNOWN>\" }
+                        Project (#4) // { cardinality: \"<UNKNOWN>\" }
+                          Filter (#5{col4} <= 97.63) AND (#5{col4} >= 20.3) // { cardinality: \"<UNKNOWN>\" }
+                            ReadStorage materialize.public.tab0 // { cardinality: \"<UNKNOWN>\" }
+                cte l2 =
+                  Union // { cardinality: \"<UNKNOWN>\" }
+                    Get l1 // { cardinality: \"<UNKNOWN>\" }
+                    Map (false) // { cardinality: \"<UNKNOWN>\" }
+                      Union // { cardinality: \"<UNKNOWN>\" }
+                        Negate // { cardinality: \"<UNKNOWN>\" }
+                          Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                            Get l1 // { cardinality: \"<UNKNOWN>\" }
+                        Get l0 // { cardinality: \"<UNKNOWN>\" }
+              Return // { cardinality: \"<UNKNOWN>\" }
+                Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                  Filter ((#1{col0} > 3) OR ((#1{col0} <= 88) AND (#1{col0} > 5) AND ((#1{col0} = 98) OR (#1{col0} >= 30) OR (#6 AND (#2{col1}) IS NULL AND (#3{col3} < 48) AND (#4{col4} < 86.27) AND (#1{col0} <= 45) AND (#2{col1} <= 10.7) AND (#3{col3} > 49) AND (#3{col3} > 66) AND (#4{col4} > 42.2) AND (#1{col0} >= 25) AND (#3{col3} >= 49) AND (#3{col3} >= 77) AND ((#1{col0} = 67) OR (#1{col0} = 81) OR (#1{col0} = 86) OR (#1{col0} = 94) OR (#1{col0} = 97)) AND ((#2{col1} < 20.99) OR (#2{col1} <= 30.14) OR (#1{col0} > 79) OR (#1{col0} >= 89) OR (#3{col3} >= 12) OR ((#3{col3} > 77) AND (#2{col1} >= 74.51)))) OR (#7 AND (#3{col3} <= 88)) OR ((#1{col0} < 68) AND (#1{col0} <= 35)) OR ((#2{col1} <= 17.96) AND (#7 OR ((#4{col4} <= 2.63) AND (#1{col0} > 2) AND (#3{col3} > 8)))) OR ((#4{col4} <= 97.11) AND ((#1{col0} = 11) OR (#1{col0} = 63) OR (#1{col0} = 85) OR (#1{col0} = 87) OR (#1{col0} = 88)))))) // { cardinality: \"<UNKNOWN>\" }
+                    Map ((#1{col0}) IS NULL) // { cardinality: \"<UNKNOWN>\" }
+                      Join on=(#1 = #5) type=differential // { cardinality: \"<UNKNOWN>\" }
+                        ArrangeBy keys=[[#1]] // { cardinality: \"<UNKNOWN>\" }
+                          Project (#0..=#2, #4, #5) // { cardinality: \"<UNKNOWN>\" }
+                            Filter ((#1{col0} > 3) OR ((#1{col0} <= 88) AND (#1{col0} > 5) AND ((#1{col0} = 98) OR (#1{col0} >= 30) OR (#7 AND (#4{col3} <= 88)) OR ((#2{col1}) IS NULL AND (#4{col3} < 48) AND (#5{col4} < 86.27) AND (#1{col0} <= 45) AND (#2{col1} <= 10.7) AND (#4{col3} > 49) AND (#4{col3} > 66) AND (#5{col4} > 42.2) AND (#1{col0} >= 25) AND (#4{col3} >= 49) AND (#4{col3} >= 77) AND ((#1{col0} = 67) OR (#1{col0} = 81) OR (#1{col0} = 86) OR (#1{col0} = 94) OR (#1{col0} = 97)) AND ((#2{col1} < 20.99) OR (#2{col1} <= 30.14) OR (#1{col0} > 79) OR (#1{col0} >= 89) OR (#4{col3} >= 12) OR ((#4{col3} > 77) AND (#2{col1} >= 74.51)))) OR ((#1{col0} < 68) AND (#1{col0} <= 35)) OR ((#2{col1} <= 17.96) AND (#7 OR ((#5{col4} <= 2.63) AND (#1{col0} > 2) AND (#4{col3} > 8)))) OR ((#5{col4} <= 97.11) AND ((#1{col0} = 11) OR (#1{col0} = 63) OR (#1{col0} = 85) OR (#1{col0} = 87) OR (#1{col0} = 88)))))) // { cardinality: \"<UNKNOWN>\" }
+                              Map ((#1{col0}) IS NULL) // { cardinality: \"<UNKNOWN>\" }
+                                ReadStorage materialize.public.tab0 // { cardinality: \"<UNKNOWN>\" }
+                        ArrangeBy keys=[[#0]] // { cardinality: \"<UNKNOWN>\" }
+                          Union // { cardinality: \"<UNKNOWN>\" }
+                            Filter ((#0 > 3) OR ((#0 <= 88) AND (#0 > 5) AND ((#0) IS NULL OR (#0 = 11) OR (#0 = 63) OR (#0 = 85) OR (#0 = 87) OR (#0 = 88) OR (#0 = 98) OR (#0 > 2) OR (#0 >= 30) OR (#1 AND (#0 <= 45) AND (#0 >= 25) AND ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97))) OR ((#0 < 68) AND (#0 <= 35))))) // { cardinality: \"<UNKNOWN>\" }
+                              Get l2 // { cardinality: \"<UNKNOWN>\" }
+                            Project (#0, #18) // { cardinality: \"<UNKNOWN>\" }
+                              Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: \"<UNKNOWN>\" }
+                                Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35)), null) // { cardinality: \"<UNKNOWN>\" }
+                                  Join on=(#0 = #1) type=differential // { cardinality: \"<UNKNOWN>\" }
+                                    ArrangeBy keys=[[#0]] // { cardinality: \"<UNKNOWN>\" }
+                                      Union // { cardinality: \"<UNKNOWN>\" }
+                                        Negate // { cardinality: \"<UNKNOWN>\" }
+                                          Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                                            Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: \"<UNKNOWN>\" }
+                                              Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: \"<UNKNOWN>\" }
+                                                Get l2 // { cardinality: \"<UNKNOWN>\" }
+                                        Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                                          Filter (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15)))) AND (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15 AND null)))) // { cardinality: \"<UNKNOWN>\" }
+                                            Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: \"<UNKNOWN>\" }
+                                              Get l0 // { cardinality: \"<UNKNOWN>\" }
+                                    ArrangeBy keys=[[#0]] // { cardinality: \"<UNKNOWN>\" }
+                                      Get l0 // { cardinality: \"<UNKNOWN>\" }
+
+            Source materialize.public.tab0
+
+            Target cluster: quickstart
+
+            ?[version<14400] EXPLAIN OPTIMIZED PLAN WITH(cardinality) AS VERBOSE TEXT FOR SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
+            Explained Query:
+              With
+                cte l0 =
+                  Distinct project=[#0] // { cardinality: "<UNKNOWN>" }
+                    Project (#1) // { cardinality: "<UNKNOWN>" }
+                      ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                cte l1 =
+                  Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { cardinality: "<UNKNOWN>" }
+                    CrossJoin type=differential // { cardinality: "<UNKNOWN>" }
+                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
+                        Get l0 // { cardinality: "<UNKNOWN>" }
+                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
+                        Project (#4) // { cardinality: "<UNKNOWN>" }
+                          Filter (#5 <= 97.63) AND (#5 >= 20.3) // { cardinality: "<UNKNOWN>" }
+                            ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                cte l2 =
+                  Union // { cardinality: "<UNKNOWN>" }
+                    Get l1 // { cardinality: "<UNKNOWN>" }
+                    Map (false) // { cardinality: "<UNKNOWN>" }
+                      Union // { cardinality: "<UNKNOWN>" }
+                        Negate // { cardinality: "<UNKNOWN>" }
+                          Project (#0) // { cardinality: "<UNKNOWN>" }
+                            Get l1 // { cardinality: "<UNKNOWN>" }
+                        Get l0 // { cardinality: "<UNKNOWN>" }
               Return // { cardinality: "<UNKNOWN>" }
                 Project (#0) // { cardinality: "<UNKNOWN>" }
                   Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#6 AND (#2) IS NULL AND (#3 < 48) AND (#4 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#3 > 49) AND (#3 > 66) AND (#4 > 42.2) AND (#1 >= 25) AND (#3 >= 49) AND (#3 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#3 >= 12) OR ((#3 > 77) AND (#2 >= 74.51)))) OR (#7 AND (#3 <= 88)) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#4 <= 2.63) AND (#1 > 2) AND (#3 > 8)))) OR ((#4 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: "<UNKNOWN>" }
@@ -1031,59 +1164,191 @@ SCENARIOS = [
                                               Get l0 // { cardinality: "<UNKNOWN>" }
                                     ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
                                       Get l0 // { cardinality: "<UNKNOWN>" }
-              With
-                cte l2 =
-                  Union // { cardinality: "<UNKNOWN>" }
-                    Get l1 // { cardinality: "<UNKNOWN>" }
-                    Map (false) // { cardinality: "<UNKNOWN>" }
-                      Union // { cardinality: "<UNKNOWN>" }
-                        Negate // { cardinality: "<UNKNOWN>" }
-                          Project (#0) // { cardinality: "<UNKNOWN>" }
-                            Get l1 // { cardinality: "<UNKNOWN>" }
-                        Get l0 // { cardinality: "<UNKNOWN>" }
-                cte l1 =
-                  Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { cardinality: "<UNKNOWN>" }
-                    CrossJoin type=differential // { cardinality: "<UNKNOWN>" }
-                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
-                        Get l0 // { cardinality: "<UNKNOWN>" }
-                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
-                        Project (#4) // { cardinality: "<UNKNOWN>" }
-                          Filter (#5 <= 97.63) AND (#5 >= 20.3) // { cardinality: "<UNKNOWN>" }
-                            ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
-                cte l0 =
-                  Distinct project=[#0] // { cardinality: "<UNKNOWN>" }
-                    Project (#1) // { cardinality: "<UNKNOWN>" }
-                      ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
 
             Source materialize.public.tab0
 
             Target cluster: quickstart
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
+    ),
+    Scenario(
+        name="dataflow-logical-backpressure",
+        pre_restart=dedent("""
+            # * Timestamp interval to quickly create a source with many distinct timestamps.
+            # * Lgalloc disabled to force more memory pressure.
+            # * Index options to enable retained history.
+            # * Finally, enable backpressure.
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET min_timestamp_interval = '10ms';
+            ALTER SYSTEM SET enable_lgalloc = false;
+            ALTER SYSTEM SET enable_index_options = true;
+            ALTER SYSTEM SET enable_compute_logical_backpressure = true;
+
+            > DROP CLUSTER REPLICA clusterd.r1;
+
+            # Table to hold back frontiers.
+            > CREATE TABLE t (a int);
+            > INSERT INTO t VALUES (1);
+
+            # Create a source with 512 distinct timestamps.
+            > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '100ms', UP TO 512) WITH (TIMESTAMP INTERVAL '100ms');
+
+            > CREATE TABLE counter_tbl FROM SOURCE counter WITH (RETAIN HISTORY FOR '10d');
+
+            > CREATE MATERIALIZED VIEW cv WITH (RETAIN HISTORY FOR '10d') AS SELECT counter FROM counter_tbl, t;
+
+            # Wait until counter is fully ingested.
+            > SELECT COUNT(*) FROM counter_tbl;
+            512
+
+            > CREATE CLUSTER REPLICA clusterd.r1
+              STORAGECTL ADDRESSES ['clusterd:2100'],
+              STORAGE ADDRESSES ['clusterd:2103'],
+              COMPUTECTL ADDRESSES ['clusterd:2101'],
+              COMPUTE ADDRESSES ['clusterd:2102'];
+
+            > SET CLUSTER = clusterd
+
+            # Ballast is the concatenation of two 32-byte strings, for readability.
+            > CREATE VIEW v AS
+                SELECT
+                    c1.counter + c2.counter * 10 + c3.counter * 100 AS c,
+                    '01234567890123456789012345678901'||'01234567890123456789012345678901' AS ballast
+                FROM
+                    cv c1,
+                    cv c2,
+                    cv c3;
+            > CREATE DEFAULT INDEX ON v WITH (RETAIN HISTORY FOR '10d');
+            > SELECT COUNT(*) > 0 FROM v;
+            true
+            """),
+        post_restart=dedent("""
+            > SET CLUSTER = clusterd
+
+            > SELECT COUNT(*) > 0 FROM v;
+            true
+            """),
+        materialized_memory="10Gb",
+        clusterd_memory="3.5Gb",
+    ),
+    Scenario(
+        name="iceberg-sink",
+        needs_iceberg=True,
+        pre_restart="\n".join(
+            [
+                "> SET CLUSTER = clusterd",
+                "> CREATE TABLE t1 (key INT, pad TEXT)",
+                f"> INSERT INTO t1 SELECT generate_series, repeat('x', {PAD_LEN}) FROM generate_series(1, {REPEAT})",
+            ]
+            + [
+                f"> INSERT INTO t1 SELECT key + {i * REPEAT}, pad FROM t1 WHERE key <= {REPEAT}"
+                for i in range(1, 16)
+            ]
+            + [
+                "> SELECT count(*) FROM t1",
+                f"{REPEAT * 16}",
+                """> CREATE SECRET access_key_secret AS '${arg.s3-access-key}'""",
+                """> CREATE CONNECTION aws_conn TO AWS (
+  ACCESS KEY ID = '${arg.s3-access-user}',
+  SECRET ACCESS KEY = SECRET access_key_secret,
+  ENDPOINT = 'http://${arg.aws-endpoint}/',
+  REGION = 'us-east-1'
+  )""",
+                """> CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (
+  CATALOG TYPE = 'REST',
+  URL = 'http://polaris:8181/api/catalog',
+  CREDENTIAL = 'root:root',
+  WAREHOUSE = 'default_catalog',
+  SCOPE = 'PRINCIPAL_ROLE:ALL'
+  )""",
+                """> CREATE SINK iceberg_sink
+  IN CLUSTER clusterd
+  FROM t1
+  INTO ICEBERG CATALOG CONNECTION polaris_conn (
+    NAMESPACE 'default_namespace',
+    TABLE 'bounded_memory_test'
+  )
+  USING AWS CONNECTION aws_conn
+  KEY (key) NOT ENFORCED
+  MODE UPSERT
+  WITH (COMMIT INTERVAL '10s')""",
+                "> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'iceberg_sink'",
+                "running",
+            ]
+        ),
+        post_restart=dedent("""
+            > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'iceberg_sink'
+            running
+            """),
+        materialized_memory="2.5Gb",
+        clusterd_memory="1Gb",
+    ),
+    Scenario(
+        name="copy-to-from-s3",
+        pre_restart=dedent(f"""
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET max_result_size = 2147483648;
+
+            > CREATE SECRET s3_secret AS '${{arg.aws-secret-access-key}}'
+
+            > CREATE CONNECTION s3_conn TO AWS (
+                ACCESS KEY ID = '${{arg.aws-access-key-id}}',
+                SECRET ACCESS KEY = SECRET s3_secret,
+                ENDPOINT = '${{arg.aws-endpoint}}',
+                REGION = 'us-east-1'
+              )
+
+            > CREATE TABLE t_src (f1 INTEGER, f2 TEXT)
+
+            > INSERT INTO t_src
+              SELECT i, repeat('x', {PAD_LEN})
+              FROM generate_series(1, {REPEAT}) AS s(i)
+
+            > COPY t_src TO 's3://copytos3/bounded-memory/copy-from-s3'
+              WITH (AWS CONNECTION = s3_conn, FORMAT = 'csv')
+
+            > CREATE TABLE t_dst (f1 INTEGER, f2 TEXT)
+
+            > COPY INTO t_dst FROM 's3://copytos3/bounded-memory/copy-from-s3'
+              (FORMAT CSV, AWS CONNECTION = s3_conn)
+
+            > SELECT COUNT(*) FROM t_dst
+            {REPEAT}
+            """),
+        post_restart=dedent(f"""
+            > SELECT COUNT(*) FROM t_dst
+            {REPEAT}
+            """),
+        materialized_memory="1.8Gb",
+        clusterd_memory="0.5Gb",
     ),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    def process(name: str) -> None:
+        if name in ["default", "minimization-search"]:
+            return
+        with c.test_case(name):
+            c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
+
+
+def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Process various datasets in a memory-constrained environment in order
     to exercise compaction/garbage collection and confirm no OOMs or thrashing."""
 
     parser.add_argument(
         "scenarios", nargs="*", default=None, help="run specified Scenarios"
     )
-    parser.add_argument("--find-minimal-memory", action="store_true")
-    parser.add_argument("--materialized-memory-search-step", default=0.2, type=float)
-    parser.add_argument("--clusterd-memory-search-step", default=0.2, type=float)
     args = parser.parse_args()
 
     for scenario in shard_list(SCENARIOS, lambda scenario: scenario.name):
-        if (
-            args.scenarios is not None
-            and len(args.scenarios) > 0
-            and scenario.name not in args.scenarios
-        ):
+        if shall_skip_scenario(scenario, args):
             continue
 
         if scenario.disabled:
@@ -1092,26 +1357,94 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.override_current_testcase_name(f"Scenario '{scenario.name}'")
 
-        if args.find_minimal_memory:
-            print(f"+++ Starting memory search for scenario {scenario.name}")
+        print(
+            f"+++ Running scenario {scenario.name} with materialized_memory={scenario.materialized_memory} and clusterd_memory={scenario.clusterd_memory} ..."
+        )
 
-            run_memory_search(
-                c,
-                scenario,
-                args.materialized_memory_search_step,
-                args.clusterd_memory_search_step,
-            )
-        else:
-            print(
-                f"+++ Running scenario {scenario.name} with materialized_memory={scenario.materialized_memory} and clusterd_memory={scenario.clusterd_memory} ..."
-            )
+        run_scenario(
+            c,
+            scenario,
+            materialized_memory=scenario.materialized_memory,
+            clusterd_memory=scenario.clusterd_memory,
+        )
 
-            run_scenario(
-                c,
-                scenario,
-                materialized_memory=scenario.materialized_memory,
-                clusterd_memory=scenario.clusterd_memory,
-            )
+
+def workflow_minimization_search(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Find the minimal working memory configurations."""
+
+    parser.add_argument(
+        "scenarios", nargs="*", default=None, help="run specified Scenarios"
+    )
+    parser.add_argument(
+        "--materialized-memory-search-step",
+        default=0.2,
+        type=float,
+    )
+    parser.add_argument(
+        "--clusterd-memory-search-step",
+        default=0.2,
+        type=float,
+    )
+    parser.add_argument(
+        "--materialized-memory-lower-bound-in-gb",
+        default=1.5,
+        type=float,
+    )
+    parser.add_argument(
+        "--clusterd-memory-lower-bound-in-gb",
+        default=0.5,
+        type=float,
+    )
+    args = parser.parse_args()
+
+    if buildkite.is_in_buildkite():
+        test_analytics_config = create_test_analytics_config(c)
+    else:
+        test_analytics_config = create_dummy_test_analytics_config()
+
+    test_analytics = TestAnalyticsDb(test_analytics_config)
+    # will be updated to True at the end
+    test_analytics.builds.add_build_job(was_successful=False)
+
+    for scenario in shard_list(SCENARIOS, lambda scenario: scenario.name):
+        if shall_skip_scenario(scenario, args):
+            continue
+
+        if scenario.disabled:
+            print(f"+++ Scenario {scenario.name} is disabled, skipping.")
+            continue
+
+        c.override_current_testcase_name(f"Scenario '{scenario.name}'")
+
+        print(f"+++ Starting memory search for scenario {scenario.name}")
+
+        run_memory_search(
+            c,
+            scenario,
+            args.materialized_memory_search_step,
+            args.clusterd_memory_search_step,
+            args.materialized_memory_lower_bound_in_gb,
+            args.clusterd_memory_lower_bound_in_gb,
+            test_analytics,
+        )
+
+    try:
+        test_analytics.builds.update_build_job_success(True)
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        test_analytics.on_upload_failed(e)
+
+
+def shall_skip_scenario(scenario: Scenario, args: argparse.Namespace) -> bool:
+    return (
+        args.scenarios is not None
+        and len(args.scenarios) > 0
+        and scenario.name not in args.scenarios
+    )
 
 
 def run_scenario(
@@ -1120,38 +1453,67 @@ def run_scenario(
     c.down(destroy_volumes=True)
 
     with c.override(
-        Materialized(memory=materialized_memory),
+        Materialized(memory=materialized_memory, support_external_clusterd=True),
         Clusterd(memory=clusterd_memory),
     ):
-        c.up("redpanda", "materialized", "postgres", "mysql", "clusterd")
+        c.up(
+            "redpanda",
+            "materialized",
+            "postgres",
+            "mysql",
+            "clusterd",
+            "minio",
+            Service("testdrive", idle=True),
+            *(
+                [
+                    Service("polaris-bootstrap", idle=True),
+                    Service("polaris", idle=True),
+                ]
+                if scenario.needs_iceberg
+                else []
+            ),
+        )
 
         c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
 
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER clusterd REPLICAS (r1 (
                 STORAGECTL ADDRESSES ['clusterd:2100'],
                 STORAGE ADDRESSES ['clusterd:2103'],
                 COMPUTECTL ADDRESSES ['clusterd:2101'],
                 COMPUTE ADDRESSES ['clusterd:2102']
             ))
-        """
-        )
+        """)
 
         testdrive_timeout_arg = "--default-timeout=5m"
+        statement_timeout = "> SET statement_timeout = '600s';\n"
+        extra_testdrive_args: list[str] = []
 
-        c.up("testdrive", persistent=True)
-        c.testdrive(scenario.pre_restart, args=[testdrive_timeout_arg])
+        if scenario.needs_iceberg:
+            username, key = setup_polaris_for_iceberg(c)
+            extra_testdrive_args = [
+                f"--var=s3-access-key={key}",
+                f"--var=s3-access-user={username}",
+                "--var=aws-endpoint=minio:9000",
+            ]
+
+        c.testdrive(
+            statement_timeout + scenario.pre_restart,
+            args=[testdrive_timeout_arg] + extra_testdrive_args,
+        )
 
         # Restart Mz to confirm that re-hydration is also bounded memory
         c.kill("materialized", "clusterd")
         c.up("materialized", "clusterd")
 
-        c.testdrive(scenario.post_restart, args=[testdrive_timeout_arg])
+        c.testdrive(
+            statement_timeout + scenario.post_restart,
+            args=[testdrive_timeout_arg] + extra_testdrive_args,
+        )
 
 
 def try_run_scenario(
@@ -1169,28 +1531,56 @@ def run_memory_search(
     scenario: Scenario,
     materialized_search_step_in_gb: float,
     clusterd_search_step_in_gb: float,
+    materialized_memory_lower_bound_in_gb: float,
+    clusterd_memory_lower_bound_in_gb: float,
+    test_analytics: TestAnalyticsDb,
 ) -> None:
     assert materialized_search_step_in_gb > 0 or clusterd_search_step_in_gb > 0
     materialized_memory = scenario.materialized_memory
     clusterd_memory = scenario.clusterd_memory
 
+    none_minimization_target = "none"
+    search_entry = BoundedMemoryMinimalSearchEntry(
+        scenario_name=scenario.name,
+        tested_memory_mz_in_gb=_get_memory_in_gb(materialized_memory),
+        tested_memory_clusterd_in_gb=_get_memory_in_gb(clusterd_memory),
+    )
+    test_analytics.bounded_memory_search.add_entry(
+        BOUNDED_MEMORY_FRAMEWORK_VERSION,
+        search_entry,
+        minimization_target=none_minimization_target,
+        flush=True,
+    )
+    test_analytics.bounded_memory_search.update_status(
+        search_entry,
+        minimization_target=none_minimization_target,
+        status=BOUNDED_MEMORY_STATUS_CONFIGURED,
+        flush=True,
+    )
+
     if materialized_search_step_in_gb > 0:
         materialized_memory, clusterd_memory = find_minimal_memory(
             c,
+            test_analytics,
             scenario,
             initial_materialized_memory=materialized_memory,
             initial_clusterd_memory=clusterd_memory,
             reduce_materialized_memory_by_gb=materialized_search_step_in_gb,
             reduce_clusterd_memory_by_gb=0,
+            materialized_memory_lower_bound_in_gb=materialized_memory_lower_bound_in_gb,
+            clusterd_memory_lower_bound_in_gb=clusterd_memory_lower_bound_in_gb,
         )
     if clusterd_search_step_in_gb > 0:
         materialized_memory, clusterd_memory = find_minimal_memory(
             c,
+            test_analytics,
             scenario,
             initial_materialized_memory=materialized_memory,
             initial_clusterd_memory=clusterd_memory,
             reduce_materialized_memory_by_gb=0,
             reduce_clusterd_memory_by_gb=clusterd_search_step_in_gb,
+            materialized_memory_lower_bound_in_gb=materialized_memory_lower_bound_in_gb,
+            clusterd_memory_lower_bound_in_gb=clusterd_memory_lower_bound_in_gb,
         )
 
     print(f"Found minimal memory for scenario {scenario.name}:")
@@ -1205,18 +1595,25 @@ def run_memory_search(
 
 def find_minimal_memory(
     c: Composition,
+    test_analytics: TestAnalyticsDb,
     scenario: Scenario,
     initial_materialized_memory: str,
     initial_clusterd_memory: str,
     reduce_materialized_memory_by_gb: float,
     reduce_clusterd_memory_by_gb: float,
+    materialized_memory_lower_bound_in_gb: float,
+    clusterd_memory_lower_bound_in_gb: float,
 ) -> tuple[str, str]:
-    assert (
-        reduce_materialized_memory_by_gb >= 0.1 or reduce_clusterd_memory_by_gb >= 0.1
-    )
-
-    min_allowed_materialized_memory_in_gb = 4.0
-    min_allowed_clusterd_memory_in_gb = 2.0
+    if reduce_materialized_memory_by_gb > 0 and reduce_clusterd_memory_by_gb > 0:
+        raise RuntimeError(
+            "Cannot reduce both materialized and clusterd memory at once"
+        )
+    elif reduce_materialized_memory_by_gb >= 0.1:
+        minimalization_target = "materialized_memory"
+    elif reduce_clusterd_memory_by_gb >= 0.1:
+        minimalization_target = "clusterd_memory"
+    else:
+        raise RuntimeError("No valid reduction set")
 
     materialized_memory = initial_materialized_memory
     clusterd_memory = initial_clusterd_memory
@@ -1227,12 +1624,12 @@ def find_minimal_memory(
         new_materialized_memory = _reduce_memory(
             materialized_memory,
             reduce_materialized_memory_by_gb,
-            min_allowed_materialized_memory_in_gb,
+            materialized_memory_lower_bound_in_gb,
         )
         new_clusterd_memory = _reduce_memory(
             clusterd_memory,
             reduce_clusterd_memory_by_gb,
-            min_allowed_clusterd_memory_in_gb,
+            clusterd_memory_lower_bound_in_gb,
         )
 
         if new_materialized_memory is None or new_clusterd_memory is None:
@@ -1240,6 +1637,18 @@ def find_minimal_memory(
             break
 
         scenario_desc = f"{scenario.name} with materialized_memory={new_materialized_memory} and clusterd_memory={new_clusterd_memory}"
+
+        search_entry = BoundedMemoryMinimalSearchEntry(
+            scenario_name=scenario.name,
+            tested_memory_mz_in_gb=_get_memory_in_gb(new_materialized_memory),
+            tested_memory_clusterd_in_gb=_get_memory_in_gb(new_clusterd_memory),
+        )
+        test_analytics.bounded_memory_search.add_entry(
+            BOUNDED_MEMORY_FRAMEWORK_VERSION,
+            search_entry,
+            minimization_target=minimalization_target,
+            flush=True,
+        )
 
         print(f"Trying scenario {scenario_desc}")
         success = try_run_scenario(
@@ -1255,13 +1664,25 @@ def find_minimal_memory(
             clusterd_memory = new_clusterd_memory
             materialized_memory_steps.append(new_materialized_memory)
             clusterd_memory_steps.append(new_clusterd_memory)
+            test_analytics.bounded_memory_search.update_status(
+                search_entry,
+                status=BOUNDED_MEMORY_STATUS_SUCCESS,
+                minimization_target=minimalization_target,
+                flush=True,
+            )
         else:
             print(f"Scenario {scenario_desc} failed.")
+            test_analytics.bounded_memory_search.update_status(
+                search_entry,
+                status=BOUNDED_MEMORY_STATUS_FAILURE,
+                minimization_target=minimalization_target,
+                flush=True,
+            )
             break
 
     if (
-        materialized_memory != initial_materialized_memory
-        or clusterd_memory != initial_clusterd_memory
+        materialized_memory < initial_materialized_memory
+        or clusterd_memory < initial_clusterd_memory
     ):
         print(f"Validating again the memory configuration for {scenario.name}")
         materialized_memory, clusterd_memory = _validate_new_memory_configuration(
@@ -1312,14 +1733,11 @@ def _validate_new_memory_configuration(
 def _reduce_memory(
     memory_spec: str, reduce_by_gb: float, lower_bound_in_gb: float
 ) -> str | None:
-    if not memory_spec.endswith("Gb"):
-        raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
-
     if math.isclose(reduce_by_gb, 0.0, abs_tol=0.01):
         # allow staying at the same value
         return memory_spec
 
-    current_gb = float(memory_spec.removesuffix("Gb"))
+    current_gb = _get_memory_in_gb(memory_spec)
 
     if math.isclose(current_gb, lower_bound_in_gb, abs_tol=0.01):
         # lower bound already reached
@@ -1330,4 +1748,11 @@ def _reduce_memory(
     if new_gb < lower_bound_in_gb:
         new_gb = lower_bound_in_gb
 
-    return f"{new_gb}Gb"
+    return f"{round(new_gb, 2)}Gb"
+
+
+def _get_memory_in_gb(memory_spec: str) -> float:
+    if not memory_spec.endswith("Gb"):
+        raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
+
+    return float(memory_spec.removesuffix("Gb"))

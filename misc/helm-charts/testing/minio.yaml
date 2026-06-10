@@ -1,0 +1,112 @@
+---
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: materialize
+  labels:
+    app: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - name: minio
+        image: minio/minio
+        args:
+        - server
+        - /data
+        env:
+        - name: MINIO_ACCESS_KEY
+          value: "minio"
+        - name: MINIO_SECRET_KEY
+          value: "minio123"
+        - name: MINIO_BROWSER
+          value: "on"
+        ports:
+        - containerPort: 9000
+        volumeMounts:
+        - name: storage
+          mountPath: /data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /minio/health/live
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 20
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+        lifecycle:
+          postStart:
+            exec:
+              command:
+                - "bash"
+                - "-euc"
+                - |
+                  function setup_buckets() {
+                      while true; do
+                          echo "Waiting for minio to become ready..."
+                          if curl --fail localhost:9000/minio/health/ready; then
+                              echo "Minio is ready"
+                              break
+                          fi
+                          sleep 1
+                      done
+
+                      echo "Creating local alias"
+                      mc alias set local http://localhost:9000 minio minio123
+                      echo $?
+
+                      echo "Creating local/persist bucket"
+                      mc mb -p local/persist
+                      echo $?
+
+                      echo "Creating local/bucket bucket"
+                      mc mb -p local/bucket
+                      echo $?
+                  }
+
+                  setup_buckets 2>&1 > poststart.log
+      volumes:
+      - name: storage
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: materialize
+spec:
+  ports:
+    - port: 9000
+      targetPort: 9000
+  selector:
+    app: minio

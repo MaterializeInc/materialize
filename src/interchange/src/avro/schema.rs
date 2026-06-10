@@ -38,26 +38,35 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use mz_avro::error::Error as AvroError;
-use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
+use mz_avro::schema::{
+    ParseSchemaError, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed, resolve_schemas,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::OreFutureExt;
 use mz_ore::retry::Retry;
-use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
-use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, RelationDesc, SqlColumnType, SqlScalarType, UNKNOWN_COLUMN_NAME};
 use tracing::warn;
 
 use crate::avro::is_null;
 
-pub fn parse_schema(schema: &str) -> anyhow::Result<Schema> {
-    let schema = serde_json::from_str(schema)?;
-    Ok(Schema::parse(&schema)?)
+pub fn parse_schema(schema: &str, references: &[String]) -> anyhow::Result<Schema> {
+    let schema: serde_json::Value = serde_json::from_str(schema)?;
+    // Parse reference schemas incrementally: each reference may depend on previous ones.
+    // References must be provided in dependency order (dependencies first).
+    let mut parsed_refs: Vec<Schema> = Vec::with_capacity(references.len());
+    for reference in references {
+        let ref_json: serde_json::Value = serde_json::from_str(reference)?;
+        let parsed = Schema::parse_with_references(&ref_json, &parsed_refs)?;
+        parsed_refs.push(parsed);
+    }
+    Ok(Schema::parse_with_references(&schema, &parsed_refs)?)
 }
 
 /// Converts an Apache Avro schema into a list of column names and types.
@@ -72,7 +81,7 @@ pub fn schema_to_relationdesc(schema: Schema) -> Result<RelationDesc, anyhow::Er
 
 /// Convert an Avro schema to a series of columns and names, flattening the top-level record,
 /// if the top node is indeed a record.
-fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
+fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, SqlColumnType)>> {
     let mut columns = vec![];
     let mut seen_avro_nodes = Default::default();
     match schema.inner {
@@ -98,7 +107,7 @@ fn get_union_columns<'a>(
     seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode<'a>,
     base_name: Option<&str>,
-) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
+) -> anyhow::Result<Vec<(ColumnName, SqlColumnType)>> {
     let us = match schema.inner {
         SchemaPiece::Union(us) => us,
         _ => panic!("This function should only be called on unions."),
@@ -109,56 +118,44 @@ fn get_union_columns<'a>(
         bail!(anyhow!("Empty or null-only unions are not supported"));
     } else {
         for (i, v) in vs.iter().filter(|v| !is_null(v)).enumerate() {
-            let named_idx = match v {
-                SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                _ => None,
-            };
-            if let Some(named_idx) = named_idx {
-                if !seen_avro_nodes.insert(named_idx) {
-                    bail!(
-                        "Recursive types are not supported: {}",
-                        v.get_human_name(schema.root)
-                    );
+            with_recursion_guard(seen_avro_nodes, schema.root, v, |seen| {
+                let node = schema.step(v);
+                if let SchemaPiece::Union(_) = node.inner {
+                    unreachable!("Internal error: directly nested avro union!");
                 }
-            }
-            let node = schema.step(v);
-            if let SchemaPiece::Union(_) = node.inner {
-                unreachable!("Internal error: directly nested avro union!");
-            }
 
-            let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
-                // There is only one non-null variant in the
-                // union, so we can use the field name directly.
-                base_name
-                    .map(|n| n.to_owned())
-                    .or_else(|| {
-                        v.get_piece_and_name(schema.root)
-                            .1
-                            .map(|full_name| full_name.base_name().to_owned())
-                    })
-                    .unwrap_or_else(|| "?column?".into())
-            } else {
-                // There are multiple non-null variants in the
-                // union, so we need to invent field names for
-                // each variant.
-                base_name
-                    .map(|n| format!("{}{}", n, i + 1))
-                    .or_else(|| {
-                        v.get_piece_and_name(schema.root)
-                            .1
-                            .map(|full_name| full_name.base_name().to_owned())
-                    })
-                    .unwrap_or_else(|| "?column?".into())
-            };
+                let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
+                    // There is only one non-null variant in the
+                    // union, so we can use the field name directly.
+                    base_name
+                        .map(|n| n.to_owned())
+                        .or_else(|| {
+                            v.get_piece_and_name(schema.root)
+                                .1
+                                .map(|full_name| full_name.base_name().to_owned())
+                        })
+                        .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into())
+                } else {
+                    // There are multiple non-null variants in the
+                    // union, so we need to invent field names for
+                    // each variant.
+                    base_name
+                        .map(|n| format!("{}{}", n, i + 1))
+                        .or_else(|| {
+                            v.get_piece_and_name(schema.root)
+                                .1
+                                .map(|full_name| full_name.base_name().to_owned())
+                        })
+                        .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into())
+                };
 
-            // If there is more than one variant in the union,
-            // the column's output type is nullable, as this
-            // column will be null whenever it is uninhabited.
-            let ty = validate_schema_2(seen_avro_nodes, node)?;
-            columns.push((name.into(), ty.nullable(vs.len() > 1)));
-            if let Some(named_idx) = named_idx {
-                seen_avro_nodes.remove(&named_idx);
-            }
+                // If there is more than one variant in the union,
+                // the column's output type is nullable, as this
+                // column will be null whenever it is uninhabited.
+                let ty = validate_schema_2(seen, node)?;
+                columns.push((name.into(), ty.nullable(vs.len() > 1)));
+                Ok(())
+            })?;
         }
     }
     Ok(columns)
@@ -168,7 +165,7 @@ fn get_named_columns<'a>(
     seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode<'a>,
     base_name: Option<&str>,
-) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
+) -> anyhow::Result<Vec<(ColumnName, SqlColumnType)>> {
     if let SchemaPiece::Union(_) = schema.inner {
         get_union_columns(seen_avro_nodes, schema, base_name)
     } else {
@@ -176,7 +173,7 @@ fn get_named_columns<'a>(
         Ok(vec![(
             // TODO(benesch): we should do better than this when there's no base
             // name, e.g., invent a name based on the type.
-            base_name.unwrap_or("?column?").into(),
+            base_name.unwrap_or(UNKNOWN_COLUMN_NAME).into(),
             scalar_type.nullable(false),
         )])
     }
@@ -188,7 +185,7 @@ fn get_named_columns<'a>(
 fn validate_schema_2(
     seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode,
-) -> anyhow::Result<ScalarType> {
+) -> anyhow::Result<SqlScalarType> {
     Ok(match schema.inner {
         SchemaPiece::Union(_) => {
             let columns = get_union_columns(seen_avro_nodes, schema, None)?;
@@ -205,16 +202,16 @@ fn validate_schema_2(
             column_type.scalar_type
         }
         SchemaPiece::Null => bail!("null outside of union types is not supported"),
-        SchemaPiece::Boolean => ScalarType::Bool,
-        SchemaPiece::Int => ScalarType::Int32,
-        SchemaPiece::Long => ScalarType::Int64,
-        SchemaPiece::Float => ScalarType::Float32,
-        SchemaPiece::Double => ScalarType::Float64,
-        SchemaPiece::Date => ScalarType::Date,
-        SchemaPiece::TimestampMilli => ScalarType::Timestamp {
+        SchemaPiece::Boolean => SqlScalarType::Bool,
+        SchemaPiece::Int => SqlScalarType::Int32,
+        SchemaPiece::Long => SqlScalarType::Int64,
+        SchemaPiece::Float => SqlScalarType::Float32,
+        SchemaPiece::Double => SqlScalarType::Float64,
+        SchemaPiece::Date => SqlScalarType::Date,
+        SchemaPiece::TimestampMilli => SqlScalarType::Timestamp {
             precision: Some(TimestampPrecision::try_from(3).unwrap()),
         },
-        SchemaPiece::TimestampMicro => ScalarType::Timestamp {
+        SchemaPiece::TimestampMicro => SqlScalarType::Timestamp {
             precision: Some(TimestampPrecision::try_from(6).unwrap()),
         },
         SchemaPiece::Decimal {
@@ -226,88 +223,158 @@ fn validate_schema_2(
                     NUMERIC_DATUM_MAX_PRECISION
                 )
             }
-            ScalarType::Numeric {
+            SqlScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::try_from(*scale)?),
             }
         }
-        SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => ScalarType::Bytes,
-        SchemaPiece::String | SchemaPiece::Enum { .. } => ScalarType::String,
+        SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => SqlScalarType::Bytes,
+        SchemaPiece::String | SchemaPiece::Enum { .. } => SqlScalarType::String,
 
-        SchemaPiece::Json => ScalarType::Jsonb,
-        SchemaPiece::Uuid => ScalarType::Uuid,
+        SchemaPiece::Json => SqlScalarType::Jsonb,
+        SchemaPiece::Uuid => SqlScalarType::Uuid,
         SchemaPiece::Record { fields, .. } => {
             let mut columns = vec![];
             for f in fields {
-                let named_idx = match &f.schema {
-                    SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                    _ => None,
-                };
-                if let Some(named_idx) = named_idx {
-                    if !seen_avro_nodes.insert(named_idx) {
-                        bail!(
-                            "Recursive types are not supported: {}",
-                            f.schema.get_human_name(schema.root)
-                        );
-                    }
-                }
-                let next_node = schema.step(&f.schema);
-                columns.extend(
-                    get_named_columns(seen_avro_nodes, next_node, Some(&f.name))?.into_iter(),
-                );
-                if let Some(named_idx) = named_idx {
-                    seen_avro_nodes.remove(&named_idx);
-                }
+                with_recursion_guard(seen_avro_nodes, schema.root, &f.schema, |seen| {
+                    columns.extend(get_named_columns(
+                        seen,
+                        schema.step(&f.schema),
+                        Some(&f.name),
+                    )?);
+                    Ok(())
+                })?;
             }
-            ScalarType::Record {
-                fields: columns,
+            SqlScalarType::Record {
+                fields: columns.into(),
                 custom_id: None,
             }
         }
         SchemaPiece::Array(inner) => {
-            let named_idx = match inner.as_ref() {
-                SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                _ => None,
-            };
-            if let Some(named_idx) = named_idx {
-                if !seen_avro_nodes.insert(named_idx) {
-                    bail!(
-                        "Recursive types are not supported: {}",
-                        inner.get_human_name(schema.root)
-                    );
-                }
-            }
-            let next_node = schema.step(inner);
-            let ret = ScalarType::List {
-                element_type: Box::new(validate_schema_2(seen_avro_nodes, next_node)?),
-                custom_id: None,
-            };
-            if let Some(named_idx) = named_idx {
-                seen_avro_nodes.remove(&named_idx);
-            }
-            ret
+            with_recursion_guard(seen_avro_nodes, schema.root, inner.as_ref(), |seen| {
+                Ok(SqlScalarType::List {
+                    element_type: Box::new(validate_schema_2(seen, schema.step(inner))?),
+                    custom_id: None,
+                })
+            })?
         }
-        SchemaPiece::Map(inner) => ScalarType::Map {
-            value_type: Box::new(validate_schema_2(seen_avro_nodes, schema.step(inner))?),
-            custom_id: None,
-        },
-
+        SchemaPiece::Map(inner) => {
+            with_recursion_guard(seen_avro_nodes, schema.root, inner.as_ref(), |seen| {
+                Ok(SqlScalarType::Map {
+                    value_type: Box::new(validate_schema_2(seen, schema.step(inner))?),
+                    custom_id: None,
+                })
+            })?
+        }
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
     })
 }
 
-pub struct ConfluentAvroResolver {
+/// Runs `f` with `node` marked as on the current resolution path, bailing if it's
+/// already on the path (a cycle). The mark is cleared on exit so sibling reuse of a
+/// named type isn't flagged.
+fn with_recursion_guard<T>(
+    seen: &mut BTreeSet<usize>,
+    root: &Schema,
+    node: &SchemaPieceOrNamed,
+    f: impl FnOnce(&mut BTreeSet<usize>) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let named_idx = match node {
+        SchemaPieceOrNamed::Named(idx) => Some(*idx),
+        SchemaPieceOrNamed::Piece(_) => None,
+    };
+    if let Some(named_idx) = named_idx {
+        if !seen.insert(named_idx) {
+            bail!(
+                "Recursive types are not supported: {}",
+                node.get_human_name(root)
+            );
+        }
+    }
+    let result = f(seen);
+    if let Some(named_idx) = named_idx {
+        seen.remove(&named_idx);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A named type that refers back to itself cannot be represented in the SQL
+    /// type system. Recursion can be introduced through any container that holds
+    /// a named reference: record fields (directly or via a union), arrays, and
+    /// maps. Each should be rejected rather than recursed into forever.
+    fn assert_recursive(schema: &str) {
+        let err = schema_to_relationdesc(parse_schema(schema, &[]).expect("schema should parse"))
+            .expect_err("recursive schema should be rejected");
+        assert!(
+            err.to_string()
+                .contains("Recursive types are not supported"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn recursive_record_field() {
+        assert_recursive(r#"{"type":"record","name":"a","fields":[{"name":"f","type":"a"}]}"#);
+    }
+
+    #[mz_ore::test]
+    fn recursive_union() {
+        assert_recursive(
+            r#"{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}"#,
+        );
+    }
+
+    #[mz_ore::test]
+    fn recursive_array() {
+        assert_recursive(
+            r#"{"type":"record","name":"a","fields":[{"name":"f","type":{"type":"array","items":"a"}}]}"#,
+        );
+    }
+
+    #[mz_ore::test]
+    fn recursive_map() {
+        assert_recursive(
+            r#"{"type":"record","name":"a","fields":[{"name":"f","type":{"type":"map","values":"a"}}]}"#,
+        );
+    }
+
+    /// Reusing a named type in sibling positions is a diamond, not a cycle, and
+    /// must not be flagged as recursive. Guards against the path-tracking set
+    /// failing to release a node after it leaves the current path.
+    #[mz_ore::test]
+    fn repeated_named_type_is_not_recursive() {
+        let schema = r#"{
+            "type": "record",
+            "name": "outer",
+            "fields": [
+                {"name": "a", "type": {"type": "record", "name": "inner", "fields": [{"name": "x", "type": "int"}]}},
+                {"name": "b", "type": "inner"}
+            ]
+        }"#;
+        let desc = schema_to_relationdesc(parse_schema(schema, &[]).expect("schema should parse"))
+            .expect("diamond reuse of a named type should be allowed");
+        assert_eq!(desc.arity(), 2);
+    }
+}
+
+pub struct AvroSchemaResolver {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
     confluent_wire_format: bool,
 }
 
-impl ConfluentAvroResolver {
+impl AvroSchemaResolver {
     pub fn new(
         reader_schema: &str,
+        reader_reference_schemas: &[String],
         ccsr_client: Option<mz_ccsr::Client>,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
-        let reader_schema = parse_schema(reader_schema)?;
+        // parse_schema handles incremental parsing of references (dependencies first)
+        let reader_schema = parse_schema(reader_schema, reader_reference_schemas)?;
         let writer_schemas = ccsr_client.map(SchemaCache::new).transpose()?;
         Ok(Self {
             reader_schema,
@@ -365,9 +432,9 @@ impl ConfluentAvroResolver {
     }
 }
 
-impl fmt::Debug for ConfluentAvroResolver {
+impl fmt::Debug for AvroSchemaResolver {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("ConfluentAvroResolver")
+        f.debug_struct("AvroSchemaResolver")
             .field("reader_schema", &self.reader_schema)
             .field(
                 "write_schema",
@@ -400,6 +467,10 @@ impl SchemaCache {
     /// that this schema cache was initialized with, returns the schema directly.
     /// If not, performs schema resolution on the reader and writer and
     /// returns the result.
+    ///
+    /// This method also handles schema references: if the schema references types
+    /// defined in other schemas, those schemas are fetched and their types are made
+    /// available during parsing.
     async fn get(
         &mut self,
         id: i32,
@@ -412,14 +483,16 @@ impl SchemaCache {
                 // immediately, and not cached, since it might get better on the
                 // next retry.
                 let ccsr_client = Arc::clone(&self.ccsr_client);
-                let response = Retry::default()
+
+                // Fetch schema with its references (if any)
+                let (primary_subject, reference_subjects) = Retry::default()
                     // Twice the timeout of the ccsr client so we can attempt 2 requests.
                     .max_duration(ccsr_client.timeout() * 2)
                     // Canceling because ultimately it's just non-mutating HTTP requests.
                     .retry_async_canceling(move |state| {
                         let ccsr_client = Arc::clone(&ccsr_client);
                         async move {
-                            let res = ccsr_client.get_schema_by_id(id).await;
+                            let res = ccsr_client.get_subject_and_references_by_id(id).await;
                             match res {
                                 Err(e) => {
                                     if let Some(timeout) = state.next_backoff {
@@ -437,21 +510,47 @@ impl SchemaCache {
                     })
                     .run_in_task(|| format!("fetch_avro_schema:{}", id))
                     .await?;
+
                 // Now, we've gotten some json back, so we want to cache it (regardless of whether it's a valid
                 // avro schema, it won't change).
                 //
                 // However, we can't just cache it directly, since resolving schemas takes significant CPU work,
-                // which  we don't want to repeat for every record. So, parse and resolve it, and cache the
+                // which we don't want to repeat for every record. So, parse and resolve it, and cache the
                 // result (whether schema or error).
-                let result = Schema::from_str(&response.raw).and_then(|schema| {
-                    // Schema fingerprints don't actually capture whether two schemas are meaningfully
-                    // different, because they strip out logical types. Thus, resolve in all cases.
-                    let resolved = resolve_schemas(&schema, reader_schema)?;
-                    Ok(resolved)
-                });
+                let result = Self::parse_with_references(
+                    &primary_subject,
+                    &reference_subjects,
+                    reader_schema,
+                );
                 v.insert(result)
             }
         };
         Ok(entry.as_ref().map_err(|e| anyhow::Error::new(e.clone())))
+    }
+
+    /// Parse a schema along with its references and resolve against the reader schema.
+    fn parse_with_references(
+        primary_subject: &mz_ccsr::Subject,
+        reference_subjects: &[mz_ccsr::Subject],
+        reader_schema: &Schema,
+    ) -> Result<Schema, AvroError> {
+        // Parse referenced schemas incrementally: each reference may depend on previous ones.
+        let mut reference_schemas: Vec<Schema> = Vec::with_capacity(reference_subjects.len());
+        for subject in reference_subjects {
+            let ref_json: serde_json::Value = serde_json::from_str(&subject.schema.raw)
+                .map_err(|e| ParseSchemaError::new(format!("Error parsing JSON: {}", e)))?;
+            let parsed = Schema::parse_with_references(&ref_json, &reference_schemas)?;
+            reference_schemas.push(parsed);
+        }
+
+        // Parse primary schema, using references, if present.
+        let primary_value: serde_json::Value = serde_json::from_str(&primary_subject.schema.raw)
+            .map_err(|e| ParseSchemaError::new(format!("Error parsing JSON: {}", e)))?;
+        let schema = Schema::parse_with_references(&primary_value, &reference_schemas)?;
+
+        // Schema fingerprints don't actually capture whether two schemas are meaningfully
+        // different, because they strip out logical types. Thus, resolve in all cases.
+        let resolved = resolve_schemas(&schema, reader_schema)?;
+        Ok(resolved)
     }
 }

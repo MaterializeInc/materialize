@@ -45,6 +45,7 @@ def print_annotation_match(
         )
     )
     print(f"URL: {with_formatting(build.web_url, COLOR_CYAN)}")
+    print(f"Date: {with_formatting(str(build.created_at), COLOR_CYAN)}")
 
     if annotation.title is not None:
         print(f"Annotation: {with_formatting(annotation.title, COLOR_CYAN)}")

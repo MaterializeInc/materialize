@@ -29,11 +29,8 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::{MapFilterProject, MirScalarExpr};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_expr::{Columns, Eval, MapFilterProject, MirScalarExpr};
 use mz_repr::{Datum, Row, RowArena};
-use proptest::prelude::*;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 pub mod delta_join;
@@ -42,38 +39,13 @@ pub mod linear_join;
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.join.rs"));
-
 /// A complete enumeration of possible join plans to render.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum JoinPlan {
     /// A join implemented by a linear join.
     Linear(LinearJoinPlan),
     /// A join implemented by a delta join.
     Delta(DeltaJoinPlan),
-}
-
-impl RustType<ProtoJoinPlan> for JoinPlan {
-    fn into_proto(&self) -> ProtoJoinPlan {
-        use proto_join_plan::Kind::*;
-        ProtoJoinPlan {
-            kind: Some(match self {
-                JoinPlan::Linear(inner) => Linear(inner.into_proto()),
-                JoinPlan::Delta(inner) => Delta(inner.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(value: ProtoJoinPlan) -> Result<Self, TryFromProtoError> {
-        use proto_join_plan::Kind::*;
-        let kind = value
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoJoinPlan::kind"))?;
-        Ok(match kind {
-            Linear(inner) => JoinPlan::Linear(inner.into_rust()?),
-            Delta(inner) => JoinPlan::Delta(inner.into_rust()?),
-        })
-    }
 }
 
 /// A manual closure implementation of filtering and logic application.
@@ -84,54 +56,21 @@ impl RustType<ProtoJoinPlan> for JoinPlan {
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct JoinClosure {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub ready_equivalences: Vec<Vec<MirScalarExpr>>,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub before: mz_expr::SafeMfpPlan,
-}
-
-impl Arbitrary for JoinClosure {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            prop::collection::vec(prop::collection::vec(any::<MirScalarExpr>(), 0..3), 0..3),
-            any::<mz_expr::SafeMfpPlan>(),
-        )
-            .prop_map(|(ready_equivalences, before)| JoinClosure {
-                ready_equivalences,
-                before,
-            })
-            .boxed()
-    }
-}
-
-impl RustType<ProtoJoinClosure> for JoinClosure {
-    fn into_proto(&self) -> ProtoJoinClosure {
-        ProtoJoinClosure {
-            ready_equivalences: self.ready_equivalences.into_proto(),
-            before: Some(self.before.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoJoinClosure) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            ready_equivalences: proto.ready_equivalences.into_rust()?,
-            before: proto.before.into_rust_if_some("ProtoJoinClosure::before")?,
-        })
-    }
 }
 
 impl JoinClosure {
     /// Applies per-row filtering and logic.
     #[inline(always)]
-    pub fn apply<'a>(
+    pub fn apply<'a, 'row>(
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
-        row: &'a mut Row,
-    ) -> Result<Option<Row>, mz_expr::EvalError> {
+        row: &'row mut Row,
+    ) -> Result<Option<&'row Row>, mz_expr::EvalError> {
         for exprs in self.ready_equivalences.iter() {
             // Each list of expressions should be equal to the same value.
             let val = exprs[0].eval(&datums[..], temp_storage)?;
@@ -260,7 +199,7 @@ impl JoinClosure {
             }
         }
 
-        before.permute(permutation, thinned_arity_with_key);
+        before.permute_fn(|c| permutation[&c], thinned_arity_with_key);
 
         // `before` should not be modified after this point.
         before.optimize();
@@ -275,6 +214,13 @@ impl JoinClosure {
     /// True iff the closure neither filters nor transforms records.
     pub fn is_identity(&self) -> bool {
         self.ready_equivalences.is_empty() && self.before.is_identity()
+    }
+
+    /// True iff the closure does more than projections.
+    pub fn maps_or_filters(&self) -> bool {
+        !self.before.expressions.is_empty()
+            || !self.before.predicates.is_empty()
+            || !self.ready_equivalences.is_empty()
     }
 
     /// Returns true if evaluation could introduce an error on non-error inputs.
@@ -385,7 +331,7 @@ impl JoinBuildState {
             }
         }
         let column_map_len = column_map.len();
-        mfp.permute(column_map, column_map_len);
+        mfp.permute_fn(|c| column_map[&c], column_map_len);
         mfp.optimize();
 
         JoinClosure {
@@ -410,25 +356,5 @@ impl JoinBuildState {
             permutation,
             thinned_arity_with_key,
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoJoinPlan>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
     }
 }

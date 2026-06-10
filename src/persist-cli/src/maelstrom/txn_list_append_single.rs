@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
@@ -25,25 +26,25 @@ use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHand
 use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace};
 
+use crate::maelstrom::Args;
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
 use crate::maelstrom::services::{CachingBlob, MaelstromBlob, MaelstromConsensus};
 use crate::maelstrom::txn_list_append_single::codec_impls::{
     MaelstromKeySchema, MaelstromValSchema,
 };
-use crate::maelstrom::Args;
 
 /// Key of the persist shard used by [Transactor]
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -100,10 +101,10 @@ pub struct MaelstromVal(Vec<u64>);
 /// along this timestamp.
 #[derive(Debug)]
 pub struct Transactor {
-    cads_token: u64,
+    cads_token: Opaque,
     shard_id: ShardId,
     client: PersistClient,
-    since: SinceHandle<MaelstromKey, MaelstromVal, u64, i64, u64>,
+    since: SinceHandle<MaelstromKey, MaelstromVal, u64, i64>,
     write: WriteHandle<MaelstromKey, MaelstromVal, u64, i64>,
 
     read_ts: u64,
@@ -111,11 +112,7 @@ pub struct Transactor {
     // Keep a long-lived listen, which is incrementally read as we go. Then
     // assert that it has the same data as the short-lived snapshot+listen in
     // `read`. This hopefully stresses slightly different parts of the system.
-    long_lived_updates: Vec<(
-        (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-        u64,
-        i64,
-    )>,
+    long_lived_updates: Vec<((MaelstromKey, MaelstromVal), u64, i64)>,
     long_lived_listen: Listen<MaelstromKey, MaelstromVal, u64, i64>,
 }
 
@@ -125,11 +122,13 @@ impl Transactor {
         node_id: NodeId,
         shard_id: ShardId,
     ) -> Result<Self, MaelstromError> {
-        let cads_token = node_id
-            .0
-            .trim_start_matches('n')
-            .parse::<u64>()
-            .expect("maelstrom node_id should be n followed by an integer");
+        let cads_token = Opaque::encode(
+            &node_id
+                .0
+                .trim_start_matches('n')
+                .parse::<u64>()
+                .expect("maelstrom node_id should be n followed by an integer"),
+        );
 
         let (mut write, mut read) = client
             .open(
@@ -146,6 +145,7 @@ impl Transactor {
             .open_critical_since(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                cads_token.clone(),
                 Diagnostics::from_purpose("maelstrom since"),
             )
             .await?;
@@ -240,11 +240,7 @@ impl Transactor {
         &mut self,
     ) -> Result<
         (
-            Vec<(
-                (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-                u64,
-                i64,
-            )>,
+            Vec<((MaelstromKey, MaelstromVal), u64, i64)>,
             Antichain<u64>,
         ),
         MaelstromError,
@@ -273,11 +269,25 @@ impl Transactor {
                 .await
                 .expect("codecs should match");
 
+            if !PartialOrder::less_equal(read.since(), &snap_as_of) {
+                // The desired snapshot as-of is before the actual critical since;
+                // refresh our state and try again.
+                info!(
+                    "read handle since {:?} is not before as_of {}, fetching a new read_ts and trying again",
+                    read.since().elements(),
+                    snap_ts,
+                );
+                self.advance_since().await?;
+
+                let recent_upper = self.write.fetch_recent_upper().await;
+                self.read_ts = Self::extract_ts(recent_upper)? - 1;
+                continue;
+            }
+
             let updates_res = read.snapshot_and_fetch(snap_as_of.clone()).await;
             let mut updates = match updates_res {
                 Ok(x) => x,
                 Err(since) => {
-                    let recent_upper = self.write.fetch_recent_upper().await;
                     // Because we artificially share the same CriticalReaderId
                     // between nodes, it doesn't quite act like a capability.
                     // Prod doesn't have this issue, because a new one will
@@ -294,15 +304,10 @@ impl Transactor {
                         snap_ts,
                         since.0.as_option()
                     );
+                    self.advance_since().await?;
+
+                    let recent_upper = self.write.fetch_recent_upper().await;
                     self.read_ts = Self::extract_ts(recent_upper)? - 1;
-                    self.since = self
-                        .client
-                        .open_critical_since(
-                            self.shard_id,
-                            PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            Diagnostics::from_purpose("maelstrom since"),
-                        )
-                        .await?;
                     continue;
                 }
             };
@@ -311,7 +316,6 @@ impl Transactor {
             let listen = match listen_res {
                 Ok(x) => x,
                 Err(since) => {
-                    let recent_upper = self.write.fetch_recent_upper().await;
                     // Because we artificially share the same CriticalReaderId
                     // between nodes, it doesn't quite act like a capability.
                     // Prod doesn't have this issue, because a new one will
@@ -328,30 +332,27 @@ impl Transactor {
                         snap_ts,
                         since.0.as_option(),
                     );
+                    self.advance_since().await?;
+                    let recent_upper = self.write.fetch_recent_upper().await;
                     self.read_ts = Self::extract_ts(recent_upper)? - 1;
-                    self.since = self
-                        .client
-                        .open_critical_since(
-                            self.shard_id,
-                            PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            Diagnostics::from_purpose("maelstrom since"),
-                        )
-                        .await?;
+                    assert!(
+                        PartialOrder::less_than(self.since.since(), recent_upper),
+                        "invariant: since {:?} should be held behind the recent upper {:?}",
+                        &**self.since.since(),
+                        &**recent_upper
+                    );
                     continue;
                 }
             };
 
             trace!(
                 "read updates from snapshot as_of {}: {:?}",
-                snap_ts,
-                updates
+                snap_ts, updates
             );
             let listen_updates = Self::listen_through(listen, &as_of).await?;
             trace!(
                 "read updates from listener as_of {} through {}: {:?}",
-                snap_ts,
-                self.read_ts,
-                listen_updates
+                snap_ts, self.read_ts, listen_updates
             );
             updates.extend(listen_updates);
 
@@ -376,14 +377,7 @@ impl Transactor {
     async fn listen_through(
         mut listen: Listen<MaelstromKey, MaelstromVal, u64, i64>,
         frontier: &Antichain<u64>,
-    ) -> Result<
-        Vec<(
-            (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-            u64,
-            i64,
-        )>,
-        ExternalError,
-    > {
+    ) -> Result<Vec<((MaelstromKey, MaelstromVal), u64, i64)>, ExternalError> {
         let mut ret = Vec::new();
         loop {
             for event in listen.fetch_next().await {
@@ -409,11 +403,7 @@ impl Transactor {
     async fn read_long_lived(
         &mut self,
         as_of: &Antichain<u64>,
-    ) -> Vec<(
-        (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-        u64,
-        i64,
-    )> {
+    ) -> Vec<((MaelstromKey, MaelstromVal), u64, i64)> {
         while PartialOrder::less_equal(self.long_lived_listen.frontier(), as_of) {
             for event in self.long_lived_listen.fetch_next().await {
                 match event {
@@ -444,11 +434,7 @@ impl Transactor {
 
     fn extract_state_map(
         read_ts: u64,
-        updates: Vec<(
-            (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-            u64,
-            i64,
-        )>,
+        updates: Vec<((MaelstromKey, MaelstromVal), u64, i64)>,
     ) -> Result<BTreeMap<MaelstromKey, MaelstromVal>, MaelstromError> {
         let mut ret = BTreeMap::new();
         for ((k, v), _, d) in updates {
@@ -458,14 +444,6 @@ impl Transactor {
                     text: format!("invalid read at time {}", read_ts),
                 });
             }
-            let k = k.map_err(|err| MaelstromError {
-                code: ErrorCode::Crash,
-                text: format!("invalid key {}", err),
-            })?;
-            let v = v.map_err(|err| MaelstromError {
-                code: ErrorCode::Crash,
-                text: format!("invalid val {}", err),
-            })?;
             if ret.contains_key(&k) {
                 return Err(MaelstromError {
                     code: ErrorCode::Crash,
@@ -529,7 +507,7 @@ impl Transactor {
         const SINCE_LAG: u64 = 10;
         let new_since = Antichain::from_elem(self.read_ts.saturating_sub(SINCE_LAG));
 
-        let mut expected_token = self.cads_token;
+        let mut expected_token = self.cads_token.clone();
         loop {
             let res = self
                 .since
@@ -537,24 +515,22 @@ impl Transactor {
                 .await;
             match res {
                 Some(Ok(latest_since)) => {
-                    // Success! If we weren't the last one to update since, but
-                    // only then, it might have advanced past our read_ts, so
+                    // Success! Another process might have advanced past our read_ts, so
                     // forward read_ts to since_ts.
-                    if expected_token != self.cads_token {
-                        let since_ts = Self::extract_ts(&latest_since)?;
-                        if since_ts > self.read_ts {
-                            info!(
-                                "since was last updated by {}, forwarding our read_ts from {} to {}",
-                                expected_token, self.read_ts, since_ts
-                            );
-                            self.read_ts = since_ts;
-                        }
+                    let since_ts = Self::extract_ts(&latest_since)?;
+                    if since_ts > self.read_ts {
+                        info!(
+                            "since was last updated by {:?}, forwarding our read_ts from {} to {}",
+                            expected_token, self.read_ts, since_ts
+                        );
+                        self.read_ts = since_ts;
                     }
+
                     return Ok(());
                 }
                 Some(Err(actual_token)) => {
                     debug!(
-                        "actual downgrade_since token {} didn't match expected {}, retrying",
+                        "actual downgrade_since token {:?} didn't match expected {:?}, retrying",
                         actual_token, expected_token,
                     );
                     expected_token = actual_token;
@@ -608,6 +584,14 @@ impl Service for TransactorService {
 
         let mut config =
             PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
+        {
+            // We only use the Postgres tuned queries when connected to vanilla
+            // Postgres, so we always want to enable them for testing.
+            let mut updates = ConfigUpdates::default();
+            updates.add(&mz_persist::postgres::USE_POSTGRES_TUNED_QUERIES, true);
+            config.apply_from(&updates);
+        }
+
         let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
 
         // Construct requested Blob.
@@ -617,7 +601,6 @@ impl Service for TransactorService {
                     blob_uri,
                     Box::new(config.clone()),
                     metrics.s3_blob.clone(),
-                    Arc::clone(&config.configs),
                 )
                 .await
                 .expect("blob_uri should be valid");
@@ -652,6 +635,7 @@ impl Service for TransactorService {
                     consensus_uri,
                     Box::new(config.clone()),
                     metrics.postgres_consensus.clone(),
+                    Arc::clone(&config.configs),
                 )
                 .expect("consensus_uri should be valid");
                 loop {
@@ -669,7 +653,7 @@ impl Service for TransactorService {
             Arc::new(UnreliableConsensus::new(consensus, unreliable));
 
         // Wire up the TransactorService.
-        let isolated_runtime = Arc::new(IsolatedRuntime::default());
+        let isolated_runtime = Arc::new(IsolatedRuntime::new_for_tests());
         let pubsub_sender = PubSubClientConnection::noop().sender;
         let shared_states = Arc::new(StateCache::new(
             &config,
@@ -717,15 +701,14 @@ impl Service for TransactorService {
 
 mod codec_impls {
     use arrow::array::{BinaryArray, BinaryBuilder, UInt64Array, UInt64Builder};
+    use arrow::datatypes::ToByteSlice;
     use bytes::Bytes;
-    use mz_persist_types::codec_impls::{
-        SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder, SimpleDecoder,
-        SimpleEncoder, SimpleSchema,
-    };
-    use mz_persist_types::columnar::{ColumnPush, Schema, Schema2};
-    use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
-    use mz_persist_types::stats::NoneStats;
     use mz_persist_types::Codec;
+    use mz_persist_types::codec_impls::{
+        SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
+    };
+    use mz_persist_types::columnar::Schema;
+    use mz_persist_types::stats::NoneStats;
 
     use crate::maelstrom::txn_list_append_single::{MaelstromKey, MaelstromVal};
 
@@ -765,6 +748,10 @@ mod codec_impls {
         type ArrowBuilder = UInt64Builder;
         type ArrowColumn = UInt64Array;
 
+        fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
+            builder.values_slice().to_byte_slice().len()
+        }
+
         fn push(&self, builder: &mut Self::ArrowBuilder) {
             builder.append_value(self.0);
         }
@@ -781,23 +768,6 @@ mod codec_impls {
     pub struct MaelstromKeySchema;
 
     impl Schema<MaelstromKey> for MaelstromKeySchema {
-        type Encoder = SimpleEncoder<MaelstromKey, u64>;
-        type Decoder = SimpleDecoder<MaelstromKey, u64>;
-
-        fn columns(&self) -> DynStructCfg {
-            SimpleSchema::<MaelstromKey, u64>::columns(&())
-        }
-
-        fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
-            SimpleSchema::<MaelstromKey, u64>::decoder(cols, |val, ret| ret.0 = val)
-        }
-
-        fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
-            SimpleSchema::<MaelstromKey, u64>::encoder(cols, |val| val.0)
-        }
-    }
-
-    impl Schema2<MaelstromKey> for MaelstromKeySchema {
         type ArrowColumn = UInt64Array;
         type Statistics = NoneStats;
 
@@ -849,6 +819,10 @@ mod codec_impls {
         type ArrowBuilder = BinaryBuilder;
         type ArrowColumn = BinaryArray;
 
+        fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
+            builder.values_slice().to_byte_slice().len()
+        }
+
         fn push(&self, builder: &mut Self::ArrowBuilder) {
             builder.append_value(&self.encode_to_vec());
         }
@@ -866,28 +840,6 @@ mod codec_impls {
     pub struct MaelstromValSchema;
 
     impl Schema<MaelstromVal> for MaelstromValSchema {
-        type Encoder = SimpleEncoder<MaelstromVal, Vec<u8>>;
-        type Decoder = SimpleDecoder<MaelstromVal, Vec<u8>>;
-
-        fn columns(&self) -> DynStructCfg {
-            SimpleSchema::<MaelstromVal, Vec<u8>>::columns(&())
-        }
-
-        fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
-            SimpleSchema::<MaelstromVal, Vec<u8>>::decoder(cols, |val, ret| {
-                *ret = MaelstromVal::decode(val, &MaelstromValSchema)
-                    .expect("should be valid MaelstromVal")
-            })
-        }
-
-        fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
-            SimpleSchema::<MaelstromVal, Vec<u8>>::push_encoder(cols, |col, val| {
-                ColumnPush::<Vec<u8>>::push(col, &val.encode_to_vec())
-            })
-        }
-    }
-
-    impl Schema2<MaelstromVal> for MaelstromValSchema {
         type ArrowColumn = BinaryArray;
         type Statistics = NoneStats;
 

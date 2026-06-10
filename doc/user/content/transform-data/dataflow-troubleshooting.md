@@ -1,6 +1,12 @@
 ---
 title: "Dataflow troubleshooting"
 description: "How to troubleshoot common dataflow-level scenarios where Materialize is not working as expected."
+menu:
+  main:
+    name: "Dataflow troubleshooting"
+    identifier: dataflow-troubleshooting
+    parent: transform-data
+    weight: 88
 ---
 
 If you're unable to troubleshoot your issue using the [`Ingest data`](/ingest-data/troubleshooting/)
@@ -20,7 +26,7 @@ arrives.
 
 Materialize dataflows act on collections of data. To provide fast access to the
 changes to individual records, the records can be stored in an indexed
-representation called [arrangements](https://materialize.com/docs/get-started/arrangements/#arrangements).
+representation called [arrangements](/get-started/arrangements/#arrangements).
 Arrangements can be manually created by users on views by creating an index on
 the view. But they are also used internally in dataflows, for instance, when
 joining relations.
@@ -28,7 +34,7 @@ joining relations.
 ### Translating SQL to dataflows
 
 To make these concepts a bit more tangible, let's look at the example from the
-[getting started guide](https://materialize.com/docs/get-started/quickstart/).
+[getting started guide](/get-started/quickstart/).
 
 ```mzsql
 CREATE SOURCE auction_house
@@ -49,7 +55,7 @@ CREATE INDEX num_bids_idx ON num_bids (item);
 The query of the materialized view joins the relations `bids` and `auctions`,
 groups by `auctions.item` and determines the number of bids per auction. To
 understand how this SQL query is translated to a dataflow, we can use
-[`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/) to display the
+[`EXPLAIN PLAN`](/sql/explain-plan/) to display the
 plan used to evaluate the join.
 
 ```mzsql
@@ -86,7 +92,7 @@ operators (`Filter`, `Join`, `Project`). Others are specific to Materialize
 In general, a high level understanding of what these operators do is sufficient
 for effective debugging: `Filter` filters records, `Join` joins records from
 two or more inputs, `Map` applies a function to transform records, etc. You can
-find more details on these operators in the [`EXPLAIN PLAN` documentation](https://materialize.com/docs/sql/explain-plan/#operators-in-decorrelated-and-optimized-plans).
+find more details on these operators in the [`EXPLAIN PLAN` documentation](/sql/explain-plan/#reference-plan-operators).
 But it's not important to have a deep understanding of all these operators for
 effective debugging.
 
@@ -105,7 +111,7 @@ just important to know than that they define a hierarchy on the operators.
 ## The system catalog and introspection relations
 
 Materialize collects a lot of useful information about the dataflows and
-operators in the system catalog in [introspection relations](/sql/system-catalog/mz_introspection).
+operators in the system catalog in [introspection relations](/reference/system-catalog/mz_introspection).
 The introspection relations are useful to troubleshoot and understand what is
 happening under the hood when Materialize is not behaving as expected. However,
 it is important to understand that most of the statistics we need for
@@ -381,14 +387,15 @@ ORDER BY mas.size DESC;
  16318559 | ArrangeBy[[Column(0)]]-errors   | Dataflow: materialize.public.num_bids_idx |       0 | 0 bytes
 ```
 
-We've also bundled an interactive, web-based memory usage visualization tool to
-aid in debugging. The memory visualization tool shows all user-created
-arrangements, grouped by dataflow. The amount of memory used by Materialize
-should correlate with the number of arrangement records that are displayed by
-either the visual interface or the SQL queries.
+In the [Materialize Console](https://console.materialize.com),
 
-You can access the memory usage visualization for your Materialize region at
-`https://<region host>/memory`.
+- The [**Cluster Overview**](/console/clusters/) page displays the cluster
+  resource utilization for a selected cluster as well as the resource intensive
+  objects in the cluster.
+
+- The [**Environment Overview**](/console/monitoring/) page displays the
+  resource utilization for all your clusters. You can select a specific cluster
+  to view its **Overview** page.
 
 ## Is work distributed equally across workers?
 
@@ -529,6 +536,6 @@ index, you have to drop and recreate all downstream dependencies.
 {{< warning >}}
 Forcing a re-plan using the approach above **will trigger hydration**,
 which incurs downtime while the objects are recreated and backfilled with
-pre-existing data. We recommend doing a [blue/green deployment](/manage/dbt/development-workflows/#bluegreen-deployments)
+pre-existing data. We recommend doing a [blue/green deployment](/manage/dbt/blue-green-deployments/)
 to handle these changes in production environments.
 {{< /warning >}}

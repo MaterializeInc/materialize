@@ -18,7 +18,7 @@ from contextlib import closing
 from itertools import chain
 from typing import TextIO
 
-from pg8000.dbapi import DatabaseError
+from psycopg.errors import DatabaseError
 
 from materialize.mzexplore import sql
 from materialize.mzexplore.common import ClonedItem, ItemType, info, warn
@@ -57,14 +57,10 @@ def defs(
             require_ssl=db_require_ssl,
         )
     ) as db:
-        output_template = string.Template(
-            textwrap.dedent(
-                """
+        output_template = string.Template(textwrap.dedent("""
                 -- original id: $id
                 $create_sql
-                """
-            ).lstrip()
-        )
+                """).lstrip())
 
         # Extract dependencies
         # --------------------
@@ -119,7 +115,7 @@ def defs(
             items_seen.add(cloned_item)
 
             # Add replacement string pairs
-            (create_name_old, create_name_new) = (
+            create_name_old, create_name_new = (
                 cloned_item.create_name_old(),
                 cloned_item.create_name_new(database_new, schema_new),
             )

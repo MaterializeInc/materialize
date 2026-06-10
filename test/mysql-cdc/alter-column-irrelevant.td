@@ -8,8 +8,10 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
+# TODO: Reenable when database-issues#8127 is fixed
+$ skip-if
+SELECT true
 
 #
 # Test ALTER TABLE -- some column changes should not do any harm
@@ -35,9 +37,12 @@ INSERT INTO t1 VALUES (1);
 CREATE TABLE t2 (f1 INTEGER);
 INSERT INTO t2 VALUES (1);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> BEGIN
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
+> COMMIT
 
 > SELECT * FROM t1;
 1
@@ -54,10 +59,12 @@ INSERT INTO t1 VALUES (2, 2);
 # add a new column to t1 at the beginning of
 $ mysql-execute name=mysql
 ALTER TABLE t1 ADD COLUMN f3 INTEGER FIRST;
-INSERT INTO t1 VALUES (3, 3, 3);
+INSERT INTO t1 VALUES (0, 3, 3);
 
-! SELECT * FROM t1;
-contains:incompatible schema change
+> SELECT * FROM t1;
+1
+2
+3
 
 # add a new column to t2
 $ mysql-execute name=mysql

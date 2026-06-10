@@ -8,19 +8,19 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::anyhow;
+use aws_sdk_s3::Client;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::complete_multipart_upload::CompleteMultipartUploadError;
 use aws_sdk_s3::operation::create_multipart_upload::CreateMultipartUploadError;
 use aws_sdk_s3::operation::upload_part::UploadPartError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
-use aws_sdk_s3::Client;
 use aws_types::sdk_config::SdkConfig;
 use bytes::{Bytes, BytesMut};
 use bytesize::ByteSize;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::task::{spawn, JoinHandle, JoinHandleExt};
+use mz_ore::task::{JoinHandle, spawn};
 
 /// A multi part uploader which can upload a single object across multiple parts
 /// and keeps track of state to eventually finish the upload process.
@@ -51,10 +51,6 @@ pub struct S3MultiPartUploader {
     upload_handles: Vec<JoinHandle<Result<(Option<String>, i32), S3MultiPartUploadError>>>,
 }
 
-/// The smallest allowable part number (inclusive).
-///
-/// From <https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html>
-const AWS_S3_MIN_PART_COUNT: i32 = 1;
 /// The largest allowable part number (inclusive).
 ///
 /// From <https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html>
@@ -134,8 +130,7 @@ impl S3MultiPartUploaderConfig {
         if estimated_parts_count > max_parts_count {
             return Err(anyhow!(format!(
                 "total number of possible parts (file_size_limit / part_size_limit): {}, cannot exceed {}",
-                estimated_parts_count,
-                AWS_S3_MAX_PART_COUNT
+                estimated_parts_count, AWS_S3_MAX_PART_COUNT
             )));
         }
         Ok(())
@@ -169,13 +164,17 @@ impl S3MultiPartUploader {
             .create_multipart_upload()
             .bucket(&bucket)
             .key(&key)
+            .customize()
+            .mutate_request(|req| {
+                // For GCS, Content-Length must be 0 when initiating MPU
+                // https://cloud.google.com/storage/docs/xml-api/post-object-multipart
+                req.headers_mut().insert("Content-Length", "0");
+            })
             .send()
             .await?;
         let upload_id = res
             .upload_id()
-            .ok_or(anyhow!(
-                "create_multipart_upload response missing upload id"
-            ))?
+            .ok_or_else(|| anyhow!("create_multipart_upload response missing upload id"))?
             .to_string();
         Ok(S3MultiPartUploader {
             client,
@@ -218,22 +217,16 @@ impl S3MultiPartUploader {
         }
     }
 
-    /// Method to finish the multi part upload. If the buffer is not empty,
-    /// it flushes the buffer first and then makes a call to `complete_multipart_upload`.
+    /// Finishes the multi part upload.
+    ///
     /// Returns the number of parts and number of bytes uploaded.
     pub async fn finish(mut self) -> Result<CompletedUpload, S3MultiPartUploadError> {
-        if self.buffer.len() > 0 {
-            let remaining = self.buffer.split();
-            self.upload_part_internal(remaining.freeze())?;
-        }
-
-        if self.part_count < AWS_S3_MIN_PART_COUNT {
-            return Err(S3MultiPartUploadError::AtLeastMinPartNumber);
-        }
+        let remaining = self.buffer.split();
+        self.upload_part_internal(remaining.freeze())?;
 
         let mut parts: Vec<CompletedPart> = Vec::with_capacity(self.upload_handles.len());
         for handle in self.upload_handles {
-            let (etag, part_num) = handle.wait_and_assert_finished().await?;
+            let (etag, part_num) = handle.await?;
             match etag {
                 Some(etag) => {
                     parts.push(
@@ -336,11 +329,6 @@ pub enum S3MultiPartUploadError {
         AWS_S3_MAX_PART_COUNT
     )]
     ExceedsMaxPartNumber,
-    #[error(
-        "multi-part upload should have at least {} part",
-        AWS_S3_MIN_PART_COUNT
-    )]
-    AtLeastMinPartNumber,
     #[error("multi-part upload will exceed configured file_size_limit: {} bytes", .0)]
     UploadExceedsMaxFileLimit(u64),
     #[error("{}", .0.display_with_causes())]
@@ -392,8 +380,9 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    #[ignore] // TODO: Reenable against minio so it can run locally
     async fn multi_part_upload_success() -> Result<(), S3MultiPartUploadError> {
         let sdk_config = defaults().load().await;
         let (bucket, key) = match s3_bucket_key_for_test() {
@@ -443,8 +432,9 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    #[ignore] // TODO: Reenable against minio so it can run locally
     async fn multi_part_upload_buffer() -> Result<(), S3MultiPartUploadError> {
         let sdk_config = defaults().load().await;
         let (bucket, key) = match s3_bucket_key_for_test() {
@@ -501,9 +491,10 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
-    async fn multi_part_upload_error() -> Result<(), S3MultiPartUploadError> {
+    #[ignore] // TODO: Reenable against minio so it can run locally
+    async fn multi_part_upload_no_data() -> Result<(), S3MultiPartUploadError> {
         let sdk_config = defaults().load().await;
         let (bucket, key) = match s3_bucket_key_for_test() {
             Some(tuple) => tuple,
@@ -514,12 +505,20 @@ mod tests {
         let uploader =
             S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), key.clone(), config).await?;
 
-        // Calling finish without adding any data should error
-        let err = uploader.finish().await.unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "multi-part upload should have at least 1 part"
-        );
+        // Calling finish without adding any data should succeed.
+        uploader.finish().await.unwrap();
+
+        // The file should exist but have no content.
+        let s3_client = s3::new_client(&sdk_config);
+        let uploaded_object = s3_client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(uploaded_object.content_length(), Some(0));
 
         Ok(())
     }
@@ -545,7 +544,8 @@ mod tests {
         };
         let error = config.validate().unwrap_err();
         assert_eq!(
-            error.to_string(), "total number of possible parts (file_size_limit / part_size_limit): 10001, cannot exceed 10000",
+            error.to_string(),
+            "total number of possible parts (file_size_limit / part_size_limit): 10001, cannot exceed 10000",
         );
     }
 }

@@ -69,14 +69,14 @@ macro_rules! bail_unsupported {
     ($feature:expr) => {
         return Err(crate::plan::error::PlanError::Unsupported {
             feature: $feature.to_string(),
-            issue_no: None,
+            discussion_no: None,
         }
         .into())
     };
-    ($issue:expr, $feature:expr) => {
+    ($discussion_no:expr, $feature:expr) => {
         return Err(crate::plan::error::PlanError::Unsupported {
             feature: $feature.to_string(),
-            issue_no: Some($issue),
+            discussion_no: Some($discussion_no),
         }
         .into())
     };
@@ -109,6 +109,24 @@ macro_rules! bail_never_supported {
     };
 }
 
+/// Returns a `PlanError::Internal` from the current function. Prefer this over
+/// `sql_bail!` whenever the situation reflects a Materialize bug rather than a
+/// user error (e.g., an invariant that is supposed to be enforced by the
+/// parser, name resolution, or purification).
+macro_rules! bail_internal {
+    ($($e:expr),* $(,)?) => {
+        return Err(crate::plan::error::PlanError::Internal(format!($($e),*)).into())
+    }
+}
+
+/// Constructs a `PlanError::Internal`. Prefer this over `sql_err!` whenever the
+/// situation reflects a Materialize bug rather than a user error.
+macro_rules! internal_err {
+    ($($e:expr),* $(,)?) => {
+        crate::plan::error::PlanError::Internal(format!($($e),*))
+    }
+}
+
 // TODO(benesch): delete these macros once we use structured errors everywhere.
 macro_rules! sql_bail {
     ($($e:expr),* $(,)?) => {
@@ -126,6 +144,8 @@ pub const DEFAULT_SCHEMA: &str = "public";
 /// The number of concurrent requests we allow at once for webhook sources.
 pub const WEBHOOK_CONCURRENCY_LIMIT: usize = 500;
 
+pub static ORDINALITY_COL_NAME: &str = "ordinality";
+
 pub mod ast;
 pub mod catalog;
 pub mod func;
@@ -133,6 +153,7 @@ pub mod kafka_util;
 pub mod names;
 #[macro_use]
 pub mod normalize;
+pub mod iceberg;
 pub mod optimizer_metrics;
 pub mod parse;
 pub mod plan;

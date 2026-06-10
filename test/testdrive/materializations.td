@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-replica-size=1
+$ set-arg-default default-replica-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 # Test creating and dropping various views and sources that depend upon
@@ -31,29 +31,33 @@ $ kafka-create-topic topic=data
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
-> SELECT * FROM data
+> SELECT * FROM data_tbl
 
-> CREATE VIEW data_view as SELECT * from data
+> CREATE VIEW data_view as SELECT * from data_tbl
 
 > SELECT * FROM data_view
 
 > CREATE MATERIALIZED VIEW test1 AS
-  SELECT b, sum(a) FROM data GROUP BY b
+  SELECT b, sum(a) FROM data_tbl GROUP BY b
 
 > SHOW VIEWS
-name
----------
-data_view
+name       comment
+------------------
+data_view  ""
 
 > SHOW MATERIALIZED VIEWS
-name    cluster
----------------
-test1   quickstart
+name    cluster     comment
+---------------------------
+test1   quickstart  ""
 
 > SELECT * FROM test1
 b  sum
@@ -72,18 +76,18 @@ b  sum
 2  1
 
 > SHOW COLUMNS FROM test1
-name nullable type
--------------------
-b     false   bigint
-sum   false   numeric
+name nullable type     comment
+------------------------------
+b     false   bigint   ""
+sum   false   numeric  ""
 
 > SHOW VIEWS LIKE '%data%'
-data_view
+data_view  ""
 
 > SHOW CREATE MATERIALIZED VIEW test1
 name                      create_sql
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"quickstart\" WITH (REFRESH = ON COMMIT) AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
+materialize.public.test1  "CREATE MATERIALIZED VIEW materialize.public.test1\n    IN CLUSTER quickstart\n    WITH (REFRESH = ON COMMIT)\n    AS SELECT b, pg_catalog.sum(a) FROM materialize.public.data_tbl GROUP BY b;"
 
 # Materialized view can be built on a not-materialized view.
 > CREATE MATERIALIZED VIEW test2 AS
@@ -154,7 +158,7 @@ a  b
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-view2-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:data_view is a view, which cannot be exported as a sink
+contains:view data_view cannot be exported as a sink
 
 # Can create indexed view from unmaterialized view.
 > CREATE VIEW test5 AS
@@ -168,11 +172,11 @@ contains:data_view is a view, which cannot be exported as a sink
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-view2-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:test5 is a view, which cannot be exported as a sink
+contains:view test5 cannot be exported as a sink
 
 $ set-regex match=(\s\(u\d+\)) replacement=
 
-? EXPLAIN SELECT * FROM test5;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM test5;
 Explained Query (fast path):
   ReadIndex on=materialize.public.test5 test5_primary_idx=[*** full scan ***]
 
@@ -194,13 +198,13 @@ b  c
 > CREATE INDEX idx1 ON test5(c)
 
 ! SELECT * FROM idx1
-contains:catalog item 'materialize.public.idx1' is an index and so cannot be depended upon
+contains:index materialize.public.idx1 cannot be depended upon
 
 # If there exists a second primary index, dropping one primary index will not
 # unmaterialize the view.
 > DROP INDEX test5_primary_idx
 
-? EXPLAIN SELECT * FROM test5
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM test5
 Explained Query (fast path):
   Project (#1, #0)
     ReadIndex on=materialize.public.test5 idx1=[*** full scan ***]
@@ -333,14 +337,18 @@ b  c
 
 $ kafka-create-topic topic=mat
 
+> BEGIN
 > CREATE SOURCE mat_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mat-${testdrive.seed}')
+
+> CREATE TABLE mat_data_tbl FROM SOURCE mat_data (REFERENCE "testdrive-mat-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE DEFAULT INDEX ON mat_data
 
-> SELECT * from mat_data
+> SELECT * from mat_data_tbl
 
 $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=1
 {"a": -1, "b": 0}
@@ -348,7 +356,7 @@ $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=1
 {"a": 3, "b": 4}
 {"a": 1, "b": 2}
 
-> SELECT * from mat_data
+> SELECT * from mat_data_tbl
 a  b
 ----
 -1 0
@@ -357,12 +365,10 @@ a  b
 1  2
 
 > SHOW SOURCES
-name     type    size    cluster
---------------------------------
-data              kafka     ${arg.default-replica-size}   ${arg.single-replica-cluster}
-data_progress     progress  <null>                        <null>
-mat_data          kafka     ${arg.default-replica-size}   ${arg.single-replica-cluster}
-mat_data_progress progress  <null>                        <null>
+name              type    cluster                          comment
+-------------------------------------------------------------------
+data              kafka     ${arg.single-replica-cluster}  ""
+mat_data          kafka     ${arg.single-replica-cluster}  ""
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the
@@ -372,7 +378,7 @@ mat_data_progress progress  <null>                        <null>
 
 > DROP INDEX mat_data_primary_idx
 
-> SELECT a+b from mat_data
+> SELECT a+b from mat_data_tbl
 -1
 0
 7
@@ -380,14 +386,14 @@ mat_data_progress progress  <null>                        <null>
 
 # Can create both materialized and unmaterialized views from materialized
 # source.
-> CREATE MATERIALIZED VIEW test7 as SELECT count(*) from mat_data
+> CREATE MATERIALIZED VIEW test7 as SELECT count(*) from mat_data_tbl
 
 > SELECT * from test7
 count
 -----
 4
 
-> CREATE VIEW test8 as SELECT -b as c, -a as d from mat_data
+> CREATE VIEW test8 as SELECT -b as c, -a as d from mat_data_tbl
 
 > SELECT * from test8
 c  d
@@ -401,7 +407,7 @@ c  d
 > DROP INDEX mat_data_primary_idx1
 
 # Still works.
-> SELECT * from mat_data
+> SELECT * from mat_data_tbl
 a  b
 ----
 -1 0
@@ -429,9 +435,9 @@ $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=2
 {"a": 1, "b": 2}
 
 # Rematerialize source.
-> CREATE INDEX mat_data_idx3 on mat_data(b)
+> CREATE INDEX mat_data_idx3 on mat_data_tbl(b)
 
-> SELECT * from mat_data
+> SELECT * from mat_data_tbl
 a  b
 ----
 -1 0
@@ -464,29 +470,29 @@ c    d
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
+
+
 > SELECT mdod.dataflow_name, mdod.name
   FROM mz_introspection.mz_arrangement_sharing mash
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
   WHERE export_id LIKE 'u%'
-"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
-"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
-"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1)]]
-"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1)]]-errors
-"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
-"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
+"Dataflow: materialize.public.test4" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.test4" "ReduceMonotonic"
+"Dataflow: materialize.public.test6" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.test6" "ReduceMonotonic"
+"Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0, \"a\")]]"
+"Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0, \"a\")]]-errors"
+"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]"
+"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]-errors"
+"Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1, \"b\")]]"
+"Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1, \"b\")]]-errors"
 "Dataflow: materialize.public.test1" AccumulableErrorCheck
 "Dataflow: materialize.public.test1" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test1" ReduceAccumulable
 "Dataflow: materialize.public.test2" AccumulableErrorCheck
 "Dataflow: materialize.public.test2" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test2" ReduceAccumulable
-"Dataflow: materialize.public.test4" "ArrangeMonotonic [val: empty]"
-"Dataflow: materialize.public.test4" ReduceMonotonic
-"Dataflow: materialize.public.test6" "ArrangeMonotonic [val: empty]"
-"Dataflow: materialize.public.test6" ReduceMonotonic
 "Dataflow: materialize.public.test7" AccumulableErrorCheck
 "Dataflow: materialize.public.test7" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test7" ReduceAccumulable

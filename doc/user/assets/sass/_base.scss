@@ -2,19 +2,19 @@
 /* ----- Basic Setup ----- */
 /* ------------------------------------------------- */
 
-$rem-scale: 0.625;
+$rem-scale: 0.585;
 
 @function rem($rem) {
     @return $rem-scale * $rem * 1rem;
 }
 
 :root {
-    --nav-height: #{rem(6.5)};
+    --nav-height: #{rem(6.5)}; // Changes to height requires changes to partials/toc.html since custom scroll logic implementation
 
-    --h1: #{rem(4.8)};
+    --h1: #{rem(4.0)};
     --h2: #{rem(2.8)};
-    --h3: #{rem(2.4)};
-    --h4: #{rem(1.8)};
+    --h3: #{rem(2.1)};
+    --h4: #{rem(1.7)};
     --h5: #{rem(1.6)};
     --base: #{rem(1.6)};
     --sm: #{rem(1.4)};
@@ -34,7 +34,7 @@ $rem-scale: 0.625;
     --milli: #{rem(2)};
     --xx-small: #{rem(2.5)};
     --x-small: #{rem(3)};
-    --small: #{rem(4)};
+    --small: #{rem(4.5)};
     --medium: #{rem(5)};
     --large: #{rem(6)};
 
@@ -68,7 +68,7 @@ $rem-scale: 0.625;
 }
 
 body.dark {
-    --bg: var(--black);
+    --bg: #100b21;
     --bg-nav: var(--nav-dark);
     --bg-sub: var(--black-light);
     --card: var(--black-mid);
@@ -77,7 +77,7 @@ body.dark {
     --divider: var(--black-lighter);
     --divider-light: var(--black-lightest);
 
-    --link: #9e7cf7;
+    --link: var(--highlight);
 
     --code-block: var(--card-light);
     --code-simple: #c2c2c2;
@@ -85,7 +85,8 @@ body.dark {
     --code-red: #fc6e6c;
     --code-pink: #f97fe6;
     --code-blue: #4b73f8;
-    --code-green: #2e731c;
+    --code-green: #819A7B;
+    --code-highlight: var(--code-blue);
 
     --important: var(--gray-lightest);
     --sub: var(--gray-light);
@@ -103,13 +104,23 @@ body.dark {
     --tip-after: #761c91;
     --tip-gutter: #b115b9;
 
+    --annotation: #e9f7fb;
+    --annotation-border: #c0d3d8;
+    --annotation-bg: #242424;
+    --annotation-after: #c0d3d8;
+
     // NOTE(benesch): please ensure these colors stay blueish. Public preview
     // requires a mild amount of caution. Importantly, green is not the right
     // color, as that implies encouragement rather than caution.
-    --public-preview: #e9f7fb;
-    --public-preview-border: #c0d3d8;
+    --public-preview: #393e514b;
+    --public-preview-text: var(--important);
+    --public-preview-border: #374e7c;
     --public-preview-after: #c0d3d8;
-    --public-preview-gutter: #186477;
+    --public-preview-gutter: #306dca;
+
+    --tab-bg: var(--gray-lightest);
+    --tab-selected-bg: var(--tip-after);
+    --font-h4: var(--gray-lightest);
 }
 
 body.light {
@@ -132,7 +143,9 @@ body.light {
     --code-blue: #1c01ce;
     --code-green: #177500;
 
+
     --important: var(--black);
+    --code-highlight: var(--important);
     --sub: var(--black-lighter);
     --body: var(--black-light);
     --highlight: var(--purple-dark);
@@ -147,6 +160,10 @@ body.light {
     --tip-after: #761c91;
     --tip-gutter: #b115b9;
 
+    --annotation-border: #c0d3d8;
+    --annotation-after: #c0d3d8;
+    --annotation-bg: #e7ebf1;
+
     // NOTE(benesch): please ensure these colors stay blueish. Public preview
     // requires a mild amount of caution. Importantly, green is not the right
     // color, as that implies encouragement rather than caution.
@@ -154,6 +171,11 @@ body.light {
     --public-preview-border: #c0d3d8;
     --public-preview-after: #c0d3d8;
     --public-preview-gutter: #186477;
+    --public-preview-text: var(--black);
+
+    --tab-bg: var(--gray-lighter);
+    --tab-selected-bg: var(--tip);
+    --font-h4: var(--gray-dark);
 }
 
 *,
@@ -235,6 +257,7 @@ nav {
 p > a,
 .note > a,
 .tip > a,
+.annotation > a,
 .link-with-code {
     color: var(--link);
 
@@ -243,6 +266,11 @@ p > a,
         text-decoration: underline;
         color: var(--sub);
     }
+}
+
+.annotation-title {
+    font-weight: 600;
+    padding-bottom: rem(1.2);
 }
 
 a {
@@ -303,3 +331,27 @@ a {
     color: transparent;
     background-clip: text;
 }
+
+select.version-dropdown {
+    appearance: none;
+	-moz-appearance: none;
+	-webkit-appearance: none;
+	background-image: url('https://res.cloudinary.com/mzimgcdn/image/upload/v1737129759/dropdown.svg');
+	background-position: right 0.5rem top 50%, 0 0;
+	background-repeat: no-repeat, repeat;
+	background-size: 1.3rem auto, 100%;
+	outline: 1px solid transparent;
+    border: 1px solid var(--divider);
+    padding: var(--pico) var(--nano);
+    border-radius: 4px;
+    background-color: var(--bg);
+
+	&:focus,
+	&:active {
+		outline: none;
+	}
+}
+
+
+red { color: var(--code-red); }
+blue { color: #2300ce; }

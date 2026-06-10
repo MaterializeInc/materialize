@@ -9,8 +9,7 @@
 
 MZFROM prod-base
 
-COPY persistcli /usr/local/bin/persistcli
-COPY mz-catalog-debug /usr/local/bin/mz-catalog-debug
+COPY persistcli mz-catalog-debug /usr/local/bin/
 
 # TODO: the intention is for this image to eventually serve as the one-off
 # job launcher for all of materialize, not just for persist. but because of

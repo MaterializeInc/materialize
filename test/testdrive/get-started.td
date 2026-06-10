@@ -7,39 +7,53 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-replica-size=1
+$ set-arg-default default-replica-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 # This test verifies the get started page works.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = true
+
 > SET cluster TO ${arg.single-replica-cluster}
 
+> BEGIN
 > CREATE SOURCE demo
-  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
+  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms', UP TO 1000)
+
+> CREATE TABLE accounts FROM SOURCE demo (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE demo (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE demo (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE demo (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE demo (REFERENCE users);
+> COMMIT
 
 > SHOW SOURCES
-name          type           size                         cluster
------------------------------------------------------------------
-accounts      subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-auctions      subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-bids          subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-demo          load-generator ${arg.default-replica-size}  ${arg.single-replica-cluster}
-demo_progress progress       <null> <null>
-organizations subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-users         subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
+name          type           cluster                        comment
+-------------------------------------------------------------------
+demo          load-generator ${arg.single-replica-cluster}  ""
+
+> SHOW TABLES
+name          comment
+-----------------------
+accounts      ""
+auctions      ""
+bids          ""
+organizations ""
+users         ""
 
 > SHOW COLUMNS FROM auctions
-end_time false "timestamp with time zone"
-id false bigint
-item false text
-seller false bigint
+end_time false "timestamp with time zone" ""
+id false bigint ""
+item false text ""
+seller false bigint ""
 
 > SHOW COLUMNS FROM bids
-amount false integer
-auction_id false bigint
-bid_time false "timestamp with time zone"
-buyer false bigint
-id false bigint
+amount false integer ""
+auction_id false bigint ""
+bid_time false "timestamp with time zone" ""
+buyer false bigint ""
+id false bigint ""
 
 > CREATE VIEW on_time_bids AS
   SELECT

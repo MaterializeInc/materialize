@@ -8,24 +8,30 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::Ipv4Addr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::num::NonZero;
 
+use anyhow::bail;
 use bytesize::ByteSize;
+use ipnet::IpNet;
+use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
+use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::MemoryLimit;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
+use mz_repr::adt::numeric::Numeric;
+use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::ConnectionCounter;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::durable::DurableCatalogState;
+use crate::durable::{CatalogError, DurableCatalogState};
+
+const GIB: u64 = 1024 * 1024 * 1024;
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -34,8 +40,6 @@ pub struct Config<'a> {
     pub storage: Box<dyn DurableCatalogState>,
     /// The registry that catalog uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
-    /// How long to retain storage usage records
-    pub storage_usage_retention_period: Option<Duration>,
     pub state: StateConfig,
 }
 
@@ -49,6 +53,8 @@ pub struct StateConfig {
     pub build_info: &'static BuildInfo,
     /// A persistent ID associated with the environment.
     pub environment_id: EnvironmentId,
+    /// Whether to start Materialize in read-only mode.
+    pub read_only: bool,
     /// Function to generate wall clock now; can be mocked.
     pub now: mz_ore::now::NowFn,
     /// Linearizable timestamp of when this environment booted.
@@ -57,23 +63,25 @@ pub struct StateConfig {
     pub skip_migrations: bool,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    /// Builtin system cluster replica size.
-    pub builtin_system_cluster_replica_size: String,
-    /// Builtin catalog server cluster replica size.
-    pub builtin_catalog_server_cluster_replica_size: String,
-    /// Builtin probe cluster replica size.
-    pub builtin_probe_cluster_replica_size: String,
-    /// Builtin support cluster replica size.
-    pub builtin_support_cluster_replica_size: String,
+    /// Builtin system cluster config.
+    pub builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin catalog server cluster config.
+    pub builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin probe cluster config.
+    pub builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin support cluster config.
+    pub builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin analytics cluster config.
+    pub builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
-    /// A optional map of system parameters pulled from a remote frontend.
+    /// An optional map of system parameters pulled from a remote frontend.
     /// A `None` value indicates that the initial sync was skipped.
     pub remote_system_parameters: Option<BTreeMap<String, String>>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
     /// IP Addresses which will be used for egress.
-    pub egress_ips: Vec<Ipv4Addr>,
+    pub egress_addresses: Vec<IpNet>,
     /// Context for generating an AWS Principal.
     pub aws_principal_context: Option<AwsPrincipalContext>,
     /// Supported AWS PrivateLink availability zone ids.
@@ -82,67 +90,91 @@ pub struct StateConfig {
     pub http_host_name: Option<String>,
     /// Context for source and sink connections.
     pub connection_context: mz_storage_types::connections::ConnectionContext,
-    /// Global connection limit and count
-    pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
     pub builtin_item_migration_config: BuiltinItemMigrationConfig,
+    pub persist_client: PersistClient,
+    /// Overrides the current value of the [`mz_adapter_types::dyncfgs::ENABLE_EXPRESSION_CACHE`]
+    /// feature flag.
+    pub enable_expression_cache_override: Option<bool>,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
+    pub external_login_password_mz_system: Option<Password>,
+    pub license_key: ValidatedLicenseKey,
 }
 
 #[derive(Debug)]
-pub enum BuiltinItemMigrationConfig {
-    Legacy,
-    ZeroDownTime {
-        persist_client: PersistClient,
-        deploy_generation: u64,
-        read_only: bool,
-    },
+pub struct BuiltinItemMigrationConfig {
+    pub persist_client: PersistClient,
+    pub read_only: bool,
+    pub force_migration: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
 impl ClusterReplicaSizeMap {
+    pub fn parse_from_str(s: &str, credit_consumption_from_memory: bool) -> anyhow::Result<Self> {
+        let mut cluster_replica_sizes: BTreeMap<String, ReplicaAllocation> =
+            serde_json::from_str(s)?;
+        if credit_consumption_from_memory {
+            for (name, replica) in cluster_replica_sizes.iter_mut() {
+                let Some(memory_limit) = replica.memory_limit else {
+                    bail!("No memory limit found in cluster definition for {name}");
+                };
+                let total_memory = memory_limit.0 * replica.scale.get();
+                replica.credits_per_hour = Numeric::from(total_memory.0) / Numeric::from(GIB);
+            }
+        }
+        Ok(Self(cluster_replica_sizes))
+    }
+
     /// Iterate all enabled (not disabled) replica allocations, with their name.
     pub fn enabled_allocations(&self) -> impl Iterator<Item = (&String, &ReplicaAllocation)> {
         self.0.iter().filter(|(_, a)| !a.disabled)
     }
-}
 
-impl Default for ClusterReplicaSizeMap {
-    // Used for testing and local purposes. This default value should not be used in production.
-    //
-    // Credits per hour are calculated as being equal to scale. This is not necessarily how the
-    // value is computed in production.
-    fn default() -> Self {
+    /// Get a replica allocation by size name. Returns a reference to the allocation, or an
+    /// error if the size is unknown.
+    pub fn get_allocation_by_name(&self, name: &str) -> Result<&ReplicaAllocation, CatalogError> {
+        self.0.get(name).ok_or_else(|| {
+            CatalogError::Catalog(SqlCatalogError::UnknownClusterReplicaSize(name.into()))
+        })
+    }
+
+    /// Used for testing and local purposes. This default value should not be used in production.
+    ///
+    /// Credits per hour are calculated as being equal to scale. This is not necessarily how the
+    /// value is computed in production.
+    pub fn for_tests() -> Self {
         // {
-        //     "1": {"scale": 1, "workers": 1},
-        //     "2": {"scale": 1, "workers": 2},
-        //     "4": {"scale": 1, "workers": 4},
+        //     "scale=1,workers=1": {"scale": 1, "workers": 1},
+        //     "scale=1,workers=2": {"scale": 1, "workers": 2},
+        //     "scale=1,workers=4": {"scale": 1, "workers": 4},
         //     /// ...
-        //     "32": {"scale": 1, "workers": 32}
+        //     "scale=1,workers=32": {"scale": 1, "workers": 32}
         //     /// Testing with multiple processes on a single machine
-        //     "2-4": {"scale": 2, "workers": 4},
+        //     "scale=2,workers=4": {"scale": 2, "workers": 4},
         //     /// Used in mzcompose tests
-        //     "2-2": {"scale": 2, "workers": 2},
+        //     "scale=2,workers=2": {"scale": 2, "workers": 2},
         //     ...
-        //     "16-16": {"scale": 16, "workers": 16},
+        //     "scale=16,workers=16": {"scale": 16, "workers": 16},
         //     /// Used in the shared_fate cloudtest tests
-        //     "2-1": {"scale": 2, "workers": 1},
+        //     "scale=2,workers=1": {"scale": 2, "workers": 1},
         //     ...
-        //     "16-1": {"scale": 16, "workers": 1},
+        //     "scale=16,workers=1": {"scale": 16, "workers": 1},
         //     /// Used in the cloudtest tests that force OOMs
-        //     "mem-2": { "memory_limit": 2Gb },
+        //     "scale=1,workers=1,mem=2GiB": { "memory_limit": 2GiB },
         //     ...
-        //     "mem-16": { "memory_limit": 16Gb },
+        //     "scale=1,workers=1,mem=16": { "memory_limit": 16GiB },
         // }
         let mut inner = (0..=5)
             .flat_map(|i| {
-                let workers: u8 = 1 << i;
+                let workers = 1 << i;
                 [
-                    (workers.to_string(), None),
-                    (format!("{workers}-4G"), Some(4)),
-                    (format!("{workers}-8G"), Some(8)),
-                    (format!("{workers}-16G"), Some(16)),
-                    (format!("{workers}-32G"), Some(32)),
+                    (format!("scale=1,workers={workers}"), None),
+                    (format!("scale=1,workers={workers},mem=4GiB"), Some(4)),
+                    (format!("scale=1,workers={workers},mem=8GiB"), Some(8)),
+                    (format!("scale=1,workers={workers},mem=16GiB"), Some(16)),
+                    (format!("scale=1,workers={workers},mem=32GiB"), Some(32)),
                 ]
                 .map(|(name, memory_limit)| {
                     (
@@ -150,11 +182,14 @@ impl Default for ClusterReplicaSizeMap {
                         ReplicaAllocation {
                             memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
                             cpu_limit: None,
+                            cpu_request: None,
                             disk_limit: None,
-                            scale: 1,
-                            workers: workers.into(),
+                            scale: NonZero::new(1).expect("not zero"),
+                            workers: NonZero::new(workers).expect("not zero"),
                             credits_per_hour: 1.into(),
                             cpu_exclusive: false,
+                            is_cc: false,
+                            swap_enabled: false,
                             disabled: false,
                             selectors: BTreeMap::default(),
                         },
@@ -166,45 +201,54 @@ impl Default for ClusterReplicaSizeMap {
         for i in 1..=5 {
             let scale = 1 << i;
             inner.insert(
-                format!("{scale}-1"),
+                format!("scale={scale},workers=1"),
                 ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
+                    cpu_request: None,
                     disk_limit: None,
-                    scale,
-                    workers: 1,
+                    scale: NonZero::new(scale).expect("not zero"),
+                    workers: NonZero::new(1).expect("not zero"),
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
+                    is_cc: false,
+                    swap_enabled: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
                 },
             );
 
             inner.insert(
-                format!("{scale}-{scale}"),
+                format!("scale={scale},workers={scale}"),
                 ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
+                    cpu_request: None,
                     disk_limit: None,
-                    scale,
-                    workers: scale.into(),
+                    scale: NonZero::new(scale).expect("not zero"),
+                    workers: NonZero::new(scale.into()).expect("not zero"),
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
+                    is_cc: false,
+                    swap_enabled: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
                 },
             );
 
             inner.insert(
-                format!("mem-{scale}"),
+                format!("scale=1,workers=8,mem={scale}GiB"),
                 ReplicaAllocation {
                     memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
                     cpu_limit: None,
+                    cpu_request: None,
                     disk_limit: None,
-                    scale: 1,
-                    workers: 8,
+                    scale: NonZero::new(1).expect("not zero"),
+                    workers: NonZero::new(8).expect("not zero"),
                     credits_per_hour: 1.into(),
                     cpu_exclusive: false,
+                    is_cc: false,
+                    swap_enabled: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
                 },
@@ -212,15 +256,18 @@ impl Default for ClusterReplicaSizeMap {
         }
 
         inner.insert(
-            "2-4".to_string(),
+            "scale=2,workers=4".to_string(),
             ReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
+                cpu_request: None,
                 disk_limit: None,
-                scale: 2,
-                workers: 4,
+                scale: NonZero::new(2).expect("not zero"),
+                workers: NonZero::new(4).expect("not zero"),
                 credits_per_hour: 2.into(),
                 cpu_exclusive: false,
+                is_cc: false,
+                swap_enabled: false,
                 disabled: false,
                 selectors: BTreeMap::default(),
             },
@@ -231,32 +278,18 @@ impl Default for ClusterReplicaSizeMap {
             ReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
+                cpu_request: None,
                 disk_limit: None,
-                scale: 0,
-                workers: 0,
+                scale: NonZero::new(1).expect("not zero"),
+                workers: NonZero::new(1).expect("not zero"),
                 credits_per_hour: 0.into(),
                 cpu_exclusive: false,
+                is_cc: true,
+                swap_enabled: false,
                 disabled: true,
                 selectors: BTreeMap::default(),
             },
         );
-
-        for size in ["1cc", "1C"] {
-            inner.insert(
-                size.to_string(),
-                ReplicaAllocation {
-                    memory_limit: None,
-                    cpu_limit: None,
-                    disk_limit: None,
-                    scale: 1,
-                    workers: 1,
-                    credits_per_hour: 1.into(),
-                    cpu_exclusive: false,
-                    disabled: false,
-                    selectors: BTreeMap::default(),
-                },
-            );
-        }
 
         Self(inner)
     }
@@ -273,10 +306,34 @@ pub struct AwsPrincipalContext {
 }
 
 impl AwsPrincipalContext {
-    pub fn to_principal_string(&self, aws_external_id_suffix: GlobalId) -> String {
+    pub fn to_principal_string(&self, aws_external_id_suffix: CatalogItemId) -> String {
         format!(
             "arn:aws:iam::{}:role/mz_{}_{}",
             self.aws_account_id, self.aws_external_id_prefix, aws_external_id_suffix
         )
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault`
+    fn cluster_replica_size_credits_from_memory() {
+        let s = r#"{
+            "test": {
+                "memory_limit": "1000MiB",
+                "scale": 2,
+                "workers": 10,
+                "credits_per_hour": "0"
+            }
+        }"#;
+        let map = ClusterReplicaSizeMap::parse_from_str(s, true).unwrap();
+
+        let alloc = map.get_allocation_by_name("test").unwrap();
+        let expected = Numeric::from(2000) / Numeric::from(1024);
+        assert_eq!(alloc.credits_per_hour, expected);
     }
 }

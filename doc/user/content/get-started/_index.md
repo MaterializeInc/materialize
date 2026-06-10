@@ -4,7 +4,6 @@ description: "Learn more about Materialize"
 disable_list: true
 aliases:
   - /overview/what-is-materialize/
-  - /overview/
 menu:
   main:
     parent: get-started
@@ -12,24 +11,11 @@ menu:
     weight: 5
 ---
 
-Materialize is the Operational Data Warehouse that delivers the speed of
-streaming with the ease of a data warehouse. With Materialize, organizations can
-operate on real-time data just by using SQL.
+{{% include-headless "/headless/materialize-intro/intro" %}}
 
-If you need to speed up queries that run frequently, or trigger actions as
-soon as events happen, Materialize is a good fit. Rather than recalculate
-results from scratch, or serve stale cached results, Materialize continually
-ingests data and keeps results up-to-date as new data arrives.
+## Materialize offerings
 
-{{< callout primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation" primary_text="Get Started">}}
-
-## Try it out! 🚀
-
-1. Sign up for a [free trial account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
-2. Follow the quickstart guide to learn the basics.
-3. Connect your own data sources and start building.
-
-{{</ callout >}}
+{{% include-headless "/headless/materialize-intro/offerings" %}}
 
 ## Key features
 
@@ -47,7 +33,7 @@ In Materialize, you don't have to make such compromises. Materialize supports
 incrementally updated view results that are **always fresh** (even when using
 complex SQL statements, like multi-way joins with aggregations) for *both*:
 
-- [Views **with an index**](/concepts/views/#indexes-and-views) and
+- [Indexed views](/concepts/views/#indexes-on-views) and
 
 - [Materialized views](/concepts/views/#materialized-views).
 
@@ -59,35 +45,22 @@ this exact purpose.
 
 ### Standard SQL support
 
-Materialize follows the SQL standard (SQL-92) implementation, so you interact
-with it like any relational database: using SQL. You can build complex
-analytical workloads using **[any type of join](/sql/join/)** (including
-non-windowed joins and joins on arbitrary conditions), but you can also
-leverage exciting new SQL patterns enabled by streaming like
-[**Change Data Capture (CDC)**](/integrations/#databases),
-[**temporal filters**](/sql/patterns/temporal-filters/), and [**subscriptions**](/sql/subscribe/).
+Like most databases, you interact with Materialize using **SQL**. You can build
+complex analytical
+workloads using **[any type of join](/sql/select/join/)** (including
+non-windowed joins and joins on arbitrary conditions) as well as leverage new
+SQL patterns enabled by streaming like [**Change Data Capture
+(CDC)**](/ingest-data/), [**temporal
+filters**](/sql/patterns/temporal-filters/), and
+[**subscriptions**](/sql/subscribe/).
+
+{{% include-from-yaml data="materialize_details" name="postgres-compatibility" %}}
 
 ### Real-time data ingestion
 
 Materialize provides **native connectors** that allow ingesting data from various external systems:
 
-{{< multilinkbox >}}
-{{< linkbox title="Message Brokers" >}}
-- [Kafka](/sql/create-source/kafka)
-- [Redpanda](/sql/create-source/kafka)
-- [Other message brokers](/integrations/#message-brokers)
-{{</ linkbox >}}
-{{< linkbox title="Databases (CDC)" >}}
-- [PostgreSQL](/sql/create-source/postgres)
-- [MySQL](/sql/create-source/mysql)
-- [Other databases](/integrations/#other-databases)
-{{</ linkbox >}}
-{{< linkbox title="Webhooks" >}}
-- [Amazon EventBridge](/ingest-data/amazon-eventbridge/)
-- [Segment](/ingest-data/segment/)
-- [Other webhooks](/sql/create-source/webhook)
-{{</ linkbox >}}
-{{</ multilinkbox >}}
+{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
 
 For more information, see [Ingest Data](/ingest-data/) and
 [Integrations](/integrations/).
@@ -101,7 +74,7 @@ tools in the data ecosystem that support PostgreSQL — like [dbt](/integrations
 
 Don't see the a tool that you’d like to use with Materialize listed under
 [Tools and integrations](/integrations/)? Let us know by submitting a
-[feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)!
+[feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)!
 
 ### Strong consistency guarantees
 

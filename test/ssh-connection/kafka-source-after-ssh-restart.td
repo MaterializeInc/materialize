@@ -11,30 +11,31 @@
 # We specifically make sure that new data written to the Kafka topic is visible
 # in the source, as that is the true measure of health, vs what is reported in
 # the mz_source_statuses relation.
+$ set-sql-timeout duration=60s
 
 $ kafka-ingest topic=thetopic format=bytes
 three
 
-> SELECT * FROM fixed_text
+> SELECT * FROM fixed_text_tbl
 text
 ----
 one
 two
 three
 
-> SELECT * FROM dynamic_text
+> SELECT * FROM dynamic_text_tbl
 text
 ----
 one
 two
 three
 
-> SELECT * FROM fixed_plus_csr
+> SELECT * FROM fixed_plus_csr_tbl
 f1    f2
 ----------
 fish  1000
 
-> SELECT * FROM dynamic_plus_csr
+> SELECT * FROM dynamic_plus_csr_tbl
 f1    f2
 ----------
 fish  1000

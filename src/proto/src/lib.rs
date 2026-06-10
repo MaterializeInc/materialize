@@ -16,18 +16,15 @@ use std::fmt;
 use std::num::{NonZeroU64, TryFromIntError};
 use std::sync::Arc;
 
+use mz_ore::Overflowing;
 use mz_ore::cast::CastFrom;
 use mz_ore::num::{NonNeg, NonNegError};
 use num::Signed;
 use proptest::prelude::Strategy;
-use uuid::Uuid;
+use prost::UnknownEnumValue;
 
 #[cfg(feature = "chrono")]
 pub mod chrono;
-
-#[cfg(feature = "tokio-postgres")]
-pub mod tokio_postgres;
-pub mod wire_compatible;
 
 include!(concat!(env!("OUT_DIR"), "/mz_proto.rs"));
 
@@ -106,6 +103,12 @@ impl From<NonNegError> for TryFromProtoError {
 impl From<CharTryFromError> for TryFromProtoError {
     fn from(error: CharTryFromError) -> Self {
         TryFromProtoError::CharTryFromError(error)
+    }
+}
+
+impl From<UnknownEnumValue> for TryFromProtoError {
+    fn from(UnknownEnumValue(n): UnknownEnumValue) -> Self {
+        TryFromProtoError::UnknownEnumVariant(format!("value {n}"))
     }
 }
 
@@ -208,10 +211,6 @@ impl std::error::Error for TryFromProtoError {
     }
 }
 
-pub fn any_uuid() -> impl Strategy<Value = Uuid> {
-    (0..u128::MAX).prop_map(Uuid::from_u128)
-}
-
 /// A trait that declares that `Self::Proto` is the default
 /// Protobuf representation for `Self`.
 pub trait ProtoRepr: Sized + RustType<Self::Proto> {
@@ -235,6 +234,13 @@ pub trait ProtoRepr: Sized + RustType<Self::Proto> {
 pub trait RustType<Proto>: Sized {
     /// Convert a `Self` into a `Proto` value.
     fn into_proto(&self) -> Proto;
+
+    /// A zero clone version of [`Self::into_proto`] that types can
+    /// optionally implement, otherwise, the default implementation
+    /// delegates to [`Self::into_proto`].
+    fn into_proto_owned(self) -> Proto {
+        self.into_proto()
+    }
 
     /// Consume and convert a `Proto` back into a `Self` value.
     ///
@@ -285,6 +291,18 @@ impl RustType<u64> for Option<NonZeroU64> {
     }
 }
 
+impl RustType<i64> for Overflowing<i64> {
+    #[inline(always)]
+    fn into_proto(&self) -> i64 {
+        self.into_inner()
+    }
+
+    #[inline(always)]
+    fn from_proto(proto: i64) -> Result<Self, TryFromProtoError> {
+        Ok(proto.into())
+    }
+}
+
 /// Blanket implementation for `BTreeMap<K, V>` where there exists `T` such
 /// that `T` implements `ProtoMapEntry<K, V>`.
 impl<K, V, T> RustType<Vec<T>> for BTreeMap<K, V>
@@ -331,10 +349,21 @@ where
     }
 
     fn from_proto(proto: Vec<P>) -> Result<Self, TryFromProtoError> {
-        proto
-            .into_iter()
-            .map(R::from_proto)
-            .collect::<Result<Vec<_>, _>>()
+        proto.into_iter().map(R::from_proto).collect()
+    }
+}
+
+/// Blanket implementation for `Box<[R]>` where `R` is a [`RustType`].
+impl<R, P> RustType<Vec<P>> for Box<[R]>
+where
+    R: RustType<P>,
+{
+    fn into_proto(&self) -> Vec<P> {
+        self.iter().map(R::into_proto).collect()
+    }
+
+    fn from_proto(proto: Vec<P>) -> Result<Self, TryFromProtoError> {
+        proto.into_iter().map(R::from_proto).collect()
     }
 }
 
@@ -466,30 +495,6 @@ impl RustType<i32> for i16 {
     }
 }
 
-impl RustType<ProtoU128> for u128 {
-    // TODO(benesch): add a trait for explicitly performing truncating casts.
-    #[allow(clippy::as_conversions)]
-    fn into_proto(&self) -> ProtoU128 {
-        let lo = (self & u128::from(u64::MAX)) as u64;
-        let hi = (self >> 64) as u64;
-        ProtoU128 { hi, lo }
-    }
-
-    fn from_proto(proto: ProtoU128) -> Result<Self, TryFromProtoError> {
-        Ok(u128::from(proto.hi) << 64 | u128::from(proto.lo))
-    }
-}
-
-impl RustType<ProtoU128> for Uuid {
-    fn into_proto(&self) -> ProtoU128 {
-        self.as_u128().into_proto()
-    }
-
-    fn from_proto(proto: ProtoU128) -> Result<Self, TryFromProtoError> {
-        Ok(Uuid::from_u128(u128::from_proto(proto)?))
-    }
-}
-
 impl RustType<u64> for std::num::NonZeroUsize {
     fn into_proto(&self) -> u64 {
         usize::from(*self).into_proto()
@@ -532,6 +537,15 @@ impl<'a> RustType<String> for Cow<'a, str> {
     }
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
         Ok(Cow::Owned(proto))
+    }
+}
+
+impl RustType<String> for Box<str> {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Ok(proto.into())
     }
 }
 

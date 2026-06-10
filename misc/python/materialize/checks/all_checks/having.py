@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class Having(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE having_table (f1 INTEGER, f2 INTEGER);
             > INSERT INTO having_table VALUES (1, 1);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -41,13 +37,9 @@ class Having(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM having_view1;
                 2 2
                 > SELECT * FROM having_view2;
                 2 2
-            """
-            )
-        )
+            """))

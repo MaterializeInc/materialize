@@ -15,13 +15,16 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use mz_dyncfg::ConfigSet;
+use mz_ore::url::SensitiveUrl;
 use tracing::warn;
-use url::Url;
 
-use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::PostgresClientKnobs;
+use mz_postgres_client::metrics::PostgresClientMetrics;
 
+use crate::azure::{AzureBlob, AzureBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};
+#[cfg(feature = "foundationdb")]
+use crate::foundationdb::{FdbConsensus, FdbConsensusConfig};
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
@@ -30,11 +33,7 @@ use crate::s3::{S3Blob, S3BlobConfig};
 
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
-    configs
-        .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_CC_SIZES)
-        .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_NONCC_SIZES)
-        .add(&crate::s3::ENABLE_S3_LGALLOC_CC_SIZES)
-        .add(&crate::s3::ENABLE_S3_LGALLOC_NONCC_SIZES)
+    configs.add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
 }
 
 /// Config for an implementation of [Blob].
@@ -47,6 +46,11 @@ pub enum BlobConfig {
     /// Config for [MemBlob], only available in testing to prevent
     /// footguns.
     Mem(bool),
+    /// Config for [AzureBlob].
+    Azure(AzureBlobConfig),
+    #[cfg(feature = "turmoil")]
+    /// Config for [crate::turmoil::TurmoilBlob].
+    Turmoil(crate::turmoil::BlobConfig),
 }
 
 /// Configuration knobs for [Blob].
@@ -69,21 +73,21 @@ impl BlobConfig {
         match self {
             BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
             BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
+            BlobConfig::Azure(config) => Ok(Arc::new(AzureBlob::open(config).await?)),
             BlobConfig::Mem(tombstone) => {
                 Ok(Arc::new(MemBlob::open(MemBlobConfig::new(tombstone))))
             }
+            #[cfg(feature = "turmoil")]
+            BlobConfig::Turmoil(config) => Ok(Arc::new(crate::turmoil::TurmoilBlob::open(config))),
         }
     }
 
     /// Parses a [Blob] config from a uri string.
     pub async fn try_from(
-        value: &str,
+        url: &SensitiveUrl,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
-        cfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
-        let url = Url::parse(value)
-            .map_err(|err| anyhow!("failed to parse blob location {} as a url: {}", &value, err))?;
         let mut query_params = url.query_pairs().collect::<BTreeMap<_, _>>();
 
         let config = match url.scheme() {
@@ -110,7 +114,14 @@ impl BlobConfig {
 
                 let credentials = match url.password() {
                     None => None,
-                    Some(password) => Some((url.username().to_string(), password.to_string())),
+                    Some(password) => Some((
+                        String::from_utf8_lossy(&urlencoding::decode_binary(
+                            url.username().as_bytes(),
+                        ))
+                        .into_owned(),
+                        String::from_utf8_lossy(&urlencoding::decode_binary(password.as_bytes()))
+                            .into_owned(),
+                    )),
                 };
 
                 let config = S3BlobConfig::new(
@@ -122,7 +133,6 @@ impl BlobConfig {
                     credentials,
                     knobs,
                     metrics,
-                    cfg,
                 )
                 .await?;
 
@@ -141,6 +151,44 @@ impl BlobConfig {
                 };
                 query_params.clear();
                 Ok(BlobConfig::Mem(tombstone))
+            }
+            "http" | "https" => match url
+                .host()
+                .ok_or_else(|| anyhow!("missing protocol: {}", &url.as_str()))?
+                .to_string()
+                .split_once('.')
+            {
+                // The Azurite emulator always uses the well-known account name devstoreaccount1
+                Some((account, root))
+                    if account == "devstoreaccount1" || root == "blob.core.windows.net" =>
+                {
+                    if let Some(container) = url
+                        .path_segments()
+                        .expect("azure blob storage container")
+                        .next()
+                    {
+                        query_params.clear();
+                        Ok(BlobConfig::Azure(AzureBlobConfig::new(
+                            account.to_string(),
+                            container.to_string(),
+                            // Azure doesn't support prefixes in the way S3 does.
+                            // This is always empty, but we leave the field for
+                            // compatibility with our existing test suite.
+                            "".to_string(),
+                            metrics,
+                            url.clone().into_redacted(),
+                            knobs,
+                        )?))
+                    } else {
+                        Err(anyhow!("unknown persist blob scheme: {}", url.as_str()))
+                    }
+                }
+                _ => Err(anyhow!("unknown persist blob scheme: {}", url.as_str())),
+            },
+            #[cfg(feature = "turmoil")]
+            "turmoil" => {
+                let cfg = crate::turmoil::BlobConfig::new(url);
+                Ok(BlobConfig::Turmoil(cfg))
             }
             p => Err(anyhow!(
                 "unknown persist blob scheme {}: {}",
@@ -168,46 +216,62 @@ impl BlobConfig {
 /// Config for an implementation of [Consensus].
 #[derive(Debug, Clone)]
 pub enum ConsensusConfig {
+    #[cfg(feature = "foundationdb")]
+    /// Config for FoundationDB.
+    FoundationDB(FdbConsensusConfig),
     /// Config for [PostgresConsensus].
     Postgres(PostgresConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
     Mem,
+    #[cfg(feature = "turmoil")]
+    /// Config for [crate::turmoil::TurmoilConsensus].
+    Turmoil(crate::turmoil::ConsensusConfig),
 }
 
 impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
     pub async fn open(self) -> Result<Arc<dyn Consensus>, ExternalError> {
         match self {
+            #[cfg(feature = "foundationdb")]
+            ConsensusConfig::FoundationDB(config) => {
+                Ok(Arc::new(FdbConsensus::open(config).await?))
+            }
             ConsensusConfig::Postgres(config) => {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
             ConsensusConfig::Mem => Ok(Arc::new(MemConsensus::default())),
+            #[cfg(feature = "turmoil")]
+            ConsensusConfig::Turmoil(config) => {
+                Ok(Arc::new(crate::turmoil::TurmoilConsensus::open(config)))
+            }
         }
     }
 
     /// Parses a [Consensus] config from a uri string.
     pub fn try_from(
-        value: &str,
+        url: &SensitiveUrl,
         knobs: Box<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
+        dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
-        let url = Url::parse(value).map_err(|err| {
-            anyhow!(
-                "failed to parse consensus location {} as a url: {}",
-                &value,
-                err
-            )
-        })?;
-
         let config = match url.scheme() {
+            #[cfg(feature = "foundationdb")]
+            "foundationdb" => Ok(ConsensusConfig::FoundationDB(FdbConsensusConfig::new(
+                url.clone(),
+            )?)),
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
-                PostgresConsensusConfig::new(value, knobs, metrics)?,
+                PostgresConsensusConfig::new(url, knobs, metrics, dyncfg)?,
             )),
             "mem" => {
                 if !cfg!(debug_assertions) {
                     warn!("persist unexpectedly using in-mem consensus in a release binary");
                 }
                 Ok(ConsensusConfig::Mem)
+            }
+            #[cfg(feature = "turmoil")]
+            "turmoil" => {
+                let cfg = crate::turmoil::ConsensusConfig::new(url);
+                Ok(ConsensusConfig::Turmoil(cfg))
             }
             p => Err(anyhow!(
                 "unknown persist consensus scheme {}: {}",

@@ -26,7 +26,18 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 /// New version variants should be added if fields need to be added, changed, or removed.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub enum VersionedEvent {
     V1(EventV1),
 }
@@ -74,7 +85,18 @@ impl VersionedEvent {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum EventType {
     Create,
@@ -101,17 +123,29 @@ impl EventType {
 serde_plain::derive_display_from_serialize!(EventType);
 
 #[derive(
-    Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum ObjectType {
     Cluster,
     ClusterReplica,
     Connection,
+    ContinualTask,
     Database,
     Func,
     Index,
     MaterializedView,
+    NetworkPolicy,
     Role,
     Secret,
     Schema,
@@ -129,10 +163,12 @@ impl ObjectType {
             ObjectType::Cluster => "Cluster",
             ObjectType::ClusterReplica => "Cluster Replica",
             ObjectType::Connection => "Connection",
+            ObjectType::ContinualTask => "Continual Task",
             ObjectType::Database => "Database",
             ObjectType::Func => "Function",
             ObjectType::Index => "Index",
             ObjectType::MaterializedView => "Materialized View",
+            ObjectType::NetworkPolicy => "Network Policy",
             ObjectType::Role => "Role",
             ObjectType::Schema => "Schema",
             ObjectType::Secret => "Secret",
@@ -148,17 +184,35 @@ impl ObjectType {
 
 serde_plain::derive_display_from_serialize!(ObjectType);
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub enum EventDetails {
     #[serde(rename = "CreateComputeReplicaV1")] // historical name
     CreateClusterReplicaV1(CreateClusterReplicaV1),
     CreateClusterReplicaV2(CreateClusterReplicaV2),
+    CreateClusterReplicaV3(CreateClusterReplicaV3),
+    CreateClusterReplicaV4(CreateClusterReplicaV4),
     #[serde(rename = "DropComputeReplicaV1")] // historical name
     DropClusterReplicaV1(DropClusterReplicaV1),
     DropClusterReplicaV2(DropClusterReplicaV2),
+    DropClusterReplicaV3(DropClusterReplicaV3),
     CreateSourceSinkV1(CreateSourceSinkV1),
     CreateSourceSinkV2(CreateSourceSinkV2),
     CreateSourceSinkV3(CreateSourceSinkV3),
+    CreateSourceSinkV4(CreateSourceSinkV4),
+    CreateIndexV1(CreateIndexV1),
+    CreateMaterializedViewV1(CreateMaterializedViewV1),
+    AlterApplyReplacementV1(AlterApplyReplacementV1),
     AlterSetClusterV1(AlterSetClusterV1),
     AlterSourceSinkV1(AlterSourceSinkV1),
     GrantRoleV1(GrantRoleV1),
@@ -178,60 +232,169 @@ pub enum EventDetails {
     UpdateItemV1(UpdateItemV1),
     RenameSchemaV1(RenameSchemaV1),
     AlterRetainHistoryV1(AlterRetainHistoryV1),
+    AlterAddColumnV1(AlterAddColumnV1),
+    AlterSourceTimestampIntervalV1(AlterSourceTimestampIntervalV1),
     ToNewIdV1(ToNewIdV1),
     FromPreviousIdV1(FromPreviousIdV1),
     SetV1(SetV1),
     ResetAllV1,
     RotateKeysV1(RotateKeysV1),
+    CreateRoleV1(CreateRoleV1),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct SetV1 {
     pub name: String,
     pub value: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct RotateKeysV1 {
     pub id: String,
     pub name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct IdFullNameV1 {
     pub id: String,
     #[serde(flatten)]
     pub name: FullNameV1,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct FullNameV1 {
     pub database: String,
     pub schema: String,
     pub item: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct IdNameV1 {
     pub id: String,
     pub name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct CreateRoleV1 {
+    pub id: String,
+    pub name: String,
+    pub auto_provision_source: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct RenameItemV1 {
     pub id: String,
     pub old_name: FullNameV1,
     pub new_name: FullNameV1,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct RenameClusterV1 {
     pub id: String,
     pub old_name: String,
     pub new_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct RenameClusterReplicaV1 {
     pub cluster_id: String,
     pub replica_id: String,
@@ -239,7 +402,18 @@ pub struct RenameClusterReplicaV1 {
     pub new_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct DropClusterReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
@@ -249,7 +423,18 @@ pub struct DropClusterReplicaV1 {
     pub replica_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct DropClusterReplicaV2 {
     pub cluster_id: String,
     pub cluster_name: String,
@@ -260,7 +445,40 @@ pub struct DropClusterReplicaV2 {
     pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV1>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct DropClusterReplicaV3 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub replica_id: Option<String>,
+    pub replica_name: String,
+    pub reason: CreateOrDropClusterReplicaReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV2>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct CreateClusterReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
@@ -274,7 +492,18 @@ pub struct CreateClusterReplicaV1 {
     pub internal: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct CreateClusterReplicaV2 {
     pub cluster_id: String,
     pub cluster_name: String,
@@ -289,7 +518,69 @@ pub struct CreateClusterReplicaV2 {
     pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV1>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct CreateClusterReplicaV3 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub replica_id: Option<String>,
+    pub replica_name: String,
+    pub logical_size: String,
+    pub disk: bool,
+    pub billed_as: Option<String>,
+    pub internal: bool,
+    pub reason: CreateOrDropClusterReplicaReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV2>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct CreateClusterReplicaV4 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub replica_id: Option<String>,
+    pub replica_name: String,
+    pub logical_size: String,
+    pub billed_as: Option<String>,
+    pub internal: bool,
+    pub reason: CreateOrDropClusterReplicaReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV2>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum CreateOrDropClusterReplicaReasonV1 {
     Manual,
@@ -300,13 +591,55 @@ pub enum CreateOrDropClusterReplicaReasonV1 {
 /// The reason for the automated cluster scheduling to turn a cluster On or Off. Each existing
 /// policy's On/Off opinion should be recorded, along with their reasons. (Among the reasons there
 /// can be settings of the policy as well as other information about the state of the system.)
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct SchedulingDecisionsWithReasonsV1 {
     /// The reason for the refresh policy for wanting to turn a cluster On or Off.
     pub on_refresh: RefreshDecisionWithReasonV1,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+/// The reason for the automated cluster scheduling to turn a cluster On or Off. Each existing
+/// policy's On/Off opinion should be recorded, along with their reasons. (Among the reasons there
+/// can be settings of the policy as well as other information about the state of the system.)
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct SchedulingDecisionsWithReasonsV2 {
+    /// The reason for the refresh policy for wanting to turn a cluster On or Off.
+    pub on_refresh: RefreshDecisionWithReasonV2,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct RefreshDecisionWithReasonV1 {
     pub decision: SchedulingDecisionV1,
     /// Objects that currently need a refresh on the cluster (taking into account the rehydration
@@ -316,7 +649,42 @@ pub struct RefreshDecisionWithReasonV1 {
     pub hydration_time_estimate: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct RefreshDecisionWithReasonV2 {
+    pub decision: SchedulingDecisionV1,
+    /// Objects that currently need a refresh on the cluster (taking into account the rehydration
+    /// time estimate), and therefore should keep the cluster On.
+    pub objects_needing_refresh: Vec<String>,
+    /// Objects for which we estimate that they currently need Persist compaction, and therefore
+    /// should keep the cluster On.
+    pub objects_needing_compaction: Vec<String>,
+    /// The HYDRATION TIME ESTIMATE setting of the cluster.
+    pub hydration_time_estimate: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum SchedulingDecisionV1 {
     On,
@@ -332,7 +700,18 @@ impl From<bool> for SchedulingDecisionV1 {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct CreateSourceSinkV1 {
     pub id: String,
     #[serde(flatten)]
@@ -340,7 +719,18 @@ pub struct CreateSourceSinkV1 {
     pub size: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct CreateSourceSinkV2 {
     pub id: String,
     #[serde(flatten)]
@@ -350,7 +740,18 @@ pub struct CreateSourceSinkV2 {
     pub external_type: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct CreateSourceSinkV3 {
     pub id: String,
     #[serde(flatten)]
@@ -359,7 +760,97 @@ pub struct CreateSourceSinkV3 {
     pub external_type: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct CreateSourceSinkV4 {
+    pub id: String,
+    pub cluster_id: Option<String>,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+    #[serde(rename = "type")]
+    pub external_type: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct CreateIndexV1 {
+    pub id: String,
+    pub cluster_id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct CreateMaterializedViewV1 {
+    pub id: String,
+    pub cluster_id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement_target_id: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct AlterApplyReplacementV1 {
+    #[serde(flatten)]
+    pub target: IdFullNameV1,
+    pub replacement: IdFullNameV1,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct AlterSourceSinkV1 {
     pub id: String,
     #[serde(flatten)]
@@ -368,23 +859,56 @@ pub struct AlterSourceSinkV1 {
     pub new_size: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct AlterSetClusterV1 {
     pub id: String,
     #[serde(flatten)]
     pub name: FullNameV1,
-    pub old_cluster: Option<String>,
-    pub new_cluster: Option<String>,
+    pub old_cluster_id: String,
+    pub new_cluster_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct GrantRoleV1 {
     pub role_id: String,
     pub member_id: String,
     pub grantor_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct GrantRoleV2 {
     pub role_id: String,
     pub member_id: String,
@@ -392,13 +916,35 @@ pub struct GrantRoleV2 {
     pub executed_by: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct RevokeRoleV1 {
     pub role_id: String,
     pub member_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct RevokeRoleV2 {
     pub role_id: String,
     pub member_id: String,
@@ -406,7 +952,18 @@ pub struct RevokeRoleV2 {
     pub executed_by: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct UpdatePrivilegeV1 {
     pub object_id: String,
     pub grantee_id: String,
@@ -414,7 +971,18 @@ pub struct UpdatePrivilegeV1 {
     pub privileges: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct AlterDefaultPrivilegeV1 {
     pub role_id: String,
     pub database_id: Option<String>,
@@ -423,28 +991,72 @@ pub struct AlterDefaultPrivilegeV1 {
     pub privileges: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct UpdateOwnerV1 {
     pub object_id: String,
     pub old_owner_id: String,
     pub new_owner_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct SchemaV1 {
     pub id: String,
     pub name: String,
     pub database_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct SchemaV2 {
     pub id: String,
     pub name: String,
     pub database_name: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct RenameSchemaV1 {
     pub id: String,
     pub database_name: Option<String>,
@@ -452,27 +1064,108 @@ pub struct RenameSchemaV1 {
     pub new_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct AlterRetainHistoryV1 {
     pub id: String,
     pub old_history: Option<String>,
     pub new_history: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct AlterAddColumnV1 {
+    pub id: String,
+    pub column: String,
+    pub column_type: String,
+    pub nullable: bool,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct AlterSourceTimestampIntervalV1 {
+    pub id: String,
+    pub old_interval: Option<String>,
+    pub new_interval: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct UpdateItemV1 {
     pub id: String,
     #[serde(flatten)]
     pub name: FullNameV1,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct ToNewIdV1 {
     pub id: String,
     pub new_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct FromPreviousIdV1 {
     pub id: String,
     pub previous_id: String,
@@ -487,10 +1180,19 @@ impl EventDetails {
             EventDetails::CreateClusterReplicaV2(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
+            EventDetails::CreateClusterReplicaV3(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::CreateClusterReplicaV4(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
             EventDetails::DropClusterReplicaV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::DropClusterReplicaV2(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::DropClusterReplicaV3(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::IdFullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
@@ -506,6 +1208,14 @@ impl EventDetails {
             EventDetails::CreateSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV3(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateSourceSinkV4(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateIndexV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateMaterializedViewV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::AlterApplyReplacementV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSetClusterV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::GrantRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
@@ -521,16 +1231,32 @@ impl EventDetails {
             EventDetails::AlterRetainHistoryV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
+            EventDetails::AlterAddColumnV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::AlterSourceTimestampIntervalV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
             EventDetails::ToNewIdV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::FromPreviousIdV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::SetV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::ResetAllV1 => serde_json::Value::Null,
             EventDetails::RotateKeysV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct EventV1 {
     pub id: u64,
     pub event_type: EventType,
@@ -560,7 +1286,18 @@ impl EventV1 {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct StorageUsageV1 {
     pub id: u64,
     pub shard_id: Option<String>,
@@ -588,7 +1325,18 @@ impl StorageUsageV1 {
 ///
 /// This type is persisted in the catalog across restarts, so any updates to the
 /// schema will require a new version.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub enum VersionedStorageUsage {
     V1(StorageUsageV1),
 }

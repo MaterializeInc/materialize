@@ -15,9 +15,9 @@
 
 //! Collection utilities.
 
+use std::collections::BTreeMap;
 use std::collections::btree_map::Entry as BEntry;
 use std::collections::hash_map::Entry as HEntry;
-use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
 
 mod hash;
@@ -42,6 +42,7 @@ where
     /// Consumes the collection and returns its only element.
     ///
     /// This method panics if the collection does not have exactly one element.
+    #[track_caller]
     fn into_element(self) -> T::Item {
         self.expect_element(|| "into_element called on collection without exactly one element")
     }
@@ -57,14 +58,17 @@ impl<T> CollectionExt<T> for T
 where
     T: IntoIterator,
 {
+    #[track_caller]
     fn into_first(self) -> T::Item {
         self.into_iter().next().unwrap()
     }
 
+    #[track_caller]
     fn into_last(self) -> T::Item {
         self.into_iter().last().unwrap()
     }
 
+    #[track_caller]
     fn expect_element<Err: Display>(self, msg_fn: impl FnOnce() -> Err) -> T::Item {
         let mut iter = self.into_iter();
         match (iter.next(), iter.next()) {
@@ -86,6 +90,18 @@ pub trait AssociativeExt<K, V> {
     /// because the key already existed in the collection.
     fn unwrap_insert(&mut self, k: K, v: V) {
         self.expect_insert(k, v, "called `unwrap_insert` for an already-existing key")
+    }
+
+    /// Removes a key, panicking with
+    /// a given message if a true
+    /// removal (as opposed to a no-op) cannot be done
+    /// because the key does not exist in the collection.
+    fn expect_remove(&mut self, k: &K, msg: &str) -> V;
+    /// Removes a key, panicking if a true
+    /// removal (as opposed to a no-op) cannot be done
+    /// because the key does not exist in the collection.
+    fn unwrap_remove(&mut self, k: &K) -> V {
+        self.expect_remove(k, "called `unwrap_remove` for a non-existing key")
     }
 }
 
@@ -110,6 +126,13 @@ where
             }
         }
     }
+
+    fn expect_remove(&mut self, k: &K, msg: &str) -> V {
+        match self.remove(k) {
+            Some(v) => v,
+            None => panic!("{} (key: {:?})", msg, k),
+        }
+    }
 }
 
 impl<K, V> AssociativeExt<K, V> for BTreeMap<K, V>
@@ -131,6 +154,13 @@ where
                     v
                 )
             }
+        }
+    }
+
+    fn expect_remove(&mut self, k: &K, msg: &str) -> V {
+        match self.remove(k) {
+            Some(v) => v,
+            None => panic!("{} (key: {:?})", msg, k),
         }
     }
 }

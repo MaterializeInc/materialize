@@ -16,11 +16,11 @@ import time
 from typing import IO, NamedTuple, cast
 
 import docker
-import pg8000
 import psutil
+import psycopg
 import requests
 from docker.models.containers import Container
-from pg8000.dbapi import ProgrammingError
+from psycopg.errors import ProgrammingError
 
 from materialize import MZ_ROOT, mzbuild, ui
 
@@ -93,7 +93,11 @@ def main() -> None:
 
     os.chdir(MZ_ROOT)
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
-    repo = mzbuild.Repository(MZ_ROOT, coverage=coverage)
+
+    repo = mzbuild.Repository(
+        MZ_ROOT,
+        coverage=coverage,
+    )
 
     wait_for_confluent(args.confluent_host)
 
@@ -131,24 +135,20 @@ def main() -> None:
         network_mode="host",
     )
 
-    conn = pg8000.connect(host="localhost", port=6875, user="materialize")
+    conn = psycopg.connect(host="localhost", port=6875, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
-        cur.execute(
-            f"""CREATE CONNECTION IF NOT EXISTS csr_conn
+        cur.execute(f"""CREATE CONNECTION IF NOT EXISTS csr_conn
             TO CONFLUENT SCHEMA REGISTRY (
                 URL 'http://{args.confluent_host}:8081'
-            )"""
-        )
+            )""".encode())
         cur.execute(
             f"""CREATE CONNECTION kafka_conn
-            TO KAFKA (BROKER '{args.confluent_host}:9092', SECURITY PROTOCOL PLAINTEXT)"""
+            TO KAFKA (BROKER '{args.confluent_host}:9092', SECURITY PROTOCOL PLAINTEXT)""".encode()
         )
-        cur.execute(
-            """CREATE SOURCE src
+        cur.execute("""CREATE SOURCE src
             FROM KAFKA CONNECTION kafka_conn (TOPIC 'bench_data')
-            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn"""
-        )
+            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn""")
 
         results_file = open("results.csv", "w")
 

@@ -191,14 +191,14 @@ DROP VIEW s1
 statement ok
 DROP TABLE t
 
-# Check for memory leak (#10466)
+# Check for memory leak (materialize#10466)
 statement ok
 CREATE VIEW foo AS SELECT catalog_name, schema_name, sql_path FROM information_schema.schemata
 
 statement error pq: relation "foo" already exists
 CREATE VIEW foo AS SELECT catalog_name, schema_name, sql_path FROM information_schema.schemata
 
-# Ensure views work with dates/timestamps (#12420)
+# Ensure views work with dates/timestamps (materialize#12420)
 statement ok
 CREATE TABLE t (d DATE, t TIMESTAMP)
 
@@ -215,7 +215,7 @@ statement ok
 SELECT * FROM dt2
 
 # Ensure that creating a view doesn't leak any session-level settings that
-# could affect subsequent AS OF SYSTEM TIME queries (#13547).
+# could affect subsequent AS OF SYSTEM TIME queries (materialize#13547).
 statement ok
 CREATE VIEW v AS SELECT d, t FROM t
 
@@ -251,7 +251,7 @@ SELECT *, a[1] FROM arr
 ----
 {3}  3
 
-# Regression for #15951
+# Regression for materialize#15951
 
 statement ok
 CREATE TABLE t15951 (a int, b int)
@@ -286,7 +286,7 @@ SELECT sum ("QuotedCaps15951". a) FROM "QuotedCaps15951" GROUP BY b ORDER BY b
 3
 6
 
-# Regression tests for #23833
+# Regression tests for database-issues#7154
 
 statement ok
 CREATE VIEW w AS WITH a AS (SELECT 1 AS x) SELECT x FROM a

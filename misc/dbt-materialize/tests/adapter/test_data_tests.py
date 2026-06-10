@@ -76,7 +76,7 @@ class TestDataTestCluster:
         }
 
     def test_store_failures_cluster(self, project):
-        project.run_sql("CREATE CLUSTER not_default_test SIZE = '1'")
+        project.run_sql("CREATE CLUSTER not_default_test SIZE = 'scale=1,workers=1'")
 
         # run models
         results = run_dbt(["run"])

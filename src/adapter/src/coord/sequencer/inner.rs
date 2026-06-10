@@ -15,58 +15,58 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use futures::future::BoxFuture;
-use futures::stream::FuturesOrdered;
-use futures::{future, Future, FutureExt};
+use futures::future::{BoxFuture, FutureExt};
+use futures::{Future, StreamExt, future};
 use itertools::Itertools;
-use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_cloud_resources::VpcEndpointConfig;
-use mz_controller_types::ReplicaId;
-use mz_expr::{
-    CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
+use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
+use mz_catalog::memory::error::ErrorKind;
+use mz_catalog::memory::objects::{
+    CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
+use mz_expr::{
+    CollectionPlan, Eval, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
+};
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
-use mz_ore::task::{self, spawn, JoinHandle};
+use mz_ore::future::OreFutureExt;
+use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::vec::VecExt;
-use mz_proto::RustType;
+use mz_ore::{assert_none, instrument};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::json::json_string;
 use mz_repr::explain::ExprHumanizer;
+use mz_repr::explain::json::json_string;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, IntoRowIterator, Row, RowArena, RowIterator, Timestamp};
-use mz_sql::ast::{
-    CreateSubsourceStatement, Ident, MySqlConfigOptionName, UnresolvedItemName, Value,
+use mz_repr::{
+    CatalogItemId, Datum, Diff, GlobalId, RelationVersion, RelationVersionSelector, Row, RowArena,
+    RowIterator, Timestamp,
 };
+use mz_secrets::SecretsReader;
+use mz_sql::ast::{
+    AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName, CreateSourceOptionName,
+    CreateSubsourceOption, CreateSubsourceOptionName, SqlServerConfigOption,
+    SqlServerConfigOptionName,
+};
+use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
-    ErrorMessageObjectDescription, ObjectType, RoleVars, SessionCatalog,
+    CatalogItem as SqlCatalogItem, CatalogRole, CatalogSchema, CatalogTypeDetails,
+    ErrorMessageObjectDescription, ObjectType, RoleAttributesRaw, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::StatementContext;
-use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
+use mz_sql::plan::{
+    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule,
+    StatementContext,
+};
+use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
+use mz_storage_types::connections::gcp::GcpServiceAccountKeyTokenUri;
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::mysql::{MySqlSourceDetails, ProtoMySqlSourceDetails};
-use mz_storage_types::sources::postgres::{
-    PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
-};
-use prost::Message as _;
-use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
-use mz_adapter_types::connection::ConnectionId;
-use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, Type,
-};
-use mz_ore::cast::CastFrom;
-use mz_ore::{assert_none, instrument};
-use mz_persist_client::stats::SnapshotPartStats;
-use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
     Explainee, ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption,
@@ -75,8 +75,8 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    self, IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, SCHEMA_ALIAS,
-    TRANSACTION_ISOLATION_VAR_NAME,
+    self, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
+    TRANSACTION_ISOLATION_VAR_NAME, Var, VarError, VarInput,
 };
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -86,39 +86,47 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{
-    CollectionDescription, DataSource, DataSourceOther, ExportDescription,
-};
+use mz_storage_client::controller::ExportDescription;
+use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::stats::RelationPartStats;
-use mz_storage_types::AlterCompatible;
-use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
-use mz_transform::EmptyStatisticsOracle;
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::{OptimizerNotice, RawOptimizerNotice};
+use smallvec::SmallVec;
 use timely::progress::Antichain;
-use tokio::sync::{oneshot, watch, OwnedMutexGuard};
-use tracing::{warn, Instrument, Span};
+use tokio::sync::{oneshot, watch};
+use tracing::{Instrument, Span, info, warn};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
-use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
+use crate::coord::appends::{
+    BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder,
+};
+use crate::coord::read_then_write::validate_read_then_write_dependencies;
+use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
-    AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
-    CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, ExplainContext,
-    Message, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    StageResult, Staged, StagedContext, TargetCluster, WatchSetResponse,
+    AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
+    Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext,
+    ExplainContext, Message, NetworkPolicyError, PendingRead, PendingReadTxn, PendingTxn,
+    PendingTxnResponse, PlanValidity, StageResult, Staged, StagedContext, TargetCluster,
+    WatchSetResponse, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
-use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::{self, Optimize};
 use crate::session::{
-    EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
+    EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus,
+    WriteLocks, WriteOp,
 };
-use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
-use crate::{guard_write_critical_section, PeekResponseUnary, ReadHolds};
+use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
+use crate::{PeekResponseUnary, ReadHolds};
+
+/// A future that resolves to a real-time recency timestamp.
+type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
 
 mod cluster;
+mod copy_from;
 mod create_index;
 mod create_materialized_view;
 mod create_view;
@@ -150,15 +158,17 @@ struct DropOps {
 // A bundle of values returned from create_source_inner
 struct CreateSourceInner {
     ops: Vec<catalog::Op>,
-    sources: Vec<(GlobalId, Source)>,
-    if_not_exists_ids: BTreeMap<GlobalId, QualifiedItemName>,
+    sources: Vec<(CatalogItemId, Source)>,
+    if_not_exists_ids: BTreeMap<CatalogItemId, QualifiedItemName>,
 }
 
 impl Coordinator {
-    /// Sequences the next staged of a [Staged] plan. This is designed for use with plans that
-    /// execute both on and off of the coordinator thread. Stages can either produce another stage
-    /// to execute or a final response. An explicit [Span] is passed to allow for convenient
-    /// tracing.
+    /// Sequences a [Staged] plan.
+    ///
+    /// This is designed for plans that execute both on and off the coordinator
+    /// thread. Stages can either produce another stage to execute or a final
+    /// response. Maintains the connection-scoped cancel watch in
+    /// `connection_cancel_watches` while a stage is cancelable.
     pub(crate) async fn sequence_staged<S>(
         &mut self,
         mut ctx: S::Ctx,
@@ -176,7 +186,7 @@ impl Coordinator {
                     // Channel to await cancellation. Insert a new channel, but check if the previous one
                     // was already canceled.
                     if let Some((_prev_tx, prev_rx)) = self
-                        .staged_cancellation
+                        .connection_cancel_watches
                         .insert(session.conn_id().clone(), watch::channel(false))
                     {
                         let was_canceled = *prev_rx.borrow();
@@ -188,7 +198,7 @@ impl Coordinator {
                 } else {
                     // If no cancel allowed, remove it so handle_spawn doesn't observe any previous value
                     // when cancel_enabled may have been true on an earlier stage.
-                    self.staged_cancellation.remove(session.conn_id());
+                    self.connection_cancel_watches.remove(session.conn_id());
                 }
             } else {
                 cancel_enabled = false
@@ -221,8 +231,10 @@ impl Coordinator {
         }
     }
 
+    /// Waits for either the spawned stage work to complete or cancellation to
+    /// be signaled through the connection-scoped cancel watch.
     fn handle_spawn<C, T, F>(
-        &mut self,
+        &self,
         ctx: C,
         handle: JoinHandle<Result<T, AdapterError>>,
         cancel_enabled: bool,
@@ -234,7 +246,7 @@ impl Coordinator {
     {
         let rx: BoxFuture<()> = if let Some((_tx, rx)) = ctx
             .session()
-            .and_then(|session| self.staged_cancellation.get(session.conn_id()))
+            .and_then(|session| self.connection_cancel_watches.get(session.conn_id()))
         {
             let mut rx = rx.clone();
             Box::pin(async move {
@@ -248,16 +260,7 @@ impl Coordinator {
         spawn(|| "sequence_staged", async move {
             tokio::select! {
                 res = handle => {
-                    let next = match res {
-                        Ok(next) => return_if_err!(next, ctx),
-                        Err(err) => {
-                            tracing::error!("sequence_staged join error {err}");
-                            ctx.retire(Err(AdapterError::Internal(
-                                "sequence_staged join error".into(),
-                            )));
-                            return;
-                        }
-                    };
+                    let next = return_if_err!(res, ctx);
                     f(ctx, next);
                 }
                 _ = rx, if cancel_enabled => {
@@ -268,7 +271,7 @@ impl Coordinator {
     }
 
     async fn create_source_inner(
-        &mut self,
+        &self,
         session: &Session,
         plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<CreateSourceInner, AdapterError> {
@@ -279,12 +282,14 @@ impl Coordinator {
             .iter()
             .filter_map(
                 |plan::CreateSourcePlanBundle {
-                     source_id,
+                     item_id,
+                     global_id: _,
                      plan,
                      resolved_ids: _,
+                     available_source_references: _,
                  }| {
                     if plan.if_not_exists {
-                        Some((*source_id, plan.name.clone()))
+                        Some((*item_id, plan.name.clone()))
                     } else {
                         None
                     }
@@ -293,28 +298,14 @@ impl Coordinator {
             .collect::<BTreeMap<_, _>>();
 
         for plan::CreateSourcePlanBundle {
-            source_id,
+            item_id,
+            global_id,
             mut plan,
             resolved_ids,
+            available_source_references,
         } in plans
         {
             let name = plan.name.clone();
-            if matches!(
-                plan.source.data_source,
-                mz_sql::plan::DataSourceDesc::Ingestion(_)
-                    | mz_sql::plan::DataSourceDesc::Webhook { .. }
-            ) {
-                if let Some(cluster) = self.catalog().try_get_cluster(
-                    plan.in_cluster
-                        .expect("ingestion, webhook sources must specify cluster"),
-                ) {
-                    mz_ore::soft_assert_or_log!(
-                        cluster.replica_ids().len() <= 1,
-                        "cannot create source in cluster {}; has >1 replicas",
-                        cluster.id()
-                    );
-                }
-            }
 
             // Attempt to reduce the `CHECK` expression, we timeout if this takes too long.
             if let mz_sql::plan::DataSourceDesc::Webhook {
@@ -333,14 +324,26 @@ impl Coordinator {
                 }
             }
 
-            let source = Source::new(plan, resolved_ids, None, false);
+            // If this source contained a set of available source references, update the
+            // source references catalog table.
+            let mut reference_ops = vec![];
+            if let Some(references) = &available_source_references {
+                reference_ops.push(catalog::Op::UpdateSourceReferences {
+                    source_id: item_id,
+                    references: references.clone().into(),
+                });
+            }
+
+            let source = Source::new(plan, global_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
-                id: source_id,
+                id: item_id,
                 name,
                 item: CatalogItem::Source(source.clone()),
                 owner_id: *session.current_role_id(),
             });
-            sources.push((source_id, source));
+            sources.push((item_id, source));
+            // These operations must be executed after the source is added to the catalog.
+            ops.extend(reference_ops);
         }
 
         Ok(CreateSourceInner {
@@ -355,15 +358,20 @@ impl Coordinator {
     /// Because of this, we have usually "missed" the opportunity to plan them
     /// through the normal statement execution life cycle (the exception being
     /// during bootstrapping).
-    pub(crate) async fn plan_subsource(
-        &mut self,
+    ///
+    /// The caller needs to provide a `CatalogItemId` and `GlobalId` for the sub-source.
+    pub(crate) fn plan_subsource(
+        &self,
         session: &Session,
         params: &mz_sql::plan::Params,
         subsource_stmt: CreateSubsourceStatement<mz_sql::names::Aug>,
+        item_id: CatalogItemId,
+        global_id: GlobalId,
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
-        let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
-        let source_id = self.catalog_mut().allocate_user_id().await?;
-        let plan = self.plan_statement(
+        let catalog = self.catalog().for_session(session);
+        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
+
+        let (plan, _sql_impl_ids) = self.plan_statement(
             session,
             Statement::CreateSubsource(subsource_stmt),
             params,
@@ -374,9 +382,11 @@ impl Coordinator {
             _ => unreachable!(),
         };
         Ok(CreateSourcePlanBundle {
-            source_id,
+            item_id,
+            global_id,
             plan,
             resolved_ids,
+            available_source_references: None,
         })
     }
 
@@ -396,13 +406,23 @@ impl Coordinator {
         let pcx = plan::PlanContext::zero();
         let scx = StatementContext::new(Some(&pcx), &conn_catalog);
 
-        let source_id = *source_name.item_id();
+        let entry = self.catalog().get_entry(source_name.item_id());
+        let source = entry.source().ok_or_else(|| {
+            AdapterError::internal(
+                "plan alter source",
+                format!("expected Source found {entry:?}"),
+            )
+        })?;
+
+        let item_id = entry.id();
+        let ingestion_id = source.global_id();
         let subsource_stmts = generate_subsource_statements(&scx, source_name, subsources)?;
 
-        for subsource_stmt in subsource_stmts {
-            let s = self
-                .plan_subsource(session, &params, subsource_stmt)
-                .await?;
+        let ids = self
+            .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
+            .await?;
+        for (subsource_stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
+            let s = self.plan_subsource(session, &params, subsource_stmt, item_id, global_id)?;
             subsource_plans.push(s);
         }
 
@@ -413,10 +433,40 @@ impl Coordinator {
 
         Ok((
             Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
-                id: source_id,
+                item_id,
+                ingestion_id,
                 action,
             }),
-            ResolvedIds(BTreeSet::new()),
+            ResolvedIds::empty(),
+        ))
+    }
+
+    /// Prepares an `ALTER SOURCE...REFRESH REFERENCES`.
+    pub(crate) fn plan_purified_alter_source_refresh_references(
+        &self,
+        _session: &Session,
+        _params: Params,
+        source_name: ResolvedItemName,
+        available_source_references: plan::SourceReferences,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        let entry = self.catalog().get_entry(source_name.item_id());
+        let source = entry.source().ok_or_else(|| {
+            AdapterError::internal(
+                "plan alter source",
+                format!("expected Source found {entry:?}"),
+            )
+        })?;
+        let action = mz_sql::plan::AlterSourceAction::RefreshReferences {
+            references: available_source_references,
+        };
+
+        Ok((
+            Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
+                item_id: entry.id(),
+                ingestion_id: source.global_id(),
+                action,
+            }),
+            ResolvedIds::empty(),
         ))
     }
 
@@ -427,37 +477,53 @@ impl Coordinator {
         &mut self,
         ctx: &ExecuteContext,
         params: Params,
-        progress_stmt: CreateSubsourceStatement<Aug>,
+        progress_stmt: Option<CreateSubsourceStatement<Aug>>,
         mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
+        available_source_references: plan::SourceReferences,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         let mut create_source_plans = Vec::with_capacity(subsources.len() + 2);
 
-        // 1. First plan the progress subsource.
-        //
-        // The primary source depends on this subsource because the primary
-        // source needs to know its shard ID, and the easiest way of
-        // guaranteeing that the shard ID is discoverable is to create this
-        // collection first.
-        assert_none!(progress_stmt.of_source);
-        let progress_plan = self
-            .plan_subsource(ctx.session(), &params, progress_stmt)
-            .await?;
-        let progress_full_name = self
-            .catalog()
-            .resolve_full_name(&progress_plan.plan.name, None);
-        let progress_subsource = ResolvedItemName::Item {
-            id: progress_plan.source_id,
-            qualifiers: progress_plan.plan.name.qualifiers.clone(),
-            full_name: progress_full_name,
-            print_id: true,
-        };
+        // 1. First plan the progress subsource, if any.
+        if let Some(progress_stmt) = progress_stmt {
+            // The primary source depends on this subsource because the primary
+            // source needs to know its shard ID, and the easiest way of
+            // guaranteeing that the shard ID is discoverable is to create this
+            // collection first.
+            assert_none!(progress_stmt.of_source);
+            let (item_id, global_id) = self.allocate_user_id().await?;
+            let progress_plan =
+                self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
+            let progress_full_name = self
+                .catalog()
+                .resolve_full_name(&progress_plan.plan.name, None);
+            let progress_subsource = ResolvedItemName::Item {
+                id: progress_plan.item_id,
+                qualifiers: progress_plan.plan.name.qualifiers.clone(),
+                full_name: progress_full_name,
+                print_id: true,
+                version: RelationVersionSelector::Latest,
+            };
 
-        create_source_plans.push(progress_plan);
+            create_source_plans.push(progress_plan);
 
-        source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
+            source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
+        }
 
-        let resolved_ids = mz_sql::names::visit_dependencies(&source_stmt);
+        let catalog = self.catalog().for_session(ctx.session());
+        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
+
+        let propagated_with_options: Vec<_> = source_stmt
+            .with_options
+            .iter()
+            .filter_map(|opt| match opt.name {
+                CreateSourceOptionName::TimestampInterval => None,
+                CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
+                    name: CreateSubsourceOptionName::RetainHistory,
+                    value: opt.value.clone(),
+                }),
+            })
+            .collect();
 
         // 2. Then plan the main source.
         let source_plan = match self.plan_statement(
@@ -466,17 +532,19 @@ impl Coordinator {
             &params,
             &resolved_ids,
         )? {
-            Plan::CreateSource(plan) => plan,
-            p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
+            (Plan::CreateSource(plan), _sql_impl_ids) => plan,
+            (p, _) => unreachable!("s must be CreateSourcePlan but got {:?}", p),
         };
 
-        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let (item_id, global_id) = self.allocate_user_id().await?;
+
         let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
         let of_source = ResolvedItemName::Item {
-            id: source_id,
+            id: item_id,
             qualifiers: source_plan.name.qualifiers.clone(),
             full_name: source_full_name,
             print_id: true,
+            version: RelationVersionSelector::Latest,
         };
 
         // Generate subsource statements
@@ -484,164 +552,73 @@ impl Coordinator {
         let pcx = plan::PlanContext::zero();
         let scx = StatementContext::new(Some(&pcx), &conn_catalog);
 
-        let subsource_stmts = generate_subsource_statements(&scx, of_source, subsources)?;
+        let mut subsource_stmts = generate_subsource_statements(&scx, of_source, subsources)?;
+
+        for subsource_stmt in subsource_stmts.iter_mut() {
+            subsource_stmt
+                .with_options
+                .extend(propagated_with_options.iter().cloned())
+        }
 
         create_source_plans.push(CreateSourcePlanBundle {
-            source_id,
+            item_id,
+            global_id,
             plan: source_plan,
             resolved_ids: resolved_ids.clone(),
+            available_source_references: Some(available_source_references),
         });
 
         // 3. Finally, plan all the subsources
-        for stmt in subsource_stmts {
-            let plan = self.plan_subsource(ctx.session(), &params, stmt).await?;
+        let ids = self
+            .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
+            .await?;
+        for (stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
+            let plan = self.plan_subsource(ctx.session(), &params, stmt, item_id, global_id)?;
             create_source_plans.push(plan);
         }
 
         Ok((
             Plan::CreateSources(create_source_plans),
-            ResolvedIds(BTreeSet::new()),
+            ResolvedIds::empty(),
         ))
     }
 
     #[instrument]
     pub(super) async fn sequence_create_source(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let source_ids: Vec<_> = plans.iter().map(|plan| plan.source_id).collect();
         let CreateSourceInner {
             ops,
             sources,
             if_not_exists_ids,
-        } = self.create_source_inner(session, plans).await?;
+        } = self.create_source_inner(ctx.session(), plans).await?;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                // To improve the performance of creating a source and many
-                // subsources, we create all of the collections at once. If we
-                // created each collection independently, we would reschedule
-                // the primary source's execution for each subsources, causing
-                // unncessary thrashing.
-                //
-                // Note that creating all of the collections at once should
-                // never be semantic bearing; we should always be able to break
-                // this apart into creating the collections sequentially.
-                let mut collections = Vec::with_capacity(sources.len());
-
-                for (source_id, source) in sources {
-                    let source_status_collection_id =
-                        Some(coord.catalog().resolve_builtin_storage_collection(
-                            &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                        ));
-
-                    let (data_source, status_collection_id) = match source.data_source {
-                        DataSourceDesc::Ingestion {
-                            ingestion_desc:
-                                mz_sql::plan::Ingestion {
-                                    desc,
-                                    progress_subsource,
-                                },
-                            cluster_id,
-                        } => {
-                            let desc = desc.into_inline_connection(coord.catalog().state());
-                            let ingestion = mz_storage_types::sources::IngestionDescription::new(
-                                desc,
-                                cluster_id,
-                                progress_subsource,
-                            );
-
-                            (
-                                DataSource::Ingestion(ingestion),
-                                source_status_collection_id,
-                            )
-                        }
-                        DataSourceDesc::IngestionExport {
-                            ingestion_id,
-                            external_reference,
-                        } => (
-                            DataSource::IngestionExport {
-                                ingestion_id,
-                                external_reference,
-                            },
-                            source_status_collection_id,
-                        ),
-                        DataSourceDesc::Progress => (DataSource::Progress, None),
-                        DataSourceDesc::Webhook { .. } => {
-                            if let Some(url) =
-                                coord.catalog().state().try_get_webhook_url(&source_id)
-                            {
-                                session.add_notice(AdapterNotice::WebhookSourceCreated { url })
-                            }
-
-                            (DataSource::Webhook, None)
-                        }
-                        DataSourceDesc::Introspection(_) => {
-                            unreachable!("cannot create sources with introspection data sources")
-                        }
-                    };
-
-                    collections.push((
-                        source_id,
-                        CollectionDescription::<Timestamp> {
-                            desc: source.desc.clone(),
-                            data_source,
-                            since: None,
-                            status_collection_id,
-                        },
-                    ));
-                }
-
-                let storage_metadata = coord.catalog.state().storage_metadata();
-
-                coord
-                    .controller
-                    .storage
-                    .create_collections(storage_metadata, None, collections)
-                    .await
-                    .unwrap_or_terminate("cannot fail to create collections");
-
-                // It is _very_ important that we only initialize read policies
-                // after we have created all the sources/collections. Some of
-                // the sources created in this collection might have
-                // dependencies on other sources, so the controller must get a
-                // chance to install read holds before we set a policy that
-                // might make the since advance.
-                //
-                // One instance of this is the remap shard: it presents as a
-                // SUBSOURCE, and all other SUBSOURCES of a SOURCE will depend
-                // on it. Both subsources and sources will show up as a `Source`
-                // in the above.
-                let mut read_policies: BTreeMap<CompactionWindow, BTreeSet<GlobalId>> =
-                    BTreeMap::new();
-                // Although there should only be one parent source that sequence_create_source is
-                // ever called with, hedge our bets a bit and collect the compaction windows for
-                // each id in the bundle (these should all be identical). This is some extra work
-                // but seems safer.
-                let policies = coord
-                    .catalog()
-                    .state()
-                    .source_compaction_windows(source_ids);
-                read_policies.extend(policies);
-                for (compaction_window, storage_policies) in read_policies {
-                    coord
-                        .initialize_storage_read_policies(storage_policies, compaction_window)
-                        .await;
-                }
-            })
+            .catalog_transact_with_ddl_transaction(ctx, ops, |_, _| Box::pin(async {}))
             .await;
+
+        // Check if any sources are webhook sources and report them as created.
+        for (item_id, source) in &sources {
+            if matches!(source.data_source, DataSourceDesc::Webhook { .. }) {
+                if let Some(url) = self.catalog().state().try_get_webhook_url(item_id) {
+                    ctx.session()
+                        .add_notice(AdapterNotice::WebhookSourceCreated { url });
+                }
+            }
+        }
 
         match transact_result {
             Ok(()) => Ok(ExecuteResponse::CreatedSource),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
             })) if if_not_exists_ids.contains_key(&id) => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: if_not_exists_ids[&id].item.clone(),
-                    ty: "source",
-                });
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: if_not_exists_ids[&id].item.clone(),
+                        ty: "source",
+                    });
                 Ok(ExecuteResponse::CreatedSource)
             }
             Err(err) => Err(err),
@@ -652,37 +629,56 @@ impl Coordinator {
     pub(super) async fn sequence_create_connection(
         &mut self,
         mut ctx: ExecuteContext,
-        mut plan: plan::CreateConnectionPlan,
+        plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
-        let connection_gid = match self.catalog_mut().allocate_user_id().await {
-            Ok(gid) => gid,
-            Err(err) => return ctx.retire(Err(err.into())),
+        let (connection_id, connection_gid) = match self.allocate_user_id().await {
+            Ok(item_id) => item_id,
+            Err(err) => return ctx.retire(Err(err)),
         };
 
-        let public_key_set = match plan.connection.connection {
-            mz_storage_types::connections::Connection::Ssh(_) => {
-                let key_set = match SshKeyPairSet::new() {
-                    Ok(key) => key,
-                    Err(err) => return ctx.retire(Err(err.into())),
+        match &plan.connection.details {
+            ConnectionDetails::Ssh { key_1, key_2, .. } => {
+                let key_1 = match key_1.as_key_pair() {
+                    Some(key_1) => key_1.clone(),
+                    None => {
+                        return ctx.retire(Err(AdapterError::Unstructured(anyhow!(
+                            "the PUBLIC KEY 1 option cannot be explicitly specified"
+                        ))));
+                    }
                 };
+
+                let key_2 = match key_2.as_key_pair() {
+                    Some(key_2) => key_2.clone(),
+                    None => {
+                        return ctx.retire(Err(AdapterError::Unstructured(anyhow!(
+                            "the PUBLIC KEY 2 option cannot be explicitly specified"
+                        ))));
+                    }
+                };
+
+                let key_set = SshKeyPairSet::from_parts(key_1, key_2);
                 let secret = key_set.to_bytes();
-                match self
-                    .secrets_controller
-                    .ensure(connection_gid, &secret)
+                if let Err(err) = self.secrets_controller.ensure(connection_id, &secret).await {
+                    return ctx.retire(Err(err.into()));
+                }
+                self.caching_secrets_reader.invalidate(connection_id);
+            }
+            ConnectionDetails::Gcp(gcp) => {
+                // A service account key defines its own OAuth2 token URI.
+                // We only want to send requests to the actual Google OAuth2 token API,
+                // so we inspect the key as early as we can.
+                if let Err(err) = self
+                    .caching_secrets_reader
+                    .read_string(gcp.credentials_json)
                     .await
+                    .and_then(|json| GcpServiceAccountKeyTokenUri::validate_json(&json))
                 {
-                    Ok(()) => Some(key_set.public_keys()),
-                    Err(err) => return ctx.retire(Err(err.into())),
+                    return ctx.retire(Err(err.into()));
                 }
             }
-            _ => None,
+            _ => (),
         };
-        assert_eq!(
-            plan.public_key_set, None,
-            "public key should not be set yet"
-        );
-        plan.public_key_set = public_key_set;
 
         if plan.validate {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -693,18 +689,26 @@ impl Coordinator {
 
             let connection = plan
                 .connection
-                .connection
-                .clone()
+                .details
+                .to_connection()
                 .into_inline_connection(self.catalog().state());
 
             let current_storage_parameters = self.controller.storage.config().clone();
             task::spawn(|| format!("validate_connection:{conn_id}"), async move {
-                let result = match connection
-                    .validate(connection_gid, &current_storage_parameters)
-                    .await
+                let result = match std::panic::AssertUnwindSafe(
+                    connection.validate(connection_id, &current_storage_parameters),
+                )
+                .ore_catch_unwind()
+                .await
                 {
-                    Ok(()) => Ok(plan),
-                    Err(err) => Err(err.into()),
+                    Ok(Ok(())) => Ok(plan),
+                    Ok(Err(err)) => Err(err.into()),
+                    Err(_panic) => {
+                        tracing::error!("connection validation panicked");
+                        Err(AdapterError::Internal(
+                            "connection validation panicked".into(),
+                        ))
+                    }
                 };
 
                 // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
@@ -712,16 +716,17 @@ impl Coordinator {
                     CreateConnectionValidationReady {
                         ctx,
                         result,
+                        connection_id,
                         connection_gid,
                         plan_validity: PlanValidity::new(
                             transient_revision,
-                            resolved_ids.0.clone(),
+                            resolved_ids.items().copied().collect(),
                             None,
                             None,
                             role_metadata,
                         ),
                         otel_ctx,
-                        dependency_ids: resolved_ids.0,
+                        resolved_ids: resolved_ids.clone(),
                     },
                 ));
                 if let Err(e) = result {
@@ -731,7 +736,8 @@ impl Coordinator {
         } else {
             let result = self
                 .sequence_create_connection_stage_finish(
-                    ctx.session_mut(),
+                    &mut ctx,
+                    connection_id,
                     connection_gid,
                     plan,
                     resolved_ids,
@@ -744,79 +750,77 @@ impl Coordinator {
     #[instrument]
     pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
+        connection_id: CatalogItemId,
         connection_gid: GlobalId,
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = vec![catalog::Op::CreateItem {
-            id: connection_gid,
+        let ops = vec![catalog::Op::CreateItem {
+            id: connection_id,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                connection: plan.connection.connection.clone(),
+                global_id: connection_gid,
+                details: plan.connection.details.clone(),
                 resolved_ids,
             }),
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         }];
-        if let Some(public_key_set) = plan.public_key_set {
-            let builtin_table_update = self.catalog().state().pack_ssh_tunnel_connection_update(
-                connection_gid,
-                &public_key_set,
-                1,
-            );
-            let builtin_table_update = self
-                .catalog()
-                .state()
-                .resolve_builtin_table_update(builtin_table_update);
-            ops.push(catalog::Op::WeirdBuiltinTableUpdates {
-                builtin_table_update,
-                audit_log: Vec::new(),
-            });
-        }
 
+        // VPC endpoint creation for AWS PrivateLink connections is now handled
+        // in apply_catalog_implications.
+        let conn_id = ctx.session().conn_id().clone();
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                match plan.connection.connection {
-                    mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
-                        let spec = VpcEndpointConfig {
-                            aws_service_name: privatelink.service_name.to_owned(),
-                            availability_zone_ids: privatelink.availability_zones.to_owned(),
-                        };
-                        let cloud_resource_controller =
-                            match coord.cloud_resource_controller.as_ref().cloned() {
-                                Some(controller) => controller,
-                                None => {
-                                    tracing::warn!("AWS PrivateLink connections unsupported");
-                                    return;
-                                }
-                            };
-                        if let Err(err) = cloud_resource_controller
-                            .ensure_vpc_endpoint(connection_gid, spec)
-                            .await
-                        {
-                            tracing::warn!(?err, "failed to ensure vpc endpoint!");
-                        }
-                    }
-                    _ => {}
-                }
-            })
+            .catalog_transact_with_context(Some(&conn_id), Some(ctx), ops)
             .await;
 
         match transact_result {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection),
-            Err(err) => Err(err),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            })) if plan.if_not_exists => {
+                // Clean up SSH key material if it was persisted, since the
+                // catalog item was not created.
+                if matches!(plan.connection.details, ConnectionDetails::Ssh { .. }) {
+                    if let Err(e) = self.secrets_controller.delete(connection_id).await {
+                        tracing::warn!(
+                            "Dropping SSH secret for existing connection has encountered an error: {}",
+                            e
+                        );
+                    } else {
+                        self.caching_secrets_reader.invalidate(connection_id);
+                    }
+                }
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: plan.name.item,
+                        ty: "connection",
+                    });
+                Ok(ExecuteResponse::CreatedConnection)
+            }
+            Err(err) => {
+                // Clean up SSH key material if it was persisted, since the
+                // catalog item was not created.
+                if matches!(plan.connection.details, ConnectionDetails::Ssh { .. }) {
+                    if let Err(e) = self.secrets_controller.delete(connection_id).await {
+                        tracing::warn!(
+                            "Dropping SSH secret for failed connection has encountered an error: {}",
+                            e
+                        );
+                    } else {
+                        self.caching_secrets_reader.invalidate(connection_id);
+                    }
+                }
+                Err(err)
+            }
         }
     }
 
     #[instrument]
     pub(super) async fn sequence_create_database(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan: plan::CreateDatabasePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = vec![catalog::Op::CreateDatabase {
@@ -826,8 +830,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
+                kind: ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::DatabaseAlreadyExists { name: plan.name });
                 Ok(ExecuteResponse::CreatedDatabase)
@@ -839,7 +842,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_create_schema(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan: plan::CreateSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::CreateSchema {
@@ -850,8 +853,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
+                kind: ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::SchemaAlreadyExists {
                     name: plan.schema_name,
@@ -862,16 +864,71 @@ impl Coordinator {
         }
     }
 
+    /// Validates the role attributes for a `CREATE ROLE` statement.
+    fn validate_role_attributes(&self, attributes: &RoleAttributesRaw) -> Result<(), AdapterError> {
+        if !ENABLE_PASSWORD_AUTH.get(self.catalog().system_config().dyncfgs()) {
+            if attributes.superuser.is_some() || attributes.password.is_some() {
+                return Err(AdapterError::UnavailableFeature {
+                    feature: "SUPERUSER and PASSWORD attributes".to_string(),
+                    docs: Some("https://materialize.com/docs/sql/create-role/#details".to_string()),
+                });
+            }
+        }
+        Ok(())
+    }
+
     #[instrument]
     pub(super) async fn sequence_create_role(
         &mut self,
         conn_id: Option<&ConnectionId>,
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.validate_role_attributes(&attributes.clone())?;
         let op = catalog::Op::CreateRole { name, attributes };
-        self.catalog_transact_conn(conn_id, vec![op])
+        self.catalog_transact_with_context(conn_id, None, vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_create_network_policy(
+        &mut self,
+        session: &Session,
+        plan::CreateNetworkPolicyPlan { name, rules }: plan::CreateNetworkPolicyPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::CreateNetworkPolicy {
+            rules,
+            name,
+            owner_id: *session.current_role_id(),
+        };
+        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
+            .await
+            .map(|_| ExecuteResponse::CreatedNetworkPolicy)
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_network_policy(
+        &mut self,
+        session: &Session,
+        plan::AlterNetworkPolicyPlan { id, name, rules }: plan::AlterNetworkPolicyPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // TODO(network_policy): Consider role based network policies here.
+        let current_network_policy_name =
+            self.catalog().system_config().default_network_policy_name();
+        // Check if the way we're alerting the policy is still valid for the current connection.
+        if current_network_policy_name == name {
+            self.validate_alter_network_policy(session, &rules)?;
+        }
+
+        let op = catalog::Op::AlterNetworkPolicy {
+            id,
+            rules,
+            name,
+            owner_id: *session.current_role_id(),
+        };
+        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
+            .await
+            .map(|_| ExecuteResponse::AlteredObject(ObjectType::NetworkPolicy))
     }
 
     #[instrument]
@@ -892,15 +949,70 @@ impl Coordinator {
         } else {
             None
         };
-        let table_id = self.catalog_mut().allocate_user_id().await?;
+        let (table_id, global_id) = self.allocate_user_id().await?;
+        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+
+        let data_source = match table.data_source {
+            plan::TableDataSource::TableWrites { defaults } => {
+                TableDataSource::TableWrites { defaults }
+            }
+            plan::TableDataSource::DataSource {
+                desc: data_source_plan,
+                timeline,
+            } => match data_source_plan {
+                plan::DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                    details,
+                    data_config,
+                } => TableDataSource::DataSource {
+                    desc: DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                        details,
+                        data_config,
+                    },
+                    timeline,
+                },
+                plan::DataSourceDesc::Webhook {
+                    validate_using,
+                    body_format,
+                    headers,
+                    cluster_id,
+                } => TableDataSource::DataSource {
+                    desc: DataSourceDesc::Webhook {
+                        validate_using,
+                        body_format,
+                        headers,
+                        cluster_id: cluster_id.expect("Webhook Tables must have cluster_id set"),
+                    },
+                    timeline,
+                },
+                o => {
+                    unreachable!("CREATE TABLE data source got {:?}", o)
+                }
+            },
+        };
+
+        let is_webhook = if let TableDataSource::DataSource {
+            desc: DataSourceDesc::Webhook { .. },
+            timeline: _,
+        } = &data_source
+        {
+            true
+        } else {
+            false
+        };
+
         let table = Table {
             create_sql: Some(table.create_sql),
             desc: table.desc,
-            defaults: table.defaults,
+            collections,
             conn_id: conn_id.cloned(),
             resolved_ids,
             custom_logical_compaction_window: table.compaction_window,
             is_retained_metrics_object: false,
+            data_source,
         };
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
@@ -910,59 +1022,22 @@ impl Coordinator {
         }];
 
         let catalog_result = self
-            .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
-                // Determine the initial validity for the table.
-                let register_ts = coord.get_local_write_ts().await.timestamp;
-
-                // After acquiring `register_ts` but before using it, we need to
-                // be sure we're still the leader. Otherwise a new generation
-                // may also be trying to use `register_ts` for a different
-                // purpose.
-                //
-                // See #28216.
-                coord
-                    .catalog
-                    .confirm_leadership()
-                    .await
-                    .unwrap_or_terminate("unable to confirm leadership");
-
-                if let Some(id) = ctx.extra().contents() {
-                    coord.set_statement_execution_timestamp(id, register_ts);
-                }
-
-                let collection_desc = CollectionDescription::from_desc(
-                    table.desc.clone(),
-                    DataSourceOther::TableWrites,
-                );
-                let storage_metadata = coord.catalog.state().storage_metadata();
-                coord
-                    .controller
-                    .storage
-                    .create_collections(
-                        storage_metadata,
-                        Some(register_ts),
-                        vec![(table_id, collection_desc)],
-                    )
-                    .await
-                    .unwrap_or_terminate("cannot fail to create collections");
-                coord.apply_local_write(register_ts).await;
-
-                coord
-                    .initialize_storage_read_policies(
-                        btreeset![table_id],
-                        table
-                            .custom_logical_compaction_window
-                            .unwrap_or(CompactionWindow::Default),
-                    )
-                    .await;
-            })
+            .catalog_transact_with_ddl_transaction(ctx, ops, |_, _| Box::pin(async {}))
             .await;
+
+        if is_webhook {
+            // try_get_webhook_url will make up a URL for things that are not
+            // webhooks, so we guard against that here.
+            if let Some(url) = self.catalog().state().try_get_webhook_url(&table_id) {
+                ctx.session()
+                    .add_notice(AdapterNotice::WebhookSourceCreated { url })
+            }
+        }
 
         match catalog_result {
             Ok(()) => Ok(ExecuteResponse::CreatedTable),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session_mut()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -991,60 +1066,34 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
-
-        if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
-            mz_ore::soft_assert_or_log!(
-                cluster.replica_ids().len() <= 1,
-                "cannot create sink in cluster {}; has >1 replicas",
-                cluster.id()
-            );
-        }
+        let (item_id, global_id) = return_if_err!(self.allocate_user_id().await, ctx);
 
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
+            global_id,
             from: sink.from,
             connection: sink.connection,
-            partition_strategy: sink.partition_strategy,
             envelope: sink.envelope,
             version: sink.version,
             with_snapshot,
             resolved_ids,
             cluster_id: in_cluster,
+            commit_interval: sink.commit_interval,
         };
 
         let ops = vec![catalog::Op::CreateItem {
-            id,
+            id: item_id,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
             owner_id: *ctx.session().current_role_id(),
         }];
-
-        let from = self.catalog().get_entry(&catalog_sink.from);
-        if let Err(e) = self
-            .controller
-            .storage
-            .check_exists(sink.from)
-            .map_err(|e| match e {
-                StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
-                    "{} is a {}, which cannot be exported as a sink",
-                    from.name().item.clone(),
-                    from.item().typ().to_string(),
-                )),
-                e => AdapterError::Storage(e),
-            })
-        {
-            ctx.retire(Err(e));
-            return;
-        }
 
         let result = self.catalog_transact(Some(ctx.session()), ops).await;
 
         match result {
             Ok(()) => {}
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -1060,9 +1109,12 @@ impl Coordinator {
             }
         };
 
-        self.create_storage_export(id, &catalog_sink)
+        self.create_storage_export(global_id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
+
+        self.initialize_storage_read_policies([item_id].into(), CompactionWindow::Default)
+            .await;
 
         ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }
@@ -1097,7 +1149,7 @@ impl Coordinator {
         if uses_ambiguous_columns
             && depends_on
                 .iter()
-                .any(|id| id.is_system() && self.catalog().get_entry(id).is_relation())
+                .any(|id| id.is_system() && self.catalog().get_entry_by_global_id(id).is_relation())
         {
             Err(AdapterError::AmbiguousSystemColumnReference)
         } else {
@@ -1112,9 +1164,15 @@ impl Coordinator {
         plan: plan::CreateTypePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let (item_id, global_id) = self.allocate_user_id().await?;
+        // Validate the type definition (e.g., composite columns) before storing.
+        plan.typ
+            .inner
+            .desc(&self.catalog().for_session(session))
+            .map_err(AdapterError::from)?;
         let typ = Type {
             create_sql: Some(plan.typ.create_sql),
-            desc: plan.typ.inner.desc(&self.catalog().for_session(session))?,
+            global_id,
             details: CatalogTypeDetails {
                 array_id: None,
                 typ: plan.typ.inner,
@@ -1122,9 +1180,8 @@ impl Coordinator {
             },
             resolved_ids,
         };
-        let id = self.catalog_mut().allocate_user_id().await?;
         let op = catalog::Op::CreateItem {
-            id,
+            id: item_id,
             name: plan.name,
             item: CatalogItem::Type(typ),
             owner_id: *session.current_role_id(),
@@ -1153,7 +1210,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_drop_objects(
         &mut self,
-        session: &Session,
+        ctx: &mut ExecuteContext,
         plan::DropObjectsPlan {
             drop_ids,
             object_type,
@@ -1166,7 +1223,7 @@ impl Coordinator {
             if !referenced_ids_hashset.contains(obj_id) {
                 let object_info = ErrorMessageObjectDescription::from_id(
                     obj_id,
-                    &self.catalog().for_session(session),
+                    &self.catalog().for_session(ctx.session()),
                 )
                 .to_string();
                 objects.push(object_info);
@@ -1174,32 +1231,56 @@ impl Coordinator {
         }
 
         if !objects.is_empty() {
-            session.add_notice(AdapterNotice::CascadeDroppedObject { objects });
+            ctx.session()
+                .add_notice(AdapterNotice::CascadeDroppedObject { objects });
         }
+
+        // Collect GlobalIds for expression cache invalidation.
+        let expr_cache_invalidate_ids: BTreeSet<_> = drop_ids
+            .iter()
+            .filter_map(|id| match id {
+                ObjectId::Item(item_id) => Some(self.catalog().get_entry(item_id).global_ids()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
 
         let DropOps {
             ops,
             dropped_active_db,
             dropped_active_cluster,
             dropped_in_use_indexes,
-        } = self.sequence_drop_common(session, drop_ids).await?;
+        } = self.sequence_drop_common(ctx.session(), drop_ids)?;
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_with_context(None, Some(ctx), ops)
+            .await?;
+
+        // Invalidate expression cache entries for dropped objects.
+        if !expr_cache_invalidate_ids.is_empty() {
+            let _fut = self.catalog().update_expression_cache(
+                Default::default(),
+                Default::default(),
+                expr_cache_invalidate_ids,
+            );
+        }
 
         fail::fail_point!("after_sequencer_drop_replica");
 
         if dropped_active_db {
-            session.add_notice(AdapterNotice::DroppedActiveDatabase {
-                name: session.vars().database().to_string(),
-            });
+            ctx.session()
+                .add_notice(AdapterNotice::DroppedActiveDatabase {
+                    name: ctx.session().vars().database().to_string(),
+                });
         }
         if dropped_active_cluster {
-            session.add_notice(AdapterNotice::DroppedActiveCluster {
-                name: session.vars().cluster().to_string(),
-            });
+            ctx.session()
+                .add_notice(AdapterNotice::DroppedActiveCluster {
+                    name: ctx.session().vars().cluster().to_string(),
+                });
         }
         for dropped_in_use_index in dropped_in_use_indexes {
-            session.add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
+            ctx.session()
+                .add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
             self.metrics
                 .optimization_notices
                 .with_label_values(&["DroppedInUseIndex"])
@@ -1393,7 +1474,7 @@ impl Coordinator {
             let role_membership =
                 session_catalog.collect_role_membership(session.current_role_id());
             let invalid_revokes: BTreeSet<_> = privilege_revokes
-                .drain_filter_swapping(|(_, privilege)| {
+                .extract_if(.., |(_, privilege)| {
                     !role_membership.contains(&privilege.grantor)
                 })
                 .map(|(object_id, _)| object_id)
@@ -1424,7 +1505,7 @@ impl Coordinator {
             dropped_active_db,
             dropped_active_cluster,
             dropped_in_use_indexes,
-        } = self.sequence_drop_common(session, plan.drop_ids).await?;
+        } = self.sequence_drop_common(session, plan.drop_ids)?;
 
         let ops = privilege_revoke_ops
             .chain(default_privilege_revoke_ops)
@@ -1449,7 +1530,7 @@ impl Coordinator {
         Ok(ExecuteResponse::DroppedOwned)
     }
 
-    async fn sequence_drop_common(
+    fn sequence_drop_common(
         &self,
         session: &Session,
         ids: Vec<ObjectId>,
@@ -1470,9 +1551,6 @@ impl Coordinator {
 
         // Clusters we're dropping
         let mut clusters_to_drop = BTreeSet::new();
-
-        // SSH connections we're dropping.
-        let mut ssh_conns_to_drop = Vec::new();
 
         let ids_set = ids.iter().collect::<BTreeSet<_>>();
         for id in &ids {
@@ -1517,7 +1595,7 @@ impl Coordinator {
                         let dependants = self
                             .controller
                             .compute
-                            .collection_reverse_dependencies(index.cluster_id, *id)
+                            .collection_reverse_dependencies(index.cluster_id, index.global_id())
                             .ok()
                             .into_iter()
                             .flatten()
@@ -1528,29 +1606,34 @@ impl Coordinator {
                                 // "There is an in-progress ad hoc SELECT that uses the dropped
                                 // index. The resources used by the index will be freed when all
                                 // such SELECTs complete."
-                                !matches!(dependant_id, GlobalId::Transient(..)) &&
+                                if dependant_id.is_transient() {
+                                    return false;
+                                }
+                                // The item should exist, but don't panic if it doesn't.
+                                let Some(dependent_id) = humanizer
+                                    .try_get_item_by_global_id(dependant_id)
+                                    .map(|item| item.id())
+                                else {
+                                    return false;
+                                };
                                 // If the dependent object is also being dropped, then there is no
                                 // problem, so we don't want a notice.
-                                !ids_set.contains(&ObjectId::Item(**dependant_id))
+                                !ids_set.contains(&ObjectId::Item(dependent_id))
                             })
                             .flat_map(|dependant_id| {
                                 // If we are not able to find a name for this ID it probably means
                                 // we have already dropped the compute collection, in which case we
                                 // can ignore it.
-                                humanizer.humanize_id(*dependant_id)
+                                humanizer.humanize_id(dependant_id)
                             })
                             .collect_vec();
                         if !dependants.is_empty() {
                             dropped_in_use_indexes.push(DroppedInUseIndex {
-                                index_name: humanizer.humanize_id(*id).unwrap_or(id.to_string()),
+                                index_name: humanizer
+                                    .humanize_id(index.global_id())
+                                    .unwrap_or_else(|| id.to_string()),
                                 dependant_objects: dependants,
                             });
-                        }
-                    } else if let Ok(connection) = self.catalog().get_entry(id).connection() {
-                        if let mz_storage_types::connections::Connection::Ssh(_) =
-                            &connection.connection
-                        {
-                            ssh_conns_to_drop.push(*id);
                         }
                     }
                 }
@@ -1604,9 +1687,13 @@ impl Coordinator {
         for (default_privilege_object, default_privilege_acls) in
             self.catalog().default_privileges()
         {
-            if matches!(&default_privilege_object.database_id, Some(database_id) if dropped_databases.contains(database_id))
-                || matches!(&default_privilege_object.schema_id, Some(schema_id) if dropped_schemas.contains(schema_id))
-            {
+            if matches!(
+                &default_privilege_object.database_id,
+                Some(database_id) if dropped_databases.contains(database_id),
+            ) || matches!(
+                &default_privilege_object.schema_id,
+                Some(schema_id) if dropped_schemas.contains(schema_id),
+            ) {
                 for default_privilege_acl in default_privilege_acls {
                     default_privilege_revokes.insert((
                         default_privilege_object.clone(),
@@ -1614,30 +1701,6 @@ impl Coordinator {
                     ));
                 }
             }
-        }
-
-        let mut ssh_tunnel_updates = Vec::new();
-        let ssh_conn_secrets = ssh_conns_to_drop.into_iter().map(|ssh_conn| {
-            let secrets_controller = Arc::clone(&self.secrets_controller);
-            async move {
-                let secret = secrets_controller.reader().read(ssh_conn).await?;
-                let key_set = SshKeyPairSet::from_bytes(&secret)?.public_keys();
-                Ok::<_, AdapterError>((ssh_conn, key_set))
-            }
-            .boxed()
-        });
-        let ssh_conn_secrets = future::join_all(ssh_conn_secrets).await;
-        for secret_res in ssh_conn_secrets {
-            let (ssh_conn, key_set) = secret_res?;
-            let ssh_tunnel_update = self
-                .catalog()
-                .state()
-                .pack_ssh_tunnel_connection_update(ssh_conn, &key_set, -1);
-            let ssh_tunnel_update = self
-                .catalog()
-                .state()
-                .resolve_builtin_table_update(ssh_tunnel_update);
-            ssh_tunnel_updates.push(ssh_tunnel_update);
         }
 
         let ops = role_revokes
@@ -1659,12 +1722,6 @@ impl Coordinator {
                     .map(DropObjectInfo::manual_drop_from_object_id)
                     .collect(),
             )))
-            .chain(ssh_tunnel_updates.into_iter().map(|builtin_table_update| {
-                catalog::Op::WeirdBuiltinTableUpdates {
-                    builtin_table_update,
-                    audit_log: Vec::new(),
-                }
-            }))
             .collect();
 
         Ok(DropOps {
@@ -1676,7 +1733,7 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_explain_schema(
-        &mut self,
+        &self,
         ExplainSinkSchemaPlan { json_schema, .. }: ExplainSinkSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let json_value: serde_json::Value = serde_json::from_str(&json_schema).map_err(|e| {
@@ -1689,7 +1746,7 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_show_all_variables(
-        &mut self,
+        &self,
         session: &Session,
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut rows = viewable_variables(self.catalog().state(), session)
@@ -1712,7 +1769,7 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_show_variable(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -1730,14 +1787,16 @@ impl Coordinator {
                     Ok(Self::send_immediate_rows(row))
                 }
                 None => {
-                    session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
-                        search_path: session
-                            .vars()
-                            .search_path()
-                            .into_iter()
-                            .map(|schema| schema.to_string())
-                            .collect(),
-                    });
+                    if session.vars().current_object_missing_warnings() {
+                        session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
+                            search_path: session
+                                .vars()
+                                .search_path()
+                                .into_iter()
+                                .map(|schema| schema.to_string())
+                                .collect(),
+                        });
+                    }
                     Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::Null])))
                 }
             };
@@ -1745,12 +1804,12 @@ impl Coordinator {
 
         let variable = session
             .vars()
-            .get(Some(self.catalog().system_config()), &plan.name)
+            .get(self.catalog().system_config(), &plan.name)
             .or_else(|_| self.catalog().system_config().get(&plan.name))?;
 
         // In lieu of plumbing the user to all system config functions, just check that the var is
         // visible.
-        variable.visible(session.user(), Some(self.catalog().system_config()))?;
+        variable.visible(session.user(), self.catalog().system_config())?;
 
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         if variable.name() == vars::DATABASE.name()
@@ -1758,6 +1817,7 @@ impl Coordinator {
                 self.catalog().resolve_database(&variable.value()),
                 Err(CatalogError::UnknownDatabase(_))
             )
+            && session.vars().current_object_missing_warnings()
         {
             let name = variable.value();
             session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
@@ -1766,6 +1826,7 @@ impl Coordinator {
                 self.catalog().resolve_cluster(&variable.value()),
                 Err(CatalogError::UnknownCluster(_))
             )
+            && session.vars().current_object_missing_warnings()
         {
             let name = variable.value();
             session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
@@ -1820,7 +1881,7 @@ impl Coordinator {
         match values {
             Some(values) => {
                 vars.set(
-                    Some(self.catalog().system_config()),
+                    self.catalog().system_config(),
                     &name,
                     VarInput::SqlSet(&values),
                     local,
@@ -1829,7 +1890,7 @@ impl Coordinator {
                 let vars = session.vars();
 
                 // Emit a warning when deprecated variables are used.
-                // TODO(#27285) remove this after sufficient time has passed
+                // TODO(database-issues#8069) remove this after sufficient time has passed
                 if name == vars::OLD_AUTO_ROUTE_CATALOG_QUERIES {
                     session.add_notice(AdapterNotice::AutoRouteIntrospectionQueriesUsage);
                 } else if name == vars::CLUSTER.name()
@@ -1844,6 +1905,7 @@ impl Coordinator {
                         self.catalog().resolve_database(vars.database()),
                         Err(CatalogError::UnknownDatabase(_))
                     )
+                    && session.vars().current_object_missing_warnings()
                 {
                     let name = vars.database().to_string();
                     session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
@@ -1852,24 +1914,25 @@ impl Coordinator {
                         self.catalog().resolve_cluster(vars.cluster()),
                         Err(CatalogError::UnknownCluster(_))
                     )
+                    && session.vars().current_object_missing_warnings()
                 {
                     let name = vars.cluster().to_string();
                     session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
                 } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
                     let v = values.into_first().to_lowercase();
-                    if v == IsolationLevel::ReadUncommitted.as_str()
-                        || v == IsolationLevel::ReadCommitted.as_str()
-                        || v == IsolationLevel::RepeatableRead.as_str()
+                    if v == IsolationLevel::ReadUncommitted.as_variant_str()
+                        || v == IsolationLevel::ReadCommitted.as_variant_str()
+                        || v == IsolationLevel::RepeatableRead.as_variant_str()
                     {
                         session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
                             isolation_level: v,
                         });
-                    } else if v == IsolationLevel::StrongSessionSerializable.as_str() {
+                    } else if v == IsolationLevel::StrongSessionSerializable.as_variant_str() {
                         session.add_notice(AdapterNotice::StrongSessionSerializable);
                     }
                 }
             }
-            None => vars.reset(Some(self.catalog().system_config()), &name, local)?,
+            None => vars.reset(self.catalog().system_config(), &name, local)?,
         }
 
         Ok(ExecuteResponse::SetVariable { name, reset: false })
@@ -1889,7 +1952,7 @@ impl Coordinator {
         }
         session
             .vars_mut()
-            .reset(Some(self.catalog().system_config()), &name, false)?;
+            .reset(self.catalog().system_config(), &name, false)?;
         Ok(ExecuteResponse::SetVariable { name, reset: true })
     }
 
@@ -1902,13 +1965,13 @@ impl Coordinator {
         for mode in plan.modes {
             match mode {
                 TransactionMode::AccessMode(_) => {
-                    return Err(AdapterError::Unsupported("SET TRANSACTION <access-mode>"))
+                    return Err(AdapterError::Unsupported("SET TRANSACTION <access-mode>"));
                 }
                 TransactionMode::IsolationLevel(isolation_level) => {
                     self.validate_set_isolation_level(session)?;
 
                     session.vars_mut().set(
-                        Some(self.catalog().system_config()),
+                        self.catalog().system_config(),
                         TRANSACTION_ISOLATION_VAR_NAME,
                         VarInput::Flat(&isolation_level.to_ast_string_stable()),
                         plan.local,
@@ -1959,24 +2022,42 @@ impl Coordinator {
             }),
         };
 
-        let result = self
-            .sequence_end_transaction_inner(ctx.session_mut(), action)
-            .await;
+        let result = self.sequence_end_transaction_inner(&mut ctx, action).await;
 
         let (response, action) = match result {
             Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
                 (response, action)
             }
-            Ok((Some(TransactionOps::Writes(writes)), write_lock_guard)) => {
+            Ok((Some(TransactionOps::Writes(writes)), write_lock_guards)) => {
+                // Make sure we have the correct set of write locks for this transaction.
+                // Aggressively dropping partial sets of locks to prevent deadlocking separate
+                // transactions.
+                let validated_locks = match write_lock_guards {
+                    None => None,
+                    Some(locks) => match locks.validate(writes.iter().map(|op| op.id)) {
+                        Ok(locks) => Some(locks),
+                        Err(missing) => {
+                            tracing::error!(?missing, "programming error, missing write locks");
+                            return ctx.retire(Err(AdapterError::WrongSetOfLocks));
+                        }
+                    },
+                };
+
+                let mut collected_writes: BTreeMap<CatalogItemId, SmallVec<_>> = BTreeMap::new();
+                for WriteOp { id, rows } in writes {
+                    let total_rows = collected_writes.entry(id).or_default();
+                    total_rows.push(rows);
+                }
+
                 self.submit_write(PendingWriteTxn::User {
                     span: Span::current(),
-                    writes,
-                    write_lock_guard,
-                    pending_txn: PendingTxn {
+                    writes: collected_writes,
+                    write_locks: validated_locks,
+                    responder: UserWriteResponder::Session(PendingTxn {
                         ctx,
                         response,
                         action,
-                    },
+                    }),
                 });
                 return;
             }
@@ -2053,28 +2134,20 @@ impl Coordinator {
     #[instrument]
     async fn sequence_end_transaction_inner(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         action: EndTransactionAction,
-    ) -> Result<
-        (
-            Option<TransactionOps<Timestamp>>,
-            Option<OwnedMutexGuard<()>>,
-        ),
-        AdapterError,
-    > {
-        let txn = self.clear_transaction(session).await;
+    ) -> Result<(Option<TransactionOps>, Option<WriteLocks>), AdapterError> {
+        let txn = self.clear_transaction(ctx.session_mut()).await;
 
         if let EndTransactionAction::Commit = action {
-            if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
+            if let (Some(mut ops), write_lock_guards) = txn.into_ops_and_lock_guard() {
                 match &mut ops {
                     TransactionOps::Writes(writes) => {
                         for WriteOp { id, .. } in &mut writes.iter() {
                             // Re-verify this id exists.
                             let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
                                 AdapterError::Catalog(mz_catalog::memory::error::Error {
-                                    kind: mz_catalog::memory::error::ErrorKind::Sql(
-                                        CatalogError::UnknownItem(id.to_string()),
-                                    ),
+                                    kind: ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
                                 })
                             })?;
                         }
@@ -2085,19 +2158,33 @@ impl Coordinator {
                     TransactionOps::DDL {
                         ops,
                         state: _,
+                        side_effects,
                         revision,
+                        snapshot: _,
                     } => {
                         // Make sure our catalog hasn't changed.
                         if *revision != self.catalog().transient_revision() {
                             return Err(AdapterError::DDLTransactionRace);
                         }
                         // Commit all of our queued ops.
-                        self.catalog_transact(Some(session), std::mem::take(ops))
-                            .await?;
+                        let ops = std::mem::take(ops);
+                        let side_effects = std::mem::take(side_effects);
+                        self.catalog_transact_with_side_effects(
+                            Some(ctx),
+                            ops,
+                            move |a, mut ctx| {
+                                Box::pin(async move {
+                                    for side_effect in side_effects {
+                                        side_effect(a, ctx.as_mut().map(|ctx| &mut **ctx)).await;
+                                    }
+                                })
+                            },
+                        )
+                        .await?;
                     }
                     _ => (),
                 }
-                return Ok((Some(ops), write_lock_guard));
+                return Ok((Some(ops), write_lock_guards));
             }
         }
 
@@ -2111,6 +2198,15 @@ impl Coordinator {
     ) {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let Some(connection_id) = connection_id else {
+                    // The argument was `NULL`, so, like in PostgreSQL, the
+                    // function returns `NULL`.
+                    ctx.retire(Ok(Self::send_immediate_rows(Row::pack_slice(&[
+                        Datum::Null,
+                    ]))));
+                    return;
+                };
+
                 if ctx.session().conn_id().unhandled() == connection_id {
                     // As a special case, if we're canceling ourselves, we send
                     // back a canceled resposne to the client issuing the query,
@@ -2133,63 +2229,171 @@ impl Coordinator {
         }
     }
 
+    /// Execute a side-effecting function from the frontend peek path.
+    /// This is separate from `sequence_side_effecting_func` because
+    /// - It doesn't have an ExecuteContext.
+    /// - It needs to do its own RBAC check, because the `rbac::check_plan` call in the frontend
+    ///   peek sequencing can't look at `active_conns`.
+    ///
+    /// TODO(peek-seq): Delete `sequence_side_effecting_func` after we delete the old peek
+    /// sequencing.
+    pub(crate) async fn execute_side_effecting_func(
+        &mut self,
+        plan: SideEffectingFunc,
+        conn_id: ConnectionId,
+        current_role: RoleId,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        match plan {
+            SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let Some(connection_id) = connection_id else {
+                    // The argument was `NULL`, so, like in PostgreSQL, the
+                    // function returns `NULL`.
+                    return Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::Null])));
+                };
+
+                if conn_id.unhandled() == connection_id {
+                    // As a special case, if we're canceling ourselves, we return
+                    // a canceled response to the client issuing the query,
+                    // and so we need to do no further processing of the cancel.
+                    return Err(AdapterError::Canceled);
+                }
+
+                // Perform RBAC check: the current user must be a member of the role
+                // that owns the connection being cancelled.
+                if let Some((_id_handle, conn_meta)) =
+                    self.active_conns.get_key_value(&connection_id)
+                {
+                    let target_role = *conn_meta.authenticated_role_id();
+                    let role_membership = self
+                        .catalog()
+                        .state()
+                        .collect_role_membership(&current_role);
+                    if !role_membership.contains(&target_role) {
+                        let target_role_name = self
+                            .catalog()
+                            .try_get_role(&target_role)
+                            .map(|role| role.name().to_string())
+                            .unwrap_or_else(|| target_role.to_string());
+                        return Err(AdapterError::Unauthorized(
+                            rbac::UnauthorizedError::RoleMembership {
+                                role_names: vec![target_role_name],
+                            },
+                        ));
+                    }
+
+                    // RBAC check passed, proceed with cancellation.
+                    let id_handle = self
+                        .active_conns
+                        .get_key_value(&connection_id)
+                        .map(|(id, _)| id.clone())
+                        .expect("checked above");
+                    self.handle_privileged_cancel(id_handle).await;
+                    Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::True])))
+                } else {
+                    // Connection not found, return false.
+                    Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::False])))
+                }
+            }
+        }
+    }
+
+    /// Inner method that performs the actual real-time recency timestamp determination.
+    /// This is called by both the old peek sequencing code (via `determine_real_time_recent_timestamp`)
+    /// and the new command handler for `Command::DetermineRealTimeRecentTimestamp`.
+    pub(crate) async fn determine_real_time_recent_timestamp(
+        &self,
+        source_ids: impl Iterator<Item = GlobalId>,
+        real_time_recency_timeout: Duration,
+    ) -> Result<Option<RtrTimestampFuture>, AdapterError> {
+        let item_ids = source_ids
+            .map(|gid| {
+                self.catalog
+                    .try_resolve_item_id(&gid)
+                    .ok_or_else(|| AdapterError::RtrDropFailure(gid.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Find all dependencies transitively because we need to ensure that
+        // RTR queries determine the timestamp from the sources' (i.e.
+        // storage objects that ingest data from external systems) remap
+        // data. We "cheat" a little bit and filter out any IDs that aren't
+        // user objects because we know they are not a RTR source.
+        let mut to_visit = VecDeque::from_iter(item_ids.into_iter().filter(CatalogItemId::is_user));
+        // If none of the sources are user objects, we don't need to provide
+        // a RTR timestamp.
+        if to_visit.is_empty() {
+            return Ok(None);
+        }
+
+        let mut timestamp_objects = BTreeSet::new();
+
+        while let Some(id) = to_visit.pop_front() {
+            timestamp_objects.insert(id);
+            to_visit.extend(
+                self.catalog()
+                    .get_entry(&id)
+                    .uses()
+                    .into_iter()
+                    .filter(|id| !timestamp_objects.contains(id) && id.is_user()),
+            );
+        }
+        let timestamp_objects = timestamp_objects
+            .into_iter()
+            .flat_map(|item_id| self.catalog().get_entry(&item_id).global_ids())
+            .collect();
+
+        let r = self
+            .controller
+            .determine_real_time_recent_timestamp(timestamp_objects, real_time_recency_timeout)
+            .await?;
+
+        Ok(Some(r))
+    }
+
+    pub(crate) async fn await_real_time_recent_timestamp<F>(
+        catalog: Arc<Catalog>,
+        fut: F,
+    ) -> Result<Timestamp, AdapterError>
+    where
+        F: Future<Output = Result<Timestamp, StorageError>>,
+    {
+        fut.await
+            .map_err(|error| Self::real_time_recent_timestamp_error(&catalog, error))
+    }
+
+    fn real_time_recent_timestamp_error(catalog: &Catalog, error: StorageError) -> AdapterError {
+        let rtr_name = |id: &GlobalId| {
+            catalog
+                .try_get_entry_by_global_id(id)
+                .map(|e| e.name().item.clone())
+                .unwrap_or_else(|| id.to_string())
+        };
+
+        match error {
+            StorageError::RtrTimeout(id) => AdapterError::RtrTimeout(rtr_name(&id)),
+            StorageError::RtrDropFailure(id) => AdapterError::RtrDropFailure(rtr_name(&id)),
+            error => error.into(),
+        }
+    }
+
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
-    pub(super) async fn determine_real_time_recent_timestamp(
-        &mut self,
+    pub(crate) async fn determine_real_time_recent_timestamp_if_needed(
+        &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
-    {
+    ) -> Result<Option<RtrTimestampFuture>, AdapterError> {
         let vars = session.vars();
 
-        // Ideally this logic belongs inside of
-        // `mz-adapter::coord::timestamp_selection::determine_timestamp`. However, including the
-        // logic in there would make it extremely difficult and inconvenient to pull the waiting off
-        // of the main coord thread.
-        let r = if vars.real_time_recency()
+        if vars.real_time_recency()
             && vars.transaction_isolation() == &IsolationLevel::StrictSerializable
             && !session.contains_read_timestamp()
         {
-            // Find all dependencies transitively because we need to ensure that
-            // RTR queries determine the timestamp from the sources' (i.e.
-            // storage objects that ingest data from external systems) remap
-            // data. We "cheat" a little bit and filter out any IDs that aren't
-            // user objects because we know they are not a RTR source.
-            let mut to_visit = VecDeque::from_iter(source_ids.filter(GlobalId::is_user));
-            // If none of the sources are user objects, we don't need to provide
-            // a RTR timestamp.
-            if to_visit.is_empty() {
-                return Ok(None);
-            }
-
-            let mut timestamp_objects = BTreeSet::new();
-
-            while let Some(id) = to_visit.pop_front() {
-                timestamp_objects.insert(id);
-                to_visit.extend(
-                    self.catalog()
-                        .get_entry(&id)
-                        .uses()
-                        .into_iter()
-                        .filter(|id| !timestamp_objects.contains(id) && id.is_user()),
-                );
-            }
-
-            let r = self
-                .controller
-                .determine_real_time_recent_timestamp(
-                    timestamp_objects,
-                    *vars.real_time_recency_timeout(),
-                )
-                .await?;
-
-            Some(r)
+            self.determine_real_time_recent_timestamp(source_ids, *vars.real_time_recency_timeout())
+                .await
         } else {
-            None
-        };
-
-        Ok(r)
+            Ok(None)
+        }
     }
 
     #[instrument]
@@ -2212,6 +2416,9 @@ impl Coordinator {
                 }
                 plan::ExplaineeStatement::Select { .. } => {
                     self.explain_peek(ctx, plan, target_cluster).await;
+                }
+                plan::ExplaineeStatement::Subscribe { .. } => {
+                    self.explain_subscribe(ctx, plan, target_cluster).await;
                 }
             },
             plan::Explainee::View(_) => {
@@ -2263,8 +2470,8 @@ impl Coordinator {
                 );
                 self.sequence_staged(ctx, Span::current(), stage).await;
             }
-            Explainee::MaterializedView(gid) => {
-                self.explain_pushdown_materialized_view(ctx, gid).await;
+            Explainee::MaterializedView(item_id) => {
+                self.explain_pushdown_materialized_view(ctx, item_id).await;
             }
             _ => {
                 ctx.retire(Err(AdapterError::Unsupported(
@@ -2274,16 +2481,17 @@ impl Coordinator {
         };
     }
 
-    async fn render_explain_pushdown(
+    /// Executes an EXPLAIN FILTER PUSHDOWN, with read holds passed in.
+    async fn execute_explain_pushdown_with_read_holds(
         &self,
         ctx: ExecuteContext,
         as_of: Antichain<Timestamp>,
         mz_now: ResultSpec<'static>,
-        read_holds: Option<ReadHolds<Timestamp>>,
+        read_holds: Option<ReadHolds>,
         imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)> + 'static,
     ) {
         let fut = self
-            .render_explain_pushdown_prepare(ctx.session(), as_of, mz_now, imports)
+            .explain_pushdown_future(ctx.session(), as_of, mz_now, imports)
             .await;
         task::spawn(|| "render explain pushdown", async move {
             // Transfer the necessary read holds over to the background task
@@ -2293,97 +2501,24 @@ impl Coordinator {
         });
     }
 
-    async fn render_explain_pushdown_prepare(
+    /// Returns a future that will execute EXPLAIN FILTER PUSHDOWN.
+    async fn explain_pushdown_future<I: IntoIterator<Item = (GlobalId, MapFilterProject)>>(
         &self,
         session: &Session,
         as_of: Antichain<Timestamp>,
         mz_now: ResultSpec<'static>,
-        imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)>,
-    ) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> {
-        let explain_timeout = *session.vars().statement_timeout();
-        let mut futures = FuturesOrdered::new();
-        for (gid, mfp) in imports {
-            let catalog_entry = self.catalog.get_entry(&gid);
-            let full_name = self
-                .catalog
-                .for_session(session)
-                .resolve_full_name(&catalog_entry.name);
-            let name = format!("{}", full_name);
-            let relation_desc = catalog_entry
-                .item
-                .desc_opt()
-                .expect("source should have a proper desc")
-                .into_owned();
-            let stats_future = self
-                .controller
-                .storage
-                .snapshot_parts_stats(gid, as_of.clone())
-                .await;
-
-            let mz_now = mz_now.clone();
-            // These futures may block if the source is not yet readable at the as-of;
-            // stash them in `futures` and only block on them in a separate task.
-            futures.push_back(async move {
-                let snapshot_stats = match stats_future.await {
-                    Ok(stats) => stats,
-                    Err(e) => return Err(e),
-                };
-                let mut total_bytes = 0;
-                let mut total_parts = 0;
-                let mut selected_bytes = 0;
-                let mut selected_parts = 0;
-                for SnapshotPartStats {
-                    encoded_size_bytes: bytes,
-                    stats,
-                } in &snapshot_stats.parts
-                {
-                    let bytes = u64::cast_from(*bytes);
-                    total_bytes += bytes;
-                    total_parts += 1u64;
-                    let selected = match stats {
-                        None => true,
-                        Some(stats) => {
-                            let stats = stats.decode();
-                            let stats = RelationPartStats::new(
-                                name.as_str(),
-                                &snapshot_stats.metrics.pushdown.part_stats,
-                                &relation_desc,
-                                &stats,
-                            );
-                            stats.may_match_mfp(mz_now.clone(), &mfp)
-                        }
-                    };
-
-                    if selected {
-                        selected_bytes += bytes;
-                        selected_parts += 1u64;
-                    }
-                }
-                Ok(Row::pack_slice(&[
-                    name.as_str().into(),
-                    total_bytes.into(),
-                    selected_bytes.into(),
-                    total_parts.into(),
-                    selected_parts.into(),
-                ]))
-            });
-        }
-
-        let fut = async move {
-            match tokio::time::timeout(
-                explain_timeout,
-                futures::TryStreamExt::try_collect::<Vec<_>>(futures),
-            )
-            .await
-            {
-                Ok(Ok(rows)) => Ok(ExecuteResponse::SendingRowsImmediate {
-                    rows: Box::new(rows.into_row_iter()),
-                }),
-                Ok(Err(err)) => Err(err.into()),
-                Err(_) => Err(AdapterError::StatementTimeout),
-            }
-        };
-        fut
+        imports: I,
+    ) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> + use<I> {
+        // Get the needed Coordinator stuff and call the freestanding, shared helper.
+        super::explain_pushdown_future_inner(
+            session,
+            &self.catalog,
+            &self.controller.storage_collections,
+            as_of,
+            mz_now,
+            imports,
+        )
+        .await
     }
 
     #[instrument]
@@ -2392,6 +2527,18 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::InsertPlan,
     ) {
+        // Normally, this would get checked when trying to add "write ops" to
+        // the transaction but we go down diverging paths below, based on
+        // whether the INSERT is only constant values or not.
+        //
+        // For the non-constant case we sequence an implicit read-then-write,
+        // which messes with the transaction ops and would allow an implicit
+        // read-then-write to sneak into a read-only transaction.
+        if !ctx.session_mut().transaction().allows_writes() {
+            ctx.retire(Err(AdapterError::ReadOnlyTransaction));
+            return;
+        }
+
         // The structure of this code originates from a time where
         // `ReadThenWritePlan` was carrying an `MirRelationExpr` instead of an
         // optimized `MirRelationExpr`.
@@ -2419,7 +2566,7 @@ impl Coordinator {
             // Collect optimizer parameters.
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // Build an optimizer for this VIEW.
+            // (`optimize::view::Optimizer` has a special case for constant queries.)
             let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
@@ -2438,20 +2585,17 @@ impl Coordinator {
             // All non-constant values must be planned as read-then-writes.
             _ => {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
-                    Some(table) => table
-                        .desc(
-                            &self
-                                .catalog()
-                                .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                        )
-                        .expect("desc called on table")
-                        .arity(),
+                    Some(table) => {
+                        // Inserts always occur at the latest version of the table.
+                        let desc = table.relation_desc_latest().expect("table has a desc");
+                        desc.arity()
+                    }
                     None => {
                         ctx.retire(Err(AdapterError::Catalog(
                             mz_catalog::memory::error::Error {
-                                kind: mz_catalog::memory::error::ErrorKind::Sql(
-                                    CatalogError::UnknownItem(plan.id.to_string()),
-                                ),
+                                kind: ErrorKind::Sql(CatalogError::UnknownItem(
+                                    plan.id.to_string(),
+                                )),
                             },
                         )));
                         return;
@@ -2490,9 +2634,53 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
-        let mut source_ids = plan.selection.depends_on();
+        let mut source_ids: BTreeSet<_> = plan
+            .selection
+            .depends_on()
+            .into_iter()
+            .map(|gid| self.catalog().resolve_item_id(&gid))
+            .collect();
         source_ids.insert(plan.id);
-        guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan), source_ids);
+
+        // If the transaction doesn't already have write locks, acquire them.
+        if ctx.session().transaction().write_locks().is_none() {
+            // Pre-define all of the locks we need.
+            let mut write_locks = WriteLocks::builder(source_ids.iter().copied());
+
+            // Try acquiring all of our locks.
+            for id in &source_ids {
+                if let Some(lock) = self.try_grant_object_write_lock(*id) {
+                    write_locks.insert_lock(*id, lock);
+                }
+            }
+
+            // See if we acquired all of the neccessary locks.
+            let write_locks = match write_locks.all_or_nothing(ctx.session().conn_id()) {
+                Ok(locks) => locks,
+                Err(missing) => {
+                    // Defer our write if we couldn't acquire all of the locks.
+                    let role_metadata = ctx.session().role_metadata().clone();
+                    let acquire_future = self.grant_object_write_lock(missing).map(Option::Some);
+                    let plan = DeferredPlan {
+                        ctx,
+                        plan: Plan::ReadThenWrite(plan),
+                        validity: PlanValidity::new(
+                            self.catalog.transient_revision(),
+                            source_ids.clone(),
+                            None,
+                            None,
+                            role_metadata,
+                        ),
+                        requires_locks: source_ids,
+                    };
+                    return self.defer_op(acquire_future, DeferredOp::Plan(plan));
+                }
+            };
+
+            ctx.session_mut()
+                .try_grant_write_locks(write_locks)
+                .expect("session has already been granted write locks");
+        }
 
         let plan::ReadThenWritePlan {
             id,
@@ -2500,25 +2688,22 @@ impl Coordinator {
             selection,
             mut assignments,
             finishing,
-            returning,
+            mut returning,
         } = plan;
 
         // Read then writes can be queued, so re-verify the id exists.
         let desc = match self.catalog().try_get_entry(&id) {
-            Some(table) => table
-                .desc(
-                    &self
-                        .catalog()
-                        .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                )
-                .expect("desc called on table")
-                .into_owned(),
+            Some(table) => {
+                // Inserts always occur at the latest version of the table.
+                table
+                    .relation_desc_latest()
+                    .expect("table has a desc")
+                    .into_owned()
+            }
             None => {
                 ctx.retire(Err(AdapterError::Catalog(
                     mz_catalog::memory::error::Error {
-                        kind: mz_catalog::memory::error::ErrorKind::Sql(CatalogError::UnknownItem(
-                            id.to_string(),
-                        )),
+                        kind: ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
                     },
                 )));
                 return;
@@ -2526,7 +2711,7 @@ impl Coordinator {
         };
 
         // Disallow mz_now in any position because read time and write time differ.
-        let contains_temporal = return_if_err!(selection.contains_temporal(), ctx)
+        let contains_temporal = selection.contains_temporal()
             || assignments.values().any(|e| e.contains_temporal())
             || returning.iter().any(|e| e.contains_temporal());
         if contains_temporal {
@@ -2536,60 +2721,10 @@ impl Coordinator {
             return;
         }
 
-        // Ensure all objects `selection` depends on are valid for `ReadThenWrite` operations:
-        //
-        // - They do not refer to any objects whose notion of time moves differently than that of
-        // user tables. This limitation is meant to ensure no writes occur between this read and the
-        // subsequent write.
-        // - They do not use mz_now(), whose time produced during read will differ from the write
-        //   timestamp.
-        fn validate_read_dependencies(
-            catalog: &Catalog,
-            id: &GlobalId,
-        ) -> Result<(), AdapterError> {
-            use mz_catalog::memory::objects;
-            use CatalogItemType::*;
-            let mut ids_to_check = Vec::new();
-            let valid = match catalog.try_get_entry(id) {
-                Some(entry) => {
-                    if let CatalogItem::View(objects::View { optimized_expr, .. })
-                    | CatalogItem::MaterializedView(objects::MaterializedView {
-                        optimized_expr,
-                        ..
-                    }) = entry.item()
-                    {
-                        if optimized_expr.contains_temporal() {
-                            return Err(AdapterError::Unsupported(
-                                "calls to mz_now in write statements",
-                            ));
-                        }
-                    }
-                    match entry.item().typ() {
-                        typ @ (Func | View | MaterializedView) => {
-                            ids_to_check.extend(entry.uses());
-                            let valid_id = id.is_user() || matches!(typ, Func);
-                            valid_id
-                        }
-                        Source | Secret | Connection => false,
-                        // Cannot select from sinks or indexes
-                        Sink | Index => unreachable!(),
-                        Table => id.is_user(),
-                        Type => true,
-                    }
-                }
-                None => false,
-            };
-            if !valid {
-                return Err(AdapterError::InvalidTableMutationSelection);
-            }
-            for id in ids_to_check {
-                validate_read_dependencies(catalog, &id)?;
-            }
-            Ok(())
-        }
-
-        for id in selection.depends_on() {
-            if let Err(err) = validate_read_dependencies(self.catalog(), &id) {
+        // Ensure all objects `selection` depends on are valid for `ReadThenWrite` operations.
+        for gid in selection.depends_on() {
+            let item_id = self.catalog().resolve_item_id(&gid);
+            if let Err(err) = validate_read_then_write_dependencies(self.catalog(), &item_id) {
                 ctx.retire(Err(err));
                 return;
             }
@@ -2615,6 +2750,7 @@ impl Coordinator {
             session,
             Default::default(),
         );
+
         self.sequence_peek(
             peek_ctx,
             plan::SelectPlan {
@@ -2633,6 +2769,7 @@ impl Coordinator {
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
         let catalog = self.owned_catalog();
         let max_result_size = self.catalog().system_config().max_result_size();
+
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let (peek_response, session) = match peek_rx.await {
                 Ok(Response {
@@ -2665,17 +2802,17 @@ impl Coordinator {
                 timeout_dur = Duration::MAX;
             }
 
-            let style = ExprPrepStyle::OneShot {
-                logical_time: EvalTime::NotAvailable,
+            let style = ExprPrepOneShot {
+                logical_time: EvalTime::NotAvailable, // We already errored out on mz_now above.
                 session: ctx.session(),
                 catalog_state: catalog.state(),
             };
-            for expr in assignments.values_mut() {
-                return_if_err!(prep_scalar_expr(expr, style.clone()), ctx);
+            for expr in assignments.values_mut().chain(returning.iter_mut()) {
+                return_if_err!(style.prep_scalar_expr(expr), ctx);
             }
 
-            let make_diffs =
-                move |mut rows: Box<dyn RowIterator>| -> Result<Vec<(Row, Diff)>, AdapterError> {
+            let make_diffs = move |mut rows: Box<dyn RowIterator>|
+                  -> Result<(Vec<(Row, Diff)>, u64), AdapterError> {
                     let arena = RowArena::new();
                     let mut diffs = Vec::new();
                     let mut datum_vec = mz_repr::DatumVec::new();
@@ -2699,70 +2836,98 @@ impl Coordinator {
                                 datums[idx] = new_value;
                             }
                             let updated = Row::pack_slice(&datums);
-                            diffs.push((updated, 1));
+                            diffs.push((updated, Diff::ONE));
                         }
                         match kind {
                             // Updates and deletes always remove the
                             // current row. Updates will also add an
                             // updated value.
                             MutationKind::Update | MutationKind::Delete => {
-                                diffs.push((row.to_owned(), -1))
+                                diffs.push((row.to_owned(), Diff::MINUS_ONE))
                             }
-                            MutationKind::Insert => diffs.push((row.to_owned(), 1)),
+                            MutationKind::Insert => diffs.push((row.to_owned(), Diff::ONE)),
                         }
                     }
+
+                    // Sum of all the rows' byte size, for checking if we go
+                    // above the max_result_size threshold.
+                    let mut byte_size: u64 = 0;
                     for (row, diff) in &diffs {
-                        if *diff > 0 {
+                        byte_size = byte_size.saturating_add(u64::cast_from(row.byte_len()));
+                        if diff.is_positive() {
                             for (idx, datum) in row.iter().enumerate() {
                                 desc.constraints_met(idx, &datum)?;
                             }
                         }
                     }
-                    Ok(diffs)
+                    Ok((diffs, byte_size))
                 };
+
             let diffs = match peek_response {
-                ExecuteResponse::SendingRows { future: batch, .. } => {
-                    // TODO(jkosh44): This timeout should be removed;
-                    // we should instead periodically ensure clusters are
-                    // healthy and actively cancel any work waiting on unhealthy
-                    // clusters.
-                    match tokio::time::timeout(timeout_dur, batch).await {
-                        Ok(res) => match res {
-                            PeekResponseUnary::Rows(rows) => make_diffs(rows),
-                            PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
-                            PeekResponseUnary::Error(e) => {
-                                Err(AdapterError::Unstructured(anyhow!(e)))
+                ExecuteResponse::SendingRowsStreaming {
+                    rows: mut rows_stream,
+                    ..
+                } => {
+                    let mut byte_size: u64 = 0;
+                    let mut diffs = Vec::new();
+                    let result = loop {
+                        match tokio::time::timeout(timeout_dur, rows_stream.next()).await {
+                            Ok(Some(res)) => match res {
+                                PeekResponseUnary::Rows(new_rows) => {
+                                    match make_diffs(new_rows) {
+                                        Ok((mut new_diffs, new_byte_size)) => {
+                                            byte_size = byte_size.saturating_add(new_byte_size);
+                                            if byte_size > max_result_size {
+                                                break Err(AdapterError::ResultSize(format!(
+                                                    "result exceeds max size of {max_result_size}"
+                                                )));
+                                            }
+                                            diffs.append(&mut new_diffs)
+                                        }
+                                        Err(e) => break Err(e),
+                                    };
+                                }
+                                PeekResponseUnary::Canceled => break Err(AdapterError::Canceled),
+                                PeekResponseUnary::Error(e) => {
+                                    break Err(AdapterError::Unstructured(anyhow!(e)));
+                                }
+                                PeekResponseUnary::DependencyDropped(dep) => {
+                                    break Err(dep.to_concurrent_dependency_drop());
+                                }
+                            },
+                            Ok(None) => break Ok(diffs),
+                            Err(_) => {
+                                // We timed out, so remove the pending peek. This is
+                                // best-effort and doesn't guarantee we won't
+                                // receive a response.
+                                // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
+                                let result = internal_cmd_tx.send(Message::CancelPendingPeeks {
+                                    conn_id: ctx.session().conn_id().clone(),
+                                });
+                                if let Err(e) = result {
+                                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                                }
+                                break Err(AdapterError::StatementTimeout);
                             }
-                        },
-                        Err(_) => {
-                            // We timed out, so remove the pending peek. This is
-                            // best-effort and doesn't guarantee we won't
-                            // receive a response.
-                            // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
-                            let result = internal_cmd_tx.send(Message::CancelPendingPeeks {
-                                conn_id: ctx.session().conn_id().clone(),
-                            });
-                            if let Err(e) = result {
-                                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                            }
-                            Err(AdapterError::StatementTimeout)
                         }
-                    }
+                    };
+
+                    result
                 }
-                ExecuteResponse::SendingRowsImmediate { rows } => make_diffs(rows),
+                ExecuteResponse::SendingRowsImmediate { rows } => {
+                    make_diffs(rows).map(|(diffs, _byte_size)| diffs)
+                }
                 resp => Err(AdapterError::Unstructured(anyhow!(
                     "unexpected peek response: {resp:?}"
                 ))),
             };
+
             let mut returning_rows = Vec::new();
             let mut diff_err: Option<AdapterError> = None;
-            if !returning.is_empty() && diffs.is_ok() {
+            if let (false, Ok(diffs)) = (returning.is_empty(), &diffs) {
                 let arena = RowArena::new();
-                for (row, diff) in diffs
-                    .as_ref()
-                    .expect("known to be `Ok` from `is_ok()` call above")
-                {
-                    if diff < &1 {
+                for (row, diff) in diffs {
+                    if !diff.is_positive() {
                         continue;
                     }
                     let mut returning_row = Row::with_capacity(returning.len());
@@ -2779,7 +2944,7 @@ impl Coordinator {
                             }
                         }
                     }
-                    let diff = NonZeroI64::try_from(*diff).expect("known to be >= 1");
+                    let diff = NonZeroI64::try_from(diff.into_inner()).expect("known to be >= 1");
                     let diff = match NonZeroUsize::try_from(diff) {
                         Ok(diff) => diff,
                         Err(err) => {
@@ -2872,7 +3037,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_item_rename(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::RenameItem {
@@ -2881,7 +3046,7 @@ impl Coordinator {
             to_name: plan.to_name,
         };
         match self
-            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
@@ -2892,7 +3057,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_retain_history(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::AlterRetainHistoryPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = vec![catalog::Op::AlterRetainHistory {
@@ -2900,40 +3065,31 @@ impl Coordinator {
             value: plan.value,
             window: plan.window,
         }];
-        self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-            let cluster = match coord.catalog().get_entry(&plan.id).item() {
-                CatalogItem::Table(_) | CatalogItem::MaterializedView(_) => None,
-                CatalogItem::Index(index) => Some(index.cluster_id),
-                CatalogItem::Source(_) => {
-                    let read_policies = coord.catalog().source_read_policies(plan.id);
-                    coord.update_storage_base_read_policies(read_policies);
-                    return;
-                }
-                CatalogItem::Log(_)
-                | CatalogItem::View(_)
-                | CatalogItem::Sink(_)
-                | CatalogItem::Type(_)
-                | CatalogItem::Func(_)
-                | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => unreachable!(),
-            };
-            match cluster {
-                Some(cluster) => {
-                    coord.update_compute_base_read_policy(cluster, plan.id, plan.window.into());
-                }
-                None => {
-                    coord.update_storage_base_read_policies(vec![(plan.id, plan.window.into())]);
-                }
-            }
-        })
-        .await?;
+        self.catalog_transact_with_context(None, Some(ctx), ops)
+            .await?;
         Ok(ExecuteResponse::AlteredObject(plan.object_type))
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_source_timestamp_interval(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        plan: plan::AlterSourceTimestampIntervalPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let ops = vec![catalog::Op::AlterSourceTimestampInterval {
+            id: plan.id,
+            value: plan.value,
+            interval: plan.interval,
+        }];
+        self.catalog_transact_with_context(None, Some(ctx), ops)
+            .await?;
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
     }
 
     #[instrument]
     pub(super) async fn sequence_alter_schema_rename(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::AlterSchemaRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let (database_spec, schema_spec) = plan.cur_schema_spec;
@@ -2944,7 +3100,7 @@ impl Coordinator {
             check_reserved_names: true,
         };
         match self
-            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
@@ -2955,7 +3111,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_schema_swap(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::AlterSchemaSwapPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::AlterSchemaSwapPlan {
@@ -2986,7 +3142,9 @@ impl Coordinator {
         };
 
         match self
-            .catalog_transact_with_ddl_transaction(session, vec![op_a, op_b, op_c])
+            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_c], |_, _| {
+                Box::pin(async {})
+            })
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
@@ -3007,14 +3165,38 @@ impl Coordinator {
         let mut notices = vec![];
 
         // Get the attributes and variables from the role, as they currently are.
-        let mut attributes = role.attributes().clone();
+        let mut attributes: RoleAttributesRaw = role.attributes().clone().into();
         let mut vars = role.vars().clone();
+
+        // Whether to set the password to NULL. This is a special case since the existing
+        // password is not stored in the role attributes.
+        let mut nopassword = false;
 
         // Apply our updates.
         match option {
             PlannedAlterRoleOption::Attributes(attrs) => {
+                self.validate_role_attributes(&attrs.clone().into())?;
+
                 if let Some(inherit) = attrs.inherit {
                     attributes.inherit = inherit;
+                }
+
+                if let Some(password) = attrs.password {
+                    attributes.password = Some(password);
+                    attributes.scram_iterations =
+                        Some(self.catalog().system_config().scram_iterations())
+                }
+
+                if let Some(superuser) = attrs.superuser {
+                    attributes.superuser = Some(superuser);
+                }
+
+                if let Some(login) = attrs.login {
+                    attributes.login = Some(login);
+                }
+
+                if attrs.nopassword.unwrap_or(false) {
+                    nopassword = true;
                 }
 
                 if let Some(notice) = self.should_emit_rbac_notice(session) {
@@ -3025,10 +3207,10 @@ impl Coordinator {
                 // Get the variable to make sure it's valid and visible.
                 let session_var = session.vars().inspect(variable.name())?;
                 // Return early if it's not visible.
-                session_var.visible(session.user(), Some(catalog.system_vars()))?;
+                session_var.visible(session.user(), catalog.system_vars())?;
 
                 // Emit a warning when deprecated variables are used.
-                // TODO(#27285) remove this after sufficient time has passed
+                // TODO(database-issues#8069) remove this after sufficient time has passed
                 if variable.name() == vars::OLD_AUTO_ROUTE_CATALOG_QUERIES {
                     notices.push(AdapterNotice::AutoRouteIntrospectionQueriesUsage);
                 } else if let PlannedRoleVariable::Set {
@@ -3080,6 +3262,7 @@ impl Coordinator {
             id,
             name,
             attributes,
+            nopassword,
             vars: RoleVars { map: vars },
         };
         let response = self
@@ -3099,7 +3282,7 @@ impl Coordinator {
         ctx: ExecuteContext,
         plan: plan::AlterSinkPlan,
     ) {
-        // 1. Put a read hold on the new relation
+        // Put a read hold on the new relation
         let id_bundle = crate::CollectionIdBundle {
             storage_ids: BTreeSet::from_iter([plan.sink.from]),
             compute_ids: BTreeMap::new(),
@@ -3112,54 +3295,64 @@ impl Coordinator {
         };
 
         let otel_ctx = OpenTelemetryContext::obtain();
+        let from_item_id = self.catalog().resolve_item_id(&plan.sink.from);
 
         let plan_validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            BTreeSet::from_iter([plan.sink.from]),
+            BTreeSet::from_iter([plan.item_id, from_item_id]),
             Some(plan.in_cluster),
             None,
             ctx.session().role_metadata().clone(),
         );
 
-        // Re-resolve items in the altered statement
-        // Parse statement.
-        let create_sink_stmt = match mz_sql::parse::parse(&plan.sink.create_sql)
-            .expect("invalid create sink sql")
-            .into_element()
-            .ast
-        {
-            Statement::CreateSink(stmt) => stmt,
-            _ => unreachable!("invalid statment kind for sink"),
-        };
-        let catalog = self.catalog().for_system_session();
-        let (_, resolved_ids) = match mz_sql::names::resolve(&catalog, create_sink_stmt) {
-            Ok(ok) => ok,
-            Err(e) => {
-                ctx.retire(Err(AdapterError::internal("ALTER SINK", e)));
-                return;
-            }
-        };
+        info!(
+            "preparing alter sink for {}: frontiers={:?} export={:?}",
+            plan.global_id,
+            self.controller
+                .storage_collections
+                .collections_frontiers(vec![plan.global_id, plan.sink.from]),
+            self.controller.storage.export(plan.global_id)
+        );
 
         // Now we must wait for the sink to make enough progress such that there is overlap between
         // the new `from` collection's read hold and the sink's write frontier.
+        //
+        // TODO(database-issues#9820): If the sink is dropped while we are waiting for progress,
+        // the watch set never completes and neither does the `ALTER SINK` command.
         self.install_storage_watch_set(
             ctx.session().conn_id().clone(),
-            BTreeSet::from_iter([plan.id]),
+            BTreeSet::from_iter([plan.global_id]),
             read_ts,
             WatchSetResponse::AlterSinkReady(AlterSinkReadyContext {
                 ctx: Some(ctx),
                 otel_ctx,
                 plan,
                 plan_validity,
-                resolved_ids,
                 read_hold,
             }),
-        );
+        ).expect("plan validity verified above; we are on the coordinator main task, so they couldn't have gone away since then");
     }
 
     #[instrument]
     pub async fn sequence_alter_sink_finish(&mut self, mut ctx: AlterSinkReadyContext) {
         ctx.otel_ctx.attach_as_parent();
+
+        let plan::AlterSinkPlan {
+            item_id,
+            global_id,
+            sink: sink_plan,
+            with_snapshot,
+            in_cluster,
+        } = ctx.plan.clone();
+
+        // We avoid taking the DDL lock for `ALTER SINK SET FROM` commands, see
+        // `Coordinator::must_serialize_ddl`. We therefore must assume that the world has
+        // arbitrarily changed since we performed planning, and we must re-assert that it still
+        // matches our requirements.
+        //
+        // The `PlanValidity` check ensures that both the sink and the new source relation still
+        // exist. Apart from that we have to ensure that nobody else altered the sink in the mean
+        // time, which we do by comparing the catalog sink version to the one in the plan.
         match ctx.plan_validity.check(self.catalog()) {
             Ok(()) => {}
             Err(err) => {
@@ -3168,40 +3361,95 @@ impl Coordinator {
             }
         }
 
-        let plan::AlterSinkPlan {
-            id,
-            sink,
-            with_snapshot,
-            in_cluster,
-        } = ctx.plan.clone();
+        let entry = self.catalog().get_entry(&item_id);
+        let CatalogItem::Sink(old_sink) = entry.item() else {
+            panic!("invalid item kind for `AlterSinkPlan`");
+        };
+
+        if sink_plan.version != old_sink.version + 1 {
+            ctx.retire(Err(AdapterError::ChangedPlan(
+                "sink was altered concurrently".into(),
+            )));
+            return;
+        }
+
+        info!(
+            "finishing alter sink for {global_id}: frontiers={:?} export={:?}",
+            self.controller
+                .storage_collections
+                .collections_frontiers(vec![global_id, sink_plan.from]),
+            self.controller.storage.export(global_id),
+        );
 
         // Assert that we can recover the updates that happened at the timestamps of the write
         // frontier. This must be true in this call.
         let write_frontier = &self
             .controller
             .storage
-            .export(id)
+            .export(global_id)
             .expect("sink known to exist")
             .write_frontier;
         let as_of = ctx.read_hold.least_valid_read();
-        assert!(write_frontier.iter().all(|t| as_of.less_than(t)));
+        assert!(
+            write_frontier.iter().all(|t| as_of.less_than(t)),
+            "{:?} should be strictly less than {:?}",
+            &*as_of,
+            &**write_frontier
+        );
 
-        let catalog_sink = Sink {
-            create_sql: sink.create_sql,
-            from: sink.from,
-            connection: sink.connection.clone(),
-            envelope: sink.envelope,
-            version: sink.version,
-            partition_strategy: sink.partition_strategy.clone(),
+        // Parse the `create_sql` so we can update it to the new sink definition.
+        //
+        // Note that we need to use the `create_sql` from the catalog here, not the one from the
+        // sink plan. Even though we ensure that the sink version didn't change since planning, the
+        // names in the `create_sql` may have changed, for example due to a schema swap.
+        let create_sql = &old_sink.create_sql;
+        let parsed = mz_sql::parse::parse(create_sql).expect("valid create_sql");
+        let Statement::CreateSink(mut stmt) = parsed.into_element().ast else {
+            unreachable!("invalid statement kind for sink");
+        };
+
+        // Update the sink version.
+        stmt.with_options
+            .retain(|o| o.name != CreateSinkOptionName::Version);
+        stmt.with_options.push(CreateSinkOption {
+            name: CreateSinkOptionName::Version,
+            value: Some(WithOptionValue::Value(mz_sql::ast::Value::Number(
+                sink_plan.version.to_string(),
+            ))),
+        });
+
+        let conn_catalog = self.catalog().for_system_session();
+        let (mut stmt, resolved_ids) =
+            mz_sql::names::resolve(&conn_catalog, stmt).expect("resolvable create_sql");
+
+        // Update the `from` relation.
+        let from_entry = self.catalog().get_entry_by_global_id(&sink_plan.from);
+        let full_name = self.catalog().resolve_full_name(from_entry.name(), None);
+        stmt.from = ResolvedItemName::Item {
+            id: from_entry.id(),
+            qualifiers: from_entry.name.qualifiers.clone(),
+            full_name,
+            print_id: true,
+            version: from_entry.version,
+        };
+
+        let new_sink = Sink {
+            create_sql: stmt.to_ast_string_stable(),
+            global_id,
+            from: sink_plan.from,
+            connection: sink_plan.connection.clone(),
+            envelope: sink_plan.envelope,
+            version: sink_plan.version,
             with_snapshot,
-            resolved_ids: ctx.resolved_ids.clone(),
+            resolved_ids: resolved_ids.clone(),
             cluster_id: in_cluster,
+            commit_interval: sink_plan.commit_interval,
         };
 
         let ops = vec![catalog::Op::UpdateItem {
-            id,
-            name: self.catalog.get_entry(&id).name().clone(),
-            to_item: CatalogItem::Sink(catalog_sink),
+            id: item_id,
+            name: entry.name().clone(),
+            to_item: CatalogItem::Sink(new_sink),
         }];
 
         match self
@@ -3215,35 +3463,29 @@ impl Coordinator {
             }
         }
 
-        let status_id = Some(
-            self.catalog()
-                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
-        );
-
-        let from_entry = self.catalog().get_entry(&sink.from);
         let storage_sink_desc = StorageSinkDesc {
-            from: sink.from,
+            from: sink_plan.from,
             from_desc: from_entry
-                .desc_opt()
+                .relation_desc()
                 .expect("sinks can only be built on items with descs")
                 .into_owned(),
-            connection: sink
+            connection: sink_plan
                 .connection
                 .clone()
                 .into_inline_connection(self.catalog().state()),
-            envelope: sink.envelope,
+            envelope: sink_plan.envelope,
             as_of,
             with_snapshot,
-            version: sink.version,
-            partition_strategy: sink.partition_strategy,
-            status_id,
+            version: sink_plan.version,
             from_storage_metadata: (),
+            to_storage_metadata: (),
+            commit_interval: sink_plan.commit_interval,
         };
 
         self.controller
             .storage
             .alter_export(
-                id,
+                global_id,
                 ExportDescription {
                     sink: storage_sink_desc,
                     instance_id: in_cluster,
@@ -3280,13 +3522,14 @@ impl Coordinator {
     async fn sequence_alter_connection_options(
         &mut self,
         mut ctx: ExecuteContext,
-        id: GlobalId,
+        id: CatalogItemId,
         set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<mz_sql::names::Aug>>>,
         drop_options: BTreeSet<ConnectionOptionName>,
         validate: bool,
     ) {
         let cur_entry = self.catalog().get_entry(&id);
         let cur_conn = cur_entry.connection().expect("known to be connection");
+        let connection_gid = cur_conn.global_id();
 
         let inner = || -> Result<Connection, AdapterError> {
             // Parse statement.
@@ -3333,8 +3576,10 @@ impl Coordinator {
             )
             .map_err(|e| AdapterError::InvalidAlter("CONNECTION", e))?
             {
-                Plan::CreateConnection(plan) => plan,
-                _ => unreachable!("create source plan is only valid response"),
+                (Plan::CreateConnection(plan), _sql_impl_ids) => plan,
+                (p, _) => {
+                    unreachable!("create connection plan is only valid response, got {:?}", p)
+                }
             };
 
             // Parse statement.
@@ -3355,7 +3600,8 @@ impl Coordinator {
 
             Ok(Connection {
                 create_sql: plan.connection.create_sql,
-                connection: plan.connection.connection,
+                global_id: cur_conn.global_id,
+                details: plan.connection.details,
                 resolved_ids: new_deps,
             })
         };
@@ -3369,8 +3615,8 @@ impl Coordinator {
 
         if validate {
             let connection = conn
-                .connection
-                .clone()
+                .details
+                .to_connection()
                 .into_inline_connection(self.catalog().state());
 
             let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -3383,10 +3629,22 @@ impl Coordinator {
             task::spawn(
                 || format!("validate_alter_connection:{conn_id}"),
                 async move {
-                    let dependency_ids = conn.resolved_ids.0.clone();
-                    let result = match connection.validate(id, &current_storage_parameters).await {
-                        Ok(()) => Ok(conn),
-                        Err(err) => Err(err.into()),
+                    let resolved_ids = conn.resolved_ids.clone();
+                    let dependency_ids: BTreeSet<_> = resolved_ids.items().copied().collect();
+                    let result = match std::panic::AssertUnwindSafe(
+                        connection.validate(id, &current_storage_parameters),
+                    )
+                    .ore_catch_unwind()
+                    .await
+                    {
+                        Ok(Ok(())) => Ok(conn),
+                        Ok(Err(err)) => Err(err.into()),
+                        Err(_panic) => {
+                            tracing::error!("alter connection validation panicked");
+                            Err(AdapterError::Internal(
+                                "connection validation panicked".into(),
+                            ))
+                        }
                     };
 
                     // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
@@ -3394,7 +3652,8 @@ impl Coordinator {
                         AlterConnectionValidationReady {
                             ctx,
                             result,
-                            connection_gid: id,
+                            connection_id: id,
+                            connection_gid,
                             plan_validity: PlanValidity::new(
                                 transient_revision,
                                 dependency_ids.clone(),
@@ -3403,7 +3662,7 @@ impl Coordinator {
                                 role_metadata,
                             ),
                             otel_ctx,
-                            dependency_ids,
+                            resolved_ids,
                         },
                     ));
                     if let Err(e) = result {
@@ -3422,15 +3681,16 @@ impl Coordinator {
     #[instrument]
     pub(crate) async fn sequence_alter_connection_stage_finish(
         &mut self,
-        session: &mut Session,
-        id: GlobalId,
+        session: &Session,
+        id: CatalogItemId,
         connection: Connection,
     ) -> Result<ExecuteResponse, AdapterError> {
         match self.catalog.get_entry(&id).item() {
             CatalogItem::Connection(curr_conn) => {
                 curr_conn
-                    .connection
-                    .alter_compatible(id, &connection.connection)
+                    .details
+                    .to_connection()
+                    .alter_compatible(curr_conn.global_id, &connection.details.to_connection())
                     .map_err(StorageError::from)?;
             }
             _ => unreachable!("known to be a connection"),
@@ -3444,75 +3704,11 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        match connection.connection {
-            mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
-                let spec = VpcEndpointConfig {
-                    aws_service_name: privatelink.service_name.to_owned(),
-                    availability_zone_ids: privatelink.availability_zones.to_owned(),
-                };
-                self.cloud_resource_controller
-                    .as_ref()
-                    .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
-                    .ensure_vpc_endpoint(id, spec)
-                    .await?;
-            }
-            _ => {}
-        };
-
-        let entry = self.catalog().get_entry(&id);
-
-        let mut connections = VecDeque::new();
-        connections.push_front(entry.id());
-
-        let mut source_connections = BTreeMap::new();
-        let mut sink_connections = BTreeMap::new();
-
-        while let Some(id) = connections.pop_front() {
-            for id in self.catalog.get_entry(&id).used_by() {
-                let entry = self.catalog.get_entry(id);
-                match entry.item_type() {
-                    CatalogItemType::Connection => connections.push_back(*id),
-                    CatalogItemType::Source => {
-                        let desc = match &entry.source().expect("known to be source").data_source {
-                            DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
-                                .desc
-                                .clone()
-                                .into_inline_connection(self.catalog().state()),
-                            _ => unreachable!("only ingestions reference connections"),
-                        };
-
-                        source_connections.insert(*id, desc.connection);
-                    }
-                    CatalogItemType::Sink => {
-                        let export = entry.sink().expect("known to be sink");
-                        sink_connections.insert(
-                            *id,
-                            export
-                                .connection
-                                .clone()
-                                .into_inline_connection(self.catalog().state()),
-                        );
-                    }
-                    t => unreachable!("connection dependency not expected on {}", t),
-                }
-            }
-        }
-
-        if !source_connections.is_empty() {
-            self.controller
-                .storage
-                .alter_ingestion_connections(source_connections)
-                .await
-                .unwrap_or_terminate("cannot fail to alter ingestion connection");
-        }
-
-        if !sink_connections.is_empty() {
-            self.controller
-                .storage
-                .alter_export_connections(sink_connections)
-                .await
-                .unwrap_or_terminate("altering exports after txn must succeed");
-        }
+        // NOTE: The rest of the alter connection logic (updating VPC endpoints
+        // and propagating connection changes to dependent sources, sinks, and
+        // tables) is handled in `apply_catalog_implications` via
+        // `handle_alter_connection`. The catalog transact above triggers that
+        // code path.
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
@@ -3521,9 +3717,13 @@ impl Coordinator {
     pub(super) async fn sequence_alter_source(
         &mut self,
         session: &Session,
-        plan::AlterSourcePlan { id, action }: plan::AlterSourcePlan,
+        plan::AlterSourcePlan {
+            item_id,
+            ingestion_id,
+            action,
+        }: plan::AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let cur_entry = self.catalog().get_entry(&id);
+        let cur_entry = self.catalog().get_entry(&item_id);
         let cur_source = cur_entry.source().expect("known to be source");
 
         let create_sql_to_stmt_deps = |coord: &Coordinator, err_cx, create_source_sql| {
@@ -3553,8 +3753,7 @@ impl Coordinator {
 
                 let mz_sql::plan::AlterSourceAddSubsourceOptionExtracted {
                     text_columns: mut new_text_columns,
-                    ignore_columns: mut new_ignore_columns,
-                    details: new_details,
+                    exclude_columns: mut new_exclude_columns,
                     ..
                 } = options.try_into()?;
 
@@ -3565,14 +3764,14 @@ impl Coordinator {
                 // Get all currently referred-to items
                 let catalog = self.catalog();
                 let curr_references: BTreeSet<_> = catalog
-                    .get_entry(&id)
+                    .get_entry(&item_id)
                     .used_by()
                     .into_iter()
                     .filter_map(|subsource| {
                         catalog
                             .get_entry(subsource)
                             .subsource_details()
-                            .map(|(_id, reference)| reference)
+                            .map(|(_id, reference, _details)| reference)
                     })
                     .collect();
 
@@ -3581,116 +3780,21 @@ impl Coordinator {
                 let purification_err =
                     || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
 
+                // TODO(roshan): Remove all the text-column/ignore-column option merging here once
+                // we remove support for implicitly created subsources from a `CREATE SOURCE`
+                // statement.
                 match &mut create_source_stmt.connection {
                     CreateSourceConnection::Postgres {
                         options: curr_options,
                         ..
                     } => {
                         let mz_sql::plan::PgConfigOptionExtracted {
-                            details,
-                            mut text_columns,
-                            ..
+                            mut text_columns, ..
                         } = curr_options.clone().try_into()?;
 
-                        // Drop both details and text columns; we will add them back in
+                        // Drop text columns; we will add them back in
                         // as appropriate below.
-                        curr_options.retain(|o| {
-                            !matches!(
-                                o.name,
-                                PgConfigOptionName::Details | PgConfigOptionName::TextColumns
-                            )
-                        });
-
-                        let gen_details = |details: Option<String>| -> Result<
-                            PostgresSourcePublicationDetails,
-                            AdapterError,
-                        > {
-                            let details = details.as_ref().ok_or_else(|| {
-                                AdapterError::internal(
-                                    ALTER_SOURCE,
-                                    "Postgres source missing details",
-                                )
-                            })?;
-
-                            let details = hex::decode(details)
-                                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-                            let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
-                                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-
-                            PostgresSourcePublicationDetails::from_proto(details)
-                                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
-                        };
-
-                        let mut curr_details = gen_details(details)?;
-                        let mut new_details = gen_details(new_details)?;
-
-                        // n.b. this does not check publication table names, so we must
-                        // do that separately.
-                        curr_details
-                            .alter_compatible(cur_entry.id(), &new_details)
-                            .map_err(StorageError::InvalidAlter)?;
-
-                        // Trim any unreferred-to tables.
-                        curr_details.tables.retain(|table| {
-                            let name = UnresolvedItemName(vec![
-                                // Unchecked is fine beause we have previously verified
-                                // that these are valid idents.
-                                Ident::new_unchecked(curr_details.database.clone()),
-                                Ident::new_unchecked(table.namespace.clone()),
-                                Ident::new_unchecked(table.name.clone()),
-                            ]);
-
-                            // Retain the definition of only those that are still referenced. This
-                            // lets us retain only the minimal set of publication details, which can
-                            // help avoid issues when generating PostgreSQL table casts.
-                            //
-                            // For example, if a table in the publication contains a column whose
-                            // cast requires using `TEXT COLUMNS` but the table is not an ingested
-                            // subsource. This poses an issue because `TEXT COLUMNS` requires that
-                            // the columns refer only to referenced subsources. The best solution to
-                            // this is to ensure that we simply don't try to generate the table cast
-                            // in the first place.
-                            curr_references.contains(&name)
-                        });
-
-                        mz_ore::soft_assert_eq_or_log!(
-                            curr_details.tables.len(),
-                            curr_references.len(),
-                            "PostgresSourcePublicationDetails must have entry for every reference"
-                        );
-
-                        let referenced_oids: BTreeSet<_> =
-                            curr_details.tables.iter().map(|t| t.oid).collect();
-
-                        // Ensure that new tables are distinct from the current tables. We check the names only because
-                        for table in new_details.tables.iter() {
-                            let name = UnresolvedItemName(vec![
-                                // Unchecked is fine beause we have previously verified
-                                // that these are valid idents.
-                                Ident::new_unchecked(curr_details.database.clone()),
-                                Ident::new_unchecked(table.namespace.clone()),
-                                Ident::new_unchecked(table.name.clone()),
-                            ]);
-
-                            // Check both the OIDs and the names of the references to protect against
-                            // hard-to-reason-about renames.
-                            if referenced_oids.contains(&table.oid)
-                                || curr_references.contains(&name)
-                            {
-                                Err(AdapterError::SubsourceAlreadyReferredTo { name })?;
-                            }
-                        }
-
-                        // Merge the current table definitions into new tables. Note
-                        // this changes the output indexes of the subsources.
-                        new_details.tables.extend(curr_details.tables);
-
-                        curr_options.push(PgConfigOption {
-                            name: PgConfigOptionName::Details,
-                            value: Some(WithOptionValue::Value(Value::String(hex::encode(
-                                new_details.into_proto().encode_to_vec(),
-                            )))),
-                        });
+                        curr_options.retain(|o| !matches!(o.name, PgConfigOptionName::TextColumns));
 
                         // Drop all text columns that are not currently referred to.
                         text_columns.retain(|column_qualified_reference| {
@@ -3726,135 +3830,39 @@ impl Coordinator {
                         ..
                     } => {
                         let mz_sql::plan::MySqlConfigOptionExtracted {
-                            details,
                             mut text_columns,
-                            mut ignore_columns,
+                            mut exclude_columns,
                             ..
                         } = curr_options.clone().try_into()?;
 
-                        // Drop both details and text columns; we will add them back in
+                        // Drop both ignore and text columns; we will add them back in
                         // as appropriate below.
                         curr_options.retain(|o| {
                             !matches!(
                                 o.name,
-                                MySqlConfigOptionName::Details
-                                    | MySqlConfigOptionName::TextColumns
-                                    | MySqlConfigOptionName::IgnoreColumns
+                                MySqlConfigOptionName::TextColumns
+                                    | MySqlConfigOptionName::ExcludeColumns
                             )
                         });
 
-                        let gen_details =
-                            |details: Option<String>| -> Result<MySqlSourceDetails, AdapterError> {
-                                let details = details.as_ref().ok_or_else(|| {
-                                    AdapterError::internal(
-                                        ALTER_SOURCE,
-                                        "MySQL source missing details",
-                                    )
-                                })?;
-
-                                let details = hex::decode(details)
-                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-                                let details = ProtoMySqlSourceDetails::decode(&*details)
-                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-
-                                let mut details = MySqlSourceDetails::from_proto(details)
-                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-
-                                // Expand the initial_gtid_set vec to be one entry per table if
-                                // it's currently in the form of one entry for the whole source.
-                                if details.initial_gtid_set.len() == 1 {
-                                    details.initial_gtid_set = vec![
-                                        details.initial_gtid_set[0]
-                                            .clone();
-                                        details.tables.len()
-                                    ];
-                                }
-                                Ok(details)
-                            };
-
-                        let mut curr_details = gen_details(details)?;
-                        let mut new_details = gen_details(new_details)?;
-
-                        // this doesn't check table names, so we must do that separately.
-                        curr_details
-                            .alter_compatible(cur_entry.id(), &new_details)
-                            .map_err(StorageError::InvalidAlter)?;
-
-                        // Trim any unreferred-to tables and their corresponding initial_gtid_sets.
-                        let mut to_remove = vec![];
-                        for (i, table) in curr_details.tables.iter().enumerate() {
-                            let name = UnresolvedItemName(vec![
-                                // Unchecked is fine beause we have previously verified
-                                // that these are valid idents.
-                                Ident::new_unchecked(table.schema_name.clone()),
-                                Ident::new_unchecked(table.name.clone()),
-                            ]);
-                            if !curr_references.contains(&name) {
-                                to_remove.push(i);
-                            }
-                        }
-                        for i in to_remove.into_iter().rev() {
-                            curr_details.tables.remove(i);
-                            curr_details.initial_gtid_set.remove(i);
-                        }
-
-                        mz_ore::soft_assert_eq_or_log!(
-                            curr_details.tables.len(),
-                            curr_references.len(),
-                            "MySqlSourceDetails must have entry for every reference"
-                        );
-
-                        // Ensure that new tables are distinct from the current tables.
-                        for table in new_details.tables.iter() {
-                            let name = UnresolvedItemName(vec![
-                                // Unchecked is fine beause we have previously verified
-                                // that these are valid idents.
-                                Ident::new_unchecked(table.schema_name.clone()),
-                                Ident::new_unchecked(table.name.clone()),
-                            ]);
-                            if curr_references.contains(&name) {
-                                Err(AdapterError::SubsourceAlreadyReferredTo { name })?;
-                            }
-                        }
-
-                        // Merge the current table definitions into new tables. Note
-                        // this changes the output indexes of the subsources.
-                        new_details.tables.extend(curr_details.tables);
-                        new_details
-                            .initial_gtid_set
-                            .extend(curr_details.initial_gtid_set);
-
-                        assert_eq!(
-                            new_details.tables.len(),
-                            new_details.initial_gtid_set.len(),
-                            "initial_gtid_set must have entry for every table after merging"
-                        );
-
-                        curr_options.push(MySqlConfigOption {
-                            name: MySqlConfigOptionName::Details,
-                            value: Some(WithOptionValue::Value(Value::String(hex::encode(
-                                new_details.into_proto().encode_to_vec(),
-                            )))),
-                        });
-
-                        // Drop all text / ignore columns that are not currently referred to.
+                        // Drop all text / exclude columns that are not currently referred to.
                         let column_referenced =
                             |column_qualified_reference: &UnresolvedItemName| {
                                 mz_ore::soft_assert_eq_or_log!(
-                                column_qualified_reference.0.len(),
-                                3,
-                                "all TEXT COLUMNS & IGNORE COLUMNS values must be column-qualified references"
-                            );
+                                    column_qualified_reference.0.len(),
+                                    3,
+                                    "all TEXT COLUMNS & EXCLUDE COLUMNS values must be column-qualified references"
+                                );
                                 let mut table = column_qualified_reference.clone();
                                 table.0.truncate(2);
                                 curr_references.contains(&table)
                             };
                         text_columns.retain(column_referenced);
-                        ignore_columns.retain(column_referenced);
+                        exclude_columns.retain(column_referenced);
 
-                        // Merge the current text / ignore columns into the new text / ignore columns.
+                        // Merge the current text / exclude columns into the new text / exclude columns.
                         new_text_columns.extend(text_columns);
-                        new_ignore_columns.extend(ignore_columns);
+                        new_exclude_columns.extend(exclude_columns);
 
                         // If we have text columns, add them to the options.
                         if !new_text_columns.is_empty() {
@@ -3869,17 +3877,87 @@ impl Coordinator {
                                 value: Some(WithOptionValue::Sequence(new_text_columns)),
                             });
                         }
-                        // If we have ignore columns, add them to the options.
-                        if !new_ignore_columns.is_empty() {
-                            new_ignore_columns.sort();
-                            let new_ignore_columns = new_ignore_columns
+                        // If we have exclude columns, add them to the options.
+                        if !new_exclude_columns.is_empty() {
+                            new_exclude_columns.sort();
+                            let new_exclude_columns = new_exclude_columns
                                 .into_iter()
                                 .map(WithOptionValue::UnresolvedItemName)
                                 .collect();
 
                             curr_options.push(MySqlConfigOption {
-                                name: MySqlConfigOptionName::IgnoreColumns,
-                                value: Some(WithOptionValue::Sequence(new_ignore_columns)),
+                                name: MySqlConfigOptionName::ExcludeColumns,
+                                value: Some(WithOptionValue::Sequence(new_exclude_columns)),
+                            });
+                        }
+                    }
+                    CreateSourceConnection::SqlServer {
+                        options: curr_options,
+                        ..
+                    } => {
+                        let mz_sql::plan::SqlServerConfigOptionExtracted {
+                            mut text_columns,
+                            mut exclude_columns,
+                            ..
+                        } = curr_options.clone().try_into()?;
+
+                        // Drop both ignore and text columns; we will add them back in
+                        // as appropriate below.
+                        curr_options.retain(|o| {
+                            !matches!(
+                                o.name,
+                                SqlServerConfigOptionName::TextColumns
+                                    | SqlServerConfigOptionName::ExcludeColumns
+                            )
+                        });
+
+                        // Drop all text / exclude columns that are not currently referred to.
+                        // SQL Server text/exclude column refs are 3-part (schema.table.col),
+                        // which truncate to 2-part (schema.table). But external references
+                        // are 3-part (database.schema.table). Use suffix matching since
+                        // a SQL Server source connects to a single database.
+                        let column_referenced =
+                            |column_qualified_reference: &UnresolvedItemName| {
+                                mz_ore::soft_assert_eq_or_log!(
+                                    column_qualified_reference.0.len(),
+                                    3,
+                                    "all TEXT COLUMNS & EXCLUDE COLUMNS values must be column-qualified references"
+                                );
+                                let mut table = column_qualified_reference.clone();
+                                table.0.truncate(2);
+                                curr_references.iter().any(|r| r.0.ends_with(&table.0))
+                            };
+                        text_columns.retain(column_referenced);
+                        exclude_columns.retain(column_referenced);
+
+                        // Merge the current text / exclude columns into the new text / exclude columns.
+                        new_text_columns.extend(text_columns);
+                        new_exclude_columns.extend(exclude_columns);
+
+                        // If we have text columns, add them to the options.
+                        if !new_text_columns.is_empty() {
+                            new_text_columns.sort();
+                            let new_text_columns = new_text_columns
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect();
+
+                            curr_options.push(SqlServerConfigOption {
+                                name: SqlServerConfigOptionName::TextColumns,
+                                value: Some(WithOptionValue::Sequence(new_text_columns)),
+                            });
+                        }
+                        // If we have exclude columns, add them to the options.
+                        if !new_exclude_columns.is_empty() {
+                            new_exclude_columns.sort();
+                            let new_exclude_columns = new_exclude_columns
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect();
+
+                            curr_options.push(SqlServerConfigOption {
+                                name: SqlServerConfigOptionName::ExcludeColumns,
+                                value: Some(WithOptionValue::Sequence(new_exclude_columns)),
                             });
                         }
                     }
@@ -3890,17 +3968,19 @@ impl Coordinator {
                 catalog.mark_id_unresolvable_for_replanning(cur_entry.id());
 
                 // Re-define our source in terms of the amended statement
-                let plan = match mz_sql::plan::plan(
+                let planned = mz_sql::plan::plan(
                     None,
                     &catalog,
                     Statement::CreateSource(create_source_stmt),
                     &Params::empty(),
                     &resolved_ids,
                 )
-                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
-                {
-                    Plan::CreateSource(plan) => plan,
-                    _ => unreachable!("create source plan is only valid response"),
+                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+                let plan = match planned {
+                    (Plan::CreateSource(plan), _sql_impl_ids) => plan,
+                    (p, _) => {
+                        unreachable!("create source plan is only valid response, got {:?}", p)
+                    }
                 };
 
                 // Asserting that we've done the right thing with dependencies
@@ -3908,40 +3988,39 @@ impl Coordinator {
                 // large task for an operation we have to cover in tests anyway.
                 let source = Source::new(
                     plan,
+                    cur_source.global_id,
                     resolved_ids,
                     cur_source.custom_logical_compaction_window,
                     cur_source.is_retained_metrics_object,
                 );
 
-                let source_compaction_window = source.custom_logical_compaction_window;
-
                 // Get new ingestion description for storage.
                 let desc = match &source.data_source {
-                    DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
-                        .desc
-                        .clone()
-                        .into_inline_connection(self.catalog().state()),
+                    DataSourceDesc::Ingestion { desc, .. }
+                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                        desc.clone().into_inline_connection(self.catalog().state())
+                    }
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
                 self.controller
                     .storage
-                    .check_alter_ingestion_source_desc(id, &desc)
+                    .check_alter_ingestion_source_desc(ingestion_id, &desc)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 // Redefine source. This must be done before we create any new
                 // subsources so that it has the right ingestion.
                 let mut ops = vec![catalog::Op::UpdateItem {
-                    id,
+                    id: item_id,
                     // Look this up again so we don't have to hold an immutable reference to the
                     // entry for so long.
-                    name: self.catalog.get_entry(&id).name().clone(),
+                    name: self.catalog.get_entry(&item_id).name().clone(),
                     to_item: CatalogItem::Source(source),
                 }];
 
                 let CreateSourceInner {
                     ops: new_ops,
-                    sources,
+                    sources: _,
                     if_not_exists_ids,
                 } = self.create_source_inner(session, subsources).await?;
 
@@ -3953,67 +4032,16 @@ impl Coordinator {
                 );
 
                 self.catalog_transact(Some(session), ops).await?;
-
-                self.controller
-                    .storage
-                    .alter_ingestion_source_desc(id, desc)
-                    .await
-                    .unwrap_or_terminate("cannot fail to alter source desc");
-
-                let mut source_ids = BTreeSet::new();
-                let mut collections = Vec::with_capacity(sources.len());
-                for (source_id, source) in sources {
-                    let source_status_collection_id =
-                        Some(self.catalog().resolve_builtin_storage_collection(
-                            &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                        ));
-
-                    let (data_source, status_collection_id) = match source.data_source {
-                        // Subsources use source statuses.
-                        DataSourceDesc::IngestionExport {
-                            ingestion_id,
-                            external_reference,
-                        } => (
-                            DataSource::IngestionExport {
-                                ingestion_id,
-                                external_reference,
-                            },
-                            source_status_collection_id,
-                        ),
-                        o => {
-                            unreachable!(
-                                "ALTER SOURCE...ADD SUBSOURCE only creates SourceExport but got {:?}",
-                                o
-                            )
-                        }
-                    };
-
-                    collections.push((
-                        source_id,
-                        CollectionDescription {
-                            desc: source.desc.clone(),
-                            data_source,
-                            since: None,
-                            status_collection_id,
-                        },
-                    ));
-
-                    source_ids.insert(source_id);
-                }
-
-                let storage_metadata = self.catalog.state().storage_metadata();
-
-                self.controller
-                    .storage
-                    .create_collections(storage_metadata, None, collections)
-                    .await
-                    .unwrap_or_terminate("cannot fail to create collections");
-
-                self.initialize_storage_read_policies(
-                    source_ids,
-                    source_compaction_window.unwrap_or(CompactionWindow::Default),
+            }
+            plan::AlterSourceAction::RefreshReferences { references } => {
+                self.catalog_transact(
+                    Some(session),
+                    vec![catalog::Op::UpdateSourceReferences {
+                        source_id: item_id,
+                        references: references.into(),
+                    }],
                 )
-                .await;
+                .await?;
             }
         }
 
@@ -4027,6 +4055,11 @@ impl Coordinator {
         plan::AlterSystemSetPlan { name, value }: plan::AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
+        // We want to ensure that the network policy we're switching too actually exists.
+        if NETWORK_POLICY.name.to_string().to_lowercase() == name.clone().to_lowercase() {
+            self.validate_alter_system_network_policy(session, &value)?;
+        }
+
         let op = match value {
             plan::VariableValue::Values(values) => catalog::Op::UpdateSystemConfiguration {
                 name: name.clone(),
@@ -4094,7 +4127,7 @@ impl Coordinator {
                 // In lieu of plumbing the user to all system config functions, just check that
                 // the var is visible.
                 let var = self.catalog().system_config().get(name)?;
-                var.visible(session.user(), Some(self.catalog().system_config()))?;
+                var.visible(session.user(), self.catalog().system_config())?;
                 Ok(())
             }
             // If we're not a superuser, but the variable is user modifiable, indicate they can use
@@ -4116,10 +4149,68 @@ impl Coordinator {
         }
     }
 
+    fn validate_alter_system_network_policy(
+        &self,
+        session: &Session,
+        policy_value: &plan::VariableValue,
+    ) -> Result<(), AdapterError> {
+        let policy_name = match &policy_value {
+            // Make sure the compiled in default still exists.
+            plan::VariableValue::Default => Some(NETWORK_POLICY.default_value().format()),
+            plan::VariableValue::Values(values) if values.len() == 1 => {
+                values.iter().next().cloned()
+            }
+            plan::VariableValue::Values(values) => {
+                tracing::warn!(?values, "can't set multiple network policies at once");
+                None
+            }
+        };
+        let maybe_network_policy = policy_name
+            .as_ref()
+            .and_then(|name| self.catalog.get_network_policy_by_name(name));
+        let Some(network_policy) = maybe_network_policy else {
+            return Err(AdapterError::PlanError(plan::PlanError::VarError(
+                VarError::InvalidParameterValue {
+                    name: NETWORK_POLICY.name(),
+                    invalid_values: vec![policy_name.unwrap_or_else(|| "<none>".to_string())],
+                    reason: "no network policy with such name exists".to_string(),
+                },
+            )));
+        };
+        self.validate_alter_network_policy(session, &network_policy.rules)
+    }
+
+    /// Validates that a set of [`NetworkPolicyRule`]s is valid for the current [`Session`].
+    ///
+    /// This helps prevent users from modifying network policies in a way that would lock out their
+    /// current connection.
+    fn validate_alter_network_policy(
+        &self,
+        session: &Session,
+        policy_rules: &Vec<NetworkPolicyRule>,
+    ) -> Result<(), AdapterError> {
+        // If the user is not an internal user attempt to protect them from
+        // blocking themselves.
+        if session.user().is_internal() {
+            return Ok(());
+        }
+        if let Some(ip) = session.meta().client_ip() {
+            validate_ip_with_policy_rules(ip, policy_rules)
+                .map_err(|_| AdapterError::PlanError(plan::PlanError::NetworkPolicyLockoutError))?;
+        } else {
+            // Sessions without IPs are only temporarily constructed for default values
+            // they should not be permitted here.
+            return Err(AdapterError::NetworkPolicyDenied(
+                NetworkPolicyError::MissingIp,
+            ));
+        }
+        Ok(())
+    }
+
     // Returns the name of the portal to execute.
     #[instrument]
     pub(super) fn sequence_execute(
-        &mut self,
+        &self,
         session: &mut Session,
         plan: plan::ExecutePlan,
     ) -> Result<String, AdapterError> {
@@ -4130,9 +4221,9 @@ impl Coordinator {
             .expect("known to exist");
         let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
-        let revision = ps.catalog_revision;
+        let state_revision = ps.state_revision;
         let logging = Arc::clone(ps.logging());
-        session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), revision)
+        session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), state_revision)
     }
 
     #[instrument]
@@ -4467,8 +4558,8 @@ impl Coordinator {
                     entry
                         .progress_id()
                         .into_iter()
-                        .map(|id| catalog::Op::UpdateOwner {
-                            id: ObjectId::Item(id),
+                        .map(|item_id| catalog::Op::UpdateOwner {
+                            id: ObjectId::Item(item_id),
                             new_owner,
                         });
                 ops.extend(dependent_subsources);
@@ -4530,8 +4621,13 @@ impl Coordinator {
             crate::coord::PlanStatement::Statement { stmt, params } => {
                 self.handle_execute_inner(stmt, params, ctx).await;
             }
-            crate::coord::PlanStatement::Plan { plan, resolved_ids } => {
-                self.sequence_plan(ctx, plan, resolved_ids).await;
+            crate::coord::PlanStatement::Plan {
+                plan,
+                resolved_ids,
+                sql_impl_resolved_ids,
+            } => {
+                self.sequence_plan(ctx, plan, resolved_ids, sql_impl_resolved_ids)
+                    .await;
             }
         }
     }
@@ -4541,58 +4637,155 @@ impl Coordinator {
     #[allow(clippy::unused_async)]
     pub(super) async fn sequence_alter_table(
         &mut self,
-        _session: &Session,
-        _plan: plan::AlterTablePlan,
+        ctx: &mut ExecuteContext,
+        plan: plan::AlterTablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        Err(AdapterError::PlanError(plan::PlanError::Unsupported {
-            feature: "ALTER TABLE ... ADD COLUMN ...".to_string(),
-            issue_no: Some(28082),
-        }))
+        let plan::AlterTablePlan {
+            relation_id,
+            column_name,
+            column_type,
+            raw_sql_type,
+        } = plan;
+
+        // TODO(alter_table): Support allocating GlobalIds without a CatalogItemId.
+        let (_, new_global_id) = self.allocate_user_id().await?;
+        let ops = vec![catalog::Op::AlterAddColumn {
+            id: relation_id,
+            new_global_id,
+            name: column_name,
+            typ: column_type,
+            sql: raw_sql_type,
+        }];
+
+        self.catalog_transact_with_context(None, Some(ctx), ops)
+            .await?;
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Table))
     }
-}
 
-#[derive(Debug)]
-struct CachedStatisticsOracle {
-    cache: BTreeMap<GlobalId, usize>,
-}
+    /// Prepares to apply a replacement materialized view.
+    #[instrument]
+    pub(super) async fn sequence_alter_materialized_view_apply_replacement_prepare(
+        &mut self,
+        ctx: ExecuteContext,
+        plan: AlterMaterializedViewApplyReplacementPlan,
+    ) {
+        // To ensure there is no time gap in the output, we can only apply a replacement if the
+        // target's write frontier has caught up to the replacement dataflow's write frontier. This
+        // might not be the case initially, so we have to wait. To this end, we install a watch set
+        // waiting for the target MV's write frontier to advance sufficiently.
+        //
+        // Note that the replacement's dataflow is not performing any writes, so it can only be
+        // ahead of the target initially due to as-of selection. Once the target has caught up, the
+        // replacement's write frontier is always <= the target's.
 
-impl CachedStatisticsOracle {
-    pub async fn new<T: TimelyTimestamp>(
-        ids: &BTreeSet<GlobalId>,
-        as_of: &Antichain<T>,
-        storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
-    ) -> Result<Self, StorageError<T>> {
-        let mut cache = BTreeMap::new();
+        let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = plan.clone();
 
-        for id in ids {
-            let stats = storage.snapshot_stats(*id, as_of.clone()).await;
+        let plan_validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::from_iter([id, replacement_id]),
+            None,
+            None,
+            ctx.session().role_metadata().clone(),
+        );
 
-            match stats {
-                Ok(stats) => {
-                    cache.insert(*id, stats.num_updates);
-                }
-                Err(StorageError::IdentifierMissing(id)) => {
-                    ::tracing::debug!("no statistics for {id}")
-                }
-                Err(e) => return Err(e),
-            }
+        let target = self.catalog.get_entry(&id);
+        let target_gid = target.latest_global_id();
+
+        let replacement = self.catalog.get_entry(&replacement_id);
+        let replacement_gid = replacement.latest_global_id();
+
+        let target_upper = self
+            .controller
+            .storage_collections
+            .collection_frontiers(target_gid)
+            .expect("target MV exists")
+            .write_frontier;
+        let replacement_upper = self
+            .controller
+            .compute
+            .collection_frontiers(replacement_gid, replacement.cluster_id())
+            .expect("replacement MV exists")
+            .write_frontier;
+
+        info!(
+            %id, %replacement_id, ?target_upper, ?replacement_upper,
+            "preparing materialized view replacement application",
+        );
+
+        let Some(replacement_upper_ts) = replacement_upper.into_option() else {
+            // A replacement's write frontier can only become empty if the target's write frontier
+            // has advanced to the empty frontier. In this case the MV is sealed for all times and
+            // applying the replacement wouldn't have any effect. We use this opportunity to alert
+            // the user by returning an error, rather than applying the useless replacement.
+            //
+            // Note that we can't assert on `target_upper` being empty here, because the reporting
+            // of the target's frontier might be delayed. We'd have to fetch the current frontier
+            // from persist, which we cannot do without incurring I/O.
+            ctx.retire(Err(AdapterError::ReplaceMaterializedViewSealed {
+                name: target.name().item.clone(),
+            }));
+            return;
+        };
+
+        // A watch set resolves when the watched objects' frontier becomes _greater_ than the
+        // specified timestamp. Since we only need to wait until the target frontier is >= the
+        // replacement's frontier, we can step back the timestamp.
+        let replacement_upper_ts = replacement_upper_ts.step_back().unwrap_or(Timestamp::MIN);
+
+        // TODO(database-issues#9820): If the target MV is dropped while we are waiting for
+        // progress, the watch set never completes and neither does the `ALTER MATERIALIZED VIEW`
+        // command.
+        self.install_storage_watch_set(
+            ctx.session().conn_id().clone(),
+            BTreeSet::from_iter([target_gid]),
+            replacement_upper_ts,
+            WatchSetResponse::AlterMaterializedViewReady(AlterMaterializedViewReadyContext {
+                ctx: Some(ctx),
+                otel_ctx: OpenTelemetryContext::obtain(),
+                plan,
+                plan_validity,
+            }),
+        )
+        .expect("target collection exists");
+    }
+
+    /// Finishes applying a replacement materialized view after the frontier wait completed.
+    #[instrument]
+    pub async fn sequence_alter_materialized_view_apply_replacement_finish(
+        &mut self,
+        mut ctx: AlterMaterializedViewReadyContext,
+    ) {
+        ctx.otel_ctx.attach_as_parent();
+
+        let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = ctx.plan;
+
+        // We avoid taking the DDL lock for `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT`
+        // commands, see `Coordinator::must_serialize_ddl`. We therefore must assume that the
+        // world has arbitrarily changed since we performed planning, and we must re-assert
+        // that it still matches our requirements.
+        if let Err(err) = ctx.plan_validity.check(self.catalog()) {
+            ctx.retire(Err(err));
+            return;
         }
 
-        Ok(Self { cache })
-    }
-}
+        info!(
+            %id, %replacement_id,
+            "finishing materialized view replacement application",
+        );
 
-impl mz_transform::StatisticsOracle for CachedStatisticsOracle {
-    fn cardinality_estimate(&self, id: GlobalId) -> Option<usize> {
-        self.cache.get(&id).map(|estimate| *estimate)
+        let ops = vec![catalog::Op::AlterMaterializedViewApplyReplacement { id, replacement_id }];
+        match self
+            .catalog_transact(Some(ctx.ctx().session_mut()), ops)
+            .await
+        {
+            Ok(()) => ctx.retire(Ok(ExecuteResponse::AlteredObject(
+                ObjectType::MaterializedView,
+            ))),
+            Err(err) => ctx.retire(Err(err)),
+        }
     }
 
-    fn as_map(&self) -> BTreeMap<GlobalId, usize> {
-        self.cache.clone()
-    }
-}
-
-impl Coordinator {
     pub(super) async fn statistics_oracle(
         &self,
         session: &Session,
@@ -4600,128 +4793,74 @@ impl Coordinator {
         query_as_of: &Antichain<Timestamp>,
         is_oneshot: bool,
     ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
-        if !session.vars().enable_session_cardinality_estimates() {
-            return Ok(Box::new(EmptyStatisticsOracle));
-        }
-
-        let timeout = if is_oneshot {
-            // TODO(mgree): ideally, we would shorten the timeout even more if we think the query could take the fast path
-            self.catalog()
-                .system_config()
-                .optimizer_oneshot_stats_timeout()
-        } else {
-            self.catalog().system_config().optimizer_stats_timeout()
-        };
-
-        let cached_stats = mz_ore::future::timeout(
-            timeout,
-            CachedStatisticsOracle::new(source_ids, query_as_of, self.controller.storage.as_ref()),
+        super::statistics_oracle(
+            session,
+            source_ids,
+            query_as_of,
+            is_oneshot,
+            self.catalog().system_config(),
+            self.controller.storage_collections.as_ref(),
         )
-        .await;
-
-        match cached_stats {
-            Ok(stats) => Ok(Box::new(stats)),
-            Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
-                warn!(
-                    is_oneshot = is_oneshot,
-                    "optimizer statistics collection timed out after {}ms",
-                    timeout.as_millis()
-                );
-
-                Ok(Box::new(EmptyStatisticsOracle))
-            }
-            Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
-        }
+        .await
     }
-}
-
-/// Checks whether we should emit diagnostic
-/// information associated with reading per-replica sources.
-///
-/// If an unrecoverable error is found (today: an untargeted read on a
-/// cluster with a non-1 number of replicas), return that.  Otherwise,
-/// return a list of associated notices (today: we always emit exactly
-/// one notice if there are any per-replica log dependencies and if
-/// `emit_introspection_query_notice` is set, and none otherwise.)
-pub(super) fn check_log_reads(
-    catalog: &Catalog,
-    cluster: &Cluster,
-    source_ids: &BTreeSet<GlobalId>,
-    target_replica: &mut Option<ReplicaId>,
-    vars: &SessionVars,
-) -> Result<impl IntoIterator<Item = AdapterNotice>, AdapterError>
-where
-{
-    let log_names = source_ids
-        .iter()
-        .flat_map(|id| catalog.introspection_dependencies(*id))
-        .map(|id| catalog.get_entry(&id).name().item.clone())
-        .collect::<Vec<_>>();
-
-    if log_names.is_empty() {
-        return Ok(None);
-    }
-
-    // Reading from log sources on replicated clusters is only allowed if a
-    // target replica is selected. Otherwise, we have no way of knowing which
-    // replica we read the introspection data from.
-    let num_replicas = cluster.replicas().count();
-    if target_replica.is_none() {
-        if num_replicas == 1 {
-            *target_replica = cluster.replicas().map(|r| r.replica_id).next();
-        } else {
-            return Err(AdapterError::UntargetedLogRead { log_names });
-        }
-    }
-
-    // Ensure that logging is initialized for the target replica, lest
-    // we try to read from a non-existing arrangement.
-    let replica_id = target_replica.expect("set to `Some` above");
-    let replica = &cluster.replica(replica_id).expect("Replica must exist");
-    if !replica.config.compute.logging.enabled() {
-        return Err(AdapterError::IntrospectionDisabled { log_names });
-    }
-
-    Ok(vars
-        .emit_introspection_query_notice()
-        .then_some(AdapterNotice::PerReplicaLogRead { log_names }))
 }
 
 impl Coordinator {
-    /// Forward notices that we got from the optimizer.
-    pub(super) fn emit_optimizer_notices(
-        &mut self,
-        session: &Session,
-        notices: &Vec<RawOptimizerNotice>,
+    /// Emit the raw optimizer notices in `notices` to the user's session, if
+    /// any.
+    ///
+    /// This intentionally consumes `RawOptimizerNotice`s (not pre-rendered
+    /// ones) because the user-facing rendering goes through the user's
+    /// session-aware humanizer, which produces e.g. schema-qualified names
+    /// relative to the user's current database/schema.
+    pub(crate) fn emit_raw_optimizer_notices_to_user(
+        &self,
+        ctx: &ExecuteContext,
+        notices: &[RawOptimizerNotice],
     ) {
-        let humanizer = self.catalog.for_session(session);
-        let system_vars = self.catalog.system_config();
-        for notice in notices {
-            let kind = OptimizerNoticeKind::from(notice);
-            let notice_enabled = match kind {
-                OptimizerNoticeKind::IndexAlreadyExists => {
-                    system_vars.enable_notices_for_index_already_exists()
-                }
-                OptimizerNoticeKind::IndexTooWideForLiteralConstraints => {
-                    system_vars.enable_notices_for_index_too_wide_for_literal_constraints()
-                }
-                OptimizerNoticeKind::IndexKeyEmpty => {
-                    system_vars.enable_notices_for_index_empty_key()
-                }
-            };
-            if notice_enabled {
-                // We don't need to redact the notice parts because
-                // `emit_optimizer_notices` is onlyy called by the `sequence_~`
-                // method for the DDL that produces that notice.
-                session.add_notice(AdapterNotice::OptimizerNotice {
-                    notice: notice.message(&humanizer, false).to_string(),
-                    hint: notice.hint(&humanizer, false).to_string(),
-                });
-            }
-            self.metrics
-                .optimization_notices
-                .with_label_values(&[kind.metric_label()])
-                .inc_by(1);
+        emit_optimizer_notices(&*self.catalog, ctx.session(), notices);
+    }
+
+    /// Persist already-rendered optimizer notices for a newly created
+    /// non-transient dataflow.
+    ///
+    /// This:
+    /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
+    /// - stores the rendered metainfo on the catalog object via
+    ///   `set_dataflow_metainfo`,
+    /// - and returns a future that resolves once the builtin-table append
+    ///   has been observed, or `None` if nothing was appended.
+    async fn persist_dataflow_metainfo(
+        &mut self,
+        df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
+        export_id: GlobalId,
+    ) -> Option<BuiltinTableAppendNotify> {
+        // Attend to optimization notice builtin tables and save the metainfo in the catalog's
+        // in-memory state.
+        if self.catalog().state().system_config().enable_mz_notices()
+            && !df_meta.optimizer_notices.is_empty()
+        {
+            let mut builtin_table_updates = Vec::with_capacity(df_meta.optimizer_notices.len());
+            self.catalog().state().pack_optimizer_notices(
+                &mut builtin_table_updates,
+                df_meta.optimizer_notices.iter(),
+                Diff::ONE,
+            );
+
+            // Save the metainfo.
+            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
+
+            Some(
+                self.builtin_table_update()
+                    .execute(builtin_table_updates)
+                    .await
+                    .0,
+            )
+        } else {
+            // Save the metainfo.
+            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
+
+            None
         }
     }
 }

@@ -8,20 +8,25 @@
 # by the Apache License, Version 2.0.
 
 from materialize.output_consistency.input_data.params.any_operation_param import (
-    AnyLikeOtherOperationParam,
     AnyOperationParam,
 )
 from materialize.output_consistency.input_data.params.collection_operation_param import (
     ElementOfOtherCollectionOperationParam,
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
+    COLLECTION_INDEX_OPTIONAL_PARAM,
     COLLECTION_INDEX_PARAM,
-    COLLECTION_INDEX_PARAM_OPT,
 )
 from materialize.output_consistency.input_data.params.list_operation_param import (
     ListLikeOtherListOperationParam,
     ListOfOtherElementOperationParam,
     ListOperationParam,
+)
+from materialize.output_consistency.input_data.params.row_indices_param import (
+    RowIndicesParam,
+)
+from materialize.output_consistency.input_data.params.same_operation_param import (
+    SameOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
@@ -37,6 +42,7 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
+    DbFunctionWithCustomPattern,
     DbOperation,
     DbOperationOrFunction,
 )
@@ -93,13 +99,15 @@ LIST_OPERATION_TYPES.append(
 )
 
 LIST_OPERATION_TYPES.append(
-    DbFunction(
+    DbFunctionWithCustomPattern(
         "list_agg",
+        {
+            3: "list_agg($ ORDER BY $, $)",
+        },
         [
-            AnyOperationParam(include_record_type=False),
-            AnyLikeOtherOperationParam(index_of_previous_param=0, optional=True),
-            AnyLikeOtherOperationParam(index_of_previous_param=0, optional=True),
-            AnyLikeOtherOperationParam(index_of_previous_param=0, optional=True),
+            AnyOperationParam(include_record_type=True),
+            RowIndicesParam(index_of_param_to_share_data_source=0),
+            SameOperationParam(index_of_previous_param=0),
         ],
         ListReturnTypeSpec(),
     )
@@ -125,7 +133,11 @@ LIST_OPERATION_TYPES.append(
 LIST_OPERATION_TYPES.append(
     DbOperation(
         "$[$:$]",
-        [ListOperationParam(), COLLECTION_INDEX_PARAM_OPT, COLLECTION_INDEX_PARAM_OPT],
+        [
+            ListOperationParam(),
+            COLLECTION_INDEX_OPTIONAL_PARAM,
+            COLLECTION_INDEX_OPTIONAL_PARAM,
+        ],
         ListReturnTypeSpec(),
         comment="slice list",
     )

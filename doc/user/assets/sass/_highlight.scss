@@ -145,6 +145,12 @@
     color: var(--important);
 }
 
+/* highlighted code line */
+
+.hl .cl * {
+    color: var(--code-highlight);
+}
+
 /* NameNamespace */
 .chroma .nn {
     color: var(--important);

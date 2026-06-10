@@ -1,0 +1,56 @@
+{{- $gtid_mode_note := .Get "gtid_mode_note" | default "" -}}
+{{- $binlog_format_note := .Get "binlog_format_note" | default "[Deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging." -}}
+{{- $omit_row := .Get "omit_row" | default "" -}}
+{{- $additional_data := .Get "additional_data" | default "" -}}
+
+{{ $pathArray := split ("mysql_config_settings") "/" }}
+{{ $data := $.Site.Data }}
+
+{{ range $pathArray }}
+  {{ $data = index $data . }}
+{{ end }}
+
+{{/* Start with the existing rows */}}
+{{ $rows := $data.rows }}
+
+{{/* Parse and append additional_data if provided */}}
+{{ if $additional_data }}
+  {{/* Split the pipe-delimited string */}}
+  {{ $parts := split $additional_data "|" }}
+  {{/* Create a new row dict with the column names from the data file */}}
+  {{ $newRow := dict }}
+  {{ if ge (len $parts) 1 }}
+    {{ $newRow = merge $newRow (dict "MySQL Configuration" (trim (index $parts 0) " ")) }}
+  {{ end }}
+  {{ if ge (len $parts) 2 }}
+    {{ $newRow = merge $newRow (dict "Value" (trim (index $parts 1) " ")) }}
+  {{ end }}
+  {{ if ge (len $parts) 3 }}
+    {{ $newRow = merge $newRow (dict "Notes" (trim (index $parts 2) " ")) }}
+  {{ end }}
+  {{/* Append the new row to the rows slice */}}
+  {{ $rows = $rows | append $newRow }}
+{{ end }}
+
+{{/* Parse omit_row parameter (format: "ColumnName:value") */}}
+{{ $omitColumn := "" }}
+{{ $omitValue := "" }}
+{{ if $omit_row }}
+  {{ $parts := split $omit_row ":" }}
+  {{ if ge (len $parts) 2 }}
+    {{ $omitColumn = index $parts 0 }}
+    {{ $omitValue = index $parts 1 }}
+  {{ end }}
+{{ end }}
+
+{{/* Create a dict of variables to pass to the table */}}
+{{ $variables := dict "gtid_mode_note" $gtid_mode_note "binlog_format_note" $binlog_format_note }}
+
+{{/* Pass data, columns, and variables to the partial */}}
+{{ partial "yaml-tables/generic-table-w-variables.html" (dict
+  "rows" $rows
+  "columns" $data.columns
+  "variables" $variables
+  "omit_column" $omitColumn
+  "omit_value" $omitValue
+) }}

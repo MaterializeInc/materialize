@@ -37,14 +37,14 @@ $ protobuf-compile-descriptors inputs=recursive.proto output=recursive.pb set-va
 
 $ kafka-create-topic topic=recursive partitions=1
 
-! CREATE SOURCE recursive
+> CREATE SOURCE recursive
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-recursive-${testdrive.seed}')
+
+! CREATE TABLE recursive_tbl FROM SOURCE recursive (REFERENCE "testdrive-recursive-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.Self' USING SCHEMA '${recursive-schema}'
 contains:Recursive types are not supported: Self
 
-! CREATE SOURCE recursive
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-recursive-${testdrive.seed}')
+! CREATE TABLE recursive_tbl FROM SOURCE recursive (REFERENCE "testdrive-recursive-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.Mutual1' USING SCHEMA '${recursive-schema}'
 contains:Recursive types are not supported: Mutual1

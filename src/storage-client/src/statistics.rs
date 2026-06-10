@@ -16,48 +16,52 @@
 //!
 //! The proto conversions for this types are in the `client` module, for now.
 
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
+use mz_controller_types::ReplicaId;
 use serde::{Deserialize, Serialize};
 
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
-use once_cell::sync::Lazy;
+use mz_repr::{GlobalId, RelationDesc, Row, SqlScalarType};
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage_client.statistics.rs"));
-
-pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    RelationDesc::empty()
+pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
         // Id of the source (or subsource).
-        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("id", SqlScalarType::String.nullable(false))
+        // Id of the replica producing these statistics.
+        .with_column("replica_id", SqlScalarType::String.nullable(true))
         //
         // Counters
         //
         // A counter of the messages we have read from upstream for this source.
         // Never resets.
-        .with_column("messages_received", ScalarType::UInt64.nullable(false))
+        .with_column("messages_received", SqlScalarType::UInt64.nullable(false))
         // A counter of the bytes we have read from upstream for this source.
         // Never resets.
-        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_received", SqlScalarType::UInt64.nullable(false))
         // A counter of the updates we have staged to commit for this source.
         // Never resets.
-        .with_column("updates_staged", ScalarType::UInt64.nullable(false))
+        .with_column("updates_staged", SqlScalarType::UInt64.nullable(false))
         // A counter of the updates we have committed for this source.
         // Never resets.
-        .with_column("updates_committed", ScalarType::UInt64.nullable(false))
+        .with_column("updates_committed", SqlScalarType::UInt64.nullable(false))
         //
         // Resetting gauges
         //
         // A gauge of the number of records in the envelope state. 0 for sources
         // Resetted when the source is restarted, for any reason.
-        .with_column("records_indexed", ScalarType::UInt64.nullable(false))
+        .with_column("records_indexed", SqlScalarType::UInt64.nullable(false))
         // A gauge of the number of bytes in the envelope state. 0 for sources
         // Resetted when the source is restarted, for any reason.
-        .with_column("bytes_indexed", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_indexed", SqlScalarType::UInt64.nullable(false))
         // A gauge that shows the duration of rehydration. `NULL` before rehydration
         // is done.
         // Resetted when the source is restarted, for any reason.
-        .with_column("rehydration_latency", ScalarType::Interval.nullable(true))
+        .with_column(
+            "rehydration_latency",
+            SqlScalarType::Interval.nullable(true),
+        )
         // A gauge of the number of _values_ (source defined unit) the _snapshot_ of this source
         // contains.
         // Sometimes resetted when the source can snapshot new pieces of upstream (like Postgres and
@@ -65,19 +69,25 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         // (like pg and mysql) may repopulate this column when tables are added.
         //
         // `NULL` while we discover the snapshot size.
-        .with_column("snapshot_records_known", ScalarType::UInt64.nullable(true))
+        .with_column(
+            "snapshot_records_known",
+            SqlScalarType::UInt64.nullable(true),
+        )
         // A gauge of the number of _values_ (source defined unit) we have read of the _snapshot_
         // of this source.
         // Sometimes resetted when the source can snapshot new pieces of upstream (like Postgres and
         // MySql).
         //
         // `NULL` while we discover the snapshot size.
-        .with_column("snapshot_records_staged", ScalarType::UInt64.nullable(true))
+        .with_column(
+            "snapshot_records_staged",
+            SqlScalarType::UInt64.nullable(true),
+        )
         //
         // Non-resetting gauges
         //
         // Whether or not the snapshot for the source has been committed. Never resets.
-        .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
+        .with_column("snapshot_committed", SqlScalarType::Bool.nullable(false))
         // The following are not yet reported by sources and have 0 or `NULL` values.
         // They have been added here to reduce churn changing the schema of this collection.
         //
@@ -86,31 +96,35 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         //
         // A gauge of the number of _values_ (source defined unit) available to be read from upstream.
         // Never resets. Not to be confused with any of the counters above.
-        .with_column("offset_known", ScalarType::UInt64.nullable(true))
+        .with_column("offset_known", SqlScalarType::UInt64.nullable(true))
         // A gauge of the number of _values_ (source defined unit) we have committed.
         // Never resets. Not to be confused with any of the counters above.
-        .with_column("offset_committed", ScalarType::UInt64.nullable(true))
+        .with_column("offset_committed", SqlScalarType::UInt64.nullable(true))
+        .finish()
 });
 
-pub static MZ_SINK_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    RelationDesc::empty()
+pub static MZ_SINK_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
         // Id of the sink.
-        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("id", SqlScalarType::String.nullable(false))
+        // Id of the replica producing these statistics.
+        .with_column("replica_id", SqlScalarType::String.nullable(true))
         //
         // Counters
         //
         // A counter of the messages we have staged to upstream.
         // Never resets.
-        .with_column("messages_staged", ScalarType::UInt64.nullable(false))
+        .with_column("messages_staged", SqlScalarType::UInt64.nullable(false))
         // A counter of the messages we have committed.
         // Never resets.
-        .with_column("messages_committed", ScalarType::UInt64.nullable(false))
+        .with_column("messages_committed", SqlScalarType::UInt64.nullable(false))
         // A counter of the bytes we have staged to upstream.
         // Never resets.
-        .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_staged", SqlScalarType::UInt64.nullable(false))
         // A counter of the bytes we have committed.
         // Never resets.
-        .with_column("bytes_committed", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_committed", SqlScalarType::UInt64.nullable(false))
+        .finish()
 });
 
 // Types of statistics (counter and various types of gauges), that have different semantics
@@ -190,6 +204,12 @@ impl StorageMetric for ResettingLatency {
     }
 }
 
+impl ResettingLatency {
+    fn reset(&mut self) {
+        self.0 = None;
+    }
+}
+
 /// A numerical gauge that is always resets, but can start out as `NULL`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct ResettingNullableTotal(Option<u64>);
@@ -232,6 +252,13 @@ impl From<Option<u64>> for ResettingNullableTotal {
         ResettingNullableTotal(f)
     }
 }
+
+impl ResettingNullableTotal {
+    fn reset(&mut self) {
+        self.0 = None;
+    }
+}
+
 /// A numerical gauge that is always resets.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct ResettingTotal(u64);
@@ -255,6 +282,12 @@ impl StorageMetric for ResettingTotal {
 impl From<u64> for ResettingTotal {
     fn from(f: u64) -> Self {
         ResettingTotal(f)
+    }
+}
+
+impl ResettingTotal {
+    fn reset(&mut self) {
+        self.0 = 0;
     }
 }
 
@@ -301,9 +334,8 @@ pub struct Total {
     /// If provided, it is bumped on regressions, as opposed to `error!`
     /// logs.
     #[serde(skip)]
-    regressions: Option<
-        mz_ore::metrics::DeleteOnDropCounter<'static, prometheus::core::AtomicU64, Vec<String>>,
-    >,
+    regressions:
+        Option<mz_ore::metrics::DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>>>,
 }
 
 impl From<Option<u64>> for Total {
@@ -414,13 +446,44 @@ impl<T: StorageMetric> StorageMetric for Gauge<T> {
     }
 }
 
-/// A trait that abstracts over user-facing statistics objects, used
-/// by `spawn_statistics_scraper`.
+/// A trait that abstracts over user-facing statistics objects that can be
+/// packed into a `Row` and unpacked again. That is they round-trip.
 pub trait PackableStats {
     /// Pack `self` into the `Row`.
     fn pack(&self, packer: mz_repr::RowPacker<'_>);
     /// Unpack a `Row` back into a `Self`.
-    fn unpack(row: Row, metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self);
+    fn unpack(
+        row: Row,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self);
+}
+
+/// Stats that can get out-of-date and should then get reaped.
+pub trait ExpirableStats {
+    /// The last time this bag of stats was updated (via an update coming in
+    /// from a replica, presumably).
+    fn last_updated(&self) -> Instant;
+}
+
+/// Stats that should be initialized with a row of zeroes, that is we want the
+/// first data to show up in the builtin stats collection to be zeroes.
+///
+/// We do the tracking within the stat object itself instead of adding external
+/// tracking. That's a bit of a roundabout way of doing it, but it works.
+///
+/// This is an odd requirement, and you would think we should just report what
+/// is there when we get it, but this was consciously changed a while back and
+/// the current Console incarnation depends on this behavior.
+pub trait ZeroInitializedStats {
+    /// `True` if we have have not emitted a "zero update" for this stats blob.
+    fn needs_zero_initialization(&self) -> bool;
+
+    /// Marks that we have emitted a "zero update" for this stats blob.
+    fn mark_zero_initialized(&mut self);
+
+    /// Returns a "all zero" instance of this stat, with collection id and/or
+    /// replica id retained.
+    fn zero_stat(&self) -> Self;
 }
 
 /// An update as reported from a storage instance. The semantics
@@ -526,6 +589,15 @@ impl SourceStatisticsUpdate {
         self.updates_committed.0 = 0;
     }
 
+    /// Reset all _resetable_ gauges to their default values.
+    pub fn reset_gauges(&mut self) {
+        self.records_indexed.0.reset();
+        self.bytes_indexed.0.reset();
+        self.rehydration_latency_ms.0.reset();
+        self.snapshot_records_known.0.reset();
+        self.snapshot_records_staged.0.reset();
+    }
+
     pub fn incorporate(&mut self, other: SourceStatisticsUpdate) {
         let SourceStatisticsUpdate {
             messages_received,
@@ -558,6 +630,22 @@ impl SourceStatisticsUpdate {
         offset_committed.incorporate(other.offset_committed, "offset_committed");
     }
 
+    /// Incorporate only the counters of the given update, ignoring gauge values.
+    pub fn incorporate_counters(&mut self, other: SourceStatisticsUpdate) {
+        let SourceStatisticsUpdate {
+            messages_received,
+            bytes_received,
+            updates_staged,
+            updates_committed,
+            ..
+        } = self;
+
+        messages_received.incorporate(other.messages_received, "messages_received");
+        bytes_received.incorporate(other.bytes_received, "bytes_received");
+        updates_staged.incorporate(other.updates_staged, "updates_staged");
+        updates_committed.incorporate(other.updates_committed, "updates_committed");
+    }
+
     /// Enrich statistics that use prometheus metrics.
     pub fn with_metrics(mut self, metrics: &crate::metrics::StorageControllerMetrics) -> Self {
         self.offset_known.0.regressions = Some(metrics.regressed_offset_known(self.id));
@@ -576,23 +664,26 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.updates_staged.0));
         packer.push(Datum::from(self.updates_committed.0));
         // Resetting gauges.
-        packer.push(Datum::from(self.records_indexed.0 .0));
-        packer.push(Datum::from(self.bytes_indexed.0 .0));
+        packer.push(Datum::from(self.records_indexed.0.0));
+        packer.push(Datum::from(self.bytes_indexed.0.0));
         let rehydration_latency = self
             .rehydration_latency_ms
             .0
-             .0
+            .0
             .map(|ms| mz_repr::adt::interval::Interval::new(0, 0, ms * 1000));
         packer.push(Datum::from(rehydration_latency));
-        packer.push(Datum::from(self.snapshot_records_known.0 .0));
-        packer.push(Datum::from(self.snapshot_records_staged.0 .0));
+        packer.push(Datum::from(self.snapshot_records_known.0.0));
+        packer.push(Datum::from(self.snapshot_records_staged.0.0));
         // Gauges
-        packer.push(Datum::from(self.snapshot_committed.0 .0));
+        packer.push(Datum::from(self.snapshot_committed.0.0));
         packer.push(Datum::from(self.offset_known.0.pack()));
         packer.push(Datum::from(self.offset_committed.0.pack()));
     }
 
-    fn unpack(row: Row, metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
+    fn unpack(
+        row: Row,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
         let mut iter = row.iter();
         let mut s = Self {
             id: iter.next().unwrap().unwrap_str().parse().unwrap(),
@@ -622,53 +713,331 @@ impl PackableStats for SourceStatisticsUpdate {
         };
 
         s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
-        (s.id, s)
+        (s.id, None, s)
     }
 }
 
-impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
-    fn into_proto(&self) -> ProtoSourceStatisticsUpdate {
-        ProtoSourceStatisticsUpdate {
-            id: Some(self.id.into_proto()),
+/// Statistics that we keep in the controller about a given collection
+/// (identified by id) on a given replica (identified by replica_id).
+///
+/// This mirrors [SourceStatisticsUpdate] and we update ourselve by
+/// incorporating them using [ControllerSourceStatistics::incorporate]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControllerSourceStatistics {
+    pub id: GlobalId,
 
-            messages_received: self.messages_received.0,
-            bytes_received: self.bytes_received.0,
-            updates_staged: self.updates_staged.0,
-            updates_committed: self.updates_committed.0,
+    // This is an Option because of Webhook "sources", which don't really run on
+    // a cluster, but we decided a while ago that they are "sources", so here we
+    // are and these show up in the source statistics collection.
+    pub replica_id: Option<ReplicaId>,
 
-            records_indexed: self.records_indexed.0 .0,
-            bytes_indexed: self.bytes_indexed.0 .0,
-            rehydration_latency_ms: self.rehydration_latency_ms.0 .0,
-            snapshot_records_known: self.snapshot_records_known.0 .0,
-            snapshot_records_staged: self.snapshot_records_staged.0 .0,
+    pub messages_received: Counter,
+    pub bytes_received: Counter,
+    pub updates_staged: Counter,
+    pub updates_committed: Counter,
 
-            snapshot_committed: self.snapshot_committed.0 .0,
-            offset_known: self.offset_known.0.total,
-            offset_committed: self.offset_committed.0.total,
+    pub records_indexed: Gauge<ResettingTotal>,
+    pub bytes_indexed: Gauge<ResettingTotal>,
+    pub rehydration_latency_ms: Gauge<ResettingLatency>,
+    pub snapshot_records_known: Gauge<ResettingNullableTotal>,
+    pub snapshot_records_staged: Gauge<ResettingNullableTotal>,
+
+    pub snapshot_committed: Gauge<Boolean>,
+    pub offset_known: Gauge<Total>,
+    pub offset_committed: Gauge<Total>,
+
+    // We don't try to be cute with updating and removing stats when dropping
+    // replicas, which might run into problems with race conditions or when
+    // crashes occur.
+    //
+    // Instead, we mark when a statistic was last updated and periodically prune
+    // old statistics. It's fine if this is not 100% accurate or when the
+    // "counter" resets when the controller restarts. Eventually things will get
+    // dropped.
+    pub last_updated: Instant,
+
+    // For implementing `ZeroInitializedStats`.
+    needs_zero_initialization: bool,
+}
+
+impl ControllerSourceStatistics {
+    pub fn new(id: GlobalId, replica_id: Option<ReplicaId>) -> Self {
+        Self {
+            id,
+            replica_id,
+            messages_received: Default::default(),
+            bytes_received: Default::default(),
+            updates_staged: Default::default(),
+            updates_committed: Default::default(),
+            records_indexed: Default::default(),
+            bytes_indexed: Default::default(),
+            rehydration_latency_ms: Default::default(),
+            snapshot_records_known: Default::default(),
+            snapshot_records_staged: Default::default(),
+            snapshot_committed: Default::default(),
+            offset_known: Default::default(),
+            offset_committed: Default::default(),
+            last_updated: Instant::now(),
+            needs_zero_initialization: true,
         }
     }
 
-    fn from_proto(proto: ProtoSourceStatisticsUpdate) -> Result<Self, TryFromProtoError> {
-        Ok(SourceStatisticsUpdate {
-            id: proto
-                .id
-                .into_rust_if_some("ProtoSourceStatisticsUpdate::id")?,
+    /// Incorporate updates from the given [SourceStatisticsUpdate] into
+    /// ourselves
+    pub fn incorporate(&mut self, update: SourceStatisticsUpdate) {
+        let ControllerSourceStatistics {
+            id: _,
+            replica_id: _,
+            messages_received,
+            bytes_received,
+            updates_staged,
+            updates_committed,
+            records_indexed,
+            bytes_indexed,
+            rehydration_latency_ms,
+            snapshot_records_known,
+            snapshot_records_staged,
+            snapshot_committed,
+            offset_known,
+            offset_committed,
+            last_updated,
+            needs_zero_initialization: _,
+        } = self;
 
-            messages_received: Counter(proto.messages_received),
-            bytes_received: Counter(proto.bytes_received),
-            updates_staged: Counter(proto.updates_staged),
-            updates_committed: Counter(proto.updates_committed),
+        messages_received.incorporate(update.messages_received, "messages_received");
+        bytes_received.incorporate(update.bytes_received, "bytes_received");
+        updates_staged.incorporate(update.updates_staged, "updates_staged");
+        updates_committed.incorporate(update.updates_committed, "updates_committed");
+        records_indexed.incorporate(update.records_indexed, "records_indexed");
+        bytes_indexed.incorporate(update.bytes_indexed, "bytes_indexed");
+        rehydration_latency_ms.incorporate(update.rehydration_latency_ms, "rehydration_latency_ms");
+        snapshot_records_known.incorporate(update.snapshot_records_known, "snapshot_records_known");
+        snapshot_records_staged
+            .incorporate(update.snapshot_records_staged, "snapshot_records_staged");
+        snapshot_committed.incorporate(update.snapshot_committed, "snapshot_committed");
+        offset_known.incorporate(update.offset_known, "offset_known");
+        offset_committed.incorporate(update.offset_committed, "offset_committed");
 
-            records_indexed: Gauge::gauge(proto.records_indexed),
-            bytes_indexed: Gauge::gauge(proto.bytes_indexed),
-            rehydration_latency_ms: Gauge::gauge(proto.rehydration_latency_ms),
-            snapshot_records_known: Gauge::gauge(proto.snapshot_records_known),
-            snapshot_records_staged: Gauge::gauge(proto.snapshot_records_staged),
+        *last_updated = Instant::now();
+    }
+}
 
-            snapshot_committed: Gauge::gauge(proto.snapshot_committed),
-            offset_known: Gauge::gauge(proto.offset_known),
-            offset_committed: Gauge::gauge(proto.offset_committed),
-        })
+impl PackableStats for ControllerSourceStatistics {
+    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
+        use mz_repr::Datum;
+        // id
+        packer.push(Datum::from(self.id.to_string().as_str()));
+        // replica_id
+        if let Some(replica_id) = self.replica_id {
+            packer.push(Datum::from(replica_id.to_string().as_str()));
+        } else {
+            packer.push(Datum::Null);
+        }
+        // Counters.
+        packer.push(Datum::from(self.messages_received.0));
+        packer.push(Datum::from(self.bytes_received.0));
+        packer.push(Datum::from(self.updates_staged.0));
+        packer.push(Datum::from(self.updates_committed.0));
+        // Resetting gauges.
+        packer.push(Datum::from(self.records_indexed.0.0));
+        packer.push(Datum::from(self.bytes_indexed.0.0));
+        let rehydration_latency = self
+            .rehydration_latency_ms
+            .0
+            .0
+            .map(|ms| mz_repr::adt::interval::Interval::new(0, 0, ms * 1000));
+        packer.push(Datum::from(rehydration_latency));
+        packer.push(Datum::from(self.snapshot_records_known.0.0));
+        packer.push(Datum::from(self.snapshot_records_staged.0.0));
+        // Gauges
+        packer.push(Datum::from(self.snapshot_committed.0.0));
+        packer.push(Datum::from(self.offset_known.0.pack()));
+        packer.push(Datum::from(self.offset_committed.0.pack()));
+    }
+
+    fn unpack(
+        row: Row,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
+        let mut iter = row.iter();
+        let id = iter.next().unwrap().unwrap_str().parse().unwrap();
+        let replica_id_or_null = iter.next().unwrap();
+
+        let replica_id = if replica_id_or_null.is_null() {
+            None
+        } else {
+            Some(
+                replica_id_or_null
+                    .unwrap_str()
+                    .parse::<ReplicaId>()
+                    .unwrap(),
+            )
+        };
+
+        let mut s = Self {
+            id,
+            replica_id,
+
+            messages_received: iter.next().unwrap().unwrap_uint64().into(),
+            bytes_received: iter.next().unwrap().unwrap_uint64().into(),
+            updates_staged: iter.next().unwrap().unwrap_uint64().into(),
+            updates_committed: iter.next().unwrap().unwrap_uint64().into(),
+
+            records_indexed: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
+            bytes_indexed: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
+            rehydration_latency_ms: Gauge::gauge(
+                <Option<mz_repr::adt::interval::Interval>>::try_from(iter.next().unwrap())
+                    .unwrap()
+                    .map(|int| int.micros / 1000),
+            ),
+            snapshot_records_known: Gauge::gauge(
+                <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),
+            ),
+            snapshot_records_staged: Gauge::gauge(
+                <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),
+            ),
+
+            snapshot_committed: Gauge::gauge(iter.next().unwrap().unwrap_bool()),
+            offset_known: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            offset_committed: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            last_updated: Instant::now(),
+            // This is coming from a Row, so we have definitely already written
+            // out a "zero update" at some point.
+            needs_zero_initialization: false,
+        };
+
+        s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
+        (s.id, replica_id, s)
+    }
+}
+
+impl ExpirableStats for ControllerSourceStatistics {
+    fn last_updated(&self) -> Instant {
+        self.last_updated
+    }
+}
+
+impl ZeroInitializedStats for ControllerSourceStatistics {
+    fn needs_zero_initialization(&self) -> bool {
+        self.needs_zero_initialization
+    }
+
+    fn mark_zero_initialized(&mut self) {
+        self.needs_zero_initialization = false;
+    }
+
+    fn zero_stat(&self) -> Self {
+        ControllerSourceStatistics::new(self.id, self.replica_id)
+    }
+}
+
+/// Statistics that we keep in the controller about a given collection
+/// (identified by id) on a given replica (identified by replica_id).
+///
+/// This mirrors [SinkStatisticsUpdate] and we update ourselve by incorporating
+/// them using [ControllerSinkStatistics::incorporate]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControllerSinkStatistics {
+    pub id: GlobalId,
+    pub replica_id: ReplicaId,
+
+    pub messages_staged: Counter,
+    pub messages_committed: Counter,
+    pub bytes_staged: Counter,
+    pub bytes_committed: Counter,
+
+    // See comment on ControllerSourceStatistics.last_updated.
+    pub last_updated: Instant,
+
+    // For implementing `ZeroInitializedStats`.
+    needs_zero_initialization: bool,
+}
+
+impl ControllerSinkStatistics {
+    pub fn new(id: GlobalId, replica_id: ReplicaId) -> Self {
+        Self {
+            id,
+            replica_id,
+            messages_staged: Default::default(),
+            messages_committed: Default::default(),
+            bytes_staged: Default::default(),
+            bytes_committed: Default::default(),
+            last_updated: Instant::now(),
+            needs_zero_initialization: true,
+        }
+    }
+
+    /// Incorporate updates from the given [SinkStatisticsUpdate] into ourselves
+    pub fn incorporate(&mut self, update: SinkStatisticsUpdate) {
+        let ControllerSinkStatistics {
+            id: _,
+            replica_id: _,
+            messages_staged,
+            messages_committed,
+            bytes_staged,
+            bytes_committed,
+            last_updated,
+            needs_zero_initialization: _,
+        } = self;
+
+        messages_staged.incorporate(update.messages_staged, "messages_staged");
+        bytes_staged.incorporate(update.bytes_staged, "bytes_staged");
+        messages_committed.incorporate(update.messages_committed, "messages_committed");
+        bytes_committed.incorporate(update.bytes_committed, "bytes_committed");
+
+        *last_updated = Instant::now();
+    }
+}
+
+impl PackableStats for ControllerSinkStatistics {
+    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
+        use mz_repr::Datum;
+        packer.push(Datum::from(self.id.to_string().as_str()));
+        packer.push(Datum::from(self.replica_id.to_string().as_str()));
+        packer.push(Datum::from(self.messages_staged.0));
+        packer.push(Datum::from(self.messages_committed.0));
+        packer.push(Datum::from(self.bytes_staged.0));
+        packer.push(Datum::from(self.bytes_committed.0));
+    }
+
+    fn unpack(
+        row: Row,
+        _metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
+        let mut iter = row.iter();
+        let s = Self {
+            id: iter.next().unwrap().unwrap_str().parse().unwrap(),
+            replica_id: iter.next().unwrap().unwrap_str().parse().unwrap(),
+            messages_staged: iter.next().unwrap().unwrap_uint64().into(),
+            messages_committed: iter.next().unwrap().unwrap_uint64().into(),
+            bytes_staged: iter.next().unwrap().unwrap_uint64().into(),
+            bytes_committed: iter.next().unwrap().unwrap_uint64().into(),
+            last_updated: Instant::now(),
+            // This is coming from a Row, so we have definitely already written
+            // out a "zero update" at some point.
+            needs_zero_initialization: false,
+        };
+        (s.id, Some(s.replica_id), s)
+    }
+}
+
+impl ExpirableStats for ControllerSinkStatistics {
+    fn last_updated(&self) -> Instant {
+        self.last_updated
+    }
+}
+
+impl ZeroInitializedStats for ControllerSinkStatistics {
+    fn needs_zero_initialization(&self) -> bool {
+        self.needs_zero_initialization
+    }
+
+    fn mark_zero_initialized(&mut self) {
+        self.needs_zero_initialization = false;
+    }
+
+    fn zero_stat(&self) -> Self {
+        ControllerSinkStatistics::new(self.id, self.replica_id)
     }
 }
 
@@ -711,6 +1080,22 @@ impl SinkStatisticsUpdate {
         bytes_committed.incorporate(other.bytes_committed, "bytes_committed");
     }
 
+    /// Incorporate only the counters of the given update, ignoring gauge values.
+    pub fn incorporate_counters(&mut self, other: SinkStatisticsUpdate) {
+        let SinkStatisticsUpdate {
+            messages_staged,
+            messages_committed,
+            bytes_staged,
+            bytes_committed,
+            ..
+        } = self;
+
+        messages_staged.incorporate(other.messages_staged, "messages_staged");
+        messages_committed.incorporate(other.messages_committed, "messages_committed");
+        bytes_staged.incorporate(other.bytes_staged, "bytes_staged");
+        bytes_committed.incorporate(other.bytes_committed, "bytes_committed");
+    }
+
     pub fn summarize<'a, I, F>(values: F) -> Self
     where
         I: IntoIterator<Item = &'a Self>,
@@ -735,6 +1120,9 @@ impl SinkStatisticsUpdate {
         self.bytes_staged.0 = 0;
         self.bytes_committed.0 = 0;
     }
+
+    /// Reset all _resetable_ gauges to their default values.
+    pub fn reset_gauges(&self) {}
 }
 
 impl PackableStats for SinkStatisticsUpdate {
@@ -747,7 +1135,10 @@ impl PackableStats for SinkStatisticsUpdate {
         packer.push(Datum::from(self.bytes_committed.0));
     }
 
-    fn unpack(row: Row, _metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
+    fn unpack(
+        row: Row,
+        _metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> (GlobalId, Option<ReplicaId>, Self) {
         let mut iter = row.iter();
         let s = Self {
             // Id
@@ -758,34 +1149,7 @@ impl PackableStats for SinkStatisticsUpdate {
             bytes_staged: iter.next().unwrap().unwrap_uint64().into(),
             bytes_committed: iter.next().unwrap().unwrap_uint64().into(),
         };
-
-        (s.id, s)
-    }
-}
-
-impl RustType<ProtoSinkStatisticsUpdate> for SinkStatisticsUpdate {
-    fn into_proto(&self) -> ProtoSinkStatisticsUpdate {
-        ProtoSinkStatisticsUpdate {
-            id: Some(self.id.into_proto()),
-
-            messages_staged: self.messages_staged.0,
-            messages_committed: self.messages_committed.0,
-            bytes_staged: self.bytes_staged.0,
-            bytes_committed: self.bytes_committed.0,
-        }
-    }
-
-    fn from_proto(proto: ProtoSinkStatisticsUpdate) -> Result<Self, TryFromProtoError> {
-        Ok(SinkStatisticsUpdate {
-            id: proto
-                .id
-                .into_rust_if_some("ProtoSinkStatisticsUpdate::id")?,
-
-            messages_staged: Counter(proto.messages_staged),
-            messages_committed: Counter(proto.messages_committed),
-            bytes_staged: Counter(proto.bytes_staged),
-            bytes_committed: Counter(proto.bytes_committed),
-        })
+        (s.id, None, s)
     }
 }
 

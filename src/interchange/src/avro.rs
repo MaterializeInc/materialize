@@ -15,10 +15,10 @@ mod schema;
 
 pub use crate::avro::decode::{Decoder, DiffPair};
 pub use crate::avro::encode::{
-    encode_datums_as_avro, encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
-    AvroEncoder, AvroSchemaGenerator, DocTarget,
+    AvroEncoder, AvroSchemaGenerator, DocTarget, encode_datums_as_avro,
+    encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
 };
-pub use crate::avro::schema::{parse_schema, schema_to_relationdesc, ConfluentAvroResolver};
+pub use crate::avro::schema::{AvroSchemaResolver, parse_schema, schema_to_relationdesc};
 
 fn is_null(schema: &SchemaPieceOrNamed) -> bool {
     matches!(schema, SchemaPieceOrNamed::Piece(SchemaPiece::Null))
@@ -31,7 +31,7 @@ mod tests {
     use mz_repr::adt::date::Date;
     use mz_repr::adt::numeric::{self, NumericMaxScale};
     use mz_repr::adt::timestamp::CheckedTimestamp;
-    use mz_repr::{Datum, RelationDesc, ScalarType};
+    use mz_repr::{Datum, RelationDesc, SqlScalarType};
     use ordered_float::OrderedFloat;
 
     use super::*;
@@ -44,7 +44,7 @@ mod tests {
             "fields": []
         }"#;
 
-        let desc = schema_to_relationdesc(parse_schema(schema)?)?;
+        let desc = schema_to_relationdesc(parse_schema(schema, &[])?)?;
         assert_eq!(desc.arity(), 0, "empty record produced rows");
 
         Ok(())
@@ -61,10 +61,11 @@ mod tests {
             ]
         }"#;
 
-        let desc = schema_to_relationdesc(parse_schema(schema)?)?;
-        let expected_desc = RelationDesc::empty()
-            .with_column("f1", ScalarType::Int32.nullable(false))
-            .with_column("f2", ScalarType::String.nullable(false));
+        let desc = schema_to_relationdesc(parse_schema(schema, &[])?)?;
+        let expected_desc = RelationDesc::builder()
+            .with_column("f1", SqlScalarType::Int32.nullable(false))
+            .with_column("f2", SqlScalarType::String.nullable(false))
+            .finish();
 
         assert_eq!(desc, expected_desc);
         Ok(())
@@ -77,7 +78,7 @@ mod tests {
     ///
     /// Complete list of primitive types in test, also found in this
     /// documentation:
-    /// https://avro.apache.org/docs/current/spec.html#schemas
+    /// https://avro.apache.org/docs/++version++/specification/#primitive-types
     fn test_diff_pair_to_avro_primitive_types() -> anyhow::Result<()> {
         use numeric::Numeric;
         // Data to be used later in assertions.
@@ -92,32 +93,32 @@ mod tests {
         // Simple transformations from primitive Avro Schema types
         // to Avro Values.
         let valid_pairings = vec![
-            (ScalarType::Bool, Datum::True, Value::Boolean(true)),
-            (ScalarType::Bool, Datum::False, Value::Boolean(false)),
-            (ScalarType::Int32, Datum::Int32(1), Value::Int(1)),
-            (ScalarType::Int64, Datum::Int64(1), Value::Long(1)),
+            (SqlScalarType::Bool, Datum::True, Value::Boolean(true)),
+            (SqlScalarType::Bool, Datum::False, Value::Boolean(false)),
+            (SqlScalarType::Int32, Datum::Int32(1), Value::Int(1)),
+            (SqlScalarType::Int64, Datum::Int64(1), Value::Long(1)),
             (
-                ScalarType::Float32,
+                SqlScalarType::Float32,
                 Datum::Float32(OrderedFloat::from(1f32)),
                 Value::Float(1f32),
             ),
             (
-                ScalarType::Float64,
+                SqlScalarType::Float64,
                 Datum::Float64(OrderedFloat::from(1f64)),
                 Value::Double(1f64),
             ),
             (
-                ScalarType::Date,
+                SqlScalarType::Date,
                 Datum::Date(Date::from_unix_epoch(date).unwrap()),
                 Value::Date(date),
             ),
             (
-                ScalarType::Timestamp { precision: None },
+                SqlScalarType::Timestamp { precision: None },
                 Datum::Timestamp(CheckedTimestamp::from_timestamplike(date_time).unwrap()),
                 Value::Timestamp(date_time),
             ),
             (
-                ScalarType::TimestampTz { precision: None },
+                SqlScalarType::TimestampTz { precision: None },
                 Datum::TimestampTz(
                     CheckedTimestamp::from_timestamplike(DateTime::from_naive_utc_and_offset(
                         date_time, Utc,
@@ -127,7 +128,7 @@ mod tests {
                 Value::Timestamp(date_time),
             ),
             (
-                ScalarType::Numeric {
+                SqlScalarType::Numeric {
                     max_scale: Some(NumericMaxScale::try_from(1_i64)?),
                 },
                 Datum::from(Numeric::from(1)),
@@ -138,7 +139,7 @@ mod tests {
                 }),
             ),
             (
-                ScalarType::Numeric { max_scale: None },
+                SqlScalarType::Numeric { max_scale: None },
                 Datum::from(Numeric::from(1)),
                 Value::Decimal(DecimalValue {
                     // equivalent to 1E39
@@ -151,18 +152,20 @@ mod tests {
                 }),
             ),
             (
-                ScalarType::Bytes,
+                SqlScalarType::Bytes,
                 Datum::Bytes(&bytes),
                 Value::Bytes(bytes.clone()),
             ),
             (
-                ScalarType::String,
+                SqlScalarType::String,
                 Datum::String(&string),
                 Value::String(string.clone()),
             ),
         ];
         for (typ, datum, expected) in valid_pairings {
-            let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
+            let desc = RelationDesc::builder()
+                .with_column("column1", typ.nullable(false))
+                .finish();
             let schema_generator =
                 AvroSchemaGenerator::new(desc, false, Default::default(), "row", false, None, true)
                     .unwrap();

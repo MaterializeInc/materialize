@@ -7,8 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
-$ set-arg-default default-replica-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
+$ set-arg-default default-replica-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -27,49 +29,57 @@ goofus,gallant
   );
 
 > CREATE CLUSTER src_cluster SIZE '${arg.default-storage-size}';
-> CREATE SOURCE src (a, b)
+> BEGIN
+> CREATE SOURCE src
   IN CLUSTER src_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
+
+> CREATE TABLE src_tbl (a, b) FROM SOURCE src (REFERENCE "testdrive-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE CLUSTER src_materialized_cluster SIZE '${arg.default-storage-size}';
-> CREATE SOURCE src_materialized (a, b)
+> BEGIN
+> CREATE SOURCE src_materialized
   IN CLUSTER src_materialized_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
+
+> CREATE TABLE src_materialized_tbl (a, b) FROM SOURCE src_materialized (REFERENCE "testdrive-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE VIEW v1 AS
-  SELECT a || b AS c FROM src
+  SELECT a || b AS c FROM src_tbl
 
 > CREATE VIEW v2 AS
-  SELECT a || b AS c FROM src_materialized
+  SELECT a || b AS c FROM src_materialized_tbl
 
 > CREATE MATERIALIZED VIEW v3 AS
-  SELECT a || b AS c FROM src
+  SELECT a || b AS c FROM src_tbl
 
 # We should refuse to create a sink with invalid WITH options
 
 ! CREATE SINK invalid_with_option
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM src
+  FROM src_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   WITH (badoption=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Expected one of PARTITION or SNAPSHOT or VERSION
+contains:Expected one of PARTITION or SNAPSHOT or VERSION or COMMIT
 
 ! CREATE SINK invalid_with_option
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM src
+  FROM src_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   WITH (VERSION=1)
 contains:CREATE SINK...WITH (VERSION..) is not allowed
 
 > SHOW SINKS
-name               type   size  cluster
----------------------------------------
+name               type   cluster   comment
+-------------------------------------------
 
 # # We should refuse to create a sink with an invalid schema registry URL.
 #
@@ -102,7 +112,7 @@ name               type   size  cluster
 #   FROM v1
 #   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-# contains:v1 is a view, which cannot be exported as a sink
+# contains:view v1 cannot be exported as a sink
 #
 # # ...Even if that view is based on a materialized source
 # ! CREATE SINK bad_view2
@@ -111,7 +121,7 @@ name               type   size  cluster
 #   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
 #   WITH (retention_ms=1000000)
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-# contains:v2 is a view, which cannot be exported as a sink
+# contains:view v2 cannot be exported as a sink
 #
 # > SHOW SINKS
 # name               type   size  cluster
@@ -123,7 +133,7 @@ name               type   size  cluster
 > CREATE CLUSTER snk1_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk1
   IN CLUSTER snk1_cluster
-  FROM src
+  FROM src_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -131,7 +141,7 @@ name               type   size  cluster
 > CREATE CLUSTER snk2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk2
   IN CLUSTER snk2_cluster
-  FROM src_materialized
+  FROM src_materialized_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -145,11 +155,11 @@ name               type   size  cluster
   ENVELOPE DEBEZIUM
 
 > SHOW SINKS
-name               type   size  cluster
----------------------------------------
-snk1             kafka  ${arg.default-storage-size}  snk1_cluster
-snk2             kafka  ${arg.default-storage-size}  snk2_cluster
-snk3             kafka  ${arg.default-storage-size}  snk3_cluster
+name               type   cluster       comment
+-----------------------------------------------
+snk1             kafka    snk1_cluster  ""
+snk2             kafka    snk2_cluster  ""
+snk3             kafka    snk3_cluster  ""
 
 $ kafka-verify-data format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
@@ -179,7 +189,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk_unsigned sort-messag
 # Test the case where we have non +/- 1 multiplicities
 
 > CREATE MATERIALIZED VIEW v4 AS
-  SELECT true AS c FROM src
+  SELECT true AS c FROM src_tbl
 
 > CREATE CLUSTER snk4_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk4
@@ -203,7 +213,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk4
 > CREATE CLUSTER snk5_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk5
   IN CLUSTER snk5_cluster
-  FROM src_materialized
+  FROM src_materialized_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk5-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -212,7 +222,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk4
 > CREATE CLUSTER snk6_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk6
   IN CLUSTER snk6_cluster
-  FROM src_materialized
+  FROM src_materialized_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk6-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -271,7 +281,7 @@ $ kafka-create-topic topic=snk9 partitions=4
 
 # create sink without specifying CLUSTER
 > CREATE SINK default_cluster_sink
-  FROM src
+  FROM src_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -279,28 +289,28 @@ $ kafka-create-topic topic=snk9 partitions=4
 > SET cluster TO default
 
 # linked clusters totally deprecated
-! CREATE SINK sink_with_size FROM src
+! CREATE SINK sink_with_size FROM src_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-  WITH (SIZE = '2')
-contains:Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
+  WITH (SIZE = 'scale=1,workers=2')
+contains:Expected one of PARTITION or SNAPSHOT or VERSION or COMMIT, found SIZE
 
 # create sink with SNAPSHOT set
 > CREATE CLUSTER sink_with_options_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK sink_with_options
   IN CLUSTER sink_with_options_cluster
-  FROM src
+  FROM src_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
   WITH (SNAPSHOT = false)
 
-> CREATE CLUSTER c SIZE '4'
+> CREATE CLUSTER c SIZE 'scale=1,workers=4'
 
 > CREATE SINK cluster_c_sink
   IN CLUSTER c
-  FROM src
+  FROM src_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -309,20 +319,20 @@ contains:Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
 > SELECT bool_and(size IS NULL) FROM mz_sinks;
 true
 
-# Check that SHOW SINKS shows the size correctly
+# Check SHOW SINKS
 > SHOW SINKS
-name               type   size  cluster
----------------------------------------
-cluster_c_sink        kafka  4                            c
-default_cluster_sink  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-sink_with_options     kafka  ${arg.default-storage-size}  sink_with_options_cluster
-snk1                  kafka  ${arg.default-storage-size}  snk1_cluster
-snk2                  kafka  ${arg.default-storage-size}  snk2_cluster
-snk3                  kafka  ${arg.default-storage-size}  snk3_cluster
-snk4                  kafka  ${arg.default-storage-size}  snk4_cluster
-snk5                  kafka  ${arg.default-storage-size}  snk5_cluster
-snk6                  kafka  ${arg.default-storage-size}  snk6_cluster
-snk7                  kafka  ${arg.default-storage-size}  snk7_cluster
-snk8                  kafka  ${arg.default-storage-size}  snk8_cluster
-snk9                  kafka  ${arg.default-storage-size}  snk9_cluster
-snk_unsigned          kafka  ${arg.default-storage-size}  snk_unsigned_cluster
+name               type      cluster                        comment
+-------------------------------------------------------------------
+cluster_c_sink        kafka  c                              ""
+default_cluster_sink  kafka  ${arg.single-replica-cluster}  ""
+sink_with_options     kafka  sink_with_options_cluster      ""
+snk1                  kafka  snk1_cluster                   ""
+snk2                  kafka  snk2_cluster                   ""
+snk3                  kafka  snk3_cluster                   ""
+snk4                  kafka  snk4_cluster                   ""
+snk5                  kafka  snk5_cluster                   ""
+snk6                  kafka  snk6_cluster                   ""
+snk7                  kafka  snk7_cluster                   ""
+snk8                  kafka  snk8_cluster                   ""
+snk9                  kafka  snk9_cluster                   ""
+snk_unsigned          kafka  snk_unsigned_cluster           ""

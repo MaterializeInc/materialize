@@ -1,7 +1,7 @@
 # PrivateLink Connection Status History Table
 
 ### Associated:
-- https://github.com/MaterializeInc/materialize/issues/19022
+- https://github.com/MaterializeInc/database-issues/issues/5634
 - https://github.com/MaterializeInc/cloud/issues/5190
 - https://github.com/MaterializeInc/materialize/pull/20681
 - https://github.com/MaterializeInc/cloud/pull/6383

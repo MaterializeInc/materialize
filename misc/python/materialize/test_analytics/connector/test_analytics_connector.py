@@ -8,15 +8,15 @@
 # by the Apache License, Version 2.0.
 
 import re
-import ssl
 import time
 from dataclasses import dataclass
 from textwrap import dedent
 
-import pg8000
-from pg8000 import Connection, Cursor
+import psycopg
+from psycopg import Connection, Cursor
 
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 class TestAnalyticsUploadError(Exception):
@@ -42,14 +42,91 @@ class TestAnalyticsSettings:
 
 
 class DatabaseConnector:
-    def __init__(self, config: MzDbConfig, current_data_version: int, log_sql: bool):
+
+    def __init__(self, config: MzDbConfig):
         self.config = config
+
+    def get_or_create_connection(self, autocommit: bool = False) -> Connection:
+        raise NotImplementedError
+
+    def create_connection(
+        self,
+        autocommit: bool = False,
+        timeout_in_seconds: int = 60,
+        remaining_retries: int = 1,
+    ) -> Connection:
+        raise NotImplementedError
+
+    def create_cursor(
+        self,
+        connection: Connection | None = None,
+        autocommit: bool = False,
+        allow_reusing_connection: bool = False,
+        statement_timeout: str | None = None,
+    ) -> Cursor:
+        raise NotImplementedError
+
+    def set_read_only(self) -> None:
+        raise NotImplementedError
+
+    def try_get_or_query_settings(self) -> TestAnalyticsSettings | None:
+        raise NotImplementedError
+
+    def add_update_statements(self, sql_statements: list[str]) -> None:
+        raise NotImplementedError
+
+    def submit_update_statements(self) -> None:
+        raise NotImplementedError
+
+    def to_short_printable_sql(self, sql: str) -> str:
+        return re.sub(r"^\s+", "", sql, flags=re.MULTILINE).replace("\n", " ").strip()
+
+
+class DummyDatabaseConnector(DatabaseConnector):
+
+    def __init__(self, config: MzDbConfig):
+        super().__init__(config)
+
+    def get_or_create_connection(self, autocommit: bool = False) -> Connection:
+        raise RuntimeError("Forbidden")
+
+    def create_connection(
+        self,
+        autocommit: bool = False,
+        timeout_in_seconds: int = 60,
+        remaining_retries: int = 1,
+    ) -> Connection:
+        raise RuntimeError("Forbidden")
+
+    def create_cursor(
+        self,
+        connection: Connection | None = None,
+        autocommit: bool = False,
+        allow_reusing_connection: bool = False,
+        statement_timeout: str | None = None,
+    ) -> Cursor:
+        raise RuntimeError("Forbidden")
+
+    def set_read_only(self) -> None:
+        pass
+
+    def try_get_or_query_settings(self) -> TestAnalyticsSettings | None:
+        return None
+
+    def add_update_statements(self, sql_statements: list[str]) -> None:
+        pass
+
+    def submit_update_statements(self) -> None:
+        print("Not submitting update statements in dummy mode")
+
+
+class DatabaseConnectorImpl(DatabaseConnector):
+    def __init__(self, config: MzDbConfig, current_data_version: int, log_sql: bool):
+        super().__init__(config)
         self.current_data_version = current_data_version
         self.update_statements = []
         self._log_sql = log_sql
         self._read_only = False
-        # Note that transactions in mz do not allow to mix read and write statements (INSERT INTO ... SELECT FROM ...)
-        self._use_transaction = False
         self.open_connection: Connection | None = None
         self.cached_settings: TestAnalyticsSettings | None = None
 
@@ -65,28 +142,41 @@ class DatabaseConnector:
         self,
         autocommit: bool = False,
         timeout_in_seconds: int = 60,
+        remaining_retries: int = 1,
     ) -> Connection:
         try:
-            connection = pg8000.connect(
+            connection = psycopg.connect(
                 host=self.config.hostname,
                 user=self.config.username,
                 password=self.config.app_password,
                 port=self.config.port,
-                ssl_context=ssl.SSLContext(),
-                timeout=timeout_in_seconds,
+                sslmode="require",
+                connect_timeout=timeout_in_seconds,
                 application_name=self.config.application_name,
+                options="-c tcp_keepalives_idle=30 -c tcp_keepalives_interval=10 -c tcp_keepalives_count=5",
             )
         except Exception:
             print(
                 f"Failed to connect to host '{self.config.hostname}' on port {self.config.port}"
             )
-            raise
+            if remaining_retries > 0:
+                print("Retrying in 5 seconds...")
+                time.sleep(5)
+                return self.create_connection(
+                    autocommit=autocommit,
+                    timeout_in_seconds=timeout_in_seconds,
+                    remaining_retries=remaining_retries - 1,
+                )
+            else:
+                raise
 
         connection.autocommit = autocommit
-        connection.run(f"SET database = {self.config.database}")
-        connection.run(f"SET search_path = {self.config.search_path}")
-        connection.run(f"SET cluster = '{self.config.cluster}'")
-        connection.run("SET transaction_isolation = serializable")
+        connection.execute(f"SET database = {self.config.database}".encode())
+        connection.execute(f"SET search_path = {self.config.search_path}".encode())
+        connection.execute(
+            f"SET cluster = {as_sanitized_literal(self.config.cluster)}".encode()
+        )
+        connection.execute("SET transaction_isolation = serializable")
 
         return connection
 
@@ -106,7 +196,9 @@ class DatabaseConnector:
                 connection = self.create_connection(autocommit=autocommit)
 
         cursor = connection.cursor()
-        cursor.execute(f"SET statement_timeout = '{statement_timeout}'")
+        cursor.execute(
+            f"SET statement_timeout = {as_sanitized_literal(statement_timeout)}".encode()
+        )
         return cursor
 
     def set_read_only(self) -> None:
@@ -120,15 +212,13 @@ class DatabaseConnector:
         return self.cached_settings
 
     def _query_settings(self, cursor: Cursor) -> TestAnalyticsSettings:
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT
                 uploads_enabled,
                 min_required_data_version_for_uploads,
                 only_notify_about_communication_failures_on_main
             FROM config;
-            """
-        )
+            """)
 
         rows = cursor.fetchall()
         assert len(rows) == 1, f"Expected exactly one row, got {len(rows)}"
@@ -154,6 +244,8 @@ class DatabaseConnector:
         self.update_statements.extend(sql_statements)
 
     def submit_update_statements(self) -> None:
+        # Do not use transactions because they do not allow to mix read and write statements (INSERT INTO ... SELECT FROM ...) in mz.
+
         if not self.config.enabled:
             print("Disabled: Not writing any data to the test analytics database!")
             return
@@ -161,7 +253,7 @@ class DatabaseConnector:
         if len(self.update_statements) == 0:
             return
 
-        cursor = self.create_cursor(autocommit=not self._use_transaction)
+        cursor = self.create_cursor(autocommit=True)
 
         self._disable_if_uploads_not_allowed(cursor)
 
@@ -176,25 +268,14 @@ class DatabaseConnector:
         print("--- Updates to test analytics database")
 
         try:
-            if self._use_transaction:
-                self._execute_sql(cursor, "BEGIN;")
-
             for sql in self.update_statements:
                 sql = dedent(sql)
                 last_executed_sql = sql
                 self._execute_sql(cursor, sql, print_status=True)
 
-            if self._use_transaction:
-                self._execute_sql(cursor, "COMMIT;")
             print("Upload completed.")
         except Exception as e:
             print("Upload failed.")
-            try:
-                if self._use_transaction:
-                    print("Triggering rollback.")
-                    self._execute_sql(cursor, "ROLLBACK;")
-            except:
-                pass
 
             error_msg = f"Failed to write to test analytics database! Cause: {e}"
             raise TestAnalyticsUploadError(error_msg, sql=last_executed_sql)
@@ -202,7 +283,11 @@ class DatabaseConnector:
             self.update_statements = []
 
     def _execute_sql(
-        self, cursor: Cursor, sql: str, print_status: bool = False
+        self,
+        cursor: Cursor,
+        sql: str,
+        print_status: bool = False,
+        remaining_retries: int = 1,
     ) -> None:
         if self._log_sql:
             printable_sql = self.to_short_printable_sql(sql)
@@ -210,7 +295,7 @@ class DatabaseConnector:
 
         try:
             start_time = time.time()
-            cursor.execute(sql)
+            cursor.execute(sql.encode())
             end_time = time.time()
 
             if print_status:
@@ -220,6 +305,17 @@ class DatabaseConnector:
                     f"-- OK ({affected_rows} row{'s' if affected_rows != 1 else ''} affected, {duration_in_sec}s)"
                 )
         except:
+            if remaining_retries > 0:
+                print("-- Retrying in 5 seconds...")
+                time.sleep(5)
+                self._execute_sql(
+                    cursor=cursor,
+                    sql=sql,
+                    print_status=print_status,
+                    remaining_retries=remaining_retries - 1,
+                )
+                return
+
             if print_status:
                 print("-- FAILED!")
             raise
@@ -248,6 +344,3 @@ class DatabaseConnector:
                 f"Uploading test_analytics data is not supported from this data version ({self.current_data_version})"
             )
             self.set_read_only()
-
-    def to_short_printable_sql(self, sql: str) -> str:
-        return re.sub(r"^\s+", "", sql, flags=re.MULTILINE).replace("\n", " ").strip()

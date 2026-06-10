@@ -11,7 +11,6 @@
 # (part of the CREATE SOURCE statement).
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 > CREATE SECRET ssl_ca AS '${arg.ssl-ca}'
@@ -57,9 +56,11 @@ $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
   USER host,
   SSL MODE disabled
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.numbers);
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
+> COMMIT
 
 > SELECT * FROM "numbers";
 1 1 one
@@ -89,9 +90,11 @@ contains: invalid CONNECTION: unknown SSL MODE "PREFER"
   USER host,
   SSL MODE required
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.numbers);
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
+> COMMIT
 
 > SELECT * FROM "numbers";
 1 1 one
@@ -111,9 +114,11 @@ DELETE FROM numbers WHERE number = 2;
   USER hostssl,
   SSL MODE required
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.numbers);
+  FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
+> CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
 $ mysql-execute name=mysql
@@ -126,7 +131,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25676 (error not handled properly)
+# TODO: database-issues#7660 (error not handled properly)
 # # server: hostssl, client: verify-ca => ERROR
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #   HOST mysql,
@@ -134,8 +139,7 @@ DELETE FROM numbers WHERE number = 2;
 #   SSL MODE verify_ca
 #   );
 # ! CREATE SOURCE "mz_source"
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (public.numbers);
+#   FROM MYSQL CONNECTION mysql_conn;
 # contains:self signed certificate in certificate chain
 # > DROP CONNECTION mysql_conn;
 
@@ -146,9 +150,11 @@ DELETE FROM numbers WHERE number = 2;
   SSL MODE verify_ca,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.numbers);
+  FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
+> CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
 $ mysql-execute name=mysql
@@ -161,7 +167,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25676 (error not handled properly)
+# TODO: database-issues#7660 (error not handled properly)
 # # server: hostssl, client: verify-identity => ERROR
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #     HOST mysql,
@@ -169,12 +175,11 @@ DELETE FROM numbers WHERE number = 2;
 #     SSL MODE verify_identity
 #   );
 # ! CREATE SOURCE "mz_source"
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (public.numbers);
+#   FROM MYSQL CONNECTION mysql_conn;
 # contains:self signed certificate in certificate chain
 # > DROP CONNECTION mysql_conn;
 
-# TODO: #25676
+# TODO: database-issues#7660
 # # server: hostssl, client: verify-identity => OK
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #   HOST mysql,
@@ -183,8 +188,7 @@ DELETE FROM numbers WHERE number = 2;
 #   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
 #   );
 # > CREATE SOURCE "mz_source"
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (public.numbers);
+#   FROM MYSQL CONNECTION mysql_conn;
 # > SELECT * FROM "numbers";
 # 1 1 one
 # $ mysql-execute name=mysql
@@ -203,9 +207,11 @@ DELETE FROM numbers WHERE number = 2;
   USER hostnossl,
   SSL MODE disabled
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.numbers);
+  FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
+> CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
 $ mysql-execute name=mysql
@@ -218,7 +224,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25676 (error not handled properly)
+# TODO: database-issues#7660 (error not handled properly)
 # # server: hostnossl, client: verify-ca => ERROR
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #   HOST mysql,
@@ -226,8 +232,7 @@ DELETE FROM numbers WHERE number = 2;
 #   SSL MODE verify_ca
 #   );
 # ! CREATE SOURCE "mz_source"
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (public.numbers);
+#   FROM MYSQL CONNECTION mysql_conn;
 # contains:self signed certificate in certificate chain
 # > DROP CONNECTION mysql_conn;
 
@@ -240,9 +245,11 @@ DELETE FROM numbers WHERE number = 2;
   SSL KEY SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.numbers);
+  FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
+> CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
 $ mysql-execute name=mysql
@@ -262,9 +269,11 @@ DELETE FROM numbers WHERE number = 2;
   SSL MODE verify_ca,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.numbers);
+  FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
+> CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
 $ mysql-execute name=mysql
@@ -277,7 +286,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25676 (error not handled properly)
+# TODO: database-issues#7660 (error not handled properly)
 # # server: certuser, client: verify-ca (wrong cert) => ERROR
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #   HOST mysql,
@@ -301,9 +310,11 @@ DELETE FROM numbers WHERE number = 2;
   SSL KEY SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.numbers);
+  FROM MYSQL CONNECTION mysql_conn;
+> COMMIT
+> CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 > SELECT * FROM "numbers";
 1 1 one
 $ mysql-execute name=mysql
@@ -316,7 +327,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25676 (error not handled properly)
+# TODO: database-issues#7660 (error not handled properly)
 # # server: certuser, client: verify-identity => OK
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #   HOST mysql,
@@ -327,8 +338,8 @@ DELETE FROM numbers WHERE number = 2;
 #   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
 #   );
 # > CREATE SOURCE "mz_source"
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (public.numbers);
+#   FROM MYSQL CONNECTION mysql_conn;
+# > CREATE TABLE numbers FROM SOURCE "mz_source" (REFERENCE public.numbers);
 # > SELECT * FROM "numbers";
 # 1 1 one
 # $ mysql-execute name=mysql

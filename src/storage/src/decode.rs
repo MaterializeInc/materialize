@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::capture::{Message, Progress};
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
@@ -27,14 +27,16 @@ use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
+use mz_storage_types::wire_format::WireFormat;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use regex::Regex;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Map, Operator};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::vec::Map;
 use timely::progress::Timestamp;
 use timely::scheduling::SyncActivator;
 use tracing::error;
@@ -55,25 +57,27 @@ mod protobuf;
 /// This not only literally decodes the avro-encoded messages, but
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
-pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: Timestamp>(
-    input: &Collection<G, DecodeResult<FromTime>, Diff>,
-) -> (Collection<G, Row, Diff>, PressOnDropButton) {
+pub fn render_decode_cdcv2<'scope, FromTime: Timestamp>(
+    input: &VecCollection<'scope, mz_repr::Timestamp, DecodeResult<FromTime>, Diff>,
+) -> (
+    VecCollection<'scope, mz_repr::Timestamp, Row, Diff>,
+    PressOnDropButton,
+) {
     let channel_rx = Rc::new(RefCell::new(VecDeque::new()));
     let activator_set: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
 
     let mut row_buf = Row::default();
-    let mut vector = vec![];
     let channel_tx = Rc::clone(&channel_rx);
     let activator_get = Rc::clone(&activator_set);
     let pact = Exchange::new(|(x, _, _): &(DecodeResult<FromTime>, _, _)| x.key.hashed());
-    input.inner.sink(pact, "CDCv2Unpack", move |input| {
-        while let Some((_, data)) = input.next() {
-            data.swap(&mut vector);
+    let input2 = input.inner.clone();
+    input2.sink(pact, "CDCv2Unpack", move |(input, _)| {
+        input.for_each(|_time, data| {
             // The inputs are rows containing two columns that encode an enum, i.e only one of them
             // is ever set while the other is unset. This is the convention we follow in our Avro
             // decoder. When the first field of the record is set then we have a data message.
             // Otherwise we have a progress message.
-            for (row, _time, _diff) in vector.drain(..) {
+            for (row, _time, _diff) in data.drain(..) {
                 let mut record = match &row.value {
                     Some(Ok(row)) => row.iter(),
                     Some(Err(err)) => {
@@ -89,9 +93,9 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
                             let mut update = update.unwrap_list().iter();
                             let data = update.next().unwrap().unwrap_list();
                             let time = update.next().unwrap().unwrap_int64();
-                            let diff = update.next().unwrap().unwrap_int64();
+                            let diff = Diff::from(update.next().unwrap().unwrap_int64());
 
-                            row_buf.packer().extend(&data);
+                            row_buf.packer().extend(data);
                             let data = row_buf.clone();
                             let time = u64::try_from(time).expect("non-negative");
                             let time = mz_repr::Timestamp::from(time);
@@ -102,17 +106,17 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
                     (Datum::Null, Datum::List(progress)) => {
                         let mut progress = progress.iter();
                         let mut lower = vec![];
-                        for time in &progress.next().unwrap().unwrap_list() {
+                        for time in progress.next().unwrap().unwrap_list() {
                             let time = u64::try_from(time.unwrap_int64()).expect("non-negative");
                             lower.push(mz_repr::Timestamp::from(time));
                         }
                         let mut upper = vec![];
-                        for time in &progress.next().unwrap().unwrap_list() {
+                        for time in progress.next().unwrap().unwrap_list() {
                             let time = u64::try_from(time.unwrap_int64()).expect("non-negative");
                             upper.push(mz_repr::Timestamp::from(time));
                         }
                         let mut counts = vec![];
-                        for pair in &progress.next().unwrap().unwrap_list() {
+                        for pair in progress.next().unwrap().unwrap_list() {
                             let mut pair = pair.unwrap_list().iter();
                             let time = pair.next().unwrap().unwrap_int64();
                             let count = pair.next().unwrap().unwrap_int64();
@@ -132,7 +136,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
                 };
                 channel_tx.borrow_mut().push_back(message);
             }
-        }
+        });
         if let Some(activator) = activator_get.borrow_mut().as_mut() {
             activator.activate().unwrap()
         }
@@ -221,26 +225,20 @@ impl PreDelimitedFormat {
             PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
             PreDelimitedFormat::Json => {
                 let j = mz_repr::adt::jsonb::Jsonb::from_slice(bytes).map_err(|e| {
-                    DecodeErrorKind::Bytes(format!(
-                        "Failed to decode JSON: {}",
-                        // See if we can output the string that failed to be converted to JSON.
-                        match std::str::from_utf8(bytes) {
-                            Ok(str) => str.to_string(),
-                            // Otherwise produce the nominally helpful error.
-                            Err(_) => e.display_with_causes().to_string(),
-                        }
-                    ))
+                    DecodeErrorKind::Bytes(
+                        format!("Failed to decode JSON: {}", e.display_with_causes(),).into(),
+                    )
                 })?;
                 Ok(Some(j.into_row()))
             }
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
-                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
+                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".into()))?;
                 Ok(Some(Row::pack(Some(Datum::String(s)))))
             }
             PreDelimitedFormat::Regex(regex, row_buf) => {
                 let s = std::str::from_utf8(bytes)
-                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
+                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".into()))?;
                 let captures = match regex.captures(s) {
                     Some(captures) => captures,
                     None => return Ok(None),
@@ -354,20 +352,29 @@ async fn get_decoder(
     let decoder = match encoding {
         DataEncoding::Avro(AvroEncoding {
             schema,
-            csr_connection,
-            confluent_wire_format,
+            reference_schemas,
+            wire_format,
         }) => {
-            let csr_client = match csr_connection {
-                None => None,
-                Some(csr_connection) => {
-                    let csr_client = csr_connection
+            // Only the Confluent variant is reachable from SQL today; Glue
+            // is not yet wired to the planner.
+            let (csr_client, confluent_wire_format) = match wire_format {
+                WireFormat::None => (None, false),
+                WireFormat::Confluent { registry: None } => (None, true),
+                WireFormat::Confluent {
+                    registry: Some(csr_connection),
+                } => {
+                    let client = csr_connection
                         .connect(storage_configuration, InTask::Yes)
                         .await?;
-                    Some(csr_client)
+                    (Some(client), true)
+                }
+                WireFormat::Glue { .. } => {
+                    unreachable!("AWS Glue Schema Registry not supported yet")
                 }
             };
             let state = avro::AvroDecoderState::new(
                 &schema,
+                &reference_schemas,
                 csr_client,
                 debug_name.to_string(),
                 confluent_wire_format,
@@ -434,9 +441,10 @@ async fn decode_delimited(
                     None => decoder.eof(&mut remaining_buf)?,
                 }
             } else {
-                Err(DecodeErrorKind::Text(format!(
-                    "Unexpected bytes remaining for decoded value: {remaining_buf:?}"
-                )))
+                Err(DecodeErrorKind::Text(
+                    format!("Unexpected bytes remaining for decoded value: {remaining_buf:?}")
+                        .into(),
+                ))
             }
         }
         Err(err) => Err(err),
@@ -460,16 +468,16 @@ async fn decode_delimited(
 /// often lets us, for example, detect when Avro decoding has gone off the rails
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
-pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
-    input: &Collection<G, SourceOutput<FromTime>, Diff>,
+pub fn render_decode_delimited<'scope, T: Timestamp, FromTime: Timestamp>(
+    input: VecCollection<'scope, T, SourceOutput<FromTime>, Diff>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: String,
     metrics: DecodeMetricDefs,
     storage_configuration: StorageConfiguration,
 ) -> (
-    Collection<G, DecodeResult<FromTime>, Diff>,
-    Stream<G, HealthStatusMessage>,
+    VecCollection<'scope, T, DecodeResult<FromTime>, Diff>,
+    StreamVec<'scope, T, HealthStatusMessage>,
 ) {
     let op_name = format!(
         "{}{}DecodeDelimited",
@@ -483,8 +491,8 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
 
     let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
 
-    let (mut output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut input = builder.new_input_for(&input.inner, Exchange::new(dist), &output_handle);
+    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let mut input = builder.new_input_for(input.inner, Exchange::new(dist), &output_handle);
 
     let (_, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
@@ -578,7 +586,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
     let health = transient_errors.map(|err: Rc<CsrConnectError>| {
         let halt_status = HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
         HealthStatusMessage {
-            index: 0,
+            id: None,
             namespace: if matches!(&*err, CsrConnectError::Ssh(_)) {
                 StatusNamespace::Ssh
             } else {

@@ -59,7 +59,7 @@ What is the user's goal?
 What are the column types?
 - Are two numbers being joined on actually the same type? Join plans can be
   messed up by implicit casting from int4 (resp. float4) to int8 (resp. float8)
-  See [#4171](https://github.com/MaterializeInc/materialize/issues/4171)
+  See [#4171](https://github.com/MaterializeInc/database-issues/issues/1291)
 
 Is the plan sane? (Ask for raw/decorrelated/optimized plans)
 - Can an expensive operator be pushed down?

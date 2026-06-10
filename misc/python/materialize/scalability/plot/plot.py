@@ -17,7 +17,7 @@ from matplotlib.markers import MarkerStyle
 
 from materialize.scalability.df.df_details import DfDetails
 from materialize.scalability.df.df_totals import DfTotals
-from materialize.scalability.endpoints import endpoint_name_to_description
+from materialize.scalability.endpoint.endpoints import endpoint_name_to_description
 
 PLOT_MARKER_POINT = MarkerStyle("o")
 PLOT_MARKER_SQUARE = MarkerStyle(",")

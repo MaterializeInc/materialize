@@ -28,15 +28,14 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
+use futures::Stream;
 use futures::future::{CatchUnwind, FutureExt};
 use futures::sink::Sink;
-use futures::Stream;
 use pin_project::pin_project;
 use tokio::task::futures::TaskLocalFuture;
 use tokio::time::{self, Duration, Instant};
 
-use crate::panic::CATCHING_UNWIND_ASYNC;
-use crate::task::{self, JoinHandleExt};
+use crate::task;
 
 /// Whether or not to run the future in `run_in_task_if` in a task.
 #[derive(Clone, Copy, Debug)]
@@ -90,9 +89,10 @@ pub trait OreFutureExt {
         Self::Output: Send + 'static;
 
     /// Like [`FutureExt::catch_unwind`], but can unwind panics even if
-    /// [`set_abort_on_panic`] has been called.
+    /// [`panic::install_enhanced_handler`] has been called.
     ///
-    /// [`set_abort_on_panic`]: crate::panic::set_abort_on_panic
+    /// [`panic::install_enhanced_handler`]: crate::panic::install_enhanced_handler
+    #[cfg(feature = "panic")]
     fn ore_catch_unwind(self) -> OreCatchUnwind<Self>
     where
         Self: Sized + UnwindSafe;
@@ -126,7 +126,7 @@ where
         T: Send + 'static,
         T::Output: Send + 'static,
     {
-        task::spawn(nc, self).wait_and_assert_finished().await
+        task::spawn(nc, self).await
     }
 
     async fn run_in_task_if<Name, NameClosure>(self, in_task: InTask, nc: NameClosure) -> T::Output
@@ -143,10 +143,13 @@ where
         }
     }
 
+    #[cfg(feature = "panic")]
     fn ore_catch_unwind(self) -> OreCatchUnwind<Self>
     where
         Self: UnwindSafe,
     {
+        use crate::panic::CATCHING_UNWIND_ASYNC;
+
         OreCatchUnwind {
             #[allow(clippy::disallowed_methods)]
             inner: CATCHING_UNWIND_ASYNC.scope(true, FutureExt::catch_unwind(self)),
@@ -257,7 +260,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TimeoutError::DeadlineElapsed => f.write_str("deadline has elapsed"),
-            e => e.fmt(f),
+            TimeoutError::Inner(e) => e.fmt(f),
         }
     }
 }
@@ -364,7 +367,7 @@ pub trait OreSinkExt<T>: Sink<T> {
 
     /// Like [`futures::sink::SinkExt::send`], but does not flush the sink after enqueuing
     /// `item`.
-    fn enqueue(&mut self, item: T) -> Enqueue<Self, T> {
+    fn enqueue(&mut self, item: T) -> Enqueue<'_, Self, T> {
         Enqueue {
             sink: self,
             item: Some(item),
@@ -485,4 +488,30 @@ where
 
         Some(buffer)
     }
+}
+
+/// Yield execution back to the runtime.
+///
+/// A snapshot of the old `tokio::task::yield_now` implementation, from before it
+/// had sneaky TLS shenangans.
+pub async fn yield_now() {
+    struct YieldNow {
+        yielded: bool,
+    }
+
+    impl Future for YieldNow {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.yielded {
+                return Poll::Ready(());
+            }
+
+            self.yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+
+    YieldNow { yielded: false }.await
 }

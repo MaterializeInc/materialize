@@ -8,16 +8,17 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.zippy.all_actions import ValidateAll
+from materialize.zippy.all_actions import ValidateAll  # noqa
 from materialize.zippy.backup_and_restore_actions import BackupAndRestore
 from materialize.zippy.balancerd_actions import (
     BalancerdRestart,
     BalancerdStart,
     BalancerdStop,
 )
+from materialize.zippy.blob_store_actions import BlobStoreRestart, BlobStoreStart
 from materialize.zippy.crdb_actions import CockroachRestart, CockroachStart
 from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumStart
-from materialize.zippy.framework import ActionOrFactory
+from materialize.zippy.framework import ActionOrFactory  # noqa
 from materialize.zippy.kafka_actions import (
     CreateTopicParameterized,
     Ingest,
@@ -25,7 +26,6 @@ from materialize.zippy.kafka_actions import (
     KafkaStart,
 )
 from materialize.zippy.kafka_capabilities import Envelope
-from materialize.zippy.minio_actions import MinioRestart, MinioStart
 from materialize.zippy.mysql_actions import (
     CreateMySqlTable,
     MySqlDML,
@@ -33,6 +33,13 @@ from materialize.zippy.mysql_actions import (
     MySqlStart,
 )
 from materialize.zippy.mysql_cdc_actions import CreateMySqlCdcTable
+from materialize.zippy.sql_server_actions import (
+    CreateSqlServerTable,
+    SqlServerDML,
+    SqlServerRestart,
+    SqlServerStart,
+)
+from materialize.zippy.sql_server_cdc_actions import CreateSqlServerCdcTable
 from materialize.zippy.mz_actions import (
     KillClusterd,
     Mz0dtDeploy,
@@ -53,6 +60,10 @@ from materialize.zippy.replica_actions import (
     DropDefaultReplica,
     DropReplica,
 )
+from materialize.zippy.iceberg_actions import (
+    CreateIcebergSinkParameterized,
+    IcebergStart,
+)
 from materialize.zippy.sink_actions import CreateSinkParameterized
 from materialize.zippy.source_actions import (
     AlterSourceConnectionParameterized,
@@ -63,6 +74,7 @@ from materialize.zippy.storaged_actions import (
     StoragedRestart,
     StoragedStart,
 )
+from materialize.zippy.copy_s3_actions import CopyFromS3, CopyToS3
 from materialize.zippy.table_actions import DML, CreateTableParameterized, ValidateTable
 from materialize.zippy.view_actions import CreateViewParameterized, ValidateView
 
@@ -72,10 +84,11 @@ class Scenario:
         return [
             KafkaStart,
             CockroachStart,
-            MinioStart,
+            BlobStoreStart,
             MzStart,
             StoragedStart,
             BalancerdStart,
+            IcebergStart,
         ]
 
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
@@ -108,6 +121,7 @@ class KafkaSources(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            CreateIcebergSinkParameterized(): 5,
             ValidateView: 10,
             Ingest: 100,
             PeekCancellation: 5,
@@ -130,6 +144,7 @@ class AlterConnectionWithKafkaSources(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            CreateIcebergSinkParameterized(): 5,
             AlterSourceConnectionParameterized(): 5,
             ValidateView: 10,
             Ingest: 100,
@@ -155,6 +170,7 @@ class UserTables(Scenario):
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 10,
             CreateSinkParameterized(): 10,
+            CreateIcebergSinkParameterized(): 5,
             ValidateTable: 20,
             ValidateView: 20,
             DML: 30,
@@ -202,6 +218,16 @@ class PostgresCdc(Scenario):
             PostgresDML: 100,
         }
 
+    def finalization(self) -> list[ActionOrFactory]:
+        # Postgres sources can't be backup up and restored since Postgres
+        # refuses to re-read previously confirmed LSNs
+        return [
+            MzStart,
+            BalancerdStart,
+            StoragedStart,
+            ValidateAll(),
+        ]
+
 
 class MySqlCdc(Scenario):
     """A Zippy test using MySQL CDC exclusively."""
@@ -220,6 +246,26 @@ class MySqlCdc(Scenario):
             CreateViewParameterized(): 10,
             ValidateView: 20,
             MySqlDML: 100,
+        }
+
+
+class SqlServerCdc(Scenario):
+    """A Zippy test using SQL Server CDC exclusively."""
+
+    def bootstrap(self) -> list[ActionOrFactory]:
+        return super().bootstrap() + [SqlServerStart]
+
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
+        return {
+            CreateSqlServerTable: 10,
+            CreateSqlServerCdcTable: 10,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
+            SqlServerRestart: 10,
+            CreateViewParameterized(): 10,
+            ValidateView: 20,
+            SqlServerDML: 100,
         }
 
 
@@ -244,10 +290,18 @@ class ClusterReplicas(Scenario):
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 20,
             CreateSinkParameterized(): 10,
+            CreateIcebergSinkParameterized(): 5,
             ValidateView: 20,
             Ingest: 50,
             DML: 50,
-            PeekCancellation: 5,
+            # PeekCancellation is intentionally omitted here: this scenario drops
+            # the default replica and constantly creates/drops/resizes replicas on
+            # the quickstart cluster, so it can be left without a hydrated replica.
+            # statement_timeout only bounds the row-streaming phase of a peek, not
+            # the wait for the cluster to be able to serve it, so the timeout INSERT
+            # can stall until testdrive's deadline ("deadline has elapsed") instead
+            # of returning the expected timeout error. PeekCancellation still runs in
+            # the KafkaSources* scenarios, which keep the default replica.
         }
 
 
@@ -267,8 +321,8 @@ class KafkaParallelInsert(Scenario):
         }
 
 
-class CrdbMinioRestart(Scenario):
-    """A Zippy test that restarts CRDB and Minio."""
+class CrdbBlobStoreRestart(Scenario):
+    """A Zippy test that restarts CRDB and BlobStore."""
 
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
@@ -276,6 +330,7 @@ class CrdbMinioRestart(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            CreateIcebergSinkParameterized(): 5,
             Ingest: 50,
             CreateTableParameterized(): 10,
             DML: 50,
@@ -286,7 +341,7 @@ class CrdbMinioRestart(Scenario):
             # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
             # StoragedRestart: 10,
             CockroachRestart: 15,
-            MinioRestart: 15,
+            BlobStoreRestart: 15,
         }
 
 
@@ -299,6 +354,7 @@ class CrdbRestart(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            CreateIcebergSinkParameterized(): 5,
             Ingest: 50,
             CreateTableParameterized(): 10,
             DML: 50,
@@ -323,6 +379,7 @@ class KafkaSourcesLarge(Scenario):
                 max_views=50, expensive_aggregates=False, max_inputs=1
             ): 5,
             CreateSinkParameterized(max_sinks=25): 10,
+            CreateIcebergSinkParameterized(): 5,
             ValidateView: 10,
             Ingest: 100,
             PeekCancellation: 5,
@@ -358,6 +415,7 @@ class UserTablesLarge(Scenario):
                 max_views=5, expensive_aggregates=True, max_inputs=5
             ): 10,
             CreateSinkParameterized(max_sinks=10): 10,
+            CreateIcebergSinkParameterized(): 5,
             ValidateView: 10,
             DML: 50,
         }
@@ -372,7 +430,10 @@ class BackupAndRestoreLarge(Scenario):
             CreateViewParameterized(
                 max_views=5, expensive_aggregates=True, max_inputs=5
             ): 10,
-            CreateSinkParameterized(max_sinks=10): 10,
+            # Sinks don't make sense in this test since we don't record the
+            # state of a sink after a backup&restore cycle, see for example
+            # https://github.com/MaterializeInc/database-issues/issues/9589
+            # CreateSinkParameterized(max_sinks=10): 10,
             ValidateView: 10,
             DML: 50,
             BackupAndRestore: 0.1,
@@ -397,6 +458,16 @@ class PostgresCdcLarge(Scenario):
             PostgresDML: 100,
         }
 
+    def finalization(self) -> list[ActionOrFactory]:
+        # Postgres sources can't be backup up and restored since Postgres
+        # refuses to re-read previously confirmed LSNs
+        return [
+            MzStart,
+            BalancerdStart,
+            StoragedStart,
+            ValidateAll(),
+        ]
+
 
 class MySqlCdcLarge(Scenario):
     """A Zippy test using MySQL CDC exclusively (MySQL not killed)."""
@@ -414,4 +485,39 @@ class MySqlCdcLarge(Scenario):
             CreateViewParameterized(): 10,
             ValidateView: 20,
             MySqlDML: 100,
+        }
+
+
+class SqlServerCdcLarge(Scenario):
+    """A Zippy test using MS SQL Server CDC exclusively (SQL Server not killed)."""
+
+    def bootstrap(self) -> list[ActionOrFactory]:
+        return super().bootstrap() + [SqlServerStart]
+
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
+        return {
+            CreateSqlServerTable: 10,
+            CreateSqlServerCdcTable: 10,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
+            CreateViewParameterized(): 10,
+            ValidateView: 20,
+            SqlServerDML: 100,
+        }
+
+
+class CopyToFromS3(Scenario):
+    """A Zippy test performing roundtrip copy-to-S3 and copy-from-S3 operations over user tables."""
+
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
+        return {
+            MzStart: 5,
+            MzStop: 5,
+            KillClusterd: 5,
+            CreateTableParameterized(): 10,
+            DML: 30,
+            ValidateTable: 10,
+            CopyToS3: 20,
+            CopyFromS3: 20,
         }

@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use dec::OrderedDecimal;
@@ -18,13 +19,9 @@ use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::InTask;
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use mz_timely_util::order::{Extrema, Partitioned};
-use once_cell::sync::Lazy;
-use proptest::prelude::any;
-use proptest_derive::Arbitrary;
 use rdkafka::admin::AdminClient;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
@@ -46,16 +43,17 @@ include!(concat!(
 /// visible offset.
 pub type KafkaTimestamp = Partitioned<RangeBound<i32>, MzOffset>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection: C::Kafka,
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub topic: String,
     // Map from partition -> starting offset
-    #[proptest(strategy = "proptest::collection::btree_map(any::<i32>(), any::<i64>(), 0..4)")]
     pub start_offsets: BTreeMap<i32, i64>,
     pub group_id_prefix: Option<String>,
-    #[proptest(strategy = "proptest::collection::vec(any::<(String, KafkaMetadataKind)>(), 0..4)")]
+    // The metadata_columns for the primary source export from this kafka source
+    // TODO: This should be removed once we stop outputting to the primary source collection
+    // and instead only output to source_exports
     pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
     pub topic_metadata_refresh_interval: Duration,
 }
@@ -85,16 +83,17 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
     }
 }
 
-pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    RelationDesc::empty()
+pub static KAFKA_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
         .with_column(
             "partition",
-            ScalarType::Range {
-                element_type: Box::new(ScalarType::Numeric { max_scale: None }),
+            SqlScalarType::Range {
+                element_type: Box::new(SqlScalarType::Numeric { max_scale: None }),
             }
             .nullable(false),
         )
-        .with_column("offset", ScalarType::UInt64.nullable(true))
+        .with_column("offset", SqlScalarType::UInt64.nullable(true))
+        .finish()
 });
 
 impl KafkaSourceConnection {
@@ -180,7 +179,7 @@ impl KafkaSourceConnection {
                 Ok(current_upper)
             }
         })
-        .await?
+        .await
     }
 }
 
@@ -193,69 +192,32 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
         Some(self.topic.as_str())
     }
 
-    fn key_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("key", ScalarType::Bytes.nullable(true))
+    fn default_key_desc(&self) -> RelationDesc {
+        RelationDesc::builder()
+            .with_column("key", SqlScalarType::Bytes.nullable(true))
+            .finish()
     }
 
-    fn value_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("value", ScalarType::Bytes.nullable(true))
+    fn default_value_desc(&self) -> RelationDesc {
+        RelationDesc::builder()
+            .with_column("value", SqlScalarType::Bytes.nullable(true))
+            .finish()
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
         KAFKA_PROGRESS_DESC.clone()
     }
 
-    fn connection_id(&self) -> Option<GlobalId> {
+    fn connection_id(&self) -> Option<CatalogItemId> {
         Some(self.connection_id)
     }
 
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        self.metadata_columns
-            .iter()
-            .map(|(name, kind)| {
-                let typ = match kind {
-                    KafkaMetadataKind::Partition => ScalarType::Int32.nullable(false),
-                    KafkaMetadataKind::Offset => ScalarType::UInt64.nullable(false),
-                    KafkaMetadataKind::Timestamp => {
-                        ScalarType::Timestamp { precision: None }.nullable(false)
-                    }
-                    KafkaMetadataKind::Header {
-                        use_bytes: true, ..
-                    } => ScalarType::Bytes.nullable(true),
-                    KafkaMetadataKind::Header {
-                        use_bytes: false, ..
-                    } => ScalarType::String.nullable(true),
-                    KafkaMetadataKind::Headers => ScalarType::List {
-                        element_type: Box::new(ScalarType::Record {
-                            fields: vec![
-                                (
-                                    "key".into(),
-                                    ColumnType {
-                                        nullable: false,
-                                        scalar_type: ScalarType::String,
-                                    },
-                                ),
-                                (
-                                    "value".into(),
-                                    ColumnType {
-                                        nullable: true,
-                                        scalar_type: ScalarType::Bytes,
-                                    },
-                                ),
-                            ],
-                            custom_id: None,
-                        }),
-                        custom_id: None,
-                    }
-                    .nullable(false),
-                };
-                (&**name, typ)
-            })
-            .collect()
+    fn supports_read_only(&self) -> bool {
+        true
     }
 
-    fn get_reference_resolver(&self) -> super::SourceReferenceResolver {
-        super::SourceReferenceResolver::default()
+    fn prefers_single_replica(&self) -> bool {
+        false
     }
 }
 
@@ -310,50 +272,80 @@ impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
     }
 }
 
-impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConnection> {
-    fn into_proto(&self) -> ProtoKafkaSourceConnection {
-        ProtoKafkaSourceConnection {
-            connection: Some(self.connection.into_proto()),
-            connection_id: Some(self.connection_id.into_proto()),
-            topic: self.topic.clone(),
-            start_offsets: self.start_offsets.clone(),
-            group_id_prefix: self.group_id_prefix.clone(),
-            metadata_columns: self
-                .metadata_columns
-                .iter()
-                .map(|(name, kind)| ProtoKafkaMetadataColumn {
-                    name: name.into_proto(),
-                    kind: Some(kind.into_proto()),
-                })
-                .collect(),
-            topic_metadata_refresh_interval: Some(
-                self.topic_metadata_refresh_interval.into_proto(),
-            ),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSourceConnection) -> Result<Self, TryFromProtoError> {
-        let mut metadata_columns = Vec::with_capacity(proto.metadata_columns.len());
-        for c in proto.metadata_columns {
-            let kind = c.kind.into_rust_if_some("ProtoKafkaMetadataColumn::kind")?;
-            metadata_columns.push((c.name, kind));
-        }
-
-        Ok(KafkaSourceConnection {
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoKafkaSourceConnection::connection")?,
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoKafkaSourceConnection::connection_id")?,
-            topic: proto.topic,
-            start_offsets: proto.start_offsets,
-            group_id_prefix: proto.group_id_prefix,
-            metadata_columns,
-            topic_metadata_refresh_interval: proto
-                .topic_metadata_refresh_interval
-                .into_rust_if_some("ProtoKafkaSourceConnection::topic_metadata_refresh_interval")?,
+/// Return the column types used to describe the metadata columns of a kafka source export.
+pub fn kafka_metadata_columns_desc(
+    metadata_columns: &Vec<(String, KafkaMetadataKind)>,
+) -> Vec<(&str, SqlColumnType)> {
+    metadata_columns
+        .iter()
+        .map(|(name, kind)| {
+            let typ = match kind {
+                KafkaMetadataKind::Partition => SqlScalarType::Int32.nullable(false),
+                KafkaMetadataKind::Offset => SqlScalarType::UInt64.nullable(false),
+                KafkaMetadataKind::Timestamp => {
+                    SqlScalarType::Timestamp { precision: None }.nullable(false)
+                }
+                KafkaMetadataKind::Header {
+                    use_bytes: true, ..
+                } => SqlScalarType::Bytes.nullable(true),
+                KafkaMetadataKind::Header {
+                    use_bytes: false, ..
+                } => SqlScalarType::String.nullable(true),
+                KafkaMetadataKind::Headers => SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Record {
+                        fields: [
+                            (
+                                "key".into(),
+                                SqlColumnType {
+                                    nullable: false,
+                                    scalar_type: SqlScalarType::String,
+                                },
+                            ),
+                            (
+                                "value".into(),
+                                SqlColumnType {
+                                    nullable: true,
+                                    scalar_type: SqlScalarType::Bytes,
+                                },
+                            ),
+                        ]
+                        .into(),
+                        custom_id: None,
+                    }),
+                    custom_id: None,
+                }
+                .nullable(false),
+            };
+            (&**name, typ)
         })
+        .collect()
+}
+
+/// The details of a source export from a kafka source.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaSourceExportDetails {
+    pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
+}
+
+impl crate::AlterCompatible for KafkaSourceExportDetails {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let Self { metadata_columns } = self;
+        let compatibility_checks = [(
+            metadata_columns == &other.metadata_columns,
+            "metadata_columns",
+        )];
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "KafkaSourceExportDetails incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -361,7 +353,18 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
 /// value, exactly *at* that value, and right *after* that value. Additionally, it provides two
 /// special values for positive and negative infinity that are greater than and less than all the
 /// other elements respectively.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum RangeBound<P> {
     /// Negative infinity.
     NegInfinity,
@@ -371,7 +374,18 @@ pub enum RangeBound<P> {
     PosInfinity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum BoundKind {
     /// A bound right before a value. When used as an upper it represents an exclusive range.
     Before,
@@ -511,45 +525,11 @@ impl SourceTimestamp for KafkaTimestamp {
 }
 
 /// Which piece of metadata a column corresponds to
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KafkaMetadataKind {
     Partition,
     Offset,
     Timestamp,
     Headers,
     Header { key: String, use_bytes: bool },
-}
-
-impl RustType<ProtoKafkaMetadataKind> for KafkaMetadataKind {
-    fn into_proto(&self) -> ProtoKafkaMetadataKind {
-        use proto_kafka_metadata_kind::Kind;
-        ProtoKafkaMetadataKind {
-            kind: Some(match self {
-                KafkaMetadataKind::Partition => Kind::Partition(()),
-                KafkaMetadataKind::Offset => Kind::Offset(()),
-                KafkaMetadataKind::Timestamp => Kind::Timestamp(()),
-                KafkaMetadataKind::Headers => Kind::Headers(()),
-                KafkaMetadataKind::Header { key, use_bytes } => Kind::Header(ProtoKafkaHeader {
-                    key: key.clone(),
-                    use_bytes: *use_bytes,
-                }),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaMetadataKind) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_metadata_kind::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaMetadataKind::kind"))?;
-        Ok(match kind {
-            Kind::Partition(()) => KafkaMetadataKind::Partition,
-            Kind::Offset(()) => KafkaMetadataKind::Offset,
-            Kind::Timestamp(()) => KafkaMetadataKind::Timestamp,
-            Kind::Headers(()) => KafkaMetadataKind::Headers,
-            Kind::Header(ProtoKafkaHeader { key, use_bytes }) => {
-                KafkaMetadataKind::Header { key, use_bytes }
-            }
-        })
-    }
 }

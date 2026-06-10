@@ -11,17 +11,15 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = { version = "1.0.66", features = ["backtrace"] }
-humantime = "2.1.0"
-launchdarkly-server-sdk = { version = "1.0.0", default-features = false, features = [
-  "hypertls",
-] }
+anyhow.workspace = true
+humantime.workspace = true
+hyper-tls = "0.5.0"
+launchdarkly-server-sdk.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
-mz-ore = { path = "../ore", default-features = false }
-tokio = { version = "1.38.0", default-features = false }
-tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+mz-ore = { path = "../ore", default-features = false, features = ["async"] }
+tokio.workspace = true
+tracing.workspace = true
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+[features]
+default = []

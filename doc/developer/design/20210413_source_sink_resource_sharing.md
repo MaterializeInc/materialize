@@ -287,5 +287,5 @@ CREATE OR REPLACE VIEW kafka_view AS SELECT col1, col2, col3 FROM kafka_src;
 CREATE VIEW view3 AS SELECT col3 FROM kafka_view;
 ```
 
-[#3791]: https://github.com/MaterializeInc/materialize/issues/3791
+[#3791]: https://github.com/MaterializeInc/database-issues/issues/1182
 [jettison-discussion]: https://github.com/MaterializeInc/materialize/pull/6450/files#r612735779

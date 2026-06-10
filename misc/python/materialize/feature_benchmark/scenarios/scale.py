@@ -20,58 +20,52 @@ class SmallClusters(Scenario):
     FIXED_SCALE = True
 
     def benchmark(self) -> MeasurementSource:
-        create = "\n".join(
-            dedent(
-                f"""
+        create = "\n".join(dedent(f"""
                 > DROP CLUSTER IF EXISTS cluster{i} CASCADE;
 
-                > CREATE CLUSTER cluster{i} REPLICAS (r (SIZE '4-1'));
+                > CREATE CLUSTER cluster{i} REPLICAS (r (SIZE 'scale=4,workers=1'));
 
                 > CREATE MATERIALIZED VIEW v{i}
                   IN CLUSTER cluster{i}
                   AS SELECT COUNT(*) FROM t1;
 
                 > CREATE DEFAULT INDEX ON v{i}
-                """
-            )
-            for i in range(self.n())
-        )
+                """) for i in range(self.n()))
 
-        select = "\n".join(
-            dedent(
-                f"""
+        # We wait until all clusters are booted and connected before starting
+        # the time measurement. This is to avoid flakiness caused by the retry
+        # backoff the controller uses on replica connection attempts.
+        wait = "\n".join(dedent(f"""
                 > SET CLUSTER = cluster{i}
                 > SELECT * FROM v{i}
-                100000
-                """
-            )
-            for i in range(self.n())
-        )
+                0
+                """) for i in range(self.n()))
+
+        select = "\n".join(dedent(f"""
+                > SET CLUSTER = cluster{i}
+                > SELECT * FROM v{i}
+                1000000
+                """) for i in range(self.n()))
 
         return Td(
-            dedent(
-                f"""
+            dedent(f"""
                 > DROP TABLE IF EXISTS t1 CASCADE;
                 > CREATE TABLE t1 (f1 INTEGER);
 
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET max_clusters = {self.n() + 2};
-                """
-            )
+                """)
             + create
-            + dedent(
-                """
+            + wait
+            + dedent("""
                 > INSERT INTO t1
-                  SELECT * FROM generate_series(1, 100000)
+                  SELECT * FROM generate_series(1, 1000000)
                   /* A */
-                """
-            )
+                """)
             + select
-            + dedent(
-                """
+            + dedent("""
                 > SELECT 1
                   /* B */;
                 1
-                """
-            )
+                """)
         )

@@ -9,7 +9,7 @@
 
 use std::cmp;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use regex::Regex;
 use tokio::fs;
 

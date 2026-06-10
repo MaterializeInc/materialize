@@ -38,23 +38,16 @@ ALTER TABLE t REPLICA IDENTITY FULL;
 
 ! CREATE SOURCE "mz_source_empty"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_empty')
-  FOR ALL TABLES;
 contains:PUBLICATION mz_source_empty is empty
 
 ! CREATE SOURCE "mz_source_empty"
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_empty')
-  FOR TABLES (t1);
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_empty');
 contains:PUBLICATION mz_source_empty is empty
 
-! CREATE SOURCE "mz_source_empty"
-  FROM POSTGRES CONNECTION pg (PUBLICATION mz_source);
-contains:missing TABLES specification
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION mz_source);
 
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION mz_source)
-  FOR SCHEMAS (dne);
-contains:database postgres missing referenced schemas
-detail:missing schemas: dne
+! CREATE TABLE dne_table FROM SOURCE mz_source (REFERENCE dne.dne_table);
+contains:reference to dne.dne_table not found in source
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA other CASCADE;

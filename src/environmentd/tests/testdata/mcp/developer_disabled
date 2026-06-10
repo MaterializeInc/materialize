@@ -1,0 +1,30 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# =============================================================================
+# Developer endpoint disabled — all requests should return 503
+# =============================================================================
+
+# Initialize should return 503 when developer is disabled.
+mcp-developer
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
+----
+503 Service Unavailable
+
+# tools/list should return 503 when developer is disabled.
+mcp-developer
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+----
+503 Service Unavailable
+
+# tools/call should return 503 when developer is disabled.
+mcp-developer
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM mz_tables"}}}
+----
+503 Service Unavailable

@@ -11,9 +11,12 @@
 //!
 //! # Snapshot reading
 //!
-//! Depending on the resumption LSNs the table reader decides which tables need to be snapshotted
-//! and performs a simple `COPY` query on them in order to get a snapshot. There are a few subtle
-//! points about this operation, described in the following sections.
+//! Depending on the resumption LSNs the table reader decides which tables need to be snapshotted.
+//! Each table is partitioned across all workers using PostgreSQL's `ctid` (tuple identifier)
+//! column, which identifies the physical location of each row. This allows parallel snapshotting
+//! of large tables across all available workers.
+//!
+//! There are a few subtle points about this operation, described in the following sections.
 //!
 //! ## Consistent LSN point for snapshot transactions
 //!
@@ -104,25 +107,48 @@
 //! with the diffs taken at `t_snapshot` that were also emitted at LSN 0 (by convention) and we end
 //! up with a TVC that at LSN 0 contains the snapshot at `t_slot`.
 //!
+//! # Parallel table snapshotting with ctid ranges
+//!
+//! Each table is partitioned across workers using PostgreSQL's `ctid` column. The `ctid` is a
+//! tuple identifier of the form `(block_number, tuple_index)` that represents the physical
+//! location of a row on disk. By partitioning the ctid range, each worker can independently
+//! fetch a portion of the table.
+//!
+//! The partitioning works as follows:
+//! 1. The snapshot leader queries `pg_class.relpages` to estimate the number of blocks for each
+//!    table. This is much faster than querying `max(ctid)` which would require a sequential scan.
+//! 2. The leader broadcasts the block count estimates along with the snapshot transaction ID
+//!    to all workers, ensuring all workers use consistent estimates for partitioning.
+//! 3. Each worker calculates its assigned block range and fetches rows using a `COPY` query
+//!    with a `SELECT` that filters by `ctid >= start AND ctid < end`.
+//! 4. The last worker uses an open-ended range (`ctid >= start`) to capture any rows beyond
+//!    the estimated block count (handles cases where statistics are stale or table has grown).
+//!
+//! This approach efficiently parallelizes large table snapshots while maintaining the benefits
+//! of the `COPY` protocol for bulk data transfer.
+//!
+//! ## PostgreSQL version requirements
+//!
+//! Ctid range scans are only efficient on PostgreSQL >= 14 due to TID range scan optimizations
+//! introduced in that version. For older PostgreSQL versions, the snapshot falls back to the
+//! single-worker-per-table mode where each table is assigned to one worker based on consistent
+//! hashing. This is implemented by having the leader broadcast all-zero block counts when
+//! PostgreSQL version < 14.
+//!
 //! # Snapshot decoding
 //!
-//! The expectation is that tables will most likely be skewed on the number of rows they contain so
-//! while a `COPY` query for any given table runs on a single worker the decoding of the COPY
-//! stream is distributed to all workers.
-//!
+//! Each worker fetches its ctid range directly and decodes the COPY stream locally.
 //!
 //! ```text
 //!                 ╭──────────────────╮
 //!    ┏━━━━━━━━━━━━v━┓                │ exported
 //!    ┃    table     ┃   ╭─────────╮  │ snapshot id
-//!    ┃    reader    ┠─>─┤broadcast├──╯
-//!    ┗━┯━━━━━━━━━━┯━┛   ╰─────────╯
+//!    ┃   readers    ┠─>─┤broadcast├──╯
+//!    ┃  (parallel)  ┃   ╰─────────╯
+//!    ┗━┯━━━━━━━━━━┯━┛
 //!   raw│          │
 //!  COPY│          │
 //!  data│          │
-//! ╭────┴─────╮    │
-//! │distribute│    │
-//! ╰────┬─────╯    │
 //! ┏━━━━┷━━━━┓     │
 //! ┃  COPY   ┃     │
 //! ┃ decoder ┃     │
@@ -132,7 +158,8 @@
 //!      v          v
 //! ```
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -141,49 +168,189 @@ use std::time::Duration;
 use anyhow::bail;
 use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
-use mz_expr::MirScalarExpr;
+use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::{simple_query_opt, PostgresError};
-use mz_repr::{Datum, DatumVec, GlobalId, Row};
-use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_postgres_util::schemas::get_pg_major_version;
+use mz_postgres_util::{Client, Config, PostgresError, simple_query_opt};
+use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_sql_parser::ast::{
+    Ident,
+    display::{AstDisplay, escaped_string_literal},
+};
+use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::postgres::CastType;
+use mz_storage_types::parameters::PgSourceSnapshotConfig;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::operator::StreamExt;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::{Antichain, Timestamp};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::operators::{CapabilitySet, Concat, ConnectLoop, Feedback, Operator};
+use timely::dataflow::{Scope, StreamVec};
+use timely::progress::Timestamp;
+use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{Oid, PgLsn};
-use tokio_postgres::Client;
-use tracing::{error, trace};
+use tracing::trace;
 
 use crate::metrics::source::postgres::PgSnapshotMetrics;
-use crate::source::postgres::replication::RewindRequest;
-use crate::source::postgres::{verify_schema, DefiniteError, ReplicationError, TransientError};
-use crate::source::types::{
-    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
-};
 use crate::source::RawSourceCreationConfig;
+use crate::source::postgres::replication::RewindRequest;
+use crate::source::postgres::{
+    DefiniteError, ReplicationError, SourceOutputInfo, TransientError, verify_schema,
+};
+use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedCollection};
+use crate::statistics::SourceStatistics;
+
+/// Information broadcasted from the snapshot leader to all workers.
+/// This includes the transaction snapshot ID, LSN, and estimated block counts for each table.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SnapshotInfo {
+    /// The exported transaction snapshot identifier.
+    snapshot_id: String,
+    /// The LSN at which the snapshot was taken.
+    snapshot_lsn: MzOffset,
+    /// Estimated number of blocks (pages) for each table, keyed by OID.
+    /// This is derived from `pg_class.relpages` and used to partition ctid ranges.
+    table_block_counts: BTreeMap<u32, u64>,
+    /// The current upstream schema of each table.
+    upstream_info: BTreeMap<u32, PostgresTableDesc>,
+}
+
+/// Represents a ctid range that a worker should snapshot.
+/// The range is [start_block, end_block) where end_block is optional (None means unbounded).
+#[derive(Debug)]
+struct CtidRange {
+    /// The starting block number (inclusive).
+    start_block: u64,
+    /// The ending block number (exclusive). None means unbounded (open-ended range).
+    end_block: Option<u64>,
+}
+
+/// Calculate the ctid range for a given worker based on estimated block count.
+///
+/// The table is partitioned by block number across all workers. Each worker gets a contiguous
+/// range of blocks. The last worker gets an open-ended range to handle any rows beyond the
+/// estimated block count.
+///
+/// When `estimated_blocks` is 0 (either because statistics are unavailable, the table appears
+/// empty, or PostgreSQL version < 14 doesn't support ctid range scans), the table is assigned
+/// to a single worker determined by `config.responsible_for(oid)` and that worker scans the
+/// full table.
+///
+/// Returns None if this worker has no work to do.
+fn worker_ctid_range(
+    config: &RawSourceCreationConfig,
+    estimated_blocks: u64,
+    oid: u32,
+) -> Option<CtidRange> {
+    // If estimated_blocks is 0, fall back to single-worker mode for this table.
+    // This handles:
+    // - PostgreSQL < 14 (ctid range scans not supported)
+    // - Tables that appear empty in statistics
+    // - Tables with stale/missing statistics
+    // The responsible worker scans the full table with an open-ended range.
+    if estimated_blocks == 0 {
+        let fallback = if config.responsible_for(oid) {
+            Some(CtidRange {
+                start_block: 0,
+                end_block: None,
+            })
+        } else {
+            None
+        };
+        return fallback;
+    }
+
+    let worker_id = u64::cast_from(config.worker_id);
+    let worker_count = u64::cast_from(config.worker_count);
+
+    // If there are more workers than blocks, only assign work to workers with id < estimated_blocks
+    // The last assigned worker still gets an open range.
+    let effective_worker_count = std::cmp::min(worker_count, estimated_blocks);
+
+    if worker_id >= effective_worker_count {
+        // This worker has no work to do
+        return None;
+    }
+
+    // Calculate start block for this worker (integer division distributes blocks evenly)
+    let start_block = worker_id * estimated_blocks / effective_worker_count;
+
+    // The last effective worker gets an open-ended range
+    let is_last_effective_worker = worker_id == effective_worker_count - 1;
+    if is_last_effective_worker {
+        Some(CtidRange {
+            start_block,
+            end_block: None,
+        })
+    } else {
+        let end_block = (worker_id + 1) * estimated_blocks / effective_worker_count;
+        Some(CtidRange {
+            start_block,
+            end_block: Some(end_block),
+        })
+    }
+}
+
+/// Estimate the number of blocks for each table from pg_class statistics.
+/// This is used to partition ctid ranges across workers.
+async fn estimate_table_block_counts(
+    client: &Client,
+    table_oids: &[u32],
+) -> Result<BTreeMap<u32, u64>, TransientError> {
+    if table_oids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    // Query relpages for all tables at once
+    let oid_list = table_oids
+        .iter()
+        .map(|oid| oid.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!(
+        "SELECT oid, relpages FROM pg_class WHERE oid IN ({})",
+        oid_list
+    );
+
+    let mut block_counts = BTreeMap::new();
+    // Initialize all tables with 0 blocks (in case they're not in pg_class)
+    for &oid in table_oids {
+        block_counts.insert(oid, 0);
+    }
+
+    // Execute the query and collect results
+    let rows = client.simple_query(&query).await?;
+    for msg in rows {
+        if let tokio_postgres::SimpleQueryMessage::Row(row) = msg {
+            let oid: u32 = row.get("oid").unwrap().parse().unwrap();
+            let relpages: i64 = row.get("relpages").unwrap().parse().unwrap_or(0);
+            // relpages can be -1 if never analyzed, treat as 0
+            let relpages = std::cmp::max(0, relpages).try_into().unwrap();
+            block_counts.insert(oid, relpages);
+        }
+    }
+
+    Ok(block_counts)
+}
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
-pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
-    mut scope: G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, MzOffset>,
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
-    subsource_resume_uppers: BTreeMap<GlobalId, Antichain<MzOffset>>,
-    table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<(CastType, MirScalarExpr)>)>,
+    table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: PgSnapshotMetrics,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, RewindRequest>,
-    Stream<G, ProgressStatisticsUpdate>,
-    Stream<G, ReplicationError>,
+    StackedCollection<'scope, MzOffset, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, MzOffset, RewindRequest>,
+    StreamVec<'scope, MzOffset, Infallible>,
+    StreamVec<'scope, MzOffset, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("TableReader({})", config.id);
@@ -191,81 +358,75 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
-    let (mut raw_handle, raw_data) = builder.new_output();
-    let (mut rewinds_handle, rewinds) = builder.new_output();
-    let (mut snapshot_handle, snapshot) = builder.new_output();
-    let (mut definite_error_handle, definite_errors) = builder.new_output();
-
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (raw_handle, raw_data) = builder.new_output();
+    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<_>>();
+    // This output is used to signal to the replication operator that the replication slot has been
+    // created. With the current state of execution serialization there isn't a lot of benefit
+    // of splitting the snapshot and replication phases into two operators.
+    // TODO(petrosagg): merge the two operators in one (while still maintaining separation as
+    // functions/modules)
+    let (_, slot_ready) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (snapshot_handle, snapshot) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
 
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the
     // feedback edge specifically having a default conncetion would result in a loop.
-    let mut snapshot_input = builder.new_disconnected_input(&feedback_data, Pipeline);
+    let mut snapshot_input = builder.new_disconnected_input(feedback_data, Pipeline);
 
-    // The export id must be sent to all workes, so we broadcast the feedback connection
+    // The export id must be sent to all workers, so we broadcast the feedback connection
     snapshot.broadcast().connect_loop(feedback_handle);
 
     let is_snapshot_leader = config.responsible_for("snapshot_leader");
 
-    // A global view of all exports that need to be snapshot by all workers. Note that this affects
-    // `reader_snapshot_table_info` but must be kept separate from it because each worker needs to
-    // understand if any worker is snapshotting any subsource.
-    let exports_to_snapshot: BTreeSet<_> = subsource_resume_uppers
-        .into_iter()
-        .filter_map(|(id, upper)| {
-            // Determined which collections need to be snapshot and which already have been.
-            if id != config.id && *upper == [MzOffset::minimum()] {
-                // Convert from `GlobalId` to output index.
-                Some(config.source_exports[&id].ingestion_output)
-            } else {
-                None
+    // A global view of all outputs that will be snapshot by all workers.
+    let mut all_outputs = vec![];
+    // Table info for tables that need snapshotting. All workers will snapshot all tables,
+    // but each worker will handle a different ctid range within each table.
+    let mut tables_to_snapshot = BTreeMap::new();
+    // A collection of `SourceStatistics` to update for a given Oid. Same info exists in table_info,
+    // but this avoids having to iterate + map each time the statistics are needed.
+    let mut export_statistics = BTreeMap::new();
+    for (table, outputs) in table_info.iter() {
+        for (&output_index, output) in outputs {
+            if *output.resume_upper != [MzOffset::minimum()] {
+                // Already has been snapshotted.
+                continue;
             }
-        })
-        .collect();
-
-    // A filtered table info containing only the tables that this worker should snapshot.
-    let reader_snapshot_table_info: BTreeMap<_, _> = table_info
-        .iter()
-        .filter(|(oid, (output_index, _, _))| {
-            mz_ore::soft_assert_or_log!(
-                *output_index != 0,
-                "primary collection should not be represented in table info"
-            );
-            exports_to_snapshot.contains(output_index) && config.responsible_for(oid)
-        })
-        .map(|(k, v)| (*k, v.clone()))
-        .collect();
+            all_outputs.push(output_index);
+            tables_to_snapshot
+                .entry(*table)
+                .or_insert_with(BTreeMap::new)
+                .insert(output_index, output.clone());
+            let statistics = config
+                .statistics
+                .get(&output.export_id)
+                .expect("statistics are initialized")
+                .clone();
+            export_statistics.insert((*table, output_index), statistics);
+        }
+    }
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let id = config.id;
             let worker_id = config.worker_id;
-
             let [
                 data_cap_set,
                 rewind_cap_set,
+                slot_ready_cap_set,
                 snapshot_cap_set,
                 definite_error_cap_set,
-                stats_cap,
             ]: &mut [_; 5] = caps.try_into().unwrap();
 
             trace!(
                 %id,
                 "timely-{worker_id} initializing table reader \
                     with {} tables to snapshot",
-                reader_snapshot_table_info.len()
+                    tables_to_snapshot.len()
             );
-
-            // Nothing needs to be snapshot.
-            if exports_to_snapshot.is_empty() {
-                trace!(%id, "no exports to snapshot");
-                // Note we do not emit a `ProgressStatisticsUpdate::Snapshot` update here,
-                // as we do not want to attempt to override the current value with 0. We
-                // just leave it null.
-                return Ok(());
-            }
 
             let connection_config = connection
                 .connection
@@ -275,33 +436,156 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     InTask::Yes,
                 )
                 .await?;
-            let task_name = format!("timely-{worker_id} PG snapshotter");
 
-            let client = if is_snapshot_leader {
+
+            // The snapshot operator is responsible for creating the replication slot(s).
+            // This first slot is the permanent slot that will be used for reading the replication
+            // stream.  A temporary slot is created further on to capture table snapshots.
+            let replication_client = if is_snapshot_leader {
                 let client = connection_config
                     .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
                     .await?;
-                // The main slot must be created *before* we start snapshotting so that we can be
-                // certain that the temporarly slot created for the snapshot start at an LSN that
-                // is greater than or equal to that of the main slot.
-                super::ensure_replication_slot(&client, &connection.publication_details.slot)
+                let main_slot = &connection.publication_details.slot;
+
+                tracing::info!(%id, "ensuring replication slot {main_slot} exists");
+                super::ensure_replication_slot(&client, main_slot).await?;
+                Some(client)
+            } else {
+                None
+            };
+            *slot_ready_cap_set = CapabilitySet::new();
+
+            // Nothing needs to be snapshot.
+            if all_outputs.is_empty() {
+                trace!(%id, "no exports to snapshot");
+                // Note we do not emit a `ProgressStatisticsUpdate::Snapshot` update here,
+                // as we do not want to attempt to override the current value with 0. We
+                // just leave it null.
+                return Ok(());
+            }
+
+            // A worker *must* emit a count even if not responsible for snapshotting a table
+            // as statistic summarization will return null if any worker hasn't set a value.
+            // This will also reset snapshot stats for any exports not snapshotting.
+            // If no workers need to snapshot, then avoid emitting these as they will clear
+            // previous stats.
+            for statistics in config.statistics.values() {
+                statistics.set_snapshot_records_known(0);
+                statistics.set_snapshot_records_staged(0);
+            }
+
+            // Collect table OIDs for block count estimation
+            let table_oids: Vec<u32> = tables_to_snapshot.keys().copied().collect();
+
+            // replication client is only set if this worker is the snapshot leader
+            let client = match replication_client {
+                Some(client) => {
+                    let tmp_slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
+                    let (snapshot_id, snapshot_lsn) =
+                        export_snapshot(&client, &tmp_slot, true).await?;
+
+                    // Check PostgreSQL version. Ctid range scans are only efficient on PG >= 14
+                    // due to improvements in TID range scan support.
+                    let pg_version = get_pg_major_version(&client).await?;
+
+                    // Estimate block counts for all tables from pg_class statistics.
+                    // This must be done by the leader and broadcasted to ensure all workers
+                    // use the same estimates for ctid range partitioning.
+                    //
+                    // For PostgreSQL < 14, we set all block counts to 0 to fall back to
+                    // single-worker-per-table mode, as ctid range scans are not well supported.
+                    let table_block_counts = if pg_version >= 14 {
+                        estimate_table_block_counts(&client, &table_oids).await?
+                    } else {
+                        trace!(
+                            %id,
+                            "timely-{worker_id} PostgreSQL version {pg_version} < 14, \
+                             falling back to single-worker-per-table snapshot mode"
+                        );
+                        // Return all zeros to trigger fallback mode
+                        table_oids.iter().map(|&oid| (oid, 0u64)).collect()
+                    };
+
+                    report_snapshot_size(
+                        &client,
+                        &tables_to_snapshot,
+                        metrics,
+                        &config,
+                        &export_statistics,
+                    )
                     .await?;
 
-                let snapshot_info = export_snapshot(&client).await?;
-                trace!(
-                    %id,
-                    "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
-                snapshot_handle.give(&snapshot_cap_set[0], snapshot_info);
+                    let upstream_info = {
+                        // As part of retrieving the schema info, RLS policies are checked to ensure the
+                        // snapshot can successfully read the tables. RLS policy errors are treated as
+                        // transient, as the customer can simply add the BYPASSRLS to the PG account
+                        // used by MZ.
+                        match retrieve_schema_info(
+                            &connection_config,
+                            &config.config.connection_context,
+                            &connection.publication,
+                            &table_oids)
+                            .await
+                        {
+                            // If the replication stream cannot be obtained in a definite way there is
+                            // nothing else to do. These errors are not retractable.
+                            Err(PostgresError::PublicationMissing(publication)) => {
+                                let err = DefiniteError::PublicationDropped(publication);
+                                for (oid, outputs) in tables_to_snapshot.iter() {
+                                    // Produce a definite error here and then exit to ensure
+                                    // a missing publication doesn't generate a transient
+                                    // error and restart this dataflow indefinitely.
+                                    //
+                                    // We pick `u64::MAX` as the LSN which will (in
+                                    // practice) never conflict any previously revealed
+                                    // portions of the TVC.
+                                    for output_index in outputs.keys() {
+                                        let update = (
+                                            (*oid, *output_index, Err(err.clone().into())),
+                                            MzOffset::from(u64::MAX),
+                                            Diff::ONE,
+                                        );
+                                        let size = update.fuel_size();
+                                        raw_handle
+                                            .give_fueled(&data_cap_set[0], update, size)
+                                            .await;
+                                    }
+                                }
 
-                client
-            } else {
-                // Only the snapshot leader needs a replication connection.
-                connection_config
-                    .connect(
-                        &task_name,
-                        &config.config.connection_context.ssh_tunnel_manager,
-                    )
-                    .await?
+                                definite_error_handle.give(
+                                    &definite_error_cap_set[0],
+                                    ReplicationError::Definite(Rc::new(err)),
+                                );
+                                return Ok(());
+                            },
+                            Err(e) => Err(TransientError::from(e))?,
+                            Ok(i) => i,
+                        }
+                    };
+
+                    let snapshot_info = SnapshotInfo {
+                        snapshot_id,
+                        snapshot_lsn,
+                        upstream_info,
+                        table_block_counts,
+                    };
+                    trace!(
+                        %id,
+                        "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
+                    snapshot_handle.give(&snapshot_cap_set[0], snapshot_info);
+
+                    client
+                }
+                None => {
+                    // Only the snapshot leader needs a replication connection.
+                    let task_name = format!("timely-{worker_id} PG snapshotter");
+                    connection_config
+                        .connect(
+                            &task_name,
+                            &config.config.connection_context.ssh_tunnel_manager,
+                        )
+                        .await?
+                }
             };
 
             // Configure statement_timeout based on param. We want to be able to
@@ -316,7 +600,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             )
             .await?;
 
-            let (snapshot, snapshot_lsn) = loop {
+            let snapshot_info = loop {
                 match snapshot_input.next().await {
                     Some(AsyncEvent::Data(_, mut data)) => {
                         break data.pop().expect("snapshot sent above")
@@ -328,124 +612,106 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     ),
                 }
             };
+            let SnapshotInfo {
+                snapshot_id,
+                snapshot_lsn,
+                table_block_counts,
+                upstream_info,
+            } = snapshot_info;
+
             // Snapshot leader is already in identified transaction but all other workers need to enter it.
             if !is_snapshot_leader {
-                trace!(%id, "timely-{worker_id} using snapshot id {snapshot:?}");
-                use_snapshot(&client, &snapshot).await?;
+                trace!(%id, "timely-{worker_id} using snapshot id {snapshot_id:?}");
+                use_snapshot(&client, &snapshot_id).await?;
             }
 
-            let upstream_info = {
-                let schema_client = connection_config
-                    .connect(
-                        "snapshot schema info",
-                        &config.config.connection_context.ssh_tunnel_manager,
-                    )
-                    .await?;
-                match mz_postgres_util::publication_info(&schema_client, &connection.publication)
-                    .await
-                {
-                    // If the replication stream cannot be obtained in a definite way there is
-                    // nothing else to do. These errors are not retractable.
-                    Err(PostgresError::PublicationMissing(publication)) => {
-                        let err = DefiniteError::PublicationDropped(publication);
-                        for oid in reader_snapshot_table_info.keys() {
-                            // Produce a definite error here and then exit to ensure
-                            // a missing publication doesn't generate a transient
-                            // error and restart this dataflow indefinitely.
-                            //
-                            // We pick `u64::MAX` as the LSN which will (in
-                            // practice) never conflict any previously revealed
-                            // portions of the TVC.
-                            let update =
-                                ((*oid, Err(err.clone().into())), MzOffset::from(u64::MAX), 1);
-                            raw_handle.give_fueled(&data_cap_set[0], update).await;
-                        }
-
-                        definite_error_handle.give(
-                            &definite_error_cap_set[0],
-                            ReplicationError::Definite(Rc::new(err)),
+            for (&oid, outputs) in tables_to_snapshot.iter() {
+                for (&output_index, info) in outputs.iter() {
+                    if let Err(err) = verify_schema(oid, info, &upstream_info) {
+                        let update = (
+                            (oid, output_index, Err(err.into())),
+                            MzOffset::minimum(),
+                            Diff::ONE,
                         );
-                        return Ok(());
-                    }
-                    Err(e) => Err(TransientError::from(e))?,
-                    Ok(i) => i,
-                }
-            };
-
-            let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
-
-            let worker_tables = reader_snapshot_table_info
-                .iter()
-                .map(|(_, (_, desc, _))| {
-                    (
-                        format!(
-                            "{}.{}",
-                            Ident::new_unchecked(desc.namespace.clone()).to_ast_string(),
-                            Ident::new_unchecked(desc.name.clone()).to_ast_string()
-                        ),
-                        desc.oid.clone(),
-                    )
-                })
-                .collect();
-
-            let snapshot_total =
-                fetch_snapshot_size(&client, worker_tables, metrics, &config).await?;
-
-            stats_output.give(
-                &stats_cap[0],
-                ProgressStatisticsUpdate::Snapshot {
-                    records_known: snapshot_total,
-                    records_staged: 0,
-                },
-            );
-
-            let mut snapshot_staged = 0;
-            for (&oid, (_, expected_desc, casts)) in reader_snapshot_table_info.iter() {
-                let desc = match verify_schema(oid, expected_desc, &upstream_info, casts) {
-                    Ok(()) => expected_desc,
-                    Err(err) => {
+                        let size = update.fuel_size();
                         raw_handle
-                            .give_fueled(
-                                &data_cap_set[0],
-                                ((oid, Err(err.into())), MzOffset::minimum(), 1),
-                            )
+                            .give_fueled(&data_cap_set[0], update, size)
                             .await;
                         continue;
                     }
-                };
 
-                trace!(
-                    %id,
-                    "timely-{worker_id} snapshotting table {:?}({oid}) @ {snapshot_lsn}",
-                    desc.name
-                );
+                    // Get estimated block count from the broadcasted table statistics
+                    let block_count = table_block_counts.get(&oid).copied().unwrap_or(0);
 
-                // To handle quoted/keyword names, we can use `Ident`'s AST printing, which
-                // emulate's PG's rules for name formatting.
-                let query = format!(
-                    "COPY {}.{} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                    Ident::new_unchecked(desc.namespace.clone()).to_ast_string(),
-                    Ident::new_unchecked(desc.name.clone()).to_ast_string(),
-                );
-                let mut stream = pin!(client.copy_out_simple(&query).await?);
-
-                let mut update = ((oid, Ok(vec![])), MzOffset::minimum(), 1);
-                while let Some(bytes) = stream.try_next().await? {
-                    let data = update.0 .1.as_mut().unwrap();
-                    data.clear();
-                    data.extend_from_slice(&bytes);
-                    raw_handle.give_fueled(&data_cap_set[0], &update).await;
-                    snapshot_staged += 1;
-                    // TODO(guswynn): does this 1000 need to be configurable?
-                    if snapshot_staged % 1000 == 0 {
-                        stats_output.give(
-                            &stats_cap[0],
-                            ProgressStatisticsUpdate::Snapshot {
-                                records_known: snapshot_total,
-                                records_staged: snapshot_staged,
-                            },
+                    // Calculate this worker's ctid range based on estimated blocks.
+                    // When estimated_blocks is 0 (PG < 14 or empty table), fall back to
+                    // single-worker mode using responsible_for to pick the worker.
+                    let Some(ctid_range) = worker_ctid_range(&config, block_count, oid) else {
+                        // This worker has no work for this table (more workers than blocks)
+                        trace!(
+                            %id,
+                            "timely-{worker_id} no ctid range assigned for table {:?}({oid})",
+                            info.desc.name
                         );
+                        continue;
+                    };
+
+                    trace!(
+                        %id,
+                        "timely-{worker_id} snapshotting table {:?}({oid}) output {output_index} \
+                         @ {snapshot_lsn} with ctid range {:?}",
+                        info.desc.name,
+                        ctid_range
+                    );
+
+                    // To handle quoted/keyword names, we can use `Ident`'s AST printing, which
+                    // emulate's PG's rules for name formatting.
+                    let namespace = Ident::new_unchecked(&info.desc.namespace)
+                        .to_ast_string_stable();
+                    let table = Ident::new_unchecked(&info.desc.name)
+                        .to_ast_string_stable();
+                    let column_list = info
+                        .desc
+                        .columns
+                        .iter()
+                        .map(|c| Ident::new_unchecked(&c.name).to_ast_string_stable())
+                        .join(",");
+
+
+                    let ctid_filter = match ctid_range.end_block {
+                        Some(end) => format!(
+                            "WHERE ctid >= '({},0)'::tid AND ctid < '({},0)'::tid",
+                            ctid_range.start_block, end
+                        ),
+                        None => format!("WHERE ctid >= '({},0)'::tid", ctid_range.start_block),
+                    };
+                    let query = format!(
+                        "COPY (SELECT {column_list} FROM {namespace}.{table} {ctid_filter}) \
+                         TO STDOUT (FORMAT TEXT, DELIMITER '\t')"
+                    );
+                    let mut stream = pin!(client.copy_out_simple(&query).await?);
+
+                    let mut snapshot_staged = 0;
+                    while let Some(bytes) = stream.try_next().await? {
+                        let update = (
+                            (oid, output_index, Ok(bytes)),
+                            MzOffset::minimum(),
+                            Diff::ONE,
+                        );
+                        let size = update.fuel_size();
+                        raw_handle
+                            .give_fueled(&data_cap_set[0], update, size)
+                            .await;
+                        snapshot_staged += 1;
+                        if snapshot_staged % 1000 == 0 {
+                            let stat = &export_statistics[&(oid, output_index)];
+                            stat.set_snapshot_records_staged(snapshot_staged);
+                        }
                     }
+                    // final update for snapshot_staged, using the staged
+                    // values as the total is an estimate
+                    let stat = &export_statistics[&(oid, output_index)];
+                    stat.set_snapshot_records_staged(snapshot_staged);
                 }
             }
 
@@ -453,27 +719,23 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // that this happens after the snapshot has finished because this is what unblocks the
             // replication operator and we want this to happen serially. It might seem like a good
             // idea to read the replication stream concurrently with the snapshot but it actually
-            // leads to a lot of data being staged for the future, which needlesly consumed memory
+            // leads to a lot of data being staged for the future, which needlessly consumed memory
             // in the cluster.
-            for &oid in reader_snapshot_table_info.keys() {
-                trace!(%id, "timely-{worker_id} producing rewind request for {oid}");
-                let req = RewindRequest { oid, snapshot_lsn };
-                rewinds_handle.give(&rewind_cap_set[0], req);
+            //
+            // Since all workers now snapshot all tables (each with different ctid ranges), we only
+            // emit rewind requests from the worker responsible for each output to avoid duplicates.
+            for (&oid, output) in tables_to_snapshot.iter() {
+                for (output_index, info) in output {
+                    // Only emit rewind request from one worker per output
+                    if !config.responsible_for((oid, *output_index)) {
+                        continue;
+                    }
+                    trace!(%id, "timely-{worker_id} producing rewind request for table {} output {output_index}", info.desc.name);
+                    let req = RewindRequest { output_index: *output_index, snapshot_lsn };
+                    rewinds_handle.give(&rewind_cap_set[0], req);
+                }
             }
             *rewind_cap_set = CapabilitySet::new();
-
-            if snapshot_staged < snapshot_total {
-                error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow
-                                 bigger than records staged {snapshot_staged}");
-                snapshot_staged = snapshot_total;
-            }
-            stats_output.give(
-                &stats_cap[0],
-                ProgressStatisticsUpdate::Snapshot {
-                    records_known: snapshot_total,
-                    records_staged: snapshot_staged,
-                },
-            );
 
             // Failure scenario after we have produced the snapshot, but before a successful COMMIT
             fail::fail_point!("pg_snapshot_failure", |_| Err(
@@ -503,66 +765,105 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
     let snapshot_updates = raw_data
-        .distribute()
-        .map(move |((oid, event), time, diff)| {
-            let (output_index, _, casts) = &table_info[oid];
+        .unary(Pipeline, "PgCastSnapshotRows", |_, _| {
+            move |input, output| {
+                input.for_each_time(|time, data| {
+                    let mut session = output.session(&time);
+                    for ((oid, output_index, event), time, diff) in
+                        data.flat_map(|data| data.drain(..))
+                    {
+                        let output = &table_info
+                            .get(&oid)
+                            .and_then(|outputs| outputs.get(&output_index))
+                            .expect("table_info contains all outputs");
 
-            let event = event
-                .as_ref()
-                .map_err(|e: &DataflowError| e.clone())
-                .and_then(|bytes| {
-                    decode_copy_row(bytes, casts.len(), &mut text_row)?;
-                    let datums = datum_vec.borrow_with(&text_row);
-                    super::cast_row(casts, &datums, &mut final_row)?;
-                    Ok(SourceMessage {
-                        key: Row::default(),
-                        value: final_row.clone(),
-                        metadata: Row::default(),
-                    })
+                        let event = event
+                            .as_ref()
+                            .map_err(|e: &DataflowError| e.clone())
+                            .and_then(|bytes| {
+                                decode_copy_row(bytes, output.casts.len(), &mut text_row)?;
+                                let datums = datum_vec.borrow_with(&text_row);
+                                super::cast_row(&output.casts, &datums, &mut final_row)?;
+                                Ok(SourceMessage {
+                                    key: Row::default(),
+                                    value: final_row.clone(),
+                                    metadata: Row::default(),
+                                })
+                            });
+
+                        session.give(((output_index, event), time, diff));
+                    }
                 });
-
-            ((*output_index, event), *time, *diff)
+            }
         })
         .as_collection();
 
-    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
+    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
     (
         snapshot_updates,
         rewinds,
-        stats_stream,
+        slot_ready,
         errors,
         button.press_on_drop(),
     )
 }
 
 /// Starts a read-only transaction on the SQL session of `client` at a consistent LSN point by
-/// creating a temporary replication slot. Returns a snapshot identifier that can be imported in
+/// creating a replication slot. Returns a snapshot identifier that can be imported in
 /// other SQL session and the LSN of the consistent point.
-async fn export_snapshot(client: &Client) -> Result<(String, MzOffset), TransientError> {
+async fn export_snapshot(
+    client: &Client,
+    slot: &str,
+    temporary: bool,
+) -> Result<(String, MzOffset), TransientError> {
+    match export_snapshot_inner(client, slot, temporary).await {
+        Ok(ok) => Ok(ok),
+        Err(err) => {
+            // We don't want to leave the client inside a failed tx
+            client.simple_query("ROLLBACK;").await?;
+            Err(err)
+        }
+    }
+}
+
+async fn export_snapshot_inner(
+    client: &Client,
+    slot: &str,
+    temporary: bool,
+) -> Result<(String, MzOffset), TransientError> {
     client
         .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
         .await?;
-    // A temporary replication slot is the only way to get the tx in a consistent LSN point
-    let slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
-    let query =
-        format!("CREATE_REPLICATION_SLOT {slot:?} TEMPORARY LOGICAL \"pgoutput\" USE_SNAPSHOT");
-    let row = simple_query_opt(client, &query).await?.unwrap();
-    let consistent_point: PgLsn = row.get("consistent_point").unwrap().parse().unwrap();
 
-    let row = simple_query_opt(client, "SELECT pg_export_snapshot();")
-        .await?
-        .unwrap();
-    let snapshot = row.get("pg_export_snapshot").unwrap().to_owned();
+    // Note: Using unchecked here is okay because we're using it in a SQL query.
+    let slot = Ident::new_unchecked(slot).to_ast_string_simple();
+    let temporary_str = if temporary { " TEMPORARY" } else { "" };
+    let query =
+        format!("CREATE_REPLICATION_SLOT {slot}{temporary_str} LOGICAL \"pgoutput\" USE_SNAPSHOT");
+    let row = match simple_query_opt(client, &query).await {
+        Ok(row) => Ok(row.unwrap()),
+        Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
+            return Err(TransientError::ReplicationSlotAlreadyExists);
+        }
+        Err(err) => Err(err),
+    }?;
 
     // When creating a replication slot postgres returns the LSN of its consistent point, which is
     // the LSN that must be passed to `START_REPLICATION` to cleanly transition from the snapshot
     // phase to the replication phase. `START_REPLICATION` includes all transactions that commit at
     // LSNs *greater than or equal* to the passed LSN. Therefore the snapshot phase must happen at
     // the greatest LSN that is not beyond the consistent point. That LSN is `consistent_point - 1`
+    let consistent_point: PgLsn = row.get("consistent_point").unwrap().parse().unwrap();
     let consistent_point = u64::from(consistent_point)
         .checked_sub(1)
         .expect("consistent point is always non-zero");
+
+    let row = simple_query_opt(client, "SELECT pg_export_snapshot();")
+        .await?
+        .unwrap();
+    let snapshot = row.get("pg_export_snapshot").unwrap().to_owned();
+
     Ok((snapshot, MzOffset::from(consistent_point)))
 }
 
@@ -572,7 +873,10 @@ async fn use_snapshot(client: &Client, snapshot: &str) -> Result<(), TransientEr
     client
         .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
         .await?;
-    let query = format!("SET TRANSACTION SNAPSHOT '{snapshot}';");
+    let query = format!(
+        "SET TRANSACTION SNAPSHOT {};",
+        escaped_string_literal(snapshot)
+    );
     client.simple_query(&query).await?;
     Ok(())
 }
@@ -603,30 +907,42 @@ fn decode_copy_row(data: &[u8], col_len: usize, row: &mut Row) -> Result<(), Def
     Ok(())
 }
 
-/// Record the sizes of the tables being snapshotted in `PgSnapshotMetrics`.
-async fn fetch_snapshot_size(
+/// Record the sizes of the tables being snapshotted in `PgSnapshotMetrics` and emit snapshot statistics for each export.
+async fn report_snapshot_size(
     client: &Client,
-    // The table names and oids owned by this worker.
-    tables: Vec<(String, Oid)>,
+    tables_to_snapshot: &BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: PgSnapshotMetrics,
     config: &RawSourceCreationConfig,
-) -> Result<u64, anyhow::Error> {
+    export_statistics: &BTreeMap<(u32, usize), SourceStatistics>,
+) -> Result<(), anyhow::Error> {
     // TODO(guswynn): delete unused configs
     let snapshot_config = config.config.parameters.pg_snapshot_config;
 
-    let mut total = 0;
-    for (table, oid) in tables {
-        let stats =
-            collect_table_statistics(client, snapshot_config.collect_strict_count, &table, oid)
-                .await?;
-        metrics.record_table_count_latency(
-            table,
-            stats.count_latency,
-            snapshot_config.collect_strict_count,
+    for (&oid, outputs) in tables_to_snapshot {
+        // Use the first output's desc to make the table name since it is the same for all outputs
+        let Some((_, info)) = outputs.first_key_value() else {
+            continue;
+        };
+        let table = format!(
+            "{}.{}",
+            Ident::new_unchecked(info.desc.namespace.clone()).to_ast_string_simple(),
+            Ident::new_unchecked(info.desc.name.clone()).to_ast_string_simple()
         );
-        total += stats.count;
+        let stats = collect_table_statistics(
+            client,
+            snapshot_config,
+            &info.desc.namespace,
+            &info.desc.name,
+            info.desc.oid,
+        )
+        .await?;
+        metrics.record_table_count_latency(table, stats.count_latency);
+        for &output_index in outputs.keys() {
+            export_statistics[&(oid, output_index)].set_snapshot_records_known(stats.count);
+            export_statistics[&(oid, output_index)].set_snapshot_records_staged(0);
+        }
     }
-    Ok(total)
+    Ok(())
 }
 
 #[derive(Default)]
@@ -637,43 +953,63 @@ struct TableStatistics {
 
 async fn collect_table_statistics(
     client: &Client,
-    strict: bool,
-    table: &str,
+    config: PgSourceSnapshotConfig,
+    namespace: &str,
+    table_name: &str,
     oid: u32,
 ) -> Result<TableStatistics, anyhow::Error> {
     use mz_ore::metrics::MetricsFutureExt;
     let mut stats = TableStatistics::default();
+    let table = format!(
+        "{}.{}",
+        Ident::new_unchecked(namespace).to_ast_string_simple(),
+        Ident::new_unchecked(table_name).to_ast_string_simple()
+    );
 
-    if strict {
+    let estimate_row = simple_query_opt(
+        client,
+        &format!("SELECT reltuples::bigint AS estimate_count FROM pg_class WHERE oid = '{oid}'"),
+    )
+    .wall_time()
+    .set_at(&mut stats.count_latency)
+    .await?;
+    stats.count = match estimate_row {
+        Some(row) => row.get("estimate_count").unwrap().parse().unwrap_or(0),
+        None => bail!("failed to get estimate count for {table}"),
+    };
+
+    // If the estimate is low enough we can attempt to get an exact count. Note that not yet
+    // vacuumed tables will report zero rows here and there is a possibility that they are very
+    // large. We accept this risk and we offer the feature flag as an escape hatch if it becomes
+    // problematic.
+    if config.collect_strict_count && stats.count < 1_000_000 {
         let count_row = simple_query_opt(client, &format!("SELECT count(*) as count from {table}"))
             .wall_time()
             .set_at(&mut stats.count_latency)
             .await?;
-        match count_row {
-            Some(row) => {
-                let count: i64 = row.get("count").unwrap().parse().unwrap();
-                stats.count = count.try_into()?;
-            }
+        stats.count = match count_row {
+            Some(row) => row.get("count").unwrap().parse().unwrap(),
             None => bail!("failed to get count for {table}"),
         }
-    } else {
-        let estimate_row = simple_query_opt(
-            client,
-            &format!(
-                "SELECT reltuples::bigint AS estimate_count FROM pg_class WHERE oid = '{oid}'"
-            ),
-        )
-        .wall_time()
-        .set_at(&mut stats.count_latency)
-        .await?;
-        match estimate_row {
-            Some(row) => match row.get("estimate_count").unwrap().parse().unwrap() {
-                -1 => stats.count = 0,
-                n => stats.count = n.try_into()?,
-            },
-            None => bail!("failed to get estimate count for {table}"),
-        };
     }
 
     Ok(stats)
+}
+
+/// Validates that there are no blocking RLS polcicies on the tables and retrieves table schemas
+/// for the given publication.
+async fn retrieve_schema_info(
+    connection_config: &Config,
+    connection_context: &ConnectionContext,
+    publication: &str,
+    table_oids: &[Oid],
+) -> Result<BTreeMap<u32, PostgresTableDesc>, PostgresError> {
+    let schema_client = connection_config
+        .connect(
+            "snapshot schema info",
+            &connection_context.ssh_tunnel_manager,
+        )
+        .await?;
+    mz_postgres_util::validate_no_rls_policies(&schema_client, table_oids).await?;
+    mz_postgres_util::publication_info(&schema_client, publication, Some(table_oids)).await
 }

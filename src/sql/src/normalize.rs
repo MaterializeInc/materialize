@@ -23,9 +23,10 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement,
-    CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement,
-    TableFactor, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
+    MutRecBlock, Op, Query, Statement, TableFactor, TableFromSourceColumns, UnresolvedItemName,
+    UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -296,6 +297,31 @@ pub fn create_statement(
             *if_not_exists = false;
         }
 
+        Statement::CreateTableFromSource(CreateTableFromSourceStatement {
+            name,
+            columns,
+            constraints: _,
+            external_reference: _,
+            source: _,
+            if_not_exists,
+            format: _,
+            include_metadata: _,
+            envelope: _,
+            with_options: _,
+        }) => {
+            *name = allocate_name(name)?;
+            let mut normalizer = QueryNormalizer::new();
+            if let TableFromSourceColumns::Defined(columns) = columns {
+                for c in columns {
+                    normalizer.visit_column_def_mut(c);
+                }
+            }
+            if let Some(err) = normalizer.err {
+                return Err(err);
+            }
+            *if_not_exists = false;
+        }
+
         Statement::CreateTable(CreateTableStatement {
             name,
             columns,
@@ -321,6 +347,7 @@ pub fn create_statement(
 
         Statement::CreateWebhookSource(CreateWebhookSourceStatement {
             name,
+            is_table: _,
             if_not_exists,
             include_headers: _,
             body_format: _,
@@ -375,7 +402,9 @@ pub fn create_statement(
             if_exists,
             name,
             columns: _,
+            replacement_for: _,
             in_cluster: _,
+            in_cluster_replica: _,
             query,
             with_options: _,
             as_of: _,
@@ -445,7 +474,7 @@ pub fn create_statement(
                 .retain(|o| o.name != mz_sql_parser::ast::CreateConnectionOptionName::Validate);
         }
 
-        _ => unreachable!(),
+        _ => bail_internal!("unexpected statement type for normalization"),
     }
 
     Ok(stmt.to_ast_string_stable())
@@ -477,34 +506,67 @@ pub fn create_statement(
 ///   also converts the struct's type from `$t` to `Vec<$t>`.
 macro_rules! generate_extracted_config {
     // No default specified, have remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None, false)], $(
-            $tail
-        ),*);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty), $($tail:tt),*
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, Option::<$t>, None, false)],
+            $($tail),*
+        );
     };
     // No default specified, no remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty)) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None, false)]);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty)
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, Option::<$t>, None, false)]
+        );
     };
     // Default specified, have remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v, false)], $(
-            $tail
-        ),*);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, $v, false)],
+            $($tail),*
+        );
     };
     // Default specified, no remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr))) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v, false)]);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, Default($v:expr))
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, $v, false)]
+        );
     };
     // AllowMultiple specified, have remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, AllowMultiple), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, vec![], true)], $(
-            $tail
-        ),*);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, AllowMultiple), $($tail:tt),*
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, vec![], true)],
+            $($tail),*
+        );
     };
     // AllowMultiple specified, no remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, AllowMultiple)) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, vec![], true)]);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, AllowMultiple)
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, vec![], true)]
+        );
     };
     ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr, $allow_multiple:literal))+]) => {
         paste::paste! {
@@ -535,20 +597,34 @@ macro_rules! generate_extracted_config {
                 }
             }
 
-            impl std::convert::TryFrom<Vec<$option_ty<Aug>>> for [<$option_ty Extracted>] {
+            impl std::convert::TryFrom<Vec<$option_ty<Aug>>>
+                for [<$option_ty Extracted>]
+            {
                 type Error = $crate::plan::PlanError;
-                fn try_from(v: Vec<$option_ty<Aug>>) -> Result<[<$option_ty Extracted>], Self::Error> {
+                fn try_from(
+                    v: Vec<$option_ty<Aug>>,
+                ) -> Result<[<$option_ty Extracted>], Self::Error> {
                     use [<$option_ty Name>]::*;
                     let mut extracted = [<$option_ty Extracted>]::default();
                     for option in v {
                         match option.name {
                             $(
                                 $option_name => {
-                                    if !$allow_multiple && !extracted.seen.insert(option.name.clone()) {
-                                        sql_bail!("{} specified more than once", option.name.to_ast_string());
+                                    if !$allow_multiple
+                                        && !extracted.seen.insert(option.name.clone())
+                                    {
+                                        sql_bail!(
+                                            "{} specified more than once",
+                                            option.name.to_ast_string_simple(),
+                                        );
                                     }
-                                    let val = <$t>::try_from_value(option.value)
-                                        .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string(), e))?;
+                                    let val: $t = $crate::plan::with_options
+                                        ::TryFromValue::try_from_value(option.value)
+                                        .map_err(|e| sql_err!(
+                                            "invalid {}: {}",
+                                            option.name.to_ast_string_simple(),
+                                            e,
+                                        ))?;
                                     generate_extracted_config!(
                                         @ifexpr $allow_multiple,
                                         extracted.[<$option_name:snake>].push(val),
@@ -564,23 +640,32 @@ macro_rules! generate_extracted_config {
 
             impl [<$option_ty Extracted>] {
                 #[allow(unused)]
-                fn into_values(self, catalog: &dyn crate::catalog::SessionCatalog) -> Vec<$option_ty<Aug>> {
+                fn into_values(
+                    self,
+                    catalog: &dyn crate::catalog::SessionCatalog,
+                ) -> Vec<$option_ty<Aug>> {
                     use [<$option_ty Name>]::*;
                     let mut options = Vec::new();
                     $(
                         let value = self.[<$option_name:snake>];
-                        let values = generate_extracted_config!(
+                        let values: Vec<_> = generate_extracted_config!(
                             @ifexpr $allow_multiple,
                             value,
-                            vec![value]
+                            Vec::from([value])
                         );
                         for value in values {
                             // If `try_into_value` returns `None`, then there was no option that
                             // generated this value. For example, this can happen when `value` is
                             // `None`.
-                            if let Some(value) = value.try_into_value(catalog) {
-                                let option = $option_ty {name: $option_name, value};
-                                options.push(option);
+                            let maybe_value = <$t as $crate::plan::with_options::TryFromValue<
+                                Option<mz_sql_parser::ast::WithOptionValue<$crate::names::Aug>>
+                            >>::try_into_value(value, catalog);
+                            match maybe_value {
+                                Some(value) => {
+                                    let option = $option_ty {name: $option_name, value};
+                                    options.push(option);
+                                },
+                                None => (),
                             }
                         }
                     )*

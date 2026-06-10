@@ -9,7 +9,10 @@
 
 use std::sync::Arc;
 
+use mz_catalog::builtin::BuiltinTable;
 use mz_catalog::builtin::notice::MZ_OPTIMIZER_NOTICES;
+use mz_ore::now::EpochMillis;
+use mz_repr::explain::ExprHumanizer;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{
@@ -22,9 +25,42 @@ use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
 impl Catalog {
     /// Transform the [`DataflowMetainfo`] by rendering an [`OptimizerNotice`]
     /// for each [`RawOptimizerNotice`].
+    ///
+    /// Thin adapter over [`CatalogState::render_notices_core`]: uses a
+    /// system-session [`ExprHumanizer`] and the catalog's `now` clock.
     pub fn render_notices(
         &self,
         df_meta: DataflowMetainfo<RawOptimizerNotice>,
+        notice_ids: Vec<GlobalId>,
+        item_id: Option<GlobalId>,
+    ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
+        // These notices will be persisted in a system table, so should not be
+        // relative to any user's session.
+        let conn_catalog = self.for_system_session();
+        CatalogState::render_notices_core(
+            &conn_catalog,
+            (self.config().now)(),
+            &df_meta,
+            notice_ids,
+            item_id,
+        )
+    }
+}
+
+impl CatalogState {
+    /// Render the raw optimizer notices in `df_meta` into fully-formatted
+    /// [`OptimizerNotice`]s, using the given `humanizer` to resolve object
+    /// names and `now` as the `created_at` timestamp for every rendered
+    /// notice.
+    ///
+    /// This is the humanizer-agnostic core of [`Catalog::render_notices`]; it
+    /// can be called before the new item is in the catalog by wrapping a
+    /// base humanizer with an [`mz_repr::explain::ExprHumanizerExt`] that
+    /// knows about the to-be-created item.
+    pub fn render_notices_core(
+        humanizer: &dyn ExprHumanizer,
+        now: EpochMillis,
+        df_meta: &DataflowMetainfo<RawOptimizerNotice>,
         notice_ids: Vec<GlobalId>,
         item_id: Option<GlobalId>,
     ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
@@ -33,42 +69,34 @@ impl Catalog {
 
         // Helper for rendering redacted fields.
         fn some_if_neq<T: Eq>(x: T, y: &T) -> Option<T> {
-            if &x != y {
-                Some(x)
-            } else {
-                None
-            }
+            if &x != y { Some(x) } else { None }
         }
 
-        // These notices will be persisted in a system table, so should not be
-        // relative to any user's session.
-        let conn_catalog = self.for_system_session();
-
-        let optimizer_notices = std::iter::zip(df_meta.optimizer_notices, notice_ids)
+        let optimizer_notices = std::iter::zip(&df_meta.optimizer_notices, notice_ids)
             .map(|(notice, id)| {
                 // Render non-redacted fields.
-                let message = notice.message(&conn_catalog, false).to_string();
-                let hint = notice.hint(&conn_catalog, false).to_string();
-                let action = match notice.action_kind(&conn_catalog) {
+                let message = notice.message(humanizer, false).to_string();
+                let hint = notice.hint(humanizer, false).to_string();
+                let action = match notice.action_kind(humanizer) {
                     ActionKind::SqlStatements => {
-                        Action::SqlStatements(notice.action(&conn_catalog, false).to_string())
+                        Action::SqlStatements(notice.action(humanizer, false).to_string())
                     }
                     ActionKind::PlainText => {
-                        Action::PlainText(notice.action(&conn_catalog, false).to_string())
+                        Action::PlainText(notice.action(humanizer, false).to_string())
                     }
                     ActionKind::None => {
                         Action::None // No concrete action.
                     }
                 };
                 // Render redacted fields.
-                let message_redacted = notice.message(&conn_catalog, true).to_string();
-                let hint_redacted = notice.hint(&conn_catalog, true).to_string();
-                let action_redacted = match notice.action_kind(&conn_catalog) {
+                let message_redacted = notice.message(humanizer, true).to_string();
+                let hint_redacted = notice.hint(humanizer, true).to_string();
+                let action_redacted = match notice.action_kind(humanizer) {
                     ActionKind::SqlStatements => {
-                        Action::SqlStatements(notice.action(&conn_catalog, true).to_string())
+                        Action::SqlStatements(notice.action(humanizer, true).to_string())
                     }
                     ActionKind::PlainText => {
-                        Action::PlainText(notice.action(&conn_catalog, true).to_string())
+                        Action::PlainText(notice.action(humanizer, true).to_string())
                     }
                     ActionKind::None => {
                         Action::None // No concrete action.
@@ -77,7 +105,7 @@ impl Catalog {
                 // Assemble the rendered notice.
                 OptimizerNotice {
                     id,
-                    kind: OptimizerNoticeKind::from(&notice),
+                    kind: OptimizerNoticeKind::from(notice),
                     item_id,
                     dependencies: notice.dependencies(),
                     message_redacted: some_if_neq(message_redacted, &message),
@@ -86,7 +114,7 @@ impl Catalog {
                     message,
                     hint,
                     action,
-                    created_at: (self.config().now)(),
+                    created_at: now,
                 }
             })
             .map(From::from) // Wrap each notice into an `Arc`.
@@ -94,7 +122,7 @@ impl Catalog {
 
         DataflowMetainfo {
             optimizer_notices,
-            index_usage_types: df_meta.index_usage_types,
+            index_usage_types: df_meta.index_usage_types.clone(),
         }
     }
 }
@@ -105,6 +133,19 @@ impl CatalogState {
     pub(crate) fn pack_optimizer_notices<'a>(
         &self,
         updates: &mut Vec<BuiltinTableUpdate>,
+        notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
+        diff: Diff,
+    ) {
+        let mut resolved = Vec::new();
+        self.pack_optimizer_notice_updates(&mut resolved, notices, diff);
+        updates.extend(self.resolve_builtin_table_updates(resolved));
+    }
+
+    /// Like [`Self::pack_optimizer_notices`], but produces unresolved
+    /// [`BuiltinTableUpdate`]s keyed by `&'static BuiltinTable`.
+    pub(crate) fn pack_optimizer_notice_updates<'a>(
+        &self,
+        updates: &mut Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
         notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
         diff: Diff,
     ) {
@@ -128,7 +169,7 @@ impl CatalogState {
 
             // push `id` column
             packer.push(Datum::String(id.as_str()));
-            // push `notice_type` column (TODO(21513): encode as int?)
+            // push `notice_type` column (TODO: encode as int?)
             packer.push(Datum::String(notice.kind.as_str()));
             // push `message` column
             packer.push(Datum::String(&notice.message));
@@ -159,7 +200,7 @@ impl CatalogState {
                 },
                 None => Datum::Null,
             });
-            // push `action_type` column (TODO(21513): encode as int?)
+            // push `action_type` column (TODO: encode as int?)
             packer.push(match &notice.action {
                 Action::None => Datum::Null,
                 action => Datum::String(action.kind().as_str()),
@@ -174,11 +215,11 @@ impl CatalogState {
             // push `created_at` column
             packer.push(Datum::TimestampTz(created_at));
 
-            updates.push(BuiltinTableUpdate {
-                id: self.resolve_builtin_table(&MZ_OPTIMIZER_NOTICES),
-                row: row.clone(),
+            updates.push(BuiltinTableUpdate::row(
+                &*MZ_OPTIMIZER_NOTICES,
+                row.clone(),
                 diff,
-            });
+            ));
         }
     }
 }

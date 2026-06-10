@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_MZ_VOLUMES
 from materialize.mzcompose.service import (
@@ -23,11 +24,31 @@ class Clusterd(Service):
         environment_id: str | None = None,
         environment_extra: list[str] = [],
         memory: str | None = None,
+        cpu: str | None = None,
         options: list[str] = [],
+        restart: str = "no",
+        stop_grace_period: str = "120s",
+        scratch_directory: str = "/scratch",
+        volumes: list[str] = [],
+        workers: int = 1,
+        process_names: list[str] = [],
+        mz_service: str = "materialized",
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
+            f"CLUSTERD_GRPC_HOST={name}",
+            # For old Mz versions
+            "CLUSTERD_USE_CTP=true",
             "MZ_SOFT_ASSERTIONS=1",
+            "MZ_EAT_MY_DATA=1",
+            # Defaults that were previously set by the clusterd entrypoint.sh.
+            "CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100",
+            "CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101",
+            "CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
+            "CLUSTERD_SECRETS_READER=local-file",
+            "CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets",
+            "LD_PRELOAD=libeatmydata.so",
+            f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}:6879",
             *environment_extra,
         ]
 
@@ -36,28 +57,69 @@ class Clusterd(Service):
 
         environment += [f"CLUSTERD_ENVIRONMENT_ID={environment_id}"]
 
-        options = ["--scratch-directory=/scratch", *options]
+        process_names = process_names if process_names else [name]
+        process_index = process_names.index(name)
+        compute_timely_config = timely_config(process_names, 2102, workers, 16)
+        storage_timely_config = timely_config(process_names, 2103, workers, 1337)
+
+        environment += [
+            f"CLUSTERD_PROCESS={process_index}",
+            f"CLUSTERD_COMPUTE_TIMELY_CONFIG={compute_timely_config}",
+            f"CLUSTERD_STORAGE_TIMELY_CONFIG={storage_timely_config}",
+        ]
+
+        options = ["clusterd", f"--scratch-directory={scratch_directory}", *options]
 
         config: ServiceConfig = {}
 
         if image:
             config["image"] = image
         else:
-            config["mzbuild"] = "clusterd"
+            config["mzbuild"] = "materialized"
+
+        # Override the materialized entrypoint so that `clusterd` is invoked
+        # via the command rather than via the entrypoint. This keeps
+        # `c.exec()` working (it prepends the entrypoint to exec commands).
+        config["entrypoint"] = ["tini", "--"]
 
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the
         # memory limit is known.
-        if memory:
-            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+        if memory or cpu:
+            limits = {}
+            if memory:
+                limits["memory"] = memory
+            if cpu:
+                limits["cpus"] = cpu
+            config["deploy"] = {"resources": {"limits": limits}}
 
         config.update(
             {
                 "command": options,
                 "ports": [2100, 2101, 6878],
                 "environment": environment,
-                "volumes": DEFAULT_MZ_VOLUMES,
+                "volumes": volumes or DEFAULT_MZ_VOLUMES,
+                "restart": restart,
+                "stop_grace_period": stop_grace_period,
             }
         )
 
         super().__init__(name=name, config=config)
+
+
+def timely_config(
+    process_names: list[str],
+    port: int,
+    workers: int,
+    arrangement_exert_proportionality: int,
+) -> str:
+    config = {
+        "workers": workers,
+        "process": 0,
+        "addresses": [f"{n}:{port}" for n in process_names],
+        "arrangement_exert_proportionality": arrangement_exert_proportionality,
+        "enable_zero_copy": False,
+        "enable_zero_copy_lgalloc": False,
+        "zero_copy_limit": None,
+    }
+    return json.dumps(config)

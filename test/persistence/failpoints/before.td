@@ -42,14 +42,18 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE failpoint
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-failpoint-${testdrive.seed}')
+
+> CREATE TABLE failpoint_tbl FROM SOURCE failpoint (REFERENCE "testdrive-failpoint-${testdrive.seed}")
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS f1
   ENVELOPE UPSERT
+> COMMIT
 
-> CREATE SINK failpoint_sink FROM failpoint
+> CREATE SINK failpoint_sink FROM failpoint_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-failpoint-sink-${testdrive.seed}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -62,7 +66,7 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 {"f1": "d${kafka-ingest.iteration}"} {"f2": "d${kafka-ingest.iteration}"}
 
 # Make sure that we read (and persisted) at least one message before activating the failpoint.
-> SELECT COUNT(*) > 0 FROM failpoint;
+> SELECT COUNT(*) > 0 FROM failpoint_tbl;
 true
 
 > SET failpoints = '${arg.failpoint}=${arg.action}';

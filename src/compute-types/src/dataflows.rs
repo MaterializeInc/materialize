@@ -13,32 +13,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{GlobalId, RelationType};
-use mz_storage_types::controller::CollectionMetadata;
-use proptest::prelude::{any, Arbitrary};
-use proptest::strategy::{BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
+use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
+use mz_storage_types::time_dependence::TimeDependence;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-use crate::dataflows::proto_dataflow_description::{
-    ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
-};
-use crate::plan::flat_plan::FlatPlan;
 use crate::plan::Plan;
+use crate::plan::render_plan::RenderPlan;
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_types.dataflows.rs"));
-
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
+pub struct DataflowDescription<P, S: 'static = ()> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
-    pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool)>,
+    pub source_imports: BTreeMap<GlobalId, SourceImport<S>>,
     /// Indexes made available to the dataflow.
     /// (id of index, import)
     pub index_imports: BTreeMap<GlobalId, IndexImport>,
@@ -48,33 +40,35 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view/table)
-    pub index_exports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
+    pub index_exports: BTreeMap<GlobalId, (IndexDesc, ReprRelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
-    pub sink_exports: BTreeMap<GlobalId, ComputeSinkDesc<S, T>>,
+    pub sink_exports: BTreeMap<GlobalId, ComputeSinkDesc<S>>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// If this is set, it should override the default setting determined by
     /// the upper bound of `since` frontiers contributing to the dataflow.
     /// It is an error for this to be set to a frontier not beyond that default.
-    pub as_of: Option<Antichain<T>>,
+    pub as_of: Option<Antichain<Timestamp>>,
     /// Frontier beyond which the dataflow should not execute.
     /// Specifically, updates at times greater or equal to this frontier are suppressed.
     /// This is often set to `as_of + 1` to enable "batch" computations.
     /// Note that frontier advancements might still happen to times that are after the `until`,
     /// only data is suppressed. (This is consistent with how frontier advancements can also
     /// happen before the `as_of`.)
-    pub until: Antichain<T>,
+    pub until: Antichain<Timestamp>,
     /// The initial as_of when the collection is first created. Filled only for materialized views.
     /// Note that this doesn't change upon restarts.
-    pub initial_storage_as_of: Option<Antichain<T>>,
+    pub initial_storage_as_of: Option<Antichain<Timestamp>>,
     /// The schedule of REFRESH materialized views.
     pub refresh_schedule: Option<RefreshSchedule>,
-    /// Human readable name
+    /// Human-readable name
     pub debug_name: String,
+    /// Description of how the dataflow's progress relates to wall-clock time. None for unknown.
+    pub time_dependence: Option<TimeDependence>,
 }
 
-impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
+impl<P, S> DataflowDescription<P, S> {
     /// Tests if the dataflow refers to a single timestamp, namely
     /// that `as_of` has a single coordinate and that the `until`
     /// value corresponds to the `as_of` value plus one, or `as_of`
@@ -107,43 +101,29 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
         // here (as expected) since we are going to compare two `None` values.
         as_of.try_step_forward().as_ref() == until.as_option()
     }
+}
 
+impl DataflowDescription<Plan, ()> {
     /// Check invariants expected to be true about `DataflowDescription`s.
     pub fn check_invariants(&self) -> Result<(), String> {
         let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
         let mut lir_ids = BTreeSet::new();
 
         while let Some(plan) = plans.pop() {
-            let lir_id = plan.lir_id();
+            let lir_id = plan.lir_id;
             if !lir_ids.insert(lir_id) {
                 return Err(format!(
                     "duplicate `LirId` in `DataflowDescription`: {lir_id}"
                 ));
             }
-            plans.extend(plan.children());
+            plans.extend(plan.node.children());
         }
 
         Ok(())
     }
 }
 
-impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
-    /// Creates a new dataflow description with a human-readable name.
-    pub fn new(name: String) -> Self {
-        Self {
-            source_imports: Default::default(),
-            index_imports: Default::default(),
-            objects_to_build: Vec::new(),
-            index_exports: Default::default(),
-            sink_exports: Default::default(),
-            as_of: Default::default(),
-            until: Antichain::new(),
-            initial_storage_as_of: None,
-            refresh_schedule: None,
-            debug_name: name,
-        }
-    }
-
+impl DataflowDescription<OptimizedMirRelationExpr, ()> {
     /// Imports a previously exported index.
     ///
     /// This method makes available an index previously exported as `id`, identified
@@ -153,7 +133,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         &mut self,
         id: GlobalId,
         desc: IndexDesc,
-        typ: RelationType,
+        typ: ReprRelationType,
         monotonic: bool,
     ) {
         self.index_imports.insert(
@@ -162,24 +142,28 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
                 desc,
                 typ,
                 monotonic,
+                with_snapshot: true,
             },
         );
     }
 
     /// Imports a source and makes it available as `id`.
-    pub fn import_source(&mut self, id: GlobalId, typ: RelationType, monotonic: bool) {
+    pub fn import_source(&mut self, id: GlobalId, typ: SqlRelationType, monotonic: bool) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
+        // Similarly, we require the snapshot by default, though optimization may choose to skip it.
         self.source_imports.insert(
             id,
-            (
-                SourceInstanceDesc {
+            SourceImport {
+                desc: SourceInstanceDesc {
                     storage_metadata: (),
                     arguments: SourceInstanceArguments { operators: None },
                     typ,
                 },
                 monotonic,
-            ),
+                with_snapshot: true,
+                upper: Antichain::new(),
+            },
         );
     }
 
@@ -192,7 +176,12 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     ///
     /// Future uses of `import_index` in other dataflow descriptions may use `id`,
     /// as long as this dataflow has not been terminated in the meantime.
-    pub fn export_index(&mut self, id: GlobalId, description: IndexDesc, on_type: RelationType) {
+    pub fn export_index(
+        &mut self,
+        id: GlobalId,
+        description: IndexDesc,
+        on_type: ReprRelationType,
+    ) {
         // We first create a "view" named `id` that ensures that the
         // data are correctly arranged and available for export.
         self.insert_plan(
@@ -209,7 +198,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 
     /// Exports as `id` a sink described by `description`.
-    pub fn export_sink(&mut self, id: GlobalId, description: ComputeSinkDesc<(), T>) {
+    pub fn export_sink(&mut self, id: GlobalId, description: ComputeSinkDesc<()>) {
         self.sink_exports.insert(id, description);
     }
 
@@ -222,7 +211,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, (source, _monotonic)) in self.source_imports.iter() {
+        for (source_id, source_import) in self.source_imports.iter() {
+            let source = &source_import.desc;
             if source_id == id {
                 return source.typ.arity();
             }
@@ -249,8 +239,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         for BuildDesc { plan, .. } in &mut self.objects_to_build {
             r(plan)?;
         }
-        for (source_instance_desc, _) in self.source_imports.values_mut() {
-            let Some(mfp) = source_instance_desc.arguments.operators.as_mut() else {
+        for source_import in self.source_imports.values_mut() {
+            let Some(mfp) = source_import.desc.arguments.operators.as_mut() else {
                 continue;
             };
             for expr in mfp.expressions.iter_mut() {
@@ -264,7 +254,24 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 }
 
-impl<P, S, T> DataflowDescription<P, S, T> {
+impl<P, S> DataflowDescription<P, S> {
+    /// Creates a new dataflow description with a human-readable name.
+    pub fn new(name: String) -> Self {
+        Self {
+            source_imports: Default::default(),
+            index_imports: Default::default(),
+            objects_to_build: Vec::new(),
+            index_exports: Default::default(),
+            sink_exports: Default::default(),
+            as_of: Default::default(),
+            until: Antichain::new(),
+            initial_storage_as_of: None,
+            refresh_schedule: None,
+            debug_name: name,
+            time_dependence: None,
+        }
+    }
+
     /// Sets the `as_of` frontier to the supplied argument.
     ///
     /// This method allows the dataflow to indicate a frontier up through
@@ -288,21 +295,28 @@ impl<P, S, T> DataflowDescription<P, S, T> {
     /// Generally, one should consider setting `as_of` at least to the `since`
     /// frontiers of contributing data sources and as aggressively as the
     /// computation permits.
-    pub fn set_as_of(&mut self, as_of: Antichain<T>) {
+    pub fn set_as_of(&mut self, as_of: Antichain<Timestamp>) {
         self.as_of = Some(as_of);
     }
 
     /// Records the initial `as_of` of the storage collection associated with a materialized view.
-    pub fn set_initial_as_of(&mut self, initial_as_of: Antichain<T>) {
+    pub fn set_initial_as_of(&mut self, initial_as_of: Antichain<Timestamp>) {
         self.initial_storage_as_of = Some(initial_as_of);
     }
 
     /// Identifiers of imported objects (indexes and sources).
     pub fn import_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
-        self.index_imports
-            .keys()
-            .chain(self.source_imports.keys())
-            .copied()
+        self.imported_index_ids().chain(self.imported_source_ids())
+    }
+
+    /// Identifiers of imported indexes.
+    pub fn imported_index_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
+        self.index_imports.keys().copied()
+    }
+
+    /// Identifiers of imported sources.
+    pub fn imported_source_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
+        self.source_imports.keys().copied()
     }
 
     /// Identifiers of exported objects (indexes and sinks).
@@ -325,7 +339,7 @@ impl<P, S, T> DataflowDescription<P, S, T> {
         self.sink_exports
             .iter()
             .filter_map(|(id, desc)| match desc.connection {
-                ComputeSinkConnection::Persist(_) => Some(*id),
+                ComputeSinkConnection::MaterializedView(_) => Some(*id),
                 _ => None,
             })
     }
@@ -381,9 +395,20 @@ impl<P, S, T> DataflowDescription<P, S, T> {
         assert!(builds.next().is_none());
         build
     }
+
+    /// Returns the id of the dataflow's sink export.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dataflow has no sink exports or has more than one.
+    pub fn sink_id(&self) -> GlobalId {
+        let sink_exports = &self.sink_exports;
+        let sink_id = sink_exports.keys().into_element();
+        *sink_id
+    }
 }
 
-impl<P, S, T> DataflowDescription<P, S, T>
+impl<P, S> DataflowDescription<P, S>
 where
     P: CollectionPlan,
 {
@@ -452,10 +477,9 @@ where
     }
 }
 
-impl<S, T> DataflowDescription<FlatPlan, S, T>
+impl<S> DataflowDescription<RenderPlan, S>
 where
     S: Clone + PartialEq,
-    T: Clone + timely::PartialOrder,
 {
     /// Determine if a dataflow description is compatible with this dataflow description.
     ///
@@ -475,7 +499,8 @@ where
             && old.sink_exports == new.sink_exports
             && old.objects_to_build == new.objects_to_build
             && old.index_imports == new.index_imports
-            && old.source_imports == new.source_imports;
+            && old.source_imports == new.source_imports
+            && old.time_dependence == new.time_dependence;
 
         let partial = if let (Some(old_as_of), Some(new_as_of)) = (&old.as_of, &new.as_of) {
             timely::PartialOrder::less_equal(old_as_of, new_as_of)
@@ -489,9 +514,9 @@ where
     /// Returns a `DataflowDescription` that has the same structure as `self` and can be
     /// structurally compared to other `DataflowDescription`s.
     ///
-    /// For now this method performs a single normalization only: It replaces transient `GlobalId`s
+    /// The function normalizes several properties. It replaces transient `GlobalId`s
     /// that are only used internally (i.e. not imported nor exported) with consecutive IDs
-    /// starting from `t1`.
+    /// starting from `t1`. It replaces the source import's `upper` by a dummy value.
     fn as_comparable(&self) -> Self {
         let external_ids: BTreeSet<_> = self.import_ids().chain(self.export_ids()).collect();
 
@@ -508,6 +533,11 @@ where
                 id
             }
         };
+
+        let mut source_imports = self.source_imports.clone();
+        for import in source_imports.values_mut() {
+            import.upper = Antichain::new();
+        }
 
         let mut objects_to_build = self.objects_to_build.clone();
         for object in &mut objects_to_build {
@@ -526,7 +556,7 @@ where
         }
 
         DataflowDescription {
-            source_imports: self.source_imports.clone(),
+            source_imports,
             index_imports: self.index_imports.clone(),
             objects_to_build,
             index_exports,
@@ -536,236 +566,8 @@ where
             initial_storage_as_of: self.initial_storage_as_of.clone(),
             refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
+            time_dependence: self.time_dependence.clone(),
         }
-    }
-}
-
-impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, CollectionMetadata> {
-    fn into_proto(&self) -> ProtoDataflowDescription {
-        ProtoDataflowDescription {
-            source_imports: self.source_imports.into_proto(),
-            index_imports: self.index_imports.into_proto(),
-            objects_to_build: self.objects_to_build.into_proto(),
-            index_exports: self.index_exports.into_proto(),
-            sink_exports: self.sink_exports.into_proto(),
-            as_of: self.as_of.into_proto(),
-            until: Some(self.until.into_proto()),
-            initial_storage_as_of: self.initial_storage_as_of.into_proto(),
-            refresh_schedule: self.refresh_schedule.into_proto(),
-            debug_name: self.debug_name.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoDataflowDescription) -> Result<Self, TryFromProtoError> {
-        Ok(DataflowDescription {
-            source_imports: proto.source_imports.into_rust()?,
-            index_imports: proto.index_imports.into_rust()?,
-            objects_to_build: proto.objects_to_build.into_rust()?,
-            index_exports: proto.index_exports.into_rust()?,
-            sink_exports: proto.sink_exports.into_rust()?,
-            as_of: proto.as_of.map(|x| x.into_rust()).transpose()?,
-            until: proto
-                .until
-                .map(|x| x.into_rust())
-                .transpose()?
-                .unwrap_or_else(Antichain::new),
-            initial_storage_as_of: proto
-                .initial_storage_as_of
-                .map(|x| x.into_rust())
-                .transpose()?,
-            refresh_schedule: proto.refresh_schedule.into_rust()?,
-            debug_name: proto.debug_name,
-        })
-    }
-}
-
-impl ProtoMapEntry<GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool)> for ProtoSourceImport {
-    fn from_rust<'a>(
-        entry: (
-            &'a GlobalId,
-            &'a (SourceInstanceDesc<CollectionMetadata>, bool),
-        ),
-    ) -> Self {
-        ProtoSourceImport {
-            id: Some(entry.0.into_proto()),
-            source_instance_desc: Some(entry.1 .0.into_proto()),
-            monotonic: entry.1 .1.into_proto(),
-        }
-    }
-
-    fn into_rust(
-        self,
-    ) -> Result<(GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool)), TryFromProtoError> {
-        Ok((
-            self.id.into_rust_if_some("ProtoSourceImport::id")?,
-            (
-                self.source_instance_desc
-                    .into_rust_if_some("ProtoSourceImport::source_instance_desc")?,
-                self.monotonic.into_rust()?,
-            ),
-        ))
-    }
-}
-
-impl ProtoMapEntry<GlobalId, IndexImport> for ProtoIndexImport {
-    fn from_rust<'a>(
-        (
-            id,
-            IndexImport {
-                desc,
-                typ,
-                monotonic,
-            },
-        ): (&'a GlobalId, &'a IndexImport),
-    ) -> Self {
-        ProtoIndexImport {
-            id: Some(id.into_proto()),
-            index_desc: Some(desc.into_proto()),
-            typ: Some(typ.into_proto()),
-            monotonic: monotonic.into_proto(),
-        }
-    }
-
-    fn into_rust(self) -> Result<(GlobalId, IndexImport), TryFromProtoError> {
-        Ok((
-            self.id.into_rust_if_some("ProtoIndex::id")?,
-            IndexImport {
-                desc: self
-                    .index_desc
-                    .into_rust_if_some("ProtoIndexImport::index_desc")?,
-                typ: self.typ.into_rust_if_some("ProtoIndexImport::typ")?,
-                monotonic: self.monotonic.into_rust()?,
-            },
-        ))
-    }
-}
-
-impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType)> for ProtoIndexExport {
-    fn from_rust<'a>(
-        (id, (index_desc, typ)): (&'a GlobalId, &'a (IndexDesc, RelationType)),
-    ) -> Self {
-        ProtoIndexExport {
-            id: Some(id.into_proto()),
-            index_desc: Some(index_desc.into_proto()),
-            typ: Some(typ.into_proto()),
-        }
-    }
-
-    fn into_rust(self) -> Result<(GlobalId, (IndexDesc, RelationType)), TryFromProtoError> {
-        Ok((
-            self.id.into_rust_if_some("ProtoIndexExport::id")?,
-            (
-                self.index_desc
-                    .into_rust_if_some("ProtoIndexExport::index_desc")?,
-                self.typ.into_rust_if_some("ProtoIndexExport::typ")?,
-            ),
-        ))
-    }
-}
-
-impl ProtoMapEntry<GlobalId, ComputeSinkDesc<CollectionMetadata>> for ProtoSinkExport {
-    fn from_rust<'a>(
-        (id, sink_desc): (&'a GlobalId, &'a ComputeSinkDesc<CollectionMetadata>),
-    ) -> Self {
-        ProtoSinkExport {
-            id: Some(id.into_proto()),
-            sink_desc: Some(sink_desc.into_proto()),
-        }
-    }
-
-    fn into_rust(
-        self,
-    ) -> Result<(GlobalId, ComputeSinkDesc<CollectionMetadata>), TryFromProtoError> {
-        Ok((
-            self.id.into_rust_if_some("ProtoSinkExport::id")?,
-            self.sink_desc
-                .into_rust_if_some("ProtoSinkExport::sink_desc")?,
-        ))
-    }
-}
-
-impl Arbitrary for DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any_dataflow_description().boxed()
-    }
-}
-
-proptest::prop_compose! {
-    fn any_dataflow_description()(
-        source_imports in proptest::collection::vec(any_source_import(), 1..3),
-        index_imports in proptest::collection::vec(any_dataflow_index_import(), 1..3),
-        objects_to_build in proptest::collection::vec(any::<BuildDesc<FlatPlan>>(), 1..3),
-        index_exports in proptest::collection::vec(any_dataflow_index_export(), 1..3),
-        sink_descs in proptest::collection::vec(
-            any::<(GlobalId, ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp>)>(),
-            1..3,
-        ),
-        as_of_some in any::<bool>(),
-        as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
-        debug_name in ".*",
-        initial_storage_as_of_some in any::<bool>(),
-        initial_as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
-        refresh_schedule_some in any::<bool>(),
-        refresh_schedule in any::<RefreshSchedule>(),
-    ) -> DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp> {
-        DataflowDescription {
-            source_imports: BTreeMap::from_iter(source_imports.into_iter()),
-            index_imports: BTreeMap::from_iter(index_imports.into_iter()),
-            objects_to_build,
-            index_exports: BTreeMap::from_iter(index_exports.into_iter()),
-            sink_exports: BTreeMap::from_iter(
-                sink_descs.into_iter(),
-            ),
-            as_of: if as_of_some {
-                Some(Antichain::from(as_of))
-            } else {
-                None
-            },
-            until: Antichain::new(),
-            initial_storage_as_of: if initial_storage_as_of_some {
-                Some(Antichain::from(initial_as_of))
-            } else {
-                None
-            },
-            refresh_schedule: if refresh_schedule_some {
-                Some(refresh_schedule)
-            } else {
-                None
-            },
-            debug_name,
-        }
-    }
-}
-
-fn any_source_import(
-) -> impl Strategy<Value = (GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool))> {
-    (
-        any::<GlobalId>(),
-        any::<(SourceInstanceDesc<CollectionMetadata>, bool)>(),
-    )
-}
-
-proptest::prop_compose! {
-    fn any_dataflow_index_import()(
-        id in any::<GlobalId>(),
-        desc in any::<IndexDesc>(),
-        typ in any::<RelationType>(),
-        monotonic in any::<bool>(),
-    ) -> (GlobalId, IndexImport) {
-        (id, IndexImport {desc, typ, monotonic})
-    }
-}
-
-proptest::prop_compose! {
-    fn any_dataflow_index_export()(
-        id in any::<GlobalId>(),
-        index in any::<IndexDesc>(),
-        typ in any::<RelationType>(),
-    ) -> (GlobalId, (IndexDesc, RelationType)) {
-        (id, (index, typ))
     }
 }
 
@@ -774,29 +576,12 @@ pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
 
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
-    #[proptest(strategy = "proptest::collection::vec(any::<MirScalarExpr>(), 1..3)")]
     pub key: Vec<MirScalarExpr>,
-}
-
-impl RustType<ProtoIndexDesc> for IndexDesc {
-    fn into_proto(&self) -> ProtoIndexDesc {
-        ProtoIndexDesc {
-            on_id: Some(self.on_id.into_proto()),
-            key: self.key.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoIndexDesc) -> Result<Self, TryFromProtoError> {
-        Ok(IndexDesc {
-            on_id: proto.on_id.into_rust_if_some("ProtoIndexDesc::on_id")?,
-            key: proto.key.into_rust()?,
-        })
-    }
 }
 
 /// Information about an imported index, and how it will be used by the dataflow.
@@ -805,56 +590,31 @@ pub struct IndexImport {
     /// Description of index.
     pub desc: IndexDesc,
     /// Schema and keys of the object the index is on.
-    pub typ: RelationType,
+    pub typ: ReprRelationType,
     /// Whether the index will supply monotonic data.
     pub monotonic: bool,
+    /// Whether this import must include the snapshot data.
+    pub with_snapshot: bool,
+}
+
+/// Information about an imported source, and how it will be used by the dataflow.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SourceImport<S: 'static = ()> {
+    /// Description of the source instance to import.
+    pub desc: SourceInstanceDesc<S>,
+    /// Whether the source will supply monotonic data.
+    pub monotonic: bool,
+    /// Whether this import must include the snapshot data.
+    pub with_snapshot: bool,
+    /// The initial known upper frontier for the source.
+    pub upper: Antichain<Timestamp>,
 }
 
 /// An association of a global identifier to an expression.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildDesc<P> {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub id: GlobalId,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub plan: P,
-}
-
-impl RustType<ProtoBuildDesc> for BuildDesc<FlatPlan> {
-    fn into_proto(&self) -> ProtoBuildDesc {
-        ProtoBuildDesc {
-            id: Some(self.id.into_proto()),
-            plan: Some(self.plan.into_proto()),
-        }
-    }
-
-    fn from_proto(x: ProtoBuildDesc) -> Result<Self, TryFromProtoError> {
-        Ok(BuildDesc {
-            id: x.id.into_rust_if_some("ProtoBuildDesc::id")?,
-            plan: x.plan.into_rust_if_some("ProtoBuildDesc::plan")?,
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::ProptestConfig;
-    use proptest::proptest;
-
-    use crate::dataflows::DataflowDescription;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-
-        #[mz_ore::test]
-        fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp>>()) {
-            let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
 }

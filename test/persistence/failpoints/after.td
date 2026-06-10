@@ -56,15 +56,19 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 
 > CREATE CLUSTER single_replica_cluster SIZE '${arg.default-replica-size}';
 
+> BEGIN
 > CREATE SOURCE failpoint_from_sink
   IN CLUSTER single_replica_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-failpoint-sink-${testdrive.seed}')
+
+> CREATE TABLE failpoint_from_sink_tbl FROM SOURCE failpoint_from_sink (REFERENCE "testdrive-failpoint-sink-${testdrive.seed}")
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS f1
   ENVELOPE UPSERT
+> COMMIT
 
-> SELECT COUNT(*), COUNT(DISTINCT f1), COUNT(DISTINCT after) FROM failpoint_from_sink
+> SELECT COUNT(*), COUNT(DISTINCT f1), COUNT(DISTINCT after) FROM failpoint_from_sink_tbl
 120000 120000 120000
 
 # Delete some values inserted pre-restart
@@ -78,5 +82,5 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 > SELECT COUNT(*), COUNT(DISTINCT f1), COUNT(DISTINCT f2) FROM failpoint;
 100000 100000 100000
 
-> SELECT COUNT(*) FROM failpoint_from_sink;
+> SELECT COUNT(*) FROM failpoint_from_sink_tbl;
 120000

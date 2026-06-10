@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 import argparse
 
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -33,6 +33,9 @@ from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.output_consistency_test import (
     OutputConsistencyTest,
     connect,
+)
+from materialize.output_consistency.validation.error_message_normalizer import (
+    ErrorMessageNormalizer,
 )
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.postgres_consistency.custom.predefined_pg_queries import (
@@ -79,7 +82,7 @@ class PostgresConsistencyTest(OutputConsistencyTest):
     def create_result_comparator(
         self, ignore_filter: GenericInconsistencyIgnoreFilter
     ) -> ResultComparator:
-        return PostgresResultComparator(ignore_filter)
+        return PostgresResultComparator(ignore_filter, ErrorMessageNormalizer())
 
     def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
         return PgInconsistencyIgnoreFilter()
@@ -142,7 +145,7 @@ def main() -> int:
         test.pg_connection = connect(
             args.pg_host, args.pg_port, pg_db_user, args.pg_password
         )
-    except InterfaceError:
+    except OperationalError:
         return 1
 
     result = test.run_output_consistency_tests(

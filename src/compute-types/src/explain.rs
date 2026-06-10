@@ -13,10 +13,10 @@ pub(crate) mod text;
 
 use std::collections::BTreeMap;
 
-use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSource};
+use mz_expr::explain::{ExplainContext, ExplainMultiPlan, ExplainSource, enforce_linear_chains};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
-use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 use mz_repr::GlobalId;
+use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
 use crate::dataflows::DataflowDescription;
 use crate::plan::Plan;
@@ -69,8 +69,8 @@ impl<'a> DataflowDescription<Plan> {
         let sources = self
             .source_imports
             .iter_mut()
-            .map(|(id, (source_desc, _))| {
-                let op = source_desc.arguments.operators.as_ref();
+            .map(|(id, import)| {
+                let op = import.desc.arguments.operators.as_ref();
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();
@@ -137,8 +137,8 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
         let sources = self
             .source_imports
             .iter_mut()
-            .map(|(id, (source_desc, _))| {
-                let op = source_desc.arguments.operators.as_ref();
+            .map(|(id, import)| {
+                let op = import.desc.arguments.operators.as_ref();
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();
@@ -151,8 +151,8 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
     }
 }
 
-/// TODO(#25239): Add documentation.
-pub fn export_ids_for<P, S, T>(dd: &DataflowDescription<P, S, T>) -> BTreeMap<GlobalId, GlobalId> {
+/// TODO(database-issues#7533): Add documentation.
+pub fn export_ids_for<P, S>(dd: &DataflowDescription<P, S>) -> BTreeMap<GlobalId, GlobalId> {
     let mut map = BTreeMap::<GlobalId, GlobalId>::default();
 
     // Dataflows created from a `CREATE MATERIALIZED VIEW` have:

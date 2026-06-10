@@ -28,7 +28,17 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, QualifiedReplica};
 
 /// An identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub struct Ident(pub(crate) String);
 
 impl Ident {
@@ -275,7 +285,7 @@ impl Ident {
     }
 
     /// An identifier can be printed in bare mode if
-    ///  * it matches the regex [a-z_][a-z0-9_]* and
+    ///  * it matches the regex `[a-z_][a-z0-9_]*` and
     ///  * it is not a "reserved keyword."
     pub fn can_be_printed_bare(&self) -> bool {
         let mut chars = self.0.chars();
@@ -331,7 +341,9 @@ impl_display!(Ident);
 pub enum IdentError {
     #[error("identifier too long (len: {}, max: {}, value: {})", .0.len(), Ident::MAX_LENGTH, .0.quoted())]
     TooLong(String),
-    #[error("failed to generate identifier with prefix '{prefix}' and suffix '{suffix}' after {attempts} attempts")]
+    #[error(
+        "failed to generate identifier with prefix '{prefix}' and suffix '{suffix}' after {attempts} attempts"
+    )]
     FailedToGenerate {
         prefix: String,
         suffix: String,
@@ -343,7 +355,17 @@ pub enum IdentError {
 }
 
 /// A name of a table, view, custom type, etc. that lives in a schema, possibly multi-part, i.e. db.schema.obj
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub struct UnresolvedItemName(pub Vec<Ident>);
 
 pub enum CatalogName {
@@ -429,6 +451,7 @@ pub enum UnresolvedObjectName {
     Schema(UnresolvedSchemaName),
     Role(Ident),
     Item(UnresolvedItemName),
+    NetworkPolicy(Ident),
 }
 
 impl AstDisplay for UnresolvedObjectName {
@@ -440,6 +463,7 @@ impl AstDisplay for UnresolvedObjectName {
             UnresolvedObjectName::Schema(n) => f.write_node(n),
             UnresolvedObjectName::Role(n) => f.write_node(n),
             UnresolvedObjectName::Item(n) => f.write_node(n),
+            UnresolvedObjectName::NetworkPolicy(n) => f.write_node(n),
         }
     }
 }

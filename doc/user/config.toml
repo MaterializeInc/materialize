@@ -1,14 +1,22 @@
-languageCode = "en-us"
 title = "Materialize Documentation"
 pygmentsCodeFences = true
 pygmentsUseClasses = true
 
+disableKinds = ['taxonomy']
+
 [params]
 repo = "//github.com/MaterializeInc/materialize"
+bannerMessage = ""
+bannerLink = ""
 
 [frontmatter]
 publishDate = ["publishDate"]
 
+[languages]
+  [languages.en]
+    locale = "en-us" # Replaces deprecated languageCode
+    label = "English"
+    weight = 1
 #
 # Get started
 #
@@ -16,39 +24,16 @@ publishDate = ["publishDate"]
 [[menu.main]]
 identifier = "get-started"
 name = "Get started"
-weight= 5
+weight = 5
 
 #
 # Connect sources
 #
 
 [[menu.main]]
-identifier = "ingest-data"
-name = "Ingest data"
-weight= 11
-
-[[menu.main]]
-name = "MySQL"
+name = "CockroachDB"
 parent = 'ingest-data'
-identifier = 'mysql'
-weight = 5
-
-[[menu.main]]
-name = "PostgreSQL"
-parent = 'ingest-data'
-identifier = 'postgresql'
-weight = 10
-
-[[menu.main]]
-name = "SQL Server"
-parent = 'ingest-data'
-identifier = 'sql-server'
-weight = 15
-
-[[menu.main]]
-name = "Kafka"
-parent = 'ingest-data'
-identifier = 'kafka'
+identifier = 'crdb'
 weight = 20
 
 [[menu.main]]
@@ -65,9 +50,9 @@ weight = 30
 
 [[menu.main]]
 identifier = "network-security"
-name = "Network security"
+name = "Network configuration"
 parent = 'ingest-data'
-weight= 35
+weight = 35
 
 #
 # Transform data
@@ -76,102 +61,7 @@ weight= 35
 [[menu.main]]
 identifier = "transform-data"
 name = "Transform data"
-weight= 12
-
-[[menu.main]]
-name = "Overview"
-parent = 'transform-data'
-identifier = 'transform-overview'
-weight = 5
-
-[[menu.main]]
-name = "Views"
-parent = "transform-overview"
-url = "/sql/create-view/"
-weight= 5
-
-[[menu.main]]
-name = "Indexes"
-parent = "transform-overview"
-url = "/sql/create-index"
-weight= 10
-
-[[menu.main]]
-name = "Materialized views"
-parent = "transform-overview"
-url = "/sql/create-materialized-view/"
-weight= 15
-
-[[menu.main]]
-name = "Common patterns"
-parent = 'transform-data'
-identifier = 'sql-patterns'
-weight = 30
-
-#
-# Serve results
-#
-
-[[menu.main]]
-identifier = "serve"
-name = "Serve results"
-weight= 13
-
-[[menu.main]]
-name = "Query using `SELECT`"
-parent = "serve"
-url = "/sql/select/"
-weight= 5
-
-[[menu.main]]
-name = "Query using external tools"
-identifier = "bi-tools"
-parent = "serve"
-weight= 10
-
-[[menu.main]]
-name = "Subscribe to results (`SUBSCRIBE`)"
-parent = "serve"
-url = "/sql/subscribe/"
-weight= 15
-
-[[menu.main]]
-name = "Sink results to external tools"
-identifier = "sink"
-parent = "serve"
-weight= 20
-
-[[menu.main]]
-name = "Kafka"
-parent = "sink"
-url = "/sql/create-sink"
-weight= 20
-
-[[menu.main]]
-name = "Redpanda"
-parent = "sink"
-url = "/sql/create-sink"
-weight= 30
-#
-# Manage Materialize
-#
-
-[[menu.main]]
-identifier = "manage"
-name = "Manage Materialize"
-weight= 14
-
-[[menu.main]]
-name = "Monitoring"
-identifier = "monitor"
-weight= 5
-parent = "manage"
-
-[[menu.main]]
-identifier = "manage-dbt"
-name = "Use dbt to manage Materialize"
-weight= 10
-parent = "manage"
+weight = 12
 
 
 #
@@ -179,78 +69,19 @@ parent = "manage"
 #
 
 [[menu.main]]
+identifier = "sql"
+name = "SQL Reference"
+weight = 75
+
+
+[[menu.main]]
 identifier = "reference"
 name = "Reference"
-weight= 15
-
-[[menu.main]]
-identifier = "cs_kafka"
-name = "Kafka"
-parent = "create-source"
-url = "/sql/create-source/kafka"
-weight= 5
-
-[[menu.main]]
-identifier = "cs_redpanda"
-name = "Redpanda"
-parent = "create-source"
-url = "/sql/create-source/kafka"
-weight= 10
-
-[[menu.main]]
-identifier = "csink_kafka"
-name = "Kafka"
-parent = "create-sink"
-url = "/sql/create-sink/kafka"
-
-[[menu.main]]
-identifier = "csink_redpanda"
-name = "Redpanda"
-parent = "create-sink"
-url = "/sql/create-sink/kafka"
-
-[[menu.main]]
-name = "SQL commands"
-identifier = "commands"
-parent = "reference"
-weight = 100
-
-[[menu.main]]
-name = "CREATE SOURCE"
-parent = 'commands'
-url = '/sql/create-source'
-
-[[menu.main]]
-name = "CREATE SINK"
-parent = 'commands'
-url = '/sql/create-sink'
+weight = 76
 
 #
-# Tools and integrations
+# Releases
 #
-
-[[menu.main]]
-identifier = "integrations"
-name = "Tools and integrations"
-weight= 25
-
-[[menu.main]]
-identifier = "tools-and-integrations"
-name = "Overview"
-parent = "integrations"
-url = "/integrations"
-weight = 5
-
-[[menu.main]]
-identifier = "cli-reference"
-name = "Command reference"
-parent = "cli"
-
-[[menu.main]]
-identifier = "client-libraries"
-name = "SQL drivers"
-parent = "integrations"
-weight = 15
 
 #
 # About
@@ -259,28 +90,55 @@ weight = 15
 [[menu.main]]
 identifier = "about"
 name = "About"
-weight = 70
+weight = 90
 
 [[menu.main]]
-name = "Security overview"
+name = "Materialize Cloud Security and Compliance"
 parent = "about"
 url = "https://materialize.com/security-overview"
-weight= 25
+weight = 50
 
 [[menu.main]]
 name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
-weight= 30
+weight = 55
+
+#
+# Custom output format for Claude skill generation
+#
+[outputFormats.skill]
+  mediaType = "text/markdown"
+  baseName = "index"
+  isPlainText = true
+  notAlternative = true
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
 unsafe = true
+
+[markup]
+  [markup.highligh]
+    noClasses = false
+    style = "monokai"
+
+# Need to co-ordinate with toc.html
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 4
 
 [[deployment.targets]]
 name = "production"
 url = "s3://materialize-website?region=us-east-1"
 # Sync only the docs, to avoid deleting the marketing website.
 include = "docs/**"
-# Avoid deleting the LTS docs, which are deployed from the lts-docs branch.
-exclude = "docs/lts/**"
+
+# Per Hugo docs:
+# The pattern syntax is documented here: https://godoc.org/github.com/gobwas/glob#Glob
+# Patterns should be written with forward slashes as separator.
+#
+# include = "**.html" # would only include files with ".html" suffix
+# exclude = "**.{jpg, png}" # would exclude files with ".jpg" or ".png" suffix
+
+# Avoid deleting self-managed docs which are deployed from the self-managed-docs branches.
+exclude = "docs/{self-managed/v25.2}/**"

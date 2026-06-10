@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from materialize import MZ_ROOT
-from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.service import Service
 
 SERVICES = [
     Service(

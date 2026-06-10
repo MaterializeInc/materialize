@@ -6,64 +6,118 @@ menu:
     parent: commands
 ---
 
-`CREATE ROLE` creates a new role, which is a user account in Materialize.
+Use `CREATE ROLE` [^1] to:
+- Create functional roles (*Both Cloud and Self-Managed*).
+- Create roles with login/password/superuser privileges (*Self-Managed only*).
 
 When you connect to Materialize, you must specify the name of a valid role in
 the system.
 
+[^1]: Materialize does not support the `CREATE USER` command.
+
 ## Syntax
 
-{{< diagram "create-role.svg" >}}
+{{< tabs >}}
 
-Field               | Use
---------------------|-------------------------------------------------------------------------
-_role_name_         | A name for the role.
-**INHERIT**         | Grants the role the ability to inherit privileges of other roles.
+{{< tab "Cloud" >}}
 
-## Details
+### Cloud
 
-Unlike PostgreSQL, Materialize derives the `LOGIN` and `SUPERUSER`
-attributes for a role during authentication, every time that role tries
-to connect. Therefore, you cannot specify either
-attribute when creating a new role. Additionally, we do not support the
-`CREATE USER` command, because it implies a `LOGIN` attribute for the role.
+{{% include-syntax file="examples/rbac-cloud/create_roles"
+example="create-role-syntax" %}}
 
-Unlike PostgreSQL, Materialize does not currently support `NOINHERIT`.
+**Note:**
+{{% include-example file="examples/rbac-cloud/create_roles" example="create-role-details" %}}
+{{< /tab >}}
+{{< tab "Self-Managed" >}}
+### Self-Managed
+
+{{% include-syntax file="examples/rbac-sm/create_roles" example="create-role-syntax" %}}
+
+**Note:**
+{{% include-example file="examples/rbac-sm/create_roles" example="create-role-details" %}}
+{{< /tab >}}
+{{< /tabs >}}
+
+## Restrictions
 
 You may not specify redundant or conflicting sets of options. For example,
 Materialize will reject the statement `CREATE ROLE ... INHERIT INHERIT`.
 
-Unlike PostgreSQL, Materialize does not use role attributes to determine a role's ability to create
-top level objects such as databases and other roles. Instead, Materialize uses system level
-privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
+## Privileges
+
+The privileges required to execute this statement are:
+
+{{% include-headless "/headless/sql-command-privileges/create-role" %}}
 
 ## Examples
+
+### Create a functional role
+
+In Materialize Cloud and Self-Managed, you can create a functional role:
 
 ```mzsql
 CREATE ROLE db_reader;
 ```
+
+### Create a role with login and password (Self-Managed)
+
+```mzsql
+CREATE ROLE db_reader WITH LOGIN PASSWORD 'password';
+```
+
+You can verify that the role was created by querying the `mz_roles` system catalog:
+
 ```mzsql
 SELECT name FROM mz_roles;
 ```
+
 ```nofmt
  db_reader
  mz_system
  mz_support
 ```
 
-## Privileges
+### Create a superuser role (Self-Managed)
 
-The privileges required to execute this statement are:
+Unlike regular roles, superusers have unrestricted access to all objects in the system and can perform any action on them.
 
-- `CREATEROLE` privileges on the system.
+```mzsql
+CREATE ROLE super_user WITH SUPERUSER LOGIN PASSWORD 'password';
+```
+
+You can verify that the superuser role was created by querying the `mz_roles` system catalog:
+
+```mzsql
+SELECT name FROM mz_roles;
+```
+
+```nofmt
+ db_reader
+ mz_system
+ mz_support
+ super_user
+```
+
+You can also verify that the role has superuser privileges by checking the `pg_authid` system catalog:
+
+```mzsql
+SELECT rolsuper FROM pg_authid WHERE rolname = 'super_user';
+```
+
+```nofmt
+ true
+```
+
+
 
 ## Related pages
 
-- [ALTER ROLE](../alter-role)
-- [DROP ROLE](../drop-role)
-- [DROP USER](../drop-user)
-- [GRANT ROLE](../grant-role)
-- [REVOKE ROLE](../revoke-role)
-- [ALTER OWNER](../alter-owner)
-- [GRANT PRIVILEGE](../grant-privilege)
-- [REVOKE PRIVILEGE](../revoke-privilege)
+- [`ALTER ROLE`](../alter-role)
+- [`DROP ROLE`](../drop-role)
+- [`DROP USER`](../drop-user)
+- [`GRANT ROLE`](../grant-role)
+- [`REVOKE ROLE`](../revoke-role)
+- [`ALTER OWNER`](/sql/#rbac)
+- [`GRANT PRIVILEGE`](../grant-privilege)
+- [`REVOKE PRIVILEGE`](../revoke-privilege)

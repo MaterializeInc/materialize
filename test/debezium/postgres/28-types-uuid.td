@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE uuid_type (pk_col UUID PRIMARY KEY, nopk_col UUID);
 ALTER TABLE uuid_type REPLICA IDENTITY FULL;
 INSERT INTO uuid_type VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.uuid_type
 
@@ -24,10 +25,14 @@ $ schema-registry-wait topic=postgres.public.uuid_type
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE uuid_type
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.uuid_type')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.uuid_type');
+
+> CREATE TABLE uuid_type_tbl FROM SOURCE uuid_type (REFERENCE "postgres.public.uuid_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 #
 # UUID columns arrive as string from Debezium without a logicalType
@@ -45,11 +50,11 @@ $ schema-registry-wait topic=postgres.public.uuid_type
 #                  }
 #
 
-> SELECT pk_col, nopk_col, pg_typeof(pk_col) FROM uuid_type;
+> SELECT pk_col, nopk_col, pg_typeof(pk_col) FROM uuid_type_tbl;
 a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 text
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 UPDATE uuid_type SET nopk_col = 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
 
-> SELECT pk_col, nopk_col FROM uuid_type;
+> SELECT pk_col, nopk_col FROM uuid_type_tbl;
 a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11

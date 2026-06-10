@@ -13,14 +13,10 @@ use std::str::FromStr;
 use derivative::Derivative;
 use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::regex::Regex;
-use proptest::prelude::{Arbitrary, Strategy};
+use mz_repr::adt::regex::{Regex, RegexCompilationError};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
-
-include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));
 
 /// The number of subpatterns after which using regexes would be more efficient.
 const MAX_SUBPATTERNS: usize = 5;
@@ -133,21 +129,6 @@ mod matcher {
         }
     }
 
-    impl RustType<ProtoMatcher> for Matcher {
-        fn into_proto(&self) -> ProtoMatcher {
-            ProtoMatcher {
-                pattern: self.pattern.clone(),
-                case_insensitive: self.case_insensitive,
-            }
-        }
-
-        fn from_proto(proto: ProtoMatcher) -> Result<Self, TryFromProtoError> {
-            compile(proto.pattern.as_str(), proto.case_insensitive).map_err(|eval_err| {
-                TryFromProtoError::LikePatternDeserializationError(eval_err.to_string())
-            })
-        }
-    }
-
     #[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
     pub(super) enum MatcherImpl {
         String(Vec<Subpattern>),
@@ -177,28 +158,6 @@ pub fn compile(pattern: &str, case_insensitive: bool) -> Result<Matcher, EvalErr
         case_insensitive,
         matcher_impl,
     })
-}
-
-pub fn any_matcher() -> impl Strategy<Value = Matcher> {
-    // Generates a string out of a pool of characters. The pool has at least one
-    // representative from the following classes of the characters (listed in
-    // order of its appearance in the regex):
-    // * Alphanumeric characters, both upper and lower-case.
-    // * Control characters.
-    // * Punctuation minus the escape character.
-    // * Space characters.
-    // * Multi-byte characters.
-    // * _ and %, which are special characters for a like pattern.
-    // * Escaped _ and %, plus the escape character itself. This implementation
-    //   will have to be modified if we support choosing a different escape character.
-    //
-    // Syntax reference for LIKE here:
-    // https://www.postgresql.org/docs/current/functions-matching.html#FUNCTIONS-LIKE
-    (
-        r"([[:alnum:]]|[[:cntrl:]]|([[[:punct:]]&&[^\\]])|[[:space:]]|华|_|%|(\\_)|(\\%)|(\\\\)){0, 50}",
-        bool::arbitrary(),
-    )
-        .prop_map(|(pattern, case_insensitive)| compile(&pattern, case_insensitive).unwrap())
 }
 
 // The algorithm below is based on the observation that any LIKE pattern can be
@@ -261,24 +220,6 @@ impl Subpattern {
             }
         }
         regex_syntax::escape_into(&self.suffix, r);
-    }
-}
-
-impl RustType<ProtoSubpattern> for Subpattern {
-    fn into_proto(&self) -> ProtoSubpattern {
-        ProtoSubpattern {
-            consume: self.consume.into_proto(),
-            many: self.many,
-            suffix: self.suffix.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoSubpattern) -> Result<Self, TryFromProtoError> {
-        Ok(Subpattern {
-            consume: proto.consume.into_rust()?,
-            many: proto.many,
-            suffix: proto.suffix,
-        })
     }
 }
 
@@ -403,13 +344,15 @@ fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Reg
         sp.write_regex_to(&mut r);
     }
     r.push('$');
-    match Regex::new(r, case_insensitive) {
+    match Regex::new(&r, case_insensitive) {
         Ok(regex) => Ok(regex),
-        Err(regex::Error::CompiledTooBig(_)) => Err(EvalError::LikePatternTooLong),
-        Err(e) => Err(EvalError::Internal(format!(
-            "build_regex produced invalid regex: {}",
-            e
-        ))),
+        Err(RegexCompilationError::PatternTooLarge { .. }) => Err(EvalError::LikePatternTooLong),
+        Err(RegexCompilationError::RegexError(regex::Error::CompiledTooBig(_))) => {
+            Err(EvalError::LikePatternTooLong)
+        }
+        Err(e) => Err(EvalError::Internal(
+            format!("build_regex produced invalid regex: {}", e).into(),
+        )),
     }
 }
 

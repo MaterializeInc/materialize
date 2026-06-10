@@ -12,11 +12,13 @@
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
+use mz_orchestratord::controller::materialize::generation::DeploymentStatus;
 use mz_ore::channel::trigger::{self, Trigger};
-use serde::{Deserialize, Serialize};
 
+#[derive(Debug)]
 enum DeploymentStateInner {
     Initializing,
+    CatchingUp { _skip_trigger: Option<Trigger> },
     ReadyToPromote { _promote_trigger: Trigger },
     Promoting,
     IsLeader,
@@ -35,11 +37,12 @@ enum DeploymentStateInner {
 /// [`DeploymentState::set_is_leader`].
 ///
 /// Otherwise, the server should leave the deployment state in `Initializing`
-/// while performing initialization activities. Once the environment is ready to
-/// take over from the prior generation, the server should call
-/// [`DeploymentState::set_ready_to_promote`]. After this, the server should
-/// *not* call [`DeploymentState::set_is_leader`], as an external orchestrator
-/// will determine when promotion occurs. The future returned by
+/// while performing initialization activities. Once the server is catching up
+/// its workloads, it should proceeded to the `CatchingUp` state. Once the
+/// environment is ready to take over from the prior generation, the server
+/// should call [`DeploymentState::set_ready_to_promote`]. After this, the
+/// server should *not* call [`DeploymentState::set_is_leader`], as an external
+/// orchestrator will determine when promotion occurs. The future returned by
 /// `set_ready_to_promote` will resolve when promotion has occurred and the
 /// deployment should take over from the prior generation and begin serving
 /// queries.
@@ -61,6 +64,24 @@ impl DeploymentState {
         (state, handle)
     }
 
+    /// Marks the deployment as catching up.
+    ///
+    /// Returns a future that resolves if the catch up phase should be skipped.
+    pub fn set_catching_up(&self) -> impl Future<Output = ()> {
+        let (skip_trigger, skip_rx) = trigger::channel();
+        {
+            let mut inner = self.inner.lock().expect("lock poisoned");
+            assert!(
+                matches!(*inner, DeploymentStateInner::Initializing),
+                "LeaderState::set_catching_up called on non-initializing state",
+            );
+            *inner = DeploymentStateInner::CatchingUp {
+                _skip_trigger: Some(skip_trigger),
+            };
+        }
+        skip_rx
+    }
+
     /// Marks the deployment as ready to be promoted to leader.
     ///
     /// Returns a future that resolves when the leadership promotion occurs.
@@ -73,8 +94,11 @@ impl DeploymentState {
         {
             let mut inner = self.inner.lock().expect("lock poisoned");
             assert!(
-                matches!(*inner, DeploymentStateInner::Initializing),
-                "LeaderState::set_ready_to_promote called on non-initializing state",
+                matches!(
+                    *inner,
+                    DeploymentStateInner::Initializing | DeploymentStateInner::CatchingUp { .. }
+                ),
+                "LeaderState::set_ready_to_promote called on invalid state",
             );
             *inner = DeploymentStateInner::ReadyToPromote {
                 _promote_trigger: promote_trigger,
@@ -105,7 +129,7 @@ impl DeploymentState {
 /// `environmentd` (e.g., the HTTP server). It provides methods to inspect the
 /// current leadership state, and to promote the deployment to the leader if it
 /// is ready to do so.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DeploymentStateHandle {
     inner: Arc<Mutex<DeploymentStateInner>>,
 }
@@ -116,17 +140,42 @@ impl DeploymentStateHandle {
         let inner = self.inner.lock().expect("lock poisoned");
         match *inner {
             DeploymentStateInner::Initializing => DeploymentStatus::Initializing,
+            DeploymentStateInner::CatchingUp { .. } => DeploymentStatus::Initializing,
             DeploymentStateInner::ReadyToPromote { .. } => DeploymentStatus::ReadyToPromote,
             DeploymentStateInner::Promoting => DeploymentStatus::Promoting,
             DeploymentStateInner::IsLeader => DeploymentStatus::IsLeader,
         }
     }
 
+    /// Attempts to skip the catchup phase for the deployment.
+    ///
+    /// Deployments in the `Initializing` phase cannot have their catchup phase
+    /// skipped. Deployments in the `ReadyToPromote`, `Promoting`, and
+    /// `IsLeader` states can be promoted (with the latter two cases being
+    /// no-ops).
+    ///
+    /// If skipping the catchup was successful, returns `Ok`. Otherwise, returns
+    /// `Err`.
+    pub fn try_skip_catchup(&self) -> Result<(), ()> {
+        let mut inner = self.inner.lock().expect("lock poisoned");
+        match &mut *inner {
+            DeploymentStateInner::Initializing => Err(()),
+            DeploymentStateInner::CatchingUp { _skip_trigger } => {
+                *_skip_trigger = None;
+                Ok(())
+            }
+            DeploymentStateInner::ReadyToPromote { .. } => Ok(()),
+            DeploymentStateInner::Promoting => Ok(()),
+            DeploymentStateInner::IsLeader => Ok(()),
+        }
+    }
+
     /// Attempts to promote this deployment to the leader.
     ///
-    /// Deployments in the `Initializing` state cannot be promoted. Deployments
-    /// in the `ReadyToPromote`, `Promoting`, and `IsLeader` states can be
-    /// promoted (with the latter two cases being no-ops).
+    /// Deployments in the `Initializing` or `CatchingUp` state cannot be
+    /// promoted. Deployments in the `ReadyToPromote`, `Promoting`, and
+    /// `IsLeader` states can be promoted (with the latter two cases being
+    /// no-ops).
     ///
     /// If the leader was successfully promoted, returns `Ok`. Otherwise,
     /// returns `Err`.
@@ -134,6 +183,7 @@ impl DeploymentStateHandle {
         let mut inner = self.inner.lock().expect("lock poisoned");
         match *inner {
             DeploymentStateInner::Initializing => Err(()),
+            DeploymentStateInner::CatchingUp { .. } => Err(()),
             DeploymentStateInner::ReadyToPromote { .. } => {
                 *inner = DeploymentStateInner::Promoting;
                 Ok(())
@@ -142,21 +192,4 @@ impl DeploymentStateHandle {
             DeploymentStateInner::IsLeader => Ok(()),
         }
     }
-}
-
-/// Describes the status of a deployment.
-///
-/// This is a simplified representation of [`DeploymentState`], suitable for
-/// announcement to the external orchestrator.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DeploymentStatus {
-    /// This deployment is not the leader. It is initializing and is not yet
-    /// ready to become the leader.
-    Initializing,
-    /// This deployment is not the leader, but it is ready to become the leader.
-    ReadyToPromote,
-    /// This deployment is in the process of becoming the leader.
-    Promoting,
-    /// This deployment is the leader.
-    IsLeader,
 }

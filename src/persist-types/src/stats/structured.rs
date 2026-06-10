@@ -9,18 +9,15 @@
 
 use std::collections::BTreeMap;
 
-use mz_ore::assert_none;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::ser::{SerializeMap, SerializeStruct};
 
-use crate::columnar::Data;
-use crate::dyn_struct::{DynStruct, DynStructCol, ValidityRef};
 use crate::stats::{
-    any_columnar_stats, proto_dyn_stats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
-    OptionStats, ProtoStructStats, StatsFrom, TrimStats,
+    ColumnStatKinds, ColumnStats, ColumnarStats, DynStats, OptionStats, ProtoStructStats,
+    TrimStats, any_columnar_stats, proto_dyn_stats,
 };
 
 /// Statistics about a column of a struct type with a uniform schema (the same
@@ -71,84 +68,42 @@ impl DynStats for StructStats {
 }
 
 impl StructStats {
-    /// Returns the statistics for the given column in the struct.
+    /// Returns the statistics for the specified column in the struct, if they exist.
     ///
     /// This will often be all of the columns, but it's not guaranteed. Persist
     /// reserves the right to prune statistics about some or all of the columns.
-    pub fn col<T: Data>(&self, name: &str) -> Result<Option<T::Stats>, String> {
-        let Some(stats) = self.cols.get(name) else {
-            return Ok(None);
-        };
-        match stats.downcast::<T>() {
-            Some(x) => Ok(Some(x)),
-            None => Err(format!(
-                "expected stats type {} got {}",
-                std::any::type_name::<T::Stats>(),
-                stats.type_name()
-            )),
-        }
+    pub fn col(&self, name: &str) -> Option<&ColumnarStats> {
+        self.cols.get(name)
     }
 }
 
-impl ColumnStats<DynStruct> for StructStats {
-    fn lower<'a>(&'a self) -> Option<<DynStruct as Data>::Ref<'a>> {
+impl ColumnStats for StructStats {
+    type Ref<'a> = ();
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         // Not meaningful for structs
         None
     }
-    fn upper<'a>(&'a self) -> Option<<DynStruct as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         // Not meaningful for structs
         None
     }
     fn none_count(&self) -> usize {
         0
     }
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        match stats.as_non_null_values()? {
-            ColumnStatKinds::Struct(inner) => Some(inner.clone()),
-            _ => None,
-        }
-    }
 }
 
-impl ColumnStats<Option<DynStruct>> for OptionStats<StructStats> {
-    fn lower<'a>(&'a self) -> Option<<Option<DynStruct> as Data>::Ref<'a>> {
+impl ColumnStats for OptionStats<StructStats> {
+    type Ref<'a> = Option<()>;
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         self.some.lower().map(Some)
     }
-    fn upper<'a>(&'a self) -> Option<<Option<DynStruct> as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         self.some.upper().map(Some)
     }
     fn none_count(&self) -> usize {
         self.none
-    }
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let inner = match &stats.values {
-            ColumnStatKinds::Struct(inner) => inner,
-            _ => return None,
-        };
-        Some(OptionStats {
-            some: inner.clone(),
-            none: stats.nulls.as_ref().map_or(0, |n| n.count),
-        })
-    }
-}
-
-impl StatsFrom<DynStructCol> for StructStats {
-    fn stats_from(col: &DynStructCol, validity: ValidityRef) -> Self {
-        assert_none!(col.validity);
-        col.stats(validity).expect("valid stats").some
-    }
-}
-
-impl StatsFrom<DynStructCol> for OptionStats<StructStats> {
-    fn stats_from(col: &DynStructCol, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.validity.as_ref()));
-        col.stats(validity).expect("valid stats")
     }
 }
 
@@ -216,7 +171,7 @@ mod tests {
 
     use super::*;
     use crate::stats::primitive::PrimitiveStats;
-    use crate::stats::{trim_to_budget, BytesStats, ColumnNullStats, ColumnStatKinds};
+    use crate::stats::{BytesStats, ColumnNullStats, ColumnStatKinds, trim_to_budget};
 
     #[mz_ore::test]
     fn struct_trim_to_budget() {
@@ -293,7 +248,7 @@ mod tests {
 
     // Regression test for a bug found by a customer: trim_to_budget method only
     // operates on the top level struct columns. This (sorta) worked before
-    // #19309, but now there are always two columns at the top level, "ok" and
+    // materialize#19309, but now there are always two columns at the top level, "ok" and
     // "err", and the real columns are all nested under "ok".
     #[mz_ore::test]
     fn stats_trim_to_budget_regression_recursion() {

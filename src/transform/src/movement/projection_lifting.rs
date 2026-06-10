@@ -15,8 +15,9 @@ use std::collections::BTreeMap;
 use std::mem;
 
 use itertools::zip_eq;
-use mz_expr::{AccessStrategy, Id, MirRelationExpr, RECURSION_LIMIT};
+use mz_expr::{AccessStrategy, Columns, Id, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_repr::ReprRelationType;
 
 use crate::TransformCtx;
 
@@ -41,12 +42,16 @@ impl CheckedRecursion for ProjectionLifting {
 }
 
 impl crate::Transform for ProjectionLifting {
+    fn name(&self) -> &'static str {
+        "ProjectionLifting"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "projection_lifting")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -63,7 +68,7 @@ impl ProjectionLifting {
         &self,
         relation: &mut MirRelationExpr,
         // Map from names to new get type and projection required at use.
-        gets: &mut BTreeMap<Id, (mz_repr::RelationType, Vec<usize>)>,
+        gets: &mut BTreeMap<Id, (ReprRelationType, Vec<usize>)>,
     ) -> Result<(), crate::TransformError> {
         self.checked_recur(|_| {
             match relation {

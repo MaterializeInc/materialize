@@ -7,35 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
-
 fn main() {
-    // Build protobufs.
-    env::set_var("PROTOC", mz_build_tools::protoc());
-
-    let mut config = prost_build::Config::new();
-    config
-        .btree_map(["."])
-        .message_attribute(".", ATTR)
-        .enum_attribute(".", ATTR)
-        .compile_well_known_types()
-        // Disable comments because the Google well known types have comments
-        // that get mistreated as doc tests.
-        .disable_comments(["."]);
-
-    const ATTR: &str = "#[derive(::serde::Serialize, ::serde::Deserialize)]";
-
-    tonic_build::configure()
-        // Enabling `emit_rerun_if_changed` will rerun the build script when
-        // anything in the include directory (..) changes. This causes quite a
-        // bit of spurious recompilation, so we disable it. The default behavior
-        // is to re-run if any file in the crate changes; that's still a bit too
-        // broad, but it's better.
-        .emit_rerun_if_changed(false)
-        .compile_with_config(
-            config,
-            &["destination_sdk.proto"],
-            &["../../misc/fivetran-sdk"],
-        )
-        .unwrap();
+    // `libduckdb-sys` copies the downloaded shared library into
+    // `target/<profile>/deps`. Ensure `target/debug/testdrive` can resolve it
+    // at runtime when launched directly.
+    if let Ok(target_os) = std::env::var("CARGO_CFG_TARGET_OS") {
+        match target_os.as_str() {
+            "macos" => {
+                println!("cargo:rustc-link-arg-bin=testdrive=-Wl,-rpath,@executable_path/deps");
+            }
+            "linux" => {
+                println!("cargo:rustc-link-arg-bin=testdrive=-Wl,-rpath,$ORIGIN/deps");
+            }
+            _ => {}
+        }
+    }
 }

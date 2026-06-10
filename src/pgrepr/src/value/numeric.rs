@@ -9,14 +9,14 @@
 
 use std::error::Error;
 use std::fmt;
+use std::sync::LazyLock;
 
 use byteorder::{NetworkEndian, ReadBytesExt};
 use bytes::{BufMut, BytesMut};
 use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
-use mz_repr::adt::numeric::{self, cx_datum, Numeric as AdtNumeric, NumericAgg};
-use once_cell::sync::Lazy;
-use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
+use mz_repr::adt::numeric::{self, Numeric as AdtNumeric, NumericAgg, cx_datum};
+use postgres_types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 
 /// A wrapper for the `repr` crate's `Decimal` type that can be serialized to
 /// and deserialized from the PostgreSQL binary format.
@@ -38,9 +38,10 @@ impl From<AdtNumeric> for Numeric {
 /// `ToSql` and `FromSql` use base 10,000 units.
 const TO_FROM_SQL_BASE_POW: u32 = 4;
 
-static TO_SQL_BASER: Lazy<AdtNumeric> =
-    Lazy::new(|| AdtNumeric::from(10u32.pow(TO_FROM_SQL_BASE_POW)));
-static FROM_SQL_SCALER: Lazy<AdtNumeric> = Lazy::new(|| AdtNumeric::from(TO_FROM_SQL_BASE_POW));
+static TO_SQL_BASER: LazyLock<AdtNumeric> =
+    LazyLock::new(|| AdtNumeric::from(10u32.pow(TO_FROM_SQL_BASE_POW)));
+static FROM_SQL_SCALER: LazyLock<AdtNumeric> =
+    LazyLock::new(|| AdtNumeric::from(TO_FROM_SQL_BASE_POW));
 
 /// The maximum number of units necessary to represent a valid [`AdtNumeric`] value.
 const UNITS_LEN: usize = 11;
@@ -51,7 +52,7 @@ impl ToSql for Numeric {
         _: &Type,
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn Error + 'static + Send + Sync>> {
-        let mut d = self.0 .0.clone();
+        let mut d = self.0.0.clone();
         let scale = u16::try_from(numeric::get_scale(&d))?;
         let is_zero = d.is_zero();
         let is_nan = d.is_nan();
@@ -136,11 +137,7 @@ impl ToSql for Numeric {
         out.put_i16(weight);
         // sign
         out.put_u16(if is_infinite {
-            if is_neg {
-                0xF000
-            } else {
-                0xD000
-            }
+            if is_neg { 0xF000 } else { 0xD000 }
         } else if is_nan {
             0xC000
         } else if is_neg {

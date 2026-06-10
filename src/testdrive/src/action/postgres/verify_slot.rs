@@ -10,7 +10,7 @@
 use std::cmp;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use mz_ore::retry::Retry;
 
 use crate::action::{ControlFlow, State};
@@ -61,10 +61,7 @@ pub async fn run_verify_slot(
         .await?;
 
     drop(client);
-    conn_handle
-        .await
-        .unwrap()
-        .context("postgres connection error")?;
+    conn_handle.await.context("postgres connection error")?;
 
     Ok(ControlFlow::Continue)
 }

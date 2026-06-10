@@ -11,19 +11,22 @@
 
 from __future__ import annotations
 
-import filecmp
 import hashlib
 import json
 import os
 import pathlib
 import random
+import re
 import subprocess
 from collections.abc import Iterator
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from threading import Thread
 from typing import Protocol, TypeVar
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import psycopg
 import xxhash
 import zstandard
 
@@ -108,14 +111,6 @@ def ensure_dir_exists(path_to_dir: str) -> None:
     )
 
 
-def sha256_of_file(path: str | Path) -> str:
-    sha256 = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(filecmp.BUFSIZE), b""):
-            sha256.update(block)
-    return sha256.hexdigest()
-
-
 def sha256_of_utf8_string(value: str) -> str:
     return hashlib.sha256(bytes(value, encoding="utf-8")).hexdigest()
 
@@ -144,3 +139,115 @@ def selected_by_name(selected: list[str], objs: list[U]) -> Iterator[U]:
             raise ValueError(
                 f"Unknown object with name {name} in {[obj.name for obj in objs]}"
             )
+
+
+@dataclass
+class PgConnInfo:
+    user: str
+    host: str
+    port: int
+    database: str
+    password: str | None = None
+    ssl: bool = False
+    cluster: str | None = None
+    autocommit: bool = False
+
+    def connect(self) -> psycopg.Connection:
+        conn = psycopg.connect(
+            host=self.host,
+            port=self.port,
+            user=self.user,
+            password=self.password,
+            dbname=self.database,
+            sslmode="require" if self.ssl else None,
+        )
+        # Set SO_LINGER(1, 0) so close() sends RST instead of FIN, bypassing
+        # TIME_WAIT. Prevents exhausting the ~28k ephemeral port range under
+        # high connection churn (e.g. benchmarks doing rapid connect/disconnect).
+        self._set_linger(conn)
+        if self.autocommit:
+            conn.autocommit = True
+        if self.cluster:
+            with conn.cursor() as cur:
+                cur.execute(f"SET cluster = {self.cluster}".encode())
+        return conn
+
+    @staticmethod
+    def _set_linger(conn: psycopg.Connection) -> None:
+        import socket
+        import struct
+
+        fd = conn.pgconn.socket
+        if fd < 0:
+            return
+        sock = socket.socket(fileno=fd)
+        try:
+            sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+        finally:
+            sock.detach()
+
+    def to_conn_string(self) -> str:
+        return (
+            f"postgres://{quote(self.user)}:{quote(self.password)}@{self.host}:{self.port}/{quote(self.database)}"
+            if self.password
+            else f"postgres://{quote(self.user)}@{self.host}:{self.port}/{quote(self.database)}"
+        )
+
+
+def parse_pg_conn_string(conn_string: str) -> PgConnInfo:
+    """Not supported natively by pg8000, so we have to parse ourselves"""
+    url = urlparse(conn_string)
+    query_params = parse_qs(url.query)
+    assert url.username
+    assert url.hostname
+    return PgConnInfo(
+        user=unquote(url.username),
+        password=unquote(url.password) if url.password else url.password,
+        host=url.hostname,
+        port=url.port or 5432,
+        database=url.path.lstrip("/"),
+        ssl=query_params.get("sslmode", ["disable"])[-1] != "disable",
+    )
+
+
+FILTERED_ARGS = [
+    # Secrets
+    "mzp_",
+    "-----BEGIN PRIVATE KEY-----",
+    "-----BEGIN CERTIFICATE-----",
+    "confluent-api-key=",
+    "confluent-api-secret=",
+    "aws-access-key-id=",
+    "aws-secret-access-key=",
+    "default-sql-server-password=",
+    # Not a secret, but too spammy, filter too
+    "CLUSTER_REPLICA_SIZES",
+    "cluster-replica-sizes=",
+]
+
+
+def filter_cmd(args: list[str]) -> list[str]:
+    """Don't print out secrets in test logs"""
+    return [
+        (
+            "[REDACTED]"
+            if any(filtered_arg in arg for filtered_arg in FILTERED_ARGS)
+            else arg
+        )
+        for arg in args
+    ]
+
+
+def redact_secrets(text: str) -> str:
+    text = re.sub(
+        r"-----BEGIN [A-Z ]+-----.*?-----END [A-Z ]+-----",
+        "[REDACTED]",
+        text,
+        flags=re.DOTALL,
+    )
+    for secret in FILTERED_ARGS:
+        if secret in text:
+            text = re.sub(re.escape(secret) + r"\S*", "[REDACTED]", text)
+    return text

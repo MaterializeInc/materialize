@@ -14,9 +14,13 @@
 -- limitations under the License.
 
 {% macro generate_deploy_cluster_name(custom_cluster_name) -%}
-    {{ custom_cluster_name }}_dbt_deploy
+        {{ custom_cluster_name }}_dbt_deploy
 {%- endmacro %}
 
 {% macro generate_cluster_name(custom_cluster_name) -%}
-    {{ custom_cluster_name }}
+    {% if var('deploy', false) and not custom_cluster_name -%}
+        {{ exceptions.raise_compiler_error("When the 'deploy' variable is set, you must specify a valid target cluster in 'profiles.yml', or via the 'cluster' configuration") }}
+    {% elif custom_cluster_name -%}
+        {{ custom_cluster_name }}
+    {%- endif %}
 {%- endmacro %}

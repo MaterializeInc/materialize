@@ -10,10 +10,10 @@
 use mz_ore_proc::instrument;
 
 #[instrument(name = "my_span", level = "trace", ret, fields(next = 1, shard = %"abc"))]
-fn test_instrument() {}
+pub fn test_instrument() {}
 
 #[instrument]
-fn test_instrument_skipall() {}
+pub fn test_instrument_skipall() {}
 
 #[instrument]
-async fn test_instrument_async() {}
+pub async fn test_instrument_async() {}

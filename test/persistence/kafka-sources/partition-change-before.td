@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-
 #
 # Change the number of partitions in the topic just prior to restart
 #
@@ -41,15 +38,16 @@ $ kafka-ingest format=avro topic=partition-change key-format=avro key-schema=${k
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE partition_change
-  FROM KAFKA CONNECTION kafka_conn (
-    TOPIC 'testdrive-partition-change-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL = '100ms'
-  )
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-partition-change-${testdrive.seed}')
+
+> CREATE TABLE partition_change_tbl FROM SOURCE partition_change (REFERENCE "testdrive-partition-change-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
-> SELECT COUNT(*) > 0 FROM partition_change;
+> SELECT COUNT(*) > 0 FROM partition_change_tbl;
 true
 
 $ kafka-add-partitions topic=partition-change total-partitions=10

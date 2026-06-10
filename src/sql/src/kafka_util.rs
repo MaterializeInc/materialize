@@ -16,7 +16,7 @@ use mz_kafka_util::client::DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    KafkaSinkConfigOption, KafkaSinkConfigOptionName, KafkaSourceConfigOption,
+    Expr, KafkaSinkConfigOption, KafkaSinkConfigOptionName, KafkaSourceConfigOption,
     KafkaSourceConfigOptionName,
 };
 use mz_storage_types::sinks::KafkaSinkCompressionType;
@@ -28,8 +28,8 @@ use crate::ast::Value;
 use crate::catalog::SessionCatalog;
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
-use crate::plan::with_options::{ImpliedValue, TryFromValue};
 use crate::plan::PlanError;
+use crate::plan::with_options::{ImpliedValue, TryFromValue};
 
 generate_extracted_config!(
     KafkaSourceConfigOption,
@@ -51,11 +51,17 @@ generate_extracted_config!(
         KafkaSinkCompressionType,
         Default(KafkaSinkCompressionType::Lz4)
     ),
+    (PartitionBy, Expr<Aug>),
     (ProgressGroupIdPrefix, String),
     (TransactionalIdPrefix, String),
     (LegacyIds, bool),
     (Topic, String),
     (TopicConfig, BTreeMap<String, String>),
+    (
+        TopicMetadataRefreshInterval,
+        Duration,
+        Default(DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL)
+    ),
     (TopicPartitionCount, i32),
     (TopicReplicationFactor, i32)
 );
@@ -185,7 +191,6 @@ where
         }
     })
     .await
-    .map_err(|e| sql_err!("{}", e))?
 }
 
 // Kafka supports bulk lookup of watermarks, but it is not exposed in rdkafka.
@@ -237,7 +242,6 @@ where
         }
     })
     .await
-    .map_err(|e| sql_err!("{}", e))?
 }
 
 /// Validates that we can connect to the broker and obtain metadata about the topic.
@@ -262,5 +266,4 @@ where
         }
     })
     .await
-    .map_err(|e| sql_err!("{}", e))?
 }

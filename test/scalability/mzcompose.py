@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Benchmark for how various queries scale, compares against old Materialize versions.
+"""
+
 import argparse
 import sys
 from pathlib import Path
@@ -16,20 +20,19 @@ from jupyter_core.command import main as jupyter_core_command_main
 from matplotlib import pyplot as plt
 
 from materialize import buildkite, git
+from materialize.docker import image_registry
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.test_result import FailedTestExecutionError
-from materialize.scalability.benchmark_config import BenchmarkConfiguration
-from materialize.scalability.benchmark_executor import BenchmarkExecutor
-from materialize.scalability.benchmark_result import BenchmarkResult
-from materialize.scalability.comparison_outcome import ComparisonOutcome
+from materialize.scalability.config.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.df import df_totals_cols
 from materialize.scalability.df.df_totals import DfTotalsExtended
-from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.endpoints import (
+from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.endpoint.endpoints import (
     TARGET_HEAD,
     TARGET_MATERIALIZE_LOCAL,
     TARGET_MATERIALIZE_REMOTE,
@@ -40,25 +43,25 @@ from materialize.scalability.endpoints import (
     PostgresContainer,
     endpoint_name_to_description,
 )
+from materialize.scalability.executor.benchmark_executor import BenchmarkExecutor
 from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
     plot_duration_by_connections_for_workload,
     plot_duration_by_endpoints_for_workload,
     plot_tps_per_connections,
 )
-from materialize.scalability.regression_assessment import RegressionAssessment
-from materialize.scalability.result_analyzer import ResultAnalyzer
-from materialize.scalability.result_analyzers import DefaultResultAnalyzer
-from materialize.scalability.scalability_versioning import SCALABILITY_FRAMEWORK_VERSION
-from materialize.scalability.schema import Schema, TransactionIsolation
-from materialize.scalability.workload import (
-    Workload,
-)
-from materialize.scalability.workload_markers import WorkloadMarker
-from materialize.scalability.workloads.connection_workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads.ddl_workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads.dml_dql_workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads.self_test_workloads import *  # noqa: F401 F403
+from materialize.scalability.result.comparison_outcome import ComparisonOutcome
+from materialize.scalability.result.regression_assessment import RegressionAssessment
+from materialize.scalability.result.result_analyzer import ResultAnalyzer
+from materialize.scalability.result.result_analyzers import DefaultResultAnalyzer
+from materialize.scalability.result.scalability_result import BenchmarkResult
+from materialize.scalability.schema.schema import Schema, TransactionIsolation
+from materialize.scalability.workload.workload import Workload
+from materialize.scalability.workload.workload_markers import WorkloadMarker
+from materialize.scalability.workload.workloads.connection_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.ddl_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.dml_dql_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.self_test_workloads import *  # noqa: F401 F403
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
@@ -76,8 +79,9 @@ from materialize.version_list import (
 
 SERVICES = [
     Materialized(
-        image="materialize/materialized:latest",
+        image=f"{image_registry()}/materialized:latest",
         sanity_restart=False,
+        additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
     ),
     Postgres(),
     Balancerd(),
@@ -85,6 +89,7 @@ SERVICES = [
 ]
 
 DEFAULT_REGRESSION_THRESHOLD = 0.2
+SCALABILITY_FRAMEWORK_VERSION = "1.6.0"
 
 INCLUDE_ZERO_IN_Y_AXIS = True
 
@@ -92,7 +97,7 @@ INCLUDE_ZERO_IN_Y_AXIS = True
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--target",
-        help="Target for the benchmark: 'HEAD', 'local', 'remote', 'common-ancestor', 'Postgres', or a DockerHub tag",
+        help="Target for the benchmark: 'HEAD', 'local', 'remote', 'common-ancestor', 'postgres', or a DockerHub tag",
         action="append",
         default=[],
     )
@@ -204,7 +209,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     baseline_endpoint, other_endpoints = get_baseline_and_other_endpoints(
         c, args, regression_against_target
     )
-    workload_classes = get_workload_classes(args)
+    workload_classes = buildkite.shard_list(
+        get_workload_classes(args), lambda cls: cls.__name__
+    )
 
     print(f"Targets: {args.target}")
     print(f"Checking regression against: {regression_against_target}")
@@ -328,8 +335,7 @@ def get_baseline_and_other_endpoints(
                 specified_target=specified_target,
                 resolved_target=resolved_target,
                 use_balancerd=use_balancerd,
-                image=f"materialize/materialized:{resolved_target}",
-                alternative_image="materialize/materialized:latest",
+                image=f"{image_registry()}/materialized:{resolved_target}",
             )
         assert endpoint is not None
 
@@ -440,7 +446,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         results_by_endpoint,
     ) in result.get_df_total_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 6))
-        (subfigure) = fig.subfigures(1, 1)
+        subfigure = fig.subfigures(1, 1)
         plot_tps_per_connections(
             workload_name,
             subfigure,
@@ -459,7 +465,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         results_by_endpoint,
     ) in result.get_df_details_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 10))
-        (subfigure) = fig.subfigures(1, 1)
+        subfigure = fig.subfigures(1, 1)
         plot_duration_by_connections_for_workload(
             workload_name,
             subfigure,
@@ -475,7 +481,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         plt.close()
 
         fig = plt.figure(layout="constrained", figsize=(16, 10))
-        (subfigure) = fig.subfigures(1, 1)
+        subfigure = fig.subfigures(1, 1)
         plot_duration_by_endpoints_for_workload(
             workload_name,
             subfigure,

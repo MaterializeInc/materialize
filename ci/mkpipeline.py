@@ -25,14 +25,20 @@ import hashlib
 import os
 import subprocess
 import sys
+import threading
+import traceback
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import requests
 import yaml
 
-from materialize import mzbuild, spawn
+from materialize import mzbuild, spawn, ui
+from materialize.buildkite_insights.buildkite_api import generic_api
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
 from materialize.rustc_flags import Sanitizer
@@ -48,12 +54,10 @@ from .deploy.deploy_util import rust_version
 # exercise as much of the glue code as possible.
 #
 # It's tough to track this code with any sort of fine-grained granularity, so we
-# err on the side of including too much rather than too little. (For example,
-# bin/resync-submodules is not presently used by CI, but it's just not worth
-# trying to capture that.)
-CI_GLUE_GLOBS = ["bin", "ci"]
+# err on the side of including too much rather than too little.
+CI_GLUE_GLOBS = ["bin", "ci", "misc/python/materialize/cli/ci_annotate_errors.py"]
 
-DEFAULT_AGENT = "linux-aarch64-small"
+DEFAULT_AGENT = "hetzner-aarch64-4cpu-8gb"
 
 
 def steps(pipeline: Any) -> Iterator[dict[str, Any]]:
@@ -67,6 +71,39 @@ def get_imported_files(composition: str) -> list[str]:
     return spawn.capture(["bin/ci-python-imports", composition]).splitlines()
 
 
+def post_ci_trigger_status() -> None:
+    """Post a GitHub commit status linking to the CI trigger page for PRs."""
+    if not ui.env_is_truthy("BUILDKITE_PULL_REQUEST"):
+        return
+    pr_number = os.environ["BUILDKITE_PULL_REQUEST"]
+    token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+        "GITHUB_TOKEN"
+    )
+    if not token:
+        return
+    commit = os.getenv("BUILDKITE_COMMIT", "")
+    if not commit:
+        return
+    try:
+        resp = requests.post(
+            f"https://api.github.com/repos/MaterializeInc/materialize/statuses/{commit}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            json={
+                "state": "success",
+                "target_url": f"https://ci.dev.materialize.com/trigger/{pr_number}",
+                "description": "Trigger Nightly/Release Qualification/...",
+                "context": "Additional CI runs",
+            },
+        )
+        resp.raise_for_status()
+        print("Posted CI trigger link status to GitHub")
+    except Exception as e:
+        print(f"Failed to post CI trigger link status: {e}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="mkpipeline",
@@ -76,6 +113,7 @@ mkpipeline creates a Buildkite pipeline based on a template file and uploads it
 so it is executed.""",
     )
 
+    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--coverage", action="store_true")
     parser.add_argument(
         "--sanitizer",
@@ -83,24 +121,78 @@ so it is executed.""",
         type=Sanitizer,
         choices=Sanitizer,
     )
+    parser.add_argument(
+        "--priority",
+        type=int,
+        default=os.getenv("CI_PRIORITY", 0),
+    )
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
 
+    if not args.dry_run:
+        ci_trigger_thread = threading.Thread(target=post_ci_trigger_status, daemon=True)
+        ci_trigger_thread.start()
+
     print(f"Pipeline is: {args.pipeline}")
-
-    # Make sure we have an up to date view of main.
-    spawn.runv(["git", "fetch", "origin", "main"])
-
-    # Print out a summary of all changes.
-    os.environ["GIT_PAGER"] = ""
-    spawn.runv(["git", "diff", "--stat", "origin/main..."])
 
     with open(Path(__file__).parent / args.pipeline / "pipeline.template.yml") as f:
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
+
     pipeline = yaml.safe_load(raw)
 
-    if args.pipeline == "test":
+    lto = (
+        pipeline.get("env", {}).get("CI_LTO", 0) == 1
+        or bool(os.environ["BUILDKITE_TAG"])
+        or (
+            not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
+            and args.pipeline in ("nightly", "release-qualification")
+        )
+        or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+    )
+
+    hash_check: dict[Arch, tuple[str, bool]] = {}
+
+    def hash(deps: mzbuild.DependencySet) -> str:
+        h = hashlib.sha1()
+        for dep in deps:
+            h.update(dep.spec().encode())
+        return h.hexdigest()
+
+    def get_hashes(arch: Arch) -> tuple[str, bool]:
+        repo = mzbuild.Repository(
+            Path("."),
+            profile=mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED,
+            arch=arch,
+            coverage=args.coverage,
+            sanitizer=args.sanitizer,
+        )
+        deps = repo.resolve_dependencies(image for image in repo if image.publish)
+        check = deps.check()
+        return (hash(deps), check)
+
+    def fetch_hashes() -> None:
+        # Resolve both architectures in parallel since they are independent
+        # and each involves expensive fingerprinting.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {
+                pool.submit(get_hashes, arch): arch
+                for arch in [Arch.AARCH64, Arch.X86_64]
+            }
+            for future in futures:
+                arch = futures[future]
+                hash_check[arch] = future.result()
+
+    trim_builds_prep_thread = threading.Thread(target=fetch_hashes)
+    trim_builds_prep_thread.start()
+
+    # This has to run before other cutting steps because it depends on the id numbers
+    if test_selection := os.getenv("CI_TEST_IDS"):
+        trim_test_selection_id(pipeline, {int(i) for i in test_selection.split(",")})
+    elif test_selection := os.getenv("CI_TEST_SELECTION"):
+        trim_test_selection_name(pipeline, set(test_selection.split(",")))
+
+    if args.pipeline == "test" and not os.getenv("CI_TEST_IDS"):
         if args.coverage or args.sanitizer != Sanitizer.none:
             print("Coverage/Sanitizer build, not trimming pipeline")
         elif os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
@@ -108,146 +200,57 @@ so it is executed.""",
         elif have_paths_changed(CI_GLUE_GLOBS):
             # We still execute pipeline trimming on a copy of the pipeline to
             # protect against bugs in the pipeline trimming itself.
-            print("--- [DRY RUN] Trimming unchanged steps from pipeline")
+            print("[DRY RUN] Trimming unchanged steps from pipeline")
             print(
                 "Repository glue code has changed, so the trimmed pipeline below does not apply"
             )
-            trim_tests_pipeline(copy.deepcopy(pipeline), args.coverage, args.sanitizer)
-        else:
-            print("--- Trimming unchanged steps from pipeline")
-            trim_tests_pipeline(pipeline, args.coverage, args.sanitizer)
-
-    if args.sanitizer != Sanitizer.none:
-        pipeline.setdefault("env", {})["CI_SANITIZER"] = args.sanitizer.value
-
-        def visit(step: dict[str, Any]) -> None:
-            # ASan runs are slower ...
-            if "timeout_in_minutes" in step:
-                step["timeout_in_minutes"] *= 3
-
-            # ... and need more memory:
-            if "agents" in step:
-                agent = step["agents"].get("queue", None)
-                if agent == "linux-aarch64-small":
-                    agent = "linux-aarch64"
-                elif agent == "linux-aarch64":
-                    agent = "linux-aarch64-medium"
-                elif agent == "linux-aarch64-medium":
-                    agent = "linux-aarch64-large"
-                elif agent == "linux-aarch64-large":
-                    agent = "builder-linux-aarch64"
-                elif agent == "linux-x86_64-small":
-                    agent = "linux-x86_64"
-                elif agent == "linux-x86_64":
-                    agent = "linux-x86_64-medium"
-                elif agent == "linux-x86_64-medium":
-                    agent = "linux-x86_64-large"
-                elif agent == "linux-x86_64-large":
-                    agent = "builder-linux-x86_64"
-                elif agent == "hetzner-aarch64-2cpu-4gb":
-                    agent = "hetzner-aarch64-4cpu-8gb"
-                elif agent == "hetzner-aarch64-4cpu-8gb":
-                    agent = "hetzner-aarch64-8cpu-16gb"
-                elif agent == "hetzner-x86-64-2cpu-4gb":
-                    agent = "hetzner-x86-64-4cpu-8gb"
-                elif agent == "hetzner-x86-64-4cpu-8gb":
-                    agent = "hetzner-x86-64-8cpu-16gb"
-                elif agent == "hetzner-x86-64-8cpu-16gb":
-                    agent = "hetzner-x86-64-16cpu-32gb"
-                elif agent == "hetzner-x86-64-16cpu-32gb":
-                    agent = "hetzner-x86-64-16cpu-64gb"
-                elif agent == "hetzner-x86-64-16cpu-64gb":
-                    agent = "hetzner-x86-64-32cpu-128gb"
-                elif agent == "hetzner-x86-64-32cpu-128gb":
-                    agent = "hetzner-x86-64-48cpu-192gb"
-                step["agents"] = {"queue": agent}
-
-            if step.get("sanitizer") == "skip":
-                step["skip"] = True
-
-            # Nightly required for sanitizers
-            if step.get("id") in ("build-x86_64", "build-aarch64"):
-                step["command"] = (
-                    "bin/ci-builder run nightly bin/pyactivate -m ci.test.build"
-                )
-
-        for step in pipeline["steps"]:
-            visit(step)
-            # Groups can't be nested, so handle them explicitly here instead of recursing
-            if "group" in step:
-                for inner_step in step.get("steps", []):
-                    visit(inner_step)
-    else:
-
-        def visit(step: dict[str, Any]) -> None:
-            if step.get("sanitizer") == "only":
-                step["skip"] = True
-
-        for step in pipeline["steps"]:
-            visit(step)
-            if "group" in step:
-                for inner_step in step.get("steps", []):
-                    visit(inner_step)
-
-    if args.coverage:
-        pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
-        pipeline["env"]["CI_COVERAGE_ENABLED"] = 1
-
-        for step in steps(pipeline):
-            # Coverage runs are slower
-            if "timeout_in_minutes" in step:
-                step["timeout_in_minutes"] *= 3
-
-            if step.get("coverage") == "skip":
-                step["skip"] = True
-            if step.get("id") == "build-x86_64":
-                step["name"] = "Build x86_64 with coverage"
-            if step.get("id") == "build-aarch":
-                step["name"] = "Build aarch64 with coverage"
-    else:
-        for step in steps(pipeline):
-            if step.get("coverage") == "only":
-                step["skip"] = True
-
-    prioritize_pipeline(pipeline)
-
-    permit_rerunning_successful_steps(pipeline)
-
-    set_default_agents_queue(pipeline)
-
-    if test_selection := os.getenv("CI_TEST_SELECTION"):
-        trim_test_selection(pipeline, set(test_selection.split(",")))
-
-    check_depends_on(pipeline, args.pipeline)
-
-    add_version_to_preflight_tests(pipeline)
-
-    trim_builds(pipeline, args.coverage, args.sanitizer)
-
-    # Remove the Materialize-specific keys from the configuration that are
-    # only used to inform how to trim the pipeline and for coverage runs.
-    for step in steps(pipeline):
-        if "inputs" in step:
-            del step["inputs"]
-        if "coverage" in step:
-            del step["coverage"]
-        if "sanitizer" in step:
-            del step["sanitizer"]
-        if (
-            "timeout_in_minutes" not in step
-            and "prompt" not in step
-            and "wait" not in step
-            and "group" not in step
-            and "trigger" not in step
-            and not step.get("async")
-        ):
-            raise UIError(
-                f"Every step should have an explicit timeout_in_minutes value, missing in: {step}"
+            trim_tests_pipeline(
+                copy.deepcopy(pipeline),
+                args.coverage,
+                args.sanitizer,
+                lto,
             )
-
-    spawn.runv(
-        ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
+            trim_ci_glue_exempt_steps(pipeline)
+        else:
+            print("Trimming unchanged steps from pipeline")
+            trim_tests_pipeline(
+                pipeline,
+                args.coverage,
+                args.sanitizer,
+                lto,
+            )
+    truncate_skip_length(pipeline)
+    handle_sanitizer_skip(pipeline, args.sanitizer)
+    increase_agents_timeouts(pipeline, args.sanitizer, args.coverage)
+    prioritize_pipeline(pipeline, args.priority)
+    switch_jobs_to_aws(pipeline, args.priority)
+    permit_rerunning_successful_steps(pipeline)
+    set_retry_on_agent_lost(pipeline)
+    set_default_agents_queue(pipeline)
+    unparallelize(pipeline)
+    set_parallelism_name(pipeline)
+    check_depends_on(pipeline, args.pipeline)
+    add_version_to_preflight_tests(pipeline)
+    move_build_to_lto(pipeline, lto)
+    trim_builds_prep_thread.join()
+    trim_builds(pipeline, hash_check)
+    add_cargo_test_dependency(
+        pipeline,
+        args.pipeline,
+        args.coverage,
+        args.sanitizer,
+        lto,
     )
+    add_nightly_deploy_dependency(pipeline, args.pipeline)
+    remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
+    remove_mz_specific_keys(pipeline)
+
+    print("--- Uploading new pipeline:")
+    print(yaml.dump(pipeline))
+    cmd = ["buildkite-agent", "pipeline", "upload"]
+    if args.dry_run:
+        cmd.append("--dry-run")
+    spawn.runv(cmd, stdin=yaml.dump(pipeline).encode())
 
     return 0
 
@@ -267,44 +270,340 @@ class PipelineStep:
         return inputs
 
 
-def prioritize_pipeline(pipeline: Any) -> None:
+def prioritize_pipeline(pipeline: Any, priority: int) -> None:
     """Prioritize builds against main or release branches"""
 
     tag = os.environ["BUILDKITE_TAG"]
-    priority = None
+    branch = os.getenv("BUILDKITE_BRANCH")
+    build_author = os.getenv("BUILDKITE_BUILD_AUTHOR")
+    # use the base priority of the entire pipeline
+    priority += pipeline.get("priority", 0)
 
+    # Release results are time sensitive
     if tag.startswith("v"):
-        priority = 10
+        priority += 10
 
-    def visit(config: Any) -> None:
-        config["priority"] = config.get("priority", 0) + priority
+    # main branch is less time sensitive than results on PRs
+    if branch == "main":
+        priority -= 50
 
-    if priority is not None:
-        for config in pipeline["steps"]:
-            if "trigger" in config or "wait" in config:
-                # Trigger and Wait steps do not allow priorities.
-                continue
-            if "group" in config:
-                for inner_config in config.get("steps", []):
-                    visit(inner_config)
-                continue
-            visit(config)
+    # Dependabot is less urgent than manual PRs
+    if build_author == "Dependabot":
+        priority -= 40
+
+    for step in steps(pipeline):
+        if "trigger" in step or "wait" in step or "group" in step:
+            # Trigger and Wait steps do not allow priorities.
+            continue
+        # Increase priority for larger Hetzner-based tests so that they get
+        # preferential treatment on the agents which also accept smaller jobs.
+        agent_priority = 0
+        if "agents" in step:
+            agent = step["agents"].get("queue", None)
+            if agent == "hetzner-aarch64-8cpu-16gb":
+                agent_priority = 1
+            if agent == "hetzner-aarch64-16cpu-32gb":
+                agent_priority = 2
+        step["priority"] = step.get("priority", 0) + priority + agent_priority
+
+
+def truncate_skip_length(pipeline: Any) -> None:
+    for step in steps(pipeline):
+        if len(str(step.get("skip", ""))) > 70:
+            step["skip"] = step["skip"][:70]
+
+
+def handle_sanitizer_skip(pipeline: Any, sanitizer: Sanitizer) -> None:
+    if sanitizer != Sanitizer.none:
+        pipeline.setdefault("env", {})["CI_SANITIZER"] = sanitizer.value
+
+        for step in steps(pipeline):
+            if step.get("sanitizer") == "skip":
+                step["skip"] = True
+
+    else:
+
+        for step in steps(pipeline):
+            if step.get("sanitizer") == "only":
+                step["skip"] = True
+
+
+def increase_agents_timeouts(
+    pipeline: Any, sanitizer: Sanitizer, coverage: bool
+) -> None:
+    if sanitizer != Sanitizer.none or os.getenv("CI_SYSTEM_PARAMETERS", "") == "random":
+        for step in steps(pipeline):
+            # Most sanitizer runs, as well as random permutations of system
+            # parameters, are slower and need more memory. The default system
+            # parameters in CI are chosen to be efficient for execution, while
+            # a random permutation might take way longer and use more memory.
+            if "timeout_in_minutes" in step:
+                step["timeout_in_minutes"] *= 10
+
+            if "agents" in step:
+                agent = step["agents"].get("queue", None)
+                if agent == "linux-aarch64-small":
+                    agent = "linux-aarch64"
+                elif agent == "linux-aarch64":
+                    agent = "linux-aarch64-medium"
+                elif agent == "linux-aarch64-medium":
+                    agent = "linux-aarch64-large"
+                elif agent == "linux-aarch64-large":
+                    agent = "builder-linux-aarch64-mem"
+                elif agent == "linux-x86_64-small":
+                    agent = "linux-x86_64"
+                elif agent == "linux-x86_64":
+                    agent = "linux-x86_64-medium"
+                elif agent == "linux-x86_64-medium":
+                    agent = "linux-x86_64-large"
+                elif agent == "linux-x86_64-large":
+                    agent = "builder-linux-x86_64"
+                elif agent == "hetzner-aarch64-2cpu-4gb":
+                    agent = "hetzner-aarch64-4cpu-8gb"
+                elif agent == "hetzner-aarch64-4cpu-8gb":
+                    agent = "hetzner-aarch64-8cpu-16gb"
+                elif agent == "hetzner-aarch64-8cpu-16gb":
+                    agent = "hetzner-aarch64-16cpu-32gb"
+                elif agent == "hetzner-x86-64-2cpu-4gb":
+                    agent = "hetzner-x86-64-4cpu-8gb"
+                elif agent == "hetzner-x86-64-4cpu-8gb":
+                    agent = "hetzner-x86-64-8cpu-16gb"
+                elif agent == "hetzner-x86-64-8cpu-16gb":
+                    agent = "hetzner-x86-64-16cpu-32gb"
+                elif agent == "hetzner-x86-64-12cpu-24gb":
+                    agent = "hetzner-x86-64-dedi-16cpu-64gb"
+                elif agent == "hetzner-x86-64-16cpu-32gb":
+                    agent = "hetzner-x86-64-dedi-16cpu-64gb"
+                elif agent == "hetzner-x86-64-16cpu-64gb":
+                    agent = "hetzner-x86-64-dedi-32cpu-128gb"
+                elif agent == "hetzner-x86-64-dedi-32cpu-128gb":
+                    agent = "hetzner-x86-64-dedi-48cpu-192gb"
+                step["agents"] = {"queue": agent}
+
+    if coverage:
+        pipeline.setdefault("env", {})["CI_COVERAGE_ENABLED"] = 1
+
+        for step in steps(pipeline):
+            # Coverage runs are slower
+            if "timeout_in_minutes" in step:
+                step["timeout_in_minutes"] *= 3
+
+            if step.get("coverage") == "skip":
+                step["skip"] = True
+            if step.get("id") == "build-x86_64":
+                step["name"] = "Build x86_64 with coverage"
+            if step.get("id") == "build-aarch64":
+                step["name"] = "Build aarch64 with coverage"
+            if step.get("id") == "cargo-test":
+                step["agents"]["queue"] = "hetzner-x86-64-dedi-32cpu-128gb"
+                del step["parallelism"]
+    else:
+        for step in steps(pipeline):
+            if step.get("coverage") == "only":
+                step["skip"] = True
+
+
+def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
+    """Switch jobs to AWS if Hetzner is currently overloaded"""
+    # If Hetzner is entirely broken, you have to take these actions to switch everything back to AWS:
+    # - CI_FORCE_SWITCH_TO_AWS env variable to 1
+    # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in https://buildkite.com/materialize/test/settings/steps and other pipelines
+    # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in ci/mkpipeline.sh
+
+    stuck: set[str] = set()
+    # TODO(def-): Remove me when Hetzner fixes its aarch64 availability
+    stuck.update(
+        [
+            "hetzner-aarch64-16cpu-32gb",
+            "hetzner-aarch64-8cpu-16gb",
+            "hetzner-aarch64-4cpu-8gb",
+            "hetzner-aarch64-2cpu-4gb",
+        ]
+    )
+
+    if ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0"):
+        stuck = set(
+            {
+                "hetzner-x86-64-16cpu-32gb",
+                "hetzner-x86-64-12cpu-24gb",
+                "hetzner-x86-64-8cpu-16gb",
+                "hetzner-x86-64-4cpu-8gb",
+                "hetzner-x86-64-2cpu-4gb",
+                "hetzner-aarch64-16cpu-32gb",
+                "hetzner-aarch64-8cpu-16gb",
+                "hetzner-aarch64-4cpu-8gb",
+                "hetzner-aarch64-2cpu-4gb",
+                "hetzner-x86-64-dedi-48cpu-192gb",
+                "hetzner-x86-64-dedi-32cpu-128gb",
+                "hetzner-x86-64-dedi-16cpu-64gb",
+                "hetzner-x86-64-dedi-8cpu-32gb",
+                "hetzner-x86-64-dedi-4cpu-16gb",
+                "hetzner-x86-64-dedi-2cpu-8gb",
+            }
+        )
+    else:
+        # TODO(def-): Reenable me when Hetzner fixes its aarch64 availability
+        # If priority has manually been set to be low, or on main branch, we can
+        # wait for agents to become available
+        # if branch == "main" or priority < 0:
+        #     return
+
+        # Consider Hetzner to be overloaded/broken when an important job is stuck waiting for an agent for > 20 minutes
+        try:
+            builds = generic_api.get_multiple(
+                "builds",
+                params={
+                    "state[]": [
+                        "creating",
+                        "scheduled",
+                        "running",
+                        "failing",
+                        "canceling",
+                    ],
+                },
+                max_fetches=None,
+            )
+
+            for build in builds:
+                for job in build["jobs"]:
+                    if "state" not in job:
+                        continue
+                    if not job.get("agent_query_rules"):
+                        continue
+                    queue = job["agent_query_rules"][0].removeprefix("queue=")
+                    if not queue.startswith("hetzner-"):
+                        continue
+
+                    if queue in stuck:
+                        continue
+
+                    if job.get("state") != "scheduled":
+                        continue
+
+                    runnable = job.get("runnable_at")
+                    if not runnable or job.get("started_at"):
+                        continue
+                    if datetime.now(timezone.utc) - datetime.fromisoformat(
+                        runnable
+                    ) < timedelta(minutes=20):
+                        continue
+
+                    print(
+                        f"Job {job.get('id')} ({job.get('web_url')}) with priority {priority} is runnable since {runnable} on {queue}, considering {queue} stuck"
+                    )
+                    stuck.add(queue)
+        except Exception:
+            print("switch_jobs_to_aws failed, ignoring:")
+            traceback.print_exc()
+            return
+
+    if not stuck:
+        return
+
+    print(f"Queues stuck in Hetzner, switching to AWS or another arch: {stuck}")
+
+    for step in steps(pipeline):
+        # Trigger and Wait steps don't have agents
+        if "trigger" in step or "wait" in step or "group" in step:
+            continue
+
+        if "agents" not in step:
+            continue
+
+        agent = step["agents"].get("queue", None)
+        if not agent in stuck:
+            continue
+
+        if agent == "hetzner-aarch64-2cpu-4gb":
+            if "hetzner-x86-64-2cpu-4gb" not in stuck:
+                step["agents"]["queue"] = "hetzner-x86-64-2cpu-4gb"
+                if step.get("depends_on") == "build-aarch64":
+                    step["depends_on"] = "build-x86_64"
+            else:
+                step["agents"]["queue"] = "linux-aarch64"
+        elif agent == "hetzner-aarch64-4cpu-8gb":
+            if "hetzner-x86-64-4cpu-8gb" not in stuck:
+                step["agents"]["queue"] = "hetzner-x86-64-4cpu-8gb"
+                if step.get("depends_on") == "build-aarch64":
+                    step["depends_on"] = "build-x86_64"
+            else:
+                step["agents"]["queue"] = "linux-aarch64"
+        elif agent == "hetzner-aarch64-8cpu-16gb":
+            if "hetzner-x86-64-8cpu-16gb" not in stuck:
+                step["agents"]["queue"] = "hetzner-x86-64-8cpu-16gb"
+                if step.get("depends_on") == "build-aarch64":
+                    step["depends_on"] = "build-x86_64"
+            else:
+                step["agents"]["queue"] = "linux-aarch64-medium"
+
+        elif agent == "hetzner-aarch64-16cpu-32gb":
+            if "hetzner-x86-64-12cpu-24gb" not in stuck:
+                step["agents"]["queue"] = "hetzner-x86-64-12cpu-24gb"
+                if step.get("depends_on") == "build-aarch64":
+                    step["depends_on"] = "build-x86_64"
+            else:
+                step["agents"]["queue"] = "linux-aarch64-medium"
+
+        elif agent in ("hetzner-x86-64-4cpu-8gb", "hetzner-x86-64-2cpu-4gb"):
+            step["agents"]["queue"] = "linux-x86_64"
+        elif agent in (
+            "hetzner-x86-64-8cpu-16gb",
+            "hetzner-x86-64-12cpu-24gb",
+            "hetzner-x86-64-16cpu-32gb",
+        ):
+            step["agents"]["queue"] = "linux-x86_64-medium"
+        elif agent == "hetzner-x86-64-dedi-2cpu-8gb":
+            step["agents"]["queue"] = "linux-x86_64"
+        elif agent == "hetzner-x86-64-dedi-4cpu-16gb":
+            step["agents"]["queue"] = "linux-x86_64-medium"
+        elif agent in (
+            "hetzner-x86-64-dedi-8cpu-32gb",
+            "hetzner-x86-64-dedi-16cpu-64gb",
+        ):
+            step["agents"]["queue"] = "linux-x86_64-large"
+        elif agent in (
+            "hetzner-x86-64-dedi-32cpu-128gb",
+            "hetzner-x86-64-dedi-48cpu-192gb",
+        ):
+            step["agents"]["queue"] = "builder-linux-x86_64"
 
 
 def permit_rerunning_successful_steps(pipeline: Any) -> None:
-    def visit(step: Any) -> None:
+    for step in steps(pipeline):
+        if "trigger" in step or "wait" in step or "group" in step or "block" in step:
+            continue
         step.setdefault("retry", {}).setdefault("manual", {}).setdefault(
             "permit_on_passed", True
         )
 
-    for config in pipeline["steps"]:
-        if "trigger" in config or "wait" in config or "block" in config:
+
+def set_retry_on_agent_lost(pipeline: Any) -> None:
+    for step in steps(pipeline):
+        if "trigger" in step or "wait" in step or "group" in step or "block" in step:
             continue
-        if "group" in config:
-            for inner_config in config.get("steps", []):
-                visit(inner_config)
+        retry = step.setdefault("retry", {})
+        if "automatic" in retry:
             continue
-        visit(config)
+        retry.setdefault("automatic", []).extend(
+            [
+                {
+                    "exit_status": -1,  # Agent lost or job timed out during checkout/setup
+                    "limit": 2,
+                },
+                {
+                    "signal_reason": "agent_stop",  # Stopped by OS
+                    "limit": 2,
+                },
+                {
+                    "exit_status": 128,  # Temporary Github/GHCR/DockerHub connection issue
+                    "limit": 2,
+                },
+                {
+                    "exit_status": 199,  # Rust ICE https://github.com/rust-lang/rust/issues/148581
+                    "limit": 2,
+                },
+            ]
+        )
 
 
 def set_default_agents_queue(pipeline: Any) -> None:
@@ -319,6 +618,12 @@ def set_default_agents_queue(pipeline: Any) -> None:
             step["agents"] = {"queue": DEFAULT_AGENT}
 
 
+def set_parallelism_name(pipeline: Any) -> None:
+    for step in steps(pipeline):
+        if step.get("parallelism", 1) > 1:
+            step["label"] += " %N"
+
+
 def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
     if pipeline_name not in ("test", "nightly", "release-qualification"):
         return
@@ -330,7 +635,7 @@ def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
         # has completed, without waiting for block or wait steps unless those
         # are also explicit dependencies.
         if step.get("id") in ("analyze", "deploy", "coverage-pr-analyze"):
-            return
+            continue
 
         if (
             "depends_on" not in step
@@ -357,7 +662,30 @@ def add_version_to_preflight_tests(pipeline: Any) -> None:
             step["build"]["branch"] = str(version)
 
 
-def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
+def trim_test_selection_id(pipeline: Any, step_ids_to_run: set[int]) -> None:
+    for i, step in enumerate(steps(pipeline)):
+        ident = step.get("id") or step.get("command")
+        if (
+            (i not in step_ids_to_run or len(step_ids_to_run) == 0)
+            and "prompt" not in step
+            and "wait" not in step
+            and "group" not in step
+            and ident
+            not in (
+                "coverage-pr-analyze",
+                "analyze",
+                "build-x86_64",
+                "build-aarch64",
+                "build-x86_64-lto",
+                "build-aarch64-lto",
+                "devel-docker-tags",
+            )
+            and not step.get("async")
+        ):
+            step["skip"] = True
+
+
+def trim_test_selection_name(pipeline: Any, steps_to_run: set[str]) -> None:
     for step in steps(pipeline):
         ident = step.get("id") or step.get("command")
         if (
@@ -371,14 +699,21 @@ def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
                 "analyze",
                 "build-x86_64",
                 "build-aarch64",
-                "build-wasm",
+                "build-x86_64-lto",
+                "build-aarch64-lto",
+                "devel-docker-tags",
             )
             and not step.get("async")
         ):
             step["skip"] = True
 
 
-def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
+def trim_tests_pipeline(
+    pipeline: Any,
+    coverage: bool,
+    sanitizer: Sanitizer,
+    lto: bool,
+) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
     Steps are assigned inputs in two ways:
@@ -392,10 +727,71 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> 
     A step is trimmed if a) none of its inputs have changed, and b) there are
     no other untrimmed steps that depend on it.
     """
-    repo = mzbuild.Repository(Path("."), coverage=coverage, sanitizer=sanitizer)
+    print("--- Resolving dependencies")
+    repo = mzbuild.Repository(
+        Path("."),
+        profile=mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED,
+        coverage=coverage,
+        sanitizer=sanitizer,
+    )
     deps = repo.resolve_dependencies(image for image in repo)
 
     steps = OrderedDict()
+
+    composition_paths: set[str] = set()
+
+    for config in pipeline["steps"]:
+        if "plugins" in config:
+            for plugin in config["plugins"]:
+                for plugin_name, plugin_config in plugin.items():
+                    if plugin_name != "./ci/plugins/mzcompose":
+                        continue
+                    name = plugin_config["composition"]
+                    composition_paths.add(str(repo.compositions[name]))
+        if "group" in config:
+            for inner_config in config.get("steps", []):
+                if not "plugins" in inner_config:
+                    continue
+                for plugin in inner_config["plugins"]:
+                    for plugin_name, plugin_config in plugin.items():
+                        if plugin_name != "./ci/plugins/mzcompose":
+                            continue
+                        name = plugin_config["composition"]
+                        composition_paths.add(str(repo.compositions[name]))
+
+    imported_files: dict[str, list[str]] = {}
+
+    with ThreadPoolExecutor(max_workers=len(composition_paths)) as executor:
+        futures = {
+            executor.submit(get_imported_files, path): path
+            for path in composition_paths
+        }
+        for future in futures:
+            path = futures[future]
+            files = future.result()
+            imported_files[path] = files
+
+    # Cache compositions loaded with munge_services=False to extract image
+    # names from their service configs. This avoids expensive fingerprinting
+    # and dependency resolution that munge_services=True triggers.
+    compositions: dict[str, Composition] = {}
+
+    def get_composition_image_deps(
+        name: str,
+    ) -> list[mzbuild.ResolvedImage]:
+        """Get the mzbuild image dependencies for a composition without
+        doing expensive fingerprinting/dependency resolution."""
+        if name not in compositions:
+            compositions[name] = Composition(repo, name, munge_services=False)
+        comp = compositions[name]
+        image_deps = []
+        for _svc_name, config in comp.compose.get("services", {}).items():
+            if "mzbuild" in config:
+                try:
+                    image_deps.append(deps[config["mzbuild"]])
+                except KeyError:
+                    pass
+        return image_deps
 
     def to_step(config: dict[str, Any]) -> PipelineStep | None:
         if "wait" in config or "group" in config:
@@ -417,12 +813,12 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> 
                 for plugin_name, plugin_config in plugin.items():
                     if plugin_name == "./ci/plugins/mzcompose":
                         name = plugin_config["composition"]
-                        composition = Composition(repo, name)
-                        for dep in composition.dependencies:
+                        for dep in get_composition_image_deps(name):
                             step.image_dependencies.add(dep)
-                        step.extra_inputs.add(str(repo.compositions[name]))
+                        composition_path = str(repo.compositions[name])
+                        step.extra_inputs.add(composition_path)
                         # All (transitively) imported python modules are also implicitly dependencies
-                        for file in get_imported_files(str(repo.compositions[name])):
+                        for file in imported_files[composition_path]:
                             step.extra_inputs.add(file)
                     elif plugin_name == "./ci/plugins/cloudtest":
                         step.image_dependencies.add(deps["environmentd"])
@@ -494,75 +890,234 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> 
     ]
 
 
-def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
-    """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
-    # Used to make sure we don't recalculate hashes since there are multiple
-    # builds (Bazel, Cargo) at the moment
-    deps_check = {}
+def add_nightly_deploy_dependency(pipeline: Any, pipeline_name: str) -> None:
+    """In release builds orchestratord and terraform tests in Nightly require
+    the release tag to exist already, so we have to wait for the Deploy step to
+    finish before triggering Nightly. But we don't want to make the Deploy step
+    synchronous in non-release builds since it would make the test run take
+    significantly longer to finish."""
+    tag = os.environ["BUILDKITE_TAG"]
+    if pipeline_name != "test" or not tag:
+        return
 
-    def get_deps(arch: Arch) -> tuple[mzbuild.DependencySet, bool]:
-        if arch not in deps_check:
-            repo = mzbuild.Repository(
-                Path("."), arch=arch, coverage=coverage, sanitizer=sanitizer
-            )
-            deps = repo.resolve_dependencies(image for image in repo if image.publish)
-            check = deps.check()
-            deps_check[arch] = (deps, check)
-        return deps_check[arch]
+    previous_step: dict | None = None
+    for step in steps(pipeline):
+        if step.get("id") == "deploy":
+            step["async"] = False
+            assert previous_step and "wait" in previous_step
+            previous_step["skip"] = True
 
-    def hash(deps: mzbuild.DependencySet) -> str:
-        h = hashlib.sha1()
-        for dep in deps:
-            h.update(dep.spec().encode())
-        return h.hexdigest()
+        if step.get("id") == "nightly-if-release":
+            step["depends_on"] = "deploy"
+
+        previous_step = step
+
+
+def add_cargo_test_dependency(
+    pipeline: Any,
+    pipeline_name: str,
+    coverage: bool,
+    sanitizer: Sanitizer,
+    lto: bool,
+) -> None:
+    """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (ubuntu-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
+    if pipeline_name not in ("test", "nightly"):
+        return
+    if ui.env_is_truthy("BUILDKITE_PULL_REQUEST") and pipeline_name == "test":
+        for step in steps(pipeline):
+            if step.get("id") == "cargo-test":
+                step["depends_on"] = "build-x86_64"
+        return
+
+    repo = mzbuild.Repository(
+        Path("."),
+        arch=Arch.X86_64,
+        profile=mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED,
+        coverage=coverage,
+        sanitizer=sanitizer,
+    )
+    composition = Composition(repo, name="cargo-test")
+    deps = composition.dependencies
+    if deps.check():
+        # We already have the dependencies available, no need to add a build dependency
+        return
 
     for step in steps(pipeline):
+        if step.get("id") in ("cargo-test", "miri-test"):
+            step["depends_on"] = (
+                "build-x86_64" if "x86" in step["agents"]["queue"] else "build-aarch64"
+            )
+
+
+def remove_dependencies_on_prs(
+    pipeline: Any,
+    pipeline_name: str,
+    hash_check: dict[Arch, tuple[str, bool]],
+) -> None:
+    """On PRs in test pipeline remove dependencies on the build, start up tests immediately, they keep retrying for the Docker image"""
+    if pipeline_name != "test":
+        return
+    if (
+        not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
+        or os.environ["BUILDKITE_TAG"]
+        or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+        or os.environ["BUILDKITE_BRANCH"].startswith("dependabot/")
+    ):
+        return
+    for step in steps(pipeline):
+        if step.get("id") in (
+            "upload-debug-symbols-x86_64",
+            "upload-debug-symbols-aarch64",
+        ):
+            continue
+        if step.get("depends_on") in ("build-x86_64", "build-aarch64"):
+            if step["depends_on"] == "build-x86_64" and hash_check[Arch.X86_64][1]:
+                continue
+            if step["depends_on"] == "build-aarch64" and hash_check[Arch.AARCH64][1]:
+                continue
+            step.setdefault("env", {})["CI_WAITING_FOR_BUILD"] = step["depends_on"]
+            del step["depends_on"]
+
+
+def move_build_to_lto(pipeline: Any, lto: bool) -> None:
+    if not lto:
+        return
+    pipeline.setdefault("env", {})["CI_LTO"] = 1
+    for step in steps(pipeline):
+        # Use different queue so we don't block the fast dedicated builder
+        # agents with their caches, LTO builds are very slow at linking, and
+        # need a lot of memory for it too
         if step.get("id") == "build-x86_64":
-            (deps, check) = get_deps(Arch.X86_64)
-            if check:
-                step["skip"] = True
-            else:
-                # Make sure that builds in different pipelines for the same
-                # hash at least don't run concurrently, leading to wasted
-                # resources.
-                step["concurrency"] = 1
-                step["concurrency_group"] = f"build-x86_64/{hash(deps)}"
+            step["agents"]["queue"] = "builder-linux-x86_64"
         elif step.get("id") == "build-aarch64":
-            (deps, check) = get_deps(Arch.AARCH64)
-            if check:
+            step["agents"]["queue"] = "builder-linux-aarch64-mem"
+
+
+def trim_builds(
+    pipeline: Any,
+    hash_check: dict[Arch, tuple[str, bool]],
+) -> None:
+    """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
+    for step in steps(pipeline):
+        if step.get("id") == "build-x86_64":
+            if hash_check[Arch.X86_64][1]:
                 step["skip"] = True
             else:
-                # Make sure that builds in different pipelines for the same
-                # hash at least don't run concurrently, leading to wasted
-                # resources.
                 step["concurrency"] = 1
-                step["concurrency_group"] = f"build-aarch64/{hash(deps)}"
-        elif step.get("id") == "build-x86_64-bazel":
-            (_deps, check) = get_deps(Arch.X86_64)
-            inputs = step.get("inputs") or []
-            if check and not have_paths_changed(inputs):
+                step["concurrency_group"] = f"build-x86_64/{hash_check[Arch.X86_64][0]}"
+        elif step.get("id") == "upload-debug-symbols-x86_64":
+            if hash_check[Arch.X86_64][1]:
                 step["skip"] = True
-            # Bazel builds are not uploaded yet, so no concurrency group
-        elif step.get("id") == "build-aarch64-bazel":
-            (_deps, check) = get_deps(Arch.AARCH64)
-            inputs = step.get("inputs") or []
-            if check and not have_paths_changed(inputs):
+        elif step.get("id") == "build-aarch64":
+            if hash_check[Arch.AARCH64][1]:
                 step["skip"] = True
-            # Bazel builds are not uploaded yet, so no concurrency group
+            else:
+                step["concurrency"] = 1
+                step["concurrency_group"] = (
+                    f"build-aarch64/{hash_check[Arch.AARCH64][0]}"
+                )
+        elif step.get("id") == "upload-debug-symbols-aarch64":
+            if hash_check[Arch.AARCH64][1]:
+                step["skip"] = True
+        elif step.get("id") == "devel-docker-tags":
+            step["concurrency"] = 1
+            step["concurrency_group"] = (
+                f"devel-docker-tags/{hash_check[Arch.X86_64][0]}"
+            )
+
+
+_github_changed_files: set[str] | None = None
 
 
 def have_paths_changed(globs: Iterable[str]) -> bool:
     """Reports whether the specified globs have diverged from origin/main."""
-    diff = subprocess.run(
-        ["git", "diff", "--no-patch", "--quiet", "origin/main...", "--", *globs]
-    )
-    if diff.returncode == 0:
+    global _github_changed_files
+    try:
+        if not _github_changed_files:
+            head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
+            headers = {"Accept": "application/vnd.github+json"}
+            if token := os.getenv("GITHUB_TOKEN"):
+                headers["Authorization"] = f"Bearer {token}"
+
+            resp = requests.get(
+                f"https://api.github.com/repos/materializeinc/materialize/compare/main...{head}",
+                headers=headers,
+            )
+            resp.raise_for_status()
+            _github_changed_files = {
+                f["filename"] for f in resp.json().get("files", [])
+            }
+
+        for file in spawn.capture(["git", "ls-files", *globs]).splitlines():
+            if file in _github_changed_files:
+                return True
         return False
-    elif diff.returncode == 1:
-        return True
-    else:
-        diff.check_returncode()
-        raise RuntimeError("unreachable")
+    except Exception as e:
+        # Try locally if Github is down or the change has not been pushed yet when running locally
+        print(f"Failed to get changed files from Github, running locally: {e}")
+
+        # Make sure we have an up to date view of main.
+        command = ["git", "fetch"]
+        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+            command.append("--unshallow")
+        spawn.runv(command + ["origin", "main"])
+
+        diff = subprocess.run(
+            ["git", "diff", "--no-patch", "--quiet", "origin/main...", "--", *globs]
+        )
+        if diff.returncode == 0:
+            return False
+        elif diff.returncode == 1:
+            return True
+        else:
+            diff.check_returncode()
+            raise RuntimeError("unreachable")
+
+
+def trim_ci_glue_exempt_steps(pipeline: Any) -> None:
+    for step in steps(pipeline):
+        if not step.get("ci_glue_exempt"):
+            continue
+        inputs = step.get("inputs", [])
+        if inputs and not have_paths_changed(inputs):
+            step["skip"] = "No changes in inputs"
+
+
+def remove_mz_specific_keys(pipeline: Any) -> None:
+    """Remove the Materialize-specific keys from the configuration that are only used to inform how to trim the pipeline and for coverage runs."""
+    for step in steps(pipeline):
+        if "inputs" in step:
+            del step["inputs"]
+        if "coverage" in step:
+            del step["coverage"]
+        if "sanitizer" in step:
+            del step["sanitizer"]
+        if "ci_glue_exempt" in step:
+            del step["ci_glue_exempt"]
+        if (
+            "timeout_in_minutes" not in step
+            and "prompt" not in step
+            and "wait" not in step
+            and "group" not in step
+            and "trigger" not in step
+            and not step.get("async")
+        ):
+            raise UIError(
+                f"Every step should have an explicit timeout_in_minutes value, missing in: {step}"
+            )
+
+
+def unparallelize(pipeline: Any) -> None:
+    """Removes parallelism in the test, which will run longer, but exposes some interesting parallelism in some tests."""
+    if not ui.env_is_truthy("CI_UNPARALLELIZE"):
+        return
+
+    for step in steps(pipeline):
+        if "parallelism" not in step:
+            continue
+
+        step["timeout_in_minutes"] *= step["parallelism"]
+        del step["parallelism"]
 
 
 if __name__ == "__main__":

@@ -117,7 +117,7 @@ left_join3:
   | LEFT JOIN dim_table AS d3 ON( ft.fk1 = d3.pk1 AND ft.fk2 = d3.pk2 )
   | LEFT JOIN dim_table AS d3 ON( ft.fk1 = d3.pk2 AND ft.fk2 = d3.pk1 )
   | LEFT JOIN dim_table AS d3 ON( ft.fk1 = d3.pk1 AND ft.fk1 = d3.pk2 )
-  | LEFT JOIN dim_table AS d3 ON( ft.fk1 = d3.pk1 AND ft.fk2 = d3.pk1 ) # VOJ lowering for this is excluded in #26709
+  | LEFT JOIN dim_table AS d3 ON( ft.fk1 = d3.pk1 AND ft.fk2 = d3.pk1 ) # VOJ lowering for this is excluded in materialize#26709
   # Join against d1:
   | LEFT JOIN dim_table AS d3 ON( d1.pk1 = d3.pk1 )
   | LEFT JOIN dim_table AS d3 ON( d1.pk1 = d3.pk1 AND d1.pk2 = d3.pk2 )

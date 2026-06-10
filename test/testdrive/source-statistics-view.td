@@ -15,7 +15,8 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
 
 > CREATE SOURCE counter
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER;
+  FROM LOAD GENERATOR COUNTER (UP TO 100);
+> CREATE TABLE counter_tbl FROM SOURCE counter;
 
 > SELECT
     s.name,
@@ -35,7 +36,7 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
     u.offset_known > 0,
     u.offset_committed > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('counter')
 counter true true true true true true true true true true true true
 

@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::iter;
 use std::ops::RangeInclusive;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use chrono::NaiveDate;
@@ -18,14 +19,13 @@ use dec::{Context as DecimalContext, OrderedDecimal};
 use mz_ore::now::NowFn;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
-use mz_repr::{Datum, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator};
+use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::MzOffset;
-use once_cell::sync::Lazy;
-use rand::distributions::{Alphanumeric, DistString};
-use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
+use rand_8::distributions::{Alphanumeric, DistString};
+use rand_8::rngs::StdRng;
+use rand_8::seq::SliceRandom;
+use rand_8::{Rng, SeedableRng};
 
 #[derive(Clone, Debug)]
 pub struct Tpch {
@@ -37,22 +37,13 @@ pub struct Tpch {
     pub tick: Duration,
 }
 
-const SUPPLIER_OUTPUT: usize = 1;
-const PART_OUTPUT: usize = 2;
-const PARTSUPP_OUTPUT: usize = 3;
-const CUSTOMER_OUTPUT: usize = 4;
-const ORDERS_OUTPUT: usize = 5;
-const LINEITEM_OUTPUT: usize = 6;
-const NATION_OUTPUT: usize = 7;
-const REGION_OUTPUT: usize = 8;
-
 impl Generator for Tpch {
     fn by_seed(
         &self,
         _: NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
         let mut rng = StdRng::seed_from_u64(seed.unwrap_or_default());
         let mut ctx = Context {
             tpch: self.clone(),
@@ -68,12 +59,12 @@ impl Generator for Tpch {
         let count_region: i64 = REGIONS.len().try_into().unwrap();
 
         let mut rows = (0..ctx.tpch.count_supplier)
-            .map(|i| (SUPPLIER_OUTPUT, i))
-            .chain((1..=ctx.tpch.count_part).map(|i| (PART_OUTPUT, i)))
-            .chain((1..=ctx.tpch.count_customer).map(|i| (CUSTOMER_OUTPUT, i)))
-            .chain((1..=ctx.tpch.count_orders).map(|i| (ORDERS_OUTPUT, i)))
-            .chain((0..count_nation).map(|i| (NATION_OUTPUT, i)))
-            .chain((0..count_region).map(|i| (REGION_OUTPUT, i)))
+            .map(|i| (TpchView::Supplier, i))
+            .chain((1..=ctx.tpch.count_part).map(|i| (TpchView::Part, i)))
+            .chain((1..=ctx.tpch.count_customer).map(|i| (TpchView::Customer, i)))
+            .chain((1..=ctx.tpch.count_orders).map(|i| (TpchView::Orders, i)))
+            .chain((0..count_nation).map(|i| (TpchView::Nation, i)))
+            .chain((0..count_region).map(|i| (TpchView::Region, i)))
             .peekable();
 
         // Some rows need to generate other rows from their values; hold those
@@ -87,13 +78,13 @@ impl Generator for Tpch {
         let mut offset = 0;
         let mut row = Row::default();
         Box::new(iter::from_fn(move || {
-            if let Some(pending) = pending.pop_front() {
-                return Some(pending);
+            if let Some((output, event)) = pending.pop_front() {
+                return Some((LoadGeneratorOutput::Tpch(output), event));
             }
             if let Some((output, key)) = rows.next() {
                 let key_usize = usize::try_from(key).expect("key known to be non-negative");
                 let row = match output {
-                    SUPPLIER_OUTPUT => {
+                    TpchView::Supplier => {
                         let nation = rng.gen_range(0..count_nation);
                         row.packer().extend([
                             Datum::Int64(key),
@@ -107,7 +98,7 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    PART_OUTPUT => {
+                    TpchView::Part => {
                         let name: String = PARTNAMES
                             .choose_multiple(&mut rng, 5)
                             .cloned()
@@ -135,8 +126,8 @@ impl Generator for Tpch {
                                 )),
                             ]);
                             pending.push_back((
-                                PARTSUPP_OUTPUT,
-                                Event::Message(MzOffset::from(offset), (row.clone(), 1)),
+                                TpchView::Partsupp,
+                                Event::Message(MzOffset::from(offset), (row.clone(), Diff::ONE)),
                             ));
                         }
                         row.packer().extend([
@@ -152,7 +143,7 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    CUSTOMER_OUTPUT => {
+                    TpchView::Customer => {
                         let nation = rng.gen_range(0..count_nation);
                         row.packer().extend([
                             Datum::Int64(key),
@@ -166,13 +157,13 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    ORDERS_OUTPUT => {
-                        let seed = rng.gen();
+                    TpchView::Orders => {
+                        let seed = rng.r#gen();
                         let (order, lineitems) = ctx.order_row(seed, key);
                         for row in lineitems {
                             pending.push_back((
-                                LINEITEM_OUTPUT,
-                                Event::Message(MzOffset::from(offset), (row, 1)),
+                                TpchView::Lineitem,
+                                Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
                             ));
                         }
                         if !ctx.tpch.tick.is_zero() {
@@ -180,7 +171,7 @@ impl Generator for Tpch {
                         }
                         order
                     }
-                    NATION_OUTPUT => {
+                    TpchView::Nation => {
                         let (name, region) = NATIONS[key_usize];
                         row.packer().extend([
                             Datum::Int64(key),
@@ -190,7 +181,7 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    REGION_OUTPUT => {
+                    TpchView::Region => {
                         row.packer().extend([
                             Datum::Int64(key),
                             Datum::String(REGIONS[key_usize]),
@@ -198,10 +189,13 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    _ => unreachable!("{output}"),
+                    _ => unreachable!("{output:?}"),
                 };
 
-                pending.push_back((output, Event::Message(MzOffset::from(offset), (row, 1))));
+                pending.push_back((
+                    output,
+                    Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
+                ));
                 if rows.peek().is_none() {
                     offset += 1;
                     pending.push_back((output, Event::Progress(Some(MzOffset::from(offset)))));
@@ -218,31 +212,36 @@ impl Generator for Tpch {
                 // order to start the batch.
                 for row in old_lineitems {
                     pending.push_back((
-                        LINEITEM_OUTPUT,
-                        Event::Message(MzOffset::from(offset), (row, -1)),
+                        TpchView::Lineitem,
+                        Event::Message(MzOffset::from(offset), (row, Diff::MINUS_ONE)),
                     ));
                 }
-                let new_seed = rng.gen();
+                let new_seed = rng.r#gen();
                 let (new_order, new_lineitems) = ctx.order_row(new_seed, key);
                 for row in new_lineitems {
                     pending.push_back((
-                        LINEITEM_OUTPUT,
-                        Event::Message(MzOffset::from(offset), (row, 1)),
+                        TpchView::Lineitem,
+                        Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
                     ));
                 }
                 pending.push_back((
-                    ORDERS_OUTPUT,
-                    Event::Message(MzOffset::from(offset), (old_order, -1)),
+                    TpchView::Orders,
+                    Event::Message(MzOffset::from(offset), (old_order, Diff::MINUS_ONE)),
                 ));
                 pending.push_back((
-                    ORDERS_OUTPUT,
-                    Event::Message(MzOffset::from(offset), (new_order, 1)),
+                    TpchView::Orders,
+                    Event::Message(MzOffset::from(offset), (new_order, Diff::ONE)),
                 ));
                 offset += 1;
-                pending.push_back((ORDERS_OUTPUT, Event::Progress(Some(MzOffset::from(offset)))));
+                pending.push_back((
+                    TpchView::Orders,
+                    Event::Progress(Some(MzOffset::from(offset))),
+                ));
                 active_orders.push((key, new_seed));
             }
-            pending.pop_front()
+            pending
+                .pop_front()
+                .map(|(output, event)| (LoadGeneratorOutput::Tpch(output), event))
         }))
     }
 }
@@ -331,6 +330,8 @@ impl Context {
             lineitems.push(row);
         }
 
+        self.cx.rescale(&mut totalprice, &Numeric::from(-2));
+
         self.row_buffer.packer().extend([
             Datum::Int64(key),
             Datum::Int64(custkey),
@@ -356,13 +357,13 @@ fn pad_nine<S: Display>(prefix: &str, s: S) -> String {
     format!("{}#{s:09}", prefix)
 }
 
-pub static START_DATE: Lazy<Date> =
-    Lazy::new(|| Date::try_from(NaiveDate::from_ymd_opt(1992, 1, 1).unwrap()).unwrap());
-pub static CURRENT_DATE: Lazy<Date> =
-    Lazy::new(|| Date::try_from(NaiveDate::from_ymd_opt(1995, 6, 17).unwrap()).unwrap());
-pub static END_DATE: Lazy<Date> =
-    Lazy::new(|| Date::try_from(NaiveDate::from_ymd_opt(1998, 12, 31).unwrap()).unwrap());
-pub static ORDER_END_DAYS: Lazy<i32> = Lazy::new(|| *END_DATE - *START_DATE - 151);
+pub static START_DATE: LazyLock<Date> =
+    LazyLock::new(|| Date::try_from(NaiveDate::from_ymd_opt(1992, 1, 1).unwrap()).unwrap());
+pub static CURRENT_DATE: LazyLock<Date> =
+    LazyLock::new(|| Date::try_from(NaiveDate::from_ymd_opt(1995, 6, 17).unwrap()).unwrap());
+pub static END_DATE: LazyLock<Date> =
+    LazyLock::new(|| Date::try_from(NaiveDate::from_ymd_opt(1998, 12, 31).unwrap()).unwrap());
+pub static ORDER_END_DAYS: LazyLock<i32> = LazyLock::new(|| *END_DATE - *START_DATE - 151);
 
 fn text_string<'a, R: Rng + ?Sized>(
     rng: &mut R,

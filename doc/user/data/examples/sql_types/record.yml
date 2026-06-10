@@ -1,0 +1,7 @@
+- name: "syntax"
+  code: |
+    ROW ( <expr> [, ...] )
+  syntax_elements:
+    - name: "**ROW** ( `<expr>` [, ...] )"
+      description: |
+        Construct a record (tuple) with an arbitrary number of elements of any type. The fields of a record are named `f1`, `f2`, and so on.

@@ -160,17 +160,17 @@ BEGIN
 ----
 COMPLETE 0
 
-query T rowsort
+query TT rowsort
 SHOW TABLES
 ----
-t
+t (empty)
 
 simple
 COMMIT
 ----
 COMPLETE 0
 
-# Regression for #5725
+# Regression for database-issues#1768
 statement ok
 CREATE TABLE t5727 (i INT)
 
@@ -309,6 +309,7 @@ Only the following relations are available:
 "mz_catalog.mz_materialized_views"
 "mz_catalog.mz_operators"
 "mz_catalog.mz_pseudo_types"
+"mz_catalog.mz_role_auth"
 "mz_catalog.mz_role_members"
 "mz_catalog.mz_role_parameters"
 "mz_catalog.mz_roles"
@@ -626,10 +627,70 @@ SELECT INTERVAL '1 day'
 statement ok
 COMMIT
 
+# Verify that different kinds of INSERT INTO ... statements are correctly
+# rejected when a transaction is in read-only mode.
+#
+# At least inserts of non-constant values internally get translated to
+# read-then write statements, which has caused trouble with maintaining the
+# read-only bit in the past.
+
+statement ok
+CREATE TABLE baz(a text)
+
+statement ok
+BEGIN
+
+# A constant value
+statement ok
+INSERT INTO baz VALUES ('hello')
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+# A non-constant value
+statement ok
+INSERT INTO baz VALUES (now()::text)
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM baz
+
+# A constant value, should be rejected
+statement error transaction in read-only mode
+INSERT INTO baz VALUES ('ciao')
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM baz
+
+# A non-constant value, should be rejected as well
+statement error transaction in read-only mode
+INSERT INTO baz VALUES (now()::text)
+
+statement ok
+ROLLBACK
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET allow_real_time_recency = true
 ----
 COMPLETE 0
+
+# TODO(ggevay): I think this is not actually testing real-time recency, because tables don't participate in the
+# RTR machinery at all. (We do get the latest contents of a table in STRICT SERIALIZABLE mode even without RTR
+# being turned on.) We do have other tests in Testdrive, though.
 
 statement ok
 SET REAL_TIME_RECENCY TO TRUE
@@ -753,7 +814,7 @@ COMMIT
 simple conn=c1
 SHOW tables
 ----
-t
+t,
 COMPLETE 1
 
 statement ok
@@ -763,7 +824,7 @@ BEGIN
 statement ok
 CREATE TABLE t (i INT)
 
-statement error db error: ERROR: table "materialize\.public\.t" already exists
+statement error table "materialize\.public\.t" already exists
 COMMIT
 
 statement ok
@@ -773,7 +834,7 @@ BEGIN
 statement ok
 CREATE TABLE t (i INT)
 
-statement error db error: ERROR: this transaction can only execute a single statement
+statement error this transaction can only execute a single statement
 SELECT 1
 
 statement ok
@@ -792,9 +853,8 @@ COMMIT
 simple
 SHOW SOURCES
 ----
-s,load-generator,2,quickstart
-s_progress,progress,NULL,NULL
-COMPLETE 2
+s,load-generator,quickstart,
+COMPLETE 1
 
 # Test a statement that doesn't work even in this mode because of ambiguous responses.
 statement ok
@@ -803,10 +863,10 @@ CREATE DEFAULT INDEX ON s
 statement ok
 BEGIN
 
-statement error db error: ERROR: ALTER INDEX s_primary_idx SET \(RETAIN HISTORY = FOR '1000 hours'\) cannot be run inside a transaction block
+statement error ALTER INDEX s_primary_idx SET \(RETAIN HISTORY = FOR '1000 hours'\) cannot be run inside a transaction block
 ALTER INDEX s_primary_idx SET (RETAIN HISTORY = FOR '1000 hours')
 
-query error db error: ERROR: current transaction is aborted, commands ignored until end of transaction block
+query error current transaction is aborted, commands ignored until end of transaction block
 SELECT 1
 
 statement ok
@@ -845,7 +905,7 @@ statement ok
 CREATE TABLE t (a INT)
 
 statement ok
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 statement ok
 BEGIN
@@ -914,12 +974,12 @@ statement ok
 SHOW VIEWS
 
 query T multiline
-EXPLAIN SELECT *, generate_series(1, 100) FROM mz_views
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT *, generate_series(1, 100) FROM mz_views
 ----
 Explained Query:
   CrossJoin type=differential
     ArrangeBy keys=[[]]
-      ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***]
+      ReadIndex on=mz_views mz_views_ind=[*** full scan ***]
     ArrangeBy keys=[[]]
       Constant
         total_rows (diffs absed): 100
@@ -946,7 +1006,7 @@ Explained Query:
           - (20)
 
 Used Indexes:
-  - mz_catalog.mz_show_views_ind (*** full scan ***)
+  - mz_catalog.mz_views_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -972,15 +1032,48 @@ statement ok
 SELECT * FROM t, mz_views
 
 query T multiline
-EXPLAIN SHOW VIEWS
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SHOW VIEWS
 ----
 Explained Query:
-  Project (#3)
-    Filter (#2 = "u3")
-      ReadStorage mz_catalog.mz_views
+  With
+    cte l0 =
+      Project (#0{id}..=#2{name}, #4{comment})
+        Join on=(#0{id} = #3{id}) type=differential
+          ArrangeBy keys=[[#0{id}]]
+            Project (#0{id}, #2{schema_id}, #3{name})
+              ReadStorage mz_catalog.mz_views
+          ArrangeBy keys=[[#0{id}]]
+            Project (#0{id}, #3{comment})
+              Filter (#2{object_sub_id}) IS NULL AND (#1{object_type} = "view")
+                ReadStorage mz_internal.mz_comments
+    cte l1 =
+      Project (#0{id}, #3{name})
+        Filter (#2{schema_id} = "u3")
+          ReadStorage mz_catalog.mz_views
+  Return
+    Project (#0{name}, #2)
+      Map (coalesce(#1{comment}, ""))
+        Union
+          Map (null)
+            Union
+              Negate
+                Project (#1{name})
+                  Join on=(#0{id} = #2{id}) type=differential
+                    ArrangeBy keys=[[#0{id}]]
+                      Get l1
+                    ArrangeBy keys=[[#0{id}]]
+                      Distinct project=[#0{id}]
+                        Project (#0{id})
+                          Get l0
+              Project (#1{name})
+                Get l1
+          Project (#2{name}, #3{comment})
+            Filter (#1{schema_id} = "u3")
+              Get l0
 
 Source mz_catalog.mz_views
-  filter=((#2 = "u3"))
+Source mz_internal.mz_comments
+  filter=((#1{object_type} = "view") AND (#2{object_sub_id}) IS NULL)
 
 Target cluster: quickstart
 
@@ -1055,7 +1148,7 @@ CREATE TABLE yellow_t1 (x int);
 ----
 COMPLETE 0
 
-statement error db error: ERROR: object state changed while transaction was in progress
+statement error another session modified the catalog while this DDL transaction was open
 ALTER SCHEMA blue RENAME to pink;
 
 statement ok
@@ -1099,7 +1192,7 @@ public  u3
 statement ok
 BEGIN;
 
-statement error db error: ERROR: schema 'green' already exists
+statement error schema 'green' already exists
 ALTER SCHEMA orange RENAME TO green;
 
 statement ok
@@ -1118,7 +1211,7 @@ BEGIN;
 statement ok
 ALTER SCHEMA green RENAME TO red;
 
-statement error db error: ERROR: schema 'red' already exists
+statement error schema 'red' already exists
 ALTER SCHEMA orange RENAME TO red;
 
 statement ok
@@ -1140,7 +1233,7 @@ statement ok
 CREATE VIEW green_v1 AS ( SELECT SUM(x) FROM green_t1 );
 
 statement ok
-CREATE CLUSTER green_compute SIZE '1';
+CREATE CLUSTER green_compute SIZE 'scale=1,workers=1';
 
 statement ok
 CREATE MATERIALIZED VIEW green_mv1 IN CLUSTER green_compute AS ( SELECT AVG(x) FROM green_t1 );
@@ -1177,11 +1270,10 @@ SELECT * FROM blue_mv1;
 20
 
 query TT
-SELECT name, id FROM mz_clusters WHERE id LIKE 'u%' ORDER BY name;
+SELECT name, id FROM mz_clusters WHERE id LIKE 'u%' AND name != 'quickstart' ORDER BY name;
 ----
 blue_compute  u3
 c  u2
-quickstart  u1
 
 statement ok
 BEGIN;
@@ -1189,7 +1281,7 @@ BEGIN;
 statement ok
 INSERT INTO blue_t1 VALUES (40), (50), (60);
 
-statement error db error: ERROR: transaction in write-only mode
+statement error transaction in write-only mode
 ALTER TABLE blue_t1 RENAME TO red_t1;
 
 statement ok
@@ -1208,7 +1300,7 @@ SELECT * FROM blue_v1;
 ----
 60
 
-statement error db error: ERROR: transaction in read-only mode
+statement error transaction in read-only mode
 ALTER TABLE blue_t1 RENAME TO red_t1;
 
 statement ok
@@ -1225,7 +1317,7 @@ BEGIN;
 statement ok
 ALTER TABLE blue_t1 RENAME TO purple_t1;
 
-statement error db error: ERROR: transactions which modify objects are restricted to just modifying objects
+statement error transactions which modify objects are restricted to just modifying objects
 SELECT * FROM blue_mv1;
 
 statement ok
@@ -1249,20 +1341,161 @@ query T
 SELECT name FROM mz_columns WHERE name = 'foobar';
 ----
 
-query TTT
+query TTTT
 SHOW COLUMNS IN mz_columns
 ----
-id  false  text
-name  false  text
-position  false  uint8
-nullable  false  boolean
-type  false  text
-default  true  text
-type_oid  false  oid
-type_mod  false  integer
+id       false  text    The␠unique␠ID␠of␠the␠table,␠source,␠or␠view␠containing␠the␠column.
+name     false  text    The␠name␠of␠the␠column.
+position false  uint8   The␠1-indexed␠position␠of␠the␠column␠in␠its␠containing␠table,␠source,␠or␠view.
+nullable false  boolean Can␠the␠column␠contain␠a␠`NULL`␠value?
+type     false  text    The␠data␠type␠of␠the␠column.
+default  true   text    The␠default␠expression␠of␠the␠column.
+type_oid false  oid     The␠OID␠of␠the␠type␠of␠the␠column␠(references␠`mz_types`).
+type_mod false  integer The␠packed␠type␠identifier␠of␠the␠column.
 
 statement ok
 COMMIT;
+
+statement ok
+CREATE TABLE t1(x text, y text);
+
+statement ok
+INSERT INTO t1 VALUES (5, 6), (7, 8);
+
+# Test PREPARE FETCH.
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR (
+  SELECT count(1) FROM t1
+  UNION ALL
+  SELECT count(1) FROM t1
+);
+PREPARE p1 AS FETCH 1 c1;
+EXECUTE p1;
+ROLLBACK;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+2
+COMPLETE 1
+COMPLETE 0
+
+# Now declare a new cursor with the same name in a different transaction, and test that we realize that the meaning of
+# p1 has changed. This is a regression test for https://github.com/MaterializeInc/database-issues/issues/9634.
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR (
+  SELECT x, y FROM t1
+);
+EXECUTE p1;
+----
+db error: ERROR: cached plan must not change result type
+
+simple
+ROLLBACK;
+----
+COMPLETE 0
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/9634's portal case.
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR SELECT x, y FROM t1;
+DECLARE c2 CURSOR FOR FETCH 1 c1;
+CLOSE c1;
+DECLARE c1 CURSOR FOR SELECT x FROM t1;
+FETCH 1 c2;
+----
+db error: ERROR: cached plan must not change result type
+
+simple
+ROLLBACK;
+----
+COMPLETE 0
+
+# PREPARE FETCH with a SUBSCRIBE
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR SUBSCRIBE (
+  SELECT count(1) FROM t1
+  UNION ALL
+  SELECT count(1) FROM t1
+);
+PREPARE p2 AS FETCH 0 c1;
+EXECUTE p2;
+ROLLBACK;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+# The transaction ended, so the portal is gone.
+query error cursor "c1" does not exist
+EXECUTE p2;
+
+# Do the same as above, but commit the transaction. Counter-intuitively, the portal disappears also if you commit the
+# transaction.
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR SUBSCRIBE (
+  SELECT count(1) FROM t1
+  UNION ALL
+  SELECT count(1) FROM t1
+);
+PREPARE p3 AS FETCH 0 c1;
+EXECUTE p3;
+COMMIT;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+query error cursor "c1" does not exist
+EXECUTE p3;
+
+# DECLARE CURSOR FOR FETCH
+# (tests that `describe_fetch` is correct when called from `describe_declare`)
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR SELECT count(1) FROM t1;
+DECLARE c2 CURSOR FOR FETCH 1 c1;
+FETCH 3 c2;
+ROLLBACK;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+2
+COMPLETE 1
+COMPLETE 0
+
+# AS OF query outside the timedomain of a transaction.
+
+statement ok
+CREATE SCHEMA s1;
+
+statement ok
+CREATE TABLE s1.t (a int);
+
+statement ok
+CREATE SCHEMA s2;
+
+statement ok
+CREATE MATERIALIZED VIEW s2.const_mv AS (SELECT 1);
+
+# TODO(peek-seq): Uncomment this when the new peek sequencing is turned on in CI. See the comment on
+# `in_immediate_multi_stmt_txn`.
+#simple
+#SELECT * FROM s1.t;
+#SELECT * FROM s2.const_mv AS OF 7;
+#----
+#COMPLETE 0
+#1
+#COMPLETE 1
 
 # Cleanup.
 

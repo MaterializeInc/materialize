@@ -11,7 +11,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{cmp, str};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Headers, Message};
@@ -54,7 +54,7 @@ struct RecordFormat {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum DecodedValue {
     Avro(DebugValue),
     Json(serde_json::Value),
@@ -67,11 +67,12 @@ enum Topic {
     Named(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Record<A> {
     headers: Vec<String>,
     key: Option<A>,
     value: Option<A>,
+    partition: Option<i32>,
 }
 
 async fn get_topic(sink: &str, topic_field: &str, state: &State) -> Result<String, anyhow::Error> {
@@ -165,11 +166,11 @@ pub async fn run_verify_data(
         .context("subscribing to kafka topic")?;
 
     let (mut stream_messages_remaining, stream_timeout) = match partial_search {
-        Some(size) => (size, state.default_timeout),
+        Some(size) => (size, state.timeout),
         None => (expected_messages.len(), Duration::from_secs(15)),
     };
 
-    let timeout = cmp::max(state.default_timeout, stream_timeout);
+    let timeout = cmp::max(state.timeout, stream_timeout);
 
     let message_stream = consumer.stream().timeout(timeout);
     pin!(message_stream);
@@ -228,6 +229,7 @@ pub async fn run_verify_data(
                     headers,
                     key: message.key().map(|b| b.to_owned()),
                     value: message.payload().map(|b| b.to_owned()),
+                    partition: Some(message.partition()),
                 });
             }
             Some(Err(e)) => {
@@ -246,7 +248,9 @@ pub async fn run_verify_data(
             .get_schema_by_subject(&format!("{}-key", topic))
             .await
             .ok()
-            .map(|key_schema| avro::parse_schema(&key_schema.raw).context("parsing avro schema"))
+            .map(|key_schema| {
+                avro::parse_schema(&key_schema.raw, &[]).context("parsing avro schema")
+            })
             .transpose()?;
         // for avro, we can determine if a key is required based on the presence of the key schema
         // rather than requiring the user to specify the key=true flag
@@ -264,7 +268,7 @@ pub async fn run_verify_data(
             .await
             .context("fetching schema")?
             .raw;
-        Some(avro::parse_schema(&val_schema).context("parsing avro schema")?)
+        Some(avro::parse_schema(&val_schema, &[]).context("parsing avro schema")?)
     } else {
         None
     };
@@ -373,6 +377,7 @@ fn decode_messages(
             headers: record.headers.clone(),
             key,
             value,
+            partition: record.partition,
         });
     }
 
@@ -390,7 +395,8 @@ fn parse_expected_messages(
 
     for msg in expected_messages {
         let (headers, content) = split_headers(&msg, header_keys.len())?;
-        let mut deserializer = serde_json::Deserializer::from_str(content).into_iter();
+        let mut content = content.as_bytes();
+        let mut deserializer = serde_json::Deserializer::from_reader(&mut content).into_iter();
 
         let key = if format.requires_key {
             let key: serde_json::Value = deserializer
@@ -407,7 +413,11 @@ fn parse_expected_messages(
                 Format::Bytes => {
                     unimplemented!("bytes format not yet supported in tests")
                 }
-                Format::Text => DecodedValue::Text(key.to_string()),
+                Format::Text => DecodedValue::Text(
+                    key.as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| key.to_string()),
+                ),
             })
         } else {
             None
@@ -415,6 +425,7 @@ fn parse_expected_messages(
 
         let value = match deserializer.next().transpose().context("parsing json")? {
             None => None,
+            Some(value) if value.as_str() == Some("<null>") => None,
             Some(value) => match format.value {
                 Format::Avro => Some(DecodedValue::Avro(DebugValue(avro::from_json(
                     &value,
@@ -428,15 +439,24 @@ fn parse_expected_messages(
             },
         };
 
-        ensure!(
-            deserializer.next().is_none(),
-            "at most two records per expect line"
-        );
+        let content =
+            str::from_utf8(content).context("internal error: contents were previously a string")?;
+        let partition = match content.trim().split_once("=") {
+            None if content.trim() != "" => bail!("unexpected cruft at end of line: {content}"),
+            None => None,
+            Some((label, partition)) => {
+                if label != "partition" {
+                    bail!("partition expectation has unexpected label: {label}")
+                }
+                Some(partition.parse().context("parsing expected partition")?)
+            }
+        };
 
         expected.push(Record {
             headers,
             key,
             value,
+            partition,
         });
     }
 
@@ -451,7 +471,7 @@ fn verify_with_partial_search<A>(
     partial_search: bool,
 ) -> Result<(), anyhow::Error>
 where
-    A: Debug,
+    A: Debug + Clone,
 {
     let mut expected = expected.iter();
     let mut actual = actual.iter();
@@ -464,6 +484,10 @@ where
         let i = index.next().expect("known to exist");
         match (expected_item, actual_item) {
             (Some(e), Some(a)) => {
+                let mut a = a.clone();
+                if e.partition.is_none() {
+                    a.partition = None;
+                }
                 let e_str = format!("{:#?}", e);
                 let a_str = match &regex {
                     Some(regex) => regex

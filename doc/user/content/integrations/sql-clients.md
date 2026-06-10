@@ -13,14 +13,13 @@ menu:
 ---
 
 Materialize is **wire-compatible** with PostgreSQL, which means it integrates
-with many SQL clients that support PostgreSQL (see [Tools and Integrations](/integrations/#sql-clients)).
-In this guide, we’ll cover how to connect to your Materialize region using
-common SQL clients.
+with many SQL clients that support PostgreSQL. In this guide, we’ll cover how to
+connect to your Materialize region using some common SQL clients.
 
 ## Connection parameters
 
 You can find the credentials for your Materialize region in the
-[Materialize console](https://console.materialize.com/), under **Connect
+[Materialize console](/console/), under **Connect
 externally** in the navigation bar.
 
 Field             | Value
@@ -54,7 +53,7 @@ user and set the transactional isolation to serializable on connection using
 
 ```bash
 # Using the options connection string parameter
-psql "postgres://<MZ_USER>@<MZ_HOST>:6875/materialize?sslmode=require&options=--cluster%3Dprod%20--transaction_isolation%3Dserializable
+psql "postgres://<MZ_USER>@<MZ_HOST>:6875/materialize?sslmode=require&options=--cluster%3Dprod%20--transaction_isolation%3Dserializable"
 ```
 
 ```bash
@@ -71,10 +70,22 @@ psql \
 
 ### DataGrip
 
-{{< note >}}
-As we work on extending the coverage of `pg_catalog` in Materialize,
-some DataGrip features might not work as expected {{% gh 9720 %}}.
-{{< /note >}}
+{{< tip >}}
+
+Integration with DataGrip/WebStorm is currently limited. Certain features --
+such as the schema explorer, database introspection, and various metadata panels
+-- may not work as expected with Materialize because they rely on
+PostgreSQL-specific queries that use unsupported system functions (e.g.,
+`age()`) and system columns (e.g., `xmin`).
+
+As an alternative, you can [use the JDBC metadata
+introspector](https://www.jetbrains.com/help/datagrip/cannot-find-a-database-object-in-the-database-tree-view.html#temporarily-enable-introspection-with-jdbc-metadata).
+To use the JDBC metadata instrospector, from your data source properties, in the
+**Advanced** tab, select **Introspect using JDBC Metadata** from the **Expert
+options** list. For more information, see the [DataGrip
+documentation](https://www.jetbrains.com/help/datagrip/cannot-find-a-database-object-in-the-database-tree-view.html#temporarily-enable-introspection-with-jdbc-metadata).
+
+{{< /tip >}}
 
 To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html),
 follow the documentation to [create a connection](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html)
@@ -82,6 +93,9 @@ and use the **PostgreSQL database driver** with the credentials provided in the
 Materialize console.
 
 <img width="1131" alt="DataGrip Materialize Connection Details" src="https://user-images.githubusercontent.com/21223421/218108169-302c8597-35a9-4dce-b16d-050f49538b9e.png">
+
+[use the JDBC metadata
+introspector]:
 
 ### DBeaver
 
@@ -100,7 +114,7 @@ automatically download and install the most recent version.
 
 #### Connect to a specific cluster
 
-By default, Materialize connects to the [pre-installed `default` cluster](/sql/show-clusters/#pre-installed-clusters).
+By default, Materialize connects to the [pre-installed `quickstart` cluster](/sql/show-clusters/#pre-installed-clusters).
 To connect to a specific [cluster](/concepts/clusters), you must
 define a bootstrap query in the connection initialization settings.
 
@@ -140,7 +154,7 @@ To show system objects in the database explorer:
 
 {{< note >}}
 As we work on extending the coverage of `pg_catalog` in Materialize,
-some TablePlus features might not work as expected {{% gh 19891 %}}.
+some TablePlus features might not work as expected.
 {{< /note >}}
 
 To connect to Materialize using [TablePlus](https://tableplus.com/),
@@ -153,7 +167,7 @@ Materialize console.
 ### `psql`
 
 {{< warning >}}
-Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands {{% gh 9721 %}}.
+Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands.
 {{< /warning >}}
 
 {{< tabs >}}
@@ -209,3 +223,15 @@ psql --version
 Download and install the [PostgreSQL installer](https://www.postgresql.org/download/windows/) certified by EDB.
 {{< /tab >}}
 {{< /tabs >}}
+
+## See also
+
+See also the following integration guides for BI tools:
+
+- [Deepnote](/serve-results/bi-tools/deepnote/)
+- [Excel](/serve-results/bi-tools/excel/)
+- [Hex](/serve-results/bi-tools/hex/)
+- [Metabase](/serve-results/bi-tools/metabase/)
+- [Power BI](/serve-results/bi-tools/power-bi/)
+- [Tableau](/serve-results/bi-tools/tableau/)
+- [Looker](/serve-results/bi-tools/looker/)

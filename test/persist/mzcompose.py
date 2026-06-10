@@ -7,20 +7,31 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Maelstrom test against the Persist subsystem.
+"""
+
 import argparse
+import os
 
 from materialize.mzcompose.composition import (
     Composition,
-    Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.postgres import PostgresMetadata
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(setup_materialize=True, in_memory=True),
+    PostgresMetadata(),
     Service(
         "maelstrom-persist",
-        {"mzbuild": "maelstrom-persist", "volumes": ["./maelstrom:/store"]},
+        {
+            "mzbuild": "maelstrom-persist",
+            "volumes": ["./maelstrom:/store"],
+            "propagate_uid_gid": True,
+        },
     ),
 ]
 
@@ -44,7 +55,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--consensus",
         type=str,
-        choices=["mem", "cockroach", "maelstrom"],
+        choices=["mem", "cockroach", "maelstrom", "postgres"],
         default="maelstrom",
     )
     parser.add_argument(
@@ -56,6 +67,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
+    p = c.path / "maelstrom"
+    p.mkdir(exist_ok=True)
+    os.chmod(p, 0o777)
+
     if args.consensus == "mem":
         consensus_uri = "mem://consensus"
     elif args.consensus == "cockroach":
@@ -63,6 +78,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "postgres://root@cockroach:26257?options=--search_path=consensus"
         )
         c.up("cockroach")
+    elif args.consensus == "postgres":
+        consensus_uri = (
+            "postgres://root@postgres-metadata:26257?options=--search_path=consensus"
+        )
+        c.up("postgres-metadata")
     else:
         # empty consensus uri defaults to Maelstrom consensus implementation
         consensus_uri = ""

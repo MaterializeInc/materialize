@@ -62,13 +62,14 @@ INTERVAL_TYPE_IDENTIFIER = "INTERVAL"
 DATE_TYPE = DateTimeDataType(
     DATE_TYPE_IDENTIFIER,
     "DATE",
-    # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
+    # BC, AD not working, see: https://github.com/MaterializeInc/database-issues/issues/5843
     "0001-01-01",
     "99999-12-31",
     [
         ("2023-06-01", set()),
         ("2024-02-29", set()),
-        ("01-02-03", {ExpressionCharacteristics.DATE_WITH_SHORT_YEAR}),
+        # TODO: Reenable when database-issues#8642 is fixed
+        # ("01-02-03", {ExpressionCharacteristics.DATE_WITH_SHORT_YEAR}),
     ],
     is_max_value_pg_compatible=False,
 )
@@ -85,26 +86,27 @@ TIME_TYPE = DateTimeDataType(
 TIMESTAMP_TYPE = DateTimeDataType(
     TIMESTAMP_TYPE_IDENTIFIER,
     "TIMESTAMP",
-    # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
+    # BC, AD not working, see: https://github.com/MaterializeInc/database-issues/issues/5843
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
     [
         ("2023-02-28 11:22:33.44444", set()),
         ("2024-02-29 23:50:00", set()),
-        (
-            "01-02-03 11:",
-            {
-                ExpressionCharacteristics.DATE_WITH_SHORT_YEAR,
-                ExpressionCharacteristics.INCOMPLETE_TIME_VALUE,
-            },
-        ),
+        # TODO: Reenable when database-issues#8642 is fixed
+        # (
+        #    "01-02-03 11:",
+        #    {
+        #        ExpressionCharacteristics.DATE_WITH_SHORT_YEAR,
+        #        ExpressionCharacteristics.INCOMPLETE_TIME_VALUE,
+        #    },
+        # ),
     ],
     is_max_value_pg_compatible=False,
 )
 TIMESTAMPTZ_TYPE = DateTimeDataType(
     TIMESTAMPTZ_TYPE_IDENTIFIER,
     "TIMESTAMPTZ",
-    # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
+    # BC, AD not working, see: https://github.com/MaterializeInc/database-issues/issues/5843
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
     further_values=[("2023-06-01 11:22:33.44444", set())],

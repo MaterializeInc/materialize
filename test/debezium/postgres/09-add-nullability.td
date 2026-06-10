@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_allow_nullability (f1 INTEGER NOT NULL, f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_allow_nullability REPLICA IDENTITY FULL;
 INSERT INTO alter_allow_nullability VALUES (123, 0),(234, 1);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.alter_allow_nullability
 
@@ -24,12 +25,16 @@ $ schema-registry-wait topic=postgres.public.alter_allow_nullability
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE alter_allow_nullability
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_allow_nullability')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_allow_nullability');
+
+> CREATE TABLE alter_allow_nullability_tbl FROM SOURCE alter_allow_nullability (REFERENCE "postgres.public.alter_allow_nullability")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
-> SELECT f1 FROM alter_allow_nullability;
+> SELECT f1 FROM alter_allow_nullability_tbl;
 123
 234
 
@@ -39,5 +44,5 @@ INSERT INTO alter_allow_nullability VALUES (NULL, 2);
 UPDATE alter_allow_nullability SET f1 = NULL WHERE f1 = 123;
 DELETE FROM alter_allow_nullability WHERE f1 = 234;
 
-! SELECT * FROM alter_allow_nullability;
+! SELECT * FROM alter_allow_nullability_tbl;
 contains:Decode error: Decoding error: Reader expected variant at index 1, got 0

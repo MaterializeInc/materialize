@@ -29,15 +29,22 @@ set -euo pipefail
 declare -A shortlinks=(
     [bug]="https://github.com/MaterializeInc/materialize/issues/new?labels=C-bug&template=01-bug.yml"
     [docs]="https://materialize.com/docs"
-    [non-materialized-error]="https://materialize.com/docs/lts/sql/create-view/#querying-non-materialized-views"
+    [non-materialized-error]="https://materialize.com/blog/views-indexes/"
     [sink-key-selection]="https://materialize.com/docs/sql/create-sink/kafka/#upsert-key-selection"
     [aws-connection-role-trust-policy]="https://materialize.com/docs/sql/create-connection/#permissions"
-    [chat]="https://join.slack.com/t/materializecommunity/shared_invite/zt-2bad5ce4i-ZsiPWI5jd7Q9pRDGYj3dkw"
+    [chat]="https://join.slack.com/t/materializecommunity/shared_invite/zt-36u094n7l-M_fE43Lfpy74kCyI9Ar~7w"
     [pricing]="https://materialize.com/pdfs/pricing.pdf"
 )
 
 cd doc/user
-hugo --gc --baseURL /docs --destination public/docs
+if [[ "$BUILDKITE_ORGANIZATION_SLUG" == "materialize" ]] && [[ "$BUILDKITE_BRANCH" == self-managed-docs/* ]]; then
+    VERSION=${BUILDKITE_BRANCH#self-managed-docs/}
+    hugo --gc --baseURL "/docs/self-managed/$VERSION" --destination "public/docs/self-managed/$VERSION"
+else
+    hugo --gc --baseURL /docs --destination public/docs
+    # Build skill docs to public/docs/markdown-docs/.
+    hugo --gc --baseURL /docs --config config.toml,config.skill.toml --disableKinds sitemap,robotsTXT,taxonomy --destination public/docs/markdown-docs
+fi
 hugo deploy --maxDeletes -1
 
 touch empty
@@ -57,6 +64,8 @@ touch empty
 # NOTE(benesch): this code does not delete old shortlinks. That's fine, because
 # the whole point is that the shortlinks live forever.
 for slug in "${!shortlinks[@]}"; do
+    # Remove the potentially existing shortlink first, otherwise the redirect does not get updated
+    aws s3 rm "s3://materialize-website/s/$slug" || true
     aws s3 cp empty "s3://materialize-website/s/$slug" --website-redirect "${shortlinks[$slug]}"
 done
 

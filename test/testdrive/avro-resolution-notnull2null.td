@@ -28,18 +28,22 @@ $ kafka-ingest format=avro topic=resolution-unions schema=${not-null} timestamp=
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE resolution_unions
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-unions-${testdrive.seed}')
+
+> CREATE TABLE resolution_unions_tbl FROM SOURCE resolution_unions (REFERENCE "testdrive-resolution-unions-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-ingest format=avro topic=resolution-unions schema=${null} timestamp=2
 {"f1": null }
 {"f1": {"int": 123 } }
 
-! SELECT f1 FROM resolution_unions
+! SELECT f1 FROM resolution_unions_tbl
 contains:Failed to match writer union variant `Null` against any variant in the reader for field `schema_union.f1`
 
-! SELECT f1 FROM resolution_unions
+! SELECT f1 FROM resolution_unions_tbl
 contains:unable to decode row (Avro schema id =

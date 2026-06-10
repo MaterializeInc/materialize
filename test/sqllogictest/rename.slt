@@ -18,7 +18,7 @@ CREATE SCHEMA a1
 statement ok
 CREATE SCHEMA b1
 
-statement error db error: ERROR: schema 'b1' already exists
+statement error schema 'b1' already exists
 CREATE SCHEMA B1
 
 query TT
@@ -38,22 +38,22 @@ query TT
 SHOW CREATE TABLE b1.t
 ----
 materialize.b1.t
-CREATE TABLE "materialize"."b1"."t" ("x" "pg_catalog"."int4")
+CREATE TABLE materialize.b1.t (x pg_catalog.int4);
 
 statement ok
 INSERT INTO b1.t VALUES (1), (2), (3)
 
-query I
+query I valuesort
 SELECT x FROM b1.t
 ----
 1
 2
 3
 
-statement error db error: ERROR: schema 'a1' already exists
+statement error schema 'a1' already exists
 ALTER SCHEMA b1 RENAME TO a1
 
-statement error db error: ERROR: unacceptable schema name 'mz_special'
+statement error unacceptable schema name 'mz_special'
 ALTER SCHEMA b1 RENAME TO mz_special
 
 statement ok
@@ -66,28 +66,29 @@ alter
 schema
 {"database_name":"materialize","id":"u10","new_name":"b2","old_name":"b1"}
 
-query I
+query I valuesort
 SELECT x FROM b2.t
 ----
 1
 2
 3
 
-query TT
+mode cockroach
+
+query TT rowsort
 SELECT database_id, name FROM mz_schemas WHERE id LIKE 'u%';
 ----
-u1
-a1
-u1
-b2
-u1
-public
+u1 a1
+u1 b2
+u1 public
+
+mode standard
 
 query TT
 SHOW CREATE TABLE b2.t;
 ----
 materialize.b2.t
-CREATE TABLE "materialize"."b2"."t" ("x" "pg_catalog"."int4")
+CREATE TABLE materialize.b2.t (x pg_catalog.int4);
 
 statement ok
 CREATE SCHEMA friend;
@@ -95,7 +96,7 @@ CREATE SCHEMA friend;
 statement ok
 CREATE VIEW friend.v1 AS SELECT x FROM b2.t;
 
-query I
+query I valuesort
 SELECT * FROM friend.v1;
 ----
 1
@@ -106,12 +107,12 @@ query TT
 SHOW CREATE VIEW friend.v1;
 ----
 materialize.friend.v1
-CREATE VIEW "materialize"."friend"."v1" AS SELECT "x" FROM "materialize"."b2"."t"
+CREATE VIEW materialize.friend.v1 AS SELECT x FROM materialize.b2.t;
 
 statement ok
 ALTER SCHEMA b2 RENAME TO b3;
 
-query I
+query I valuesort
 SELECT * FROM friend.v1;
 ----
 1
@@ -122,7 +123,7 @@ query TT
 SHOW CREATE VIEW friend.v1;
 ----
 materialize.friend.v1
-CREATE VIEW "materialize"."friend"."v1" AS SELECT "x" FROM "materialize"."b3"."t"
+CREATE VIEW materialize.friend.v1 AS SELECT x FROM materialize.b3.t;
 
 statement ok
 CREATE SCHEMA grand_friend;
@@ -130,7 +131,7 @@ CREATE SCHEMA grand_friend;
 statement ok
 CREATE MATERIALIZED VIEW grand_friend.mv1 AS SELECT x FROM friend.v1;
 
-query I
+query I valuesort
 SELECT x FROM grand_friend.mv1;
 ----
 1
@@ -140,26 +141,26 @@ SELECT x FROM grand_friend.mv1;
 statement ok
 ALTER SCHEMA friend RENAME TO enemy;
 
-statement error db error: ERROR: unknown schema 'friend'
+statement error unknown schema 'friend'
 SELECT * FROM friend.v1;
 
 query TT
 SHOW CREATE TABLE b3.t;
 ----
 materialize.b3.t
-CREATE TABLE "materialize"."b3"."t" ("x" "pg_catalog"."int4")
+CREATE TABLE materialize.b3.t (x pg_catalog.int4);
 
 query TT
 SHOW CREATE VIEW enemy.v1;
 ----
 materialize.enemy.v1
-CREATE VIEW "materialize"."enemy"."v1" AS SELECT "x" FROM "materialize"."b3"."t"
+CREATE VIEW materialize.enemy.v1 AS SELECT x FROM materialize.b3.t;
 
 query TT
 SHOW CREATE MATERIALIZED VIEW grand_friend.mv1;
 ----
 materialize.grand_friend.mv1
-CREATE MATERIALIZED VIEW "materialize"."grand_friend"."mv1" IN CLUSTER "quickstart" WITH (REFRESH = ON COMMIT) AS SELECT "x" FROM "materialize"."enemy"."v1"
+CREATE MATERIALIZED VIEW materialize.grand_friend.mv1⏎    IN CLUSTER quickstart⏎    WITH (REFRESH = ON COMMIT)⏎    AS SELECT x FROM materialize.enemy.v1;
 
 statement ok
 CREATE TABLE a1.t (y text);
@@ -171,7 +172,7 @@ query TT
 SHOW CREATE TABLE a1.t;
 ----
 materialize.a1.t
-CREATE TABLE "materialize"."a1"."t" ("y" "pg_catalog"."text")
+CREATE TABLE materialize.a1.t (y pg_catalog.text);
 
 statement ok
 CREATE VIEW enemy.v2 AS (SELECT * FROM a1.t, b3.t);
@@ -196,7 +197,7 @@ query TT
 SHOW CREATE VIEW enemy.v2;
 ----
 materialize.enemy.v2
-CREATE VIEW "materialize"."enemy"."v2" AS SELECT * FROM "materialize"."a1"."t", "materialize"."b3"."t"
+CREATE VIEW materialize.enemy.v2 AS SELECT * FROM materialize.a1.t, materialize.b3.t;
 
 statement ok
 CREATE INDEX enemy_v2_idx ON enemy.v2 (y, x);
@@ -210,7 +211,7 @@ query TT
 SHOW CREATE INDEX enemy.enemy_v2_idx
 ----
 materialize.enemy.enemy_v2_idx
-CREATE INDEX "enemy_v2_idx" IN CLUSTER "quickstart" ON "materialize"."enemy"."v2" ("y", "x")
+CREATE INDEX enemy_v2_idx IN CLUSTER quickstart ON materialize.enemy.v2 (y, x);
 
 statement ok
 ALTER SCHEMA b3 RENAME TO b4;
@@ -219,7 +220,7 @@ query TT
 SHOW CREATE VIEW enemy.v2;
 ----
 materialize.enemy.v2
-CREATE VIEW "materialize"."enemy"."v2" AS SELECT * FROM "materialize"."a1"."t", "materialize"."b4"."t"
+CREATE VIEW materialize.enemy.v2 AS SELECT * FROM materialize.a1.t, materialize.b4.t;
 
 statement ok
 ALTER SCHEMA enemy RENAME TO friend_again;
@@ -228,13 +229,13 @@ query TT
 SHOW CREATE VIEW friend_again.v2;
 ----
 materialize.friend_again.v2
-CREATE VIEW "materialize"."friend_again"."v2" AS SELECT * FROM "materialize"."a1"."t", "materialize"."b4"."t"
+CREATE VIEW materialize.friend_again.v2 AS SELECT * FROM materialize.a1.t, materialize.b4.t;
 
 query TT
 SHOW CREATE INDEX friend_again.enemy_v2_idx
 ----
 materialize.friend_again.enemy_v2_idx
-CREATE INDEX "enemy_v2_idx" IN CLUSTER "quickstart" ON "materialize"."friend_again"."v2" ("y", "x")
+CREATE INDEX enemy_v2_idx IN CLUSTER quickstart ON materialize.friend_again.v2 (y, x);
 
 statement ok
 CREATE TABLE grand_friend.t1 (keys text);
@@ -245,7 +246,7 @@ INSERT INTO grand_friend.t1 VALUES ('foo'), ('baz');
 statement ok
 CREATE SCHEMA c1;
 
-query TT
+query TT valuesort
 SELECT database_id, name FROM mz_schemas WHERE id LIKE 'u%';
 ----
 u1
@@ -267,7 +268,7 @@ CREATE VIEW c1.keys (aux_key) AS VALUES ('apple'), ('orange'), ('banana');
 statement ok
 CREATE VIEW c1.v1 AS (SELECT y FROM friend_again.v2 JOIN grand_friend.t1 ON materialize.friend_again.v2.y = materialize.grand_friend.t1.keys UNION ALL SELECT aux_key FROM c1.keys, b4.t);
 
-query T
+query T valuesort
 SELECT * FROM c1.v1;
 ----
 foo
@@ -287,7 +288,7 @@ query TT
 SHOW CREATE VIEW c1.v1;
 ----
 materialize.c1.v1
-CREATE VIEW "materialize"."c1"."v1" AS SELECT "y" FROM "materialize"."friend_again"."v2" JOIN "materialize"."grand_friend"."t1" ON "materialize"."friend_again"."v2"."y" = "materialize"."grand_friend"."t1"."keys" UNION ALL SELECT "aux_key" FROM "materialize"."c1"."keys", "materialize"."b4"."t"
+CREATE VIEW⏎    materialize.c1.v1⏎    AS⏎        SELECT y⏎        FROM⏎            materialize.friend_again.v2⏎                JOIN⏎                    materialize.grand_friend.t1⏎                    ON materialize.friend_again.v2.y = materialize.grand_friend.t1.keys⏎        UNION ALL SELECT aux_key FROM materialize.c1.keys, materialize.b4.t;
 
 statement ok
 ALTER SCHEMA c1 RENAME TO c2;
@@ -299,7 +300,7 @@ query TT
 SHOW CREATE VIEW c2.v1;
 ----
 materialize.c2.v1
-CREATE VIEW "materialize"."c2"."v1" AS SELECT "y" FROM "materialize"."friend_again"."v2" JOIN "materialize"."grand_acquaintance"."t1" ON "materialize"."friend_again"."v2"."y" = "materialize"."grand_acquaintance"."t1"."keys" UNION ALL SELECT "aux_key" FROM "materialize"."c2"."keys", "materialize"."b4"."t"
+CREATE VIEW⏎    materialize.c2.v1⏎    AS⏎        SELECT y⏎        FROM⏎            materialize.friend_again.v2⏎                JOIN⏎                    materialize.grand_acquaintance.t1⏎                    ON materialize.friend_again.v2.y = materialize.grand_acquaintance.t1.keys⏎        UNION ALL SELECT aux_key FROM materialize.c2.keys, materialize.b4.t;
 
 statement ok
 CREATE TABLE c2.c2 (ts int);
@@ -308,7 +309,7 @@ query TT
 SHOW CREATE TABLE c2.c2;
 ----
 materialize.c2.c2
-CREATE TABLE "materialize"."c2"."c2" ("ts" "pg_catalog"."int4")
+CREATE TABLE materialize.c2.c2 (ts pg_catalog.int4);
 
 statement ok
 ALTER SCHEMA c2 RENAME TO c3;
@@ -317,20 +318,20 @@ query TT
 SHOW CREATE TABLE c3.c2;
 ----
 materialize.c3.c2
-CREATE TABLE "materialize"."c3"."c2" ("ts" "pg_catalog"."int4")
+CREATE TABLE materialize.c3.c2 (ts pg_catalog.int4);
 
 # Renaming system owned schemas is not allowed.
 
-statement error db error: ERROR: must be owner of SCHEMA materialize.public
+statement error must be owner of SCHEMA materialize.public
 ALTER SCHEMA public RENAME TO public_other;
 
-statement error db error: ERROR: renaming the mz_catalog schema is not supported
+statement error renaming the mz_catalog schema is not supported
 ALTER SCHEMA mz_catalog RENAME TO mz_catalog_other;
 
-statement error db error: ERROR: renaming the mz_internal schema is not supported
+statement error renaming the mz_internal schema is not supported
 ALTER SCHEMA mz_internal RENAME TO mz_internal_other;
 
-statement error db error: ERROR: renaming the information_schema schema is not supported
+statement error renaming the information_schema schema is not supported
 ALTER SCHEMA information_schema RENAME TO information_schema_other;
 
 # Fully qualified columns names are renamed.
@@ -348,20 +349,18 @@ query TT
 SHOW CREATE VIEW d.qualified_columns;
 ----
 materialize.d.qualified_columns
-CREATE VIEW "materialize"."d"."qualified_columns" AS SELECT "materialize"."d"."values"."x", "materialize"."d"."values"."y", "z" FROM "materialize"."d"."values"
+CREATE VIEW⏎    materialize.d.qualified_columns⏎    AS SELECT materialize.d.values.x, materialize.d.values.y, z FROM materialize.d.values;
 
-query ITI
+mode cockroach
+
+query ITI rowsort
 SELECT * FROM d.qualified_columns;
 ----
-1
-foo
-100
-2
-bar
-200
-3
-baz
-300
+1 foo 100
+2 bar 200
+3 baz 300
+
+mode standard
 
 statement ok
 ALTER SCHEMA d RENAME TO d_renamed;
@@ -370,7 +369,7 @@ query TT
 SHOW CREATE VIEW d_renamed.qualified_columns;
 ----
 materialize.d_renamed.qualified_columns
-CREATE VIEW "materialize"."d_renamed"."qualified_columns" AS SELECT "materialize"."d_renamed"."values"."x", "materialize"."d_renamed"."values"."y", "z" FROM "materialize"."d_renamed"."values"
+CREATE VIEW⏎    materialize.d_renamed.qualified_columns⏎    AS⏎        SELECT materialize.d_renamed.values.x, materialize.d_renamed.values.y, z⏎        FROM materialize.d_renamed.values;
 
 query ITI
 SELECT * FROM d_renamed.qualified_columns LIMIT 1;
@@ -394,7 +393,7 @@ query TT
 SHOW CREATE VIEW d_renamed."case";
 ----
 materialize.d_renamed.case
-CREATE VIEW "materialize"."d_renamed"."case" ("case") AS SELECT * FROM "materialize"."case"."case"
+CREATE VIEW materialize.d_renamed."case" ("case") AS SELECT * FROM materialize."case"."case";
 
 statement ok
 CREATE SCHEMA "CASE";
@@ -419,13 +418,13 @@ query TT
 SHOW CREATE VIEW "cAsE".case;
 ----
 materialize.cAsE.case
-CREATE VIEW "materialize"."cAsE"."case" AS VALUES (1)
+CREATE VIEW materialize."cAsE"."case" AS VALUES (1);
 
 query TT
 SHOW CREATE VIEW d_renamed.case;
 ----
 materialize.d_renamed.case
-CREATE VIEW "materialize"."d_renamed"."case" ("case") AS SELECT * FROM "materialize"."cAsE"."case"
+CREATE VIEW materialize.d_renamed."case" ("case") AS SELECT * FROM materialize."cAsE"."case";
 
 statement ok
 CREATE SCHEMA j;
@@ -446,7 +445,7 @@ query TT
 SHOW CREATE VIEW j.k.l;
 ----
 j.k.l
-CREATE VIEW "j"."k"."l" AS VALUES (101)
+CREATE VIEW j.k.l AS VALUES (101);
 
 query I
 SELECT * FROM j.k.l;
@@ -460,7 +459,7 @@ query TT
 SHOW CREATE VIEW j.k.l;
 ----
 j.k.l
-CREATE VIEW "j"."k"."l" AS VALUES (101)
+CREATE VIEW j.k.l AS VALUES (101);
 
 query I
 SELECT * FROM j.k.l;
@@ -474,7 +473,7 @@ SELECT * FROM j_other.l;
 
 # Temporary schemas.
 
-statement error db error: ERROR: cannot rename schemas in the ambient database: "mz_temp"
+statement error cannot rename schemas in the ambient database: "mz_temp"
 ALTER SCHEMA mz_temp RENAME TO other_name;
 
 simple conn=mz_system,user=mz_system
@@ -504,7 +503,7 @@ COMPLETE 0
 #
 # Note: this follows Postgres behavior.
 
-statement error db error: ERROR: unknown catalog item 't1'
+statement error unknown catalog item 't1'
 SELECT bar FROM t1;
 
 query T
@@ -561,7 +560,7 @@ query TT
 SHOW CREATE VIEW c.foo.v1;
 ----
 c.foo.v1
-CREATE VIEW "c"."foo"."v1" AS SELECT "x", "y" FROM "a"."foo"."t1", "b"."foo"."t1"
+CREATE VIEW c.foo.v1 AS SELECT x, y FROM a.foo.t1, b.foo.t1;
 
 statement ok
 ALTER SCHEMA b.foo RENAME TO bbb;
@@ -570,7 +569,7 @@ query TT
 SHOW CREATE VIEW c.foo.v1;
 ----
 c.foo.v1
-CREATE VIEW "c"."foo"."v1" AS SELECT "x", "y" FROM "a"."foo"."t1", "b"."bbb"."t1"
+CREATE VIEW c.foo.v1 AS SELECT x, y FROM a.foo.t1, b.bbb.t1;
 
 statement ok
 ALTER SCHEMA c.foo RENAME TO ccc;
@@ -579,7 +578,7 @@ query TT
 SHOW CREATE VIEW c.ccc.v1;
 ----
 c.ccc.v1
-CREATE VIEW "c"."ccc"."v1" AS SELECT "x", "y" FROM "a"."foo"."t1", "b"."bbb"."t1"
+CREATE VIEW c.ccc.v1 AS SELECT x, y FROM a.foo.t1, b.bbb.t1;
 
 # Ambiguously refer to a schema.
 
@@ -605,18 +604,33 @@ query TT
 SHOW CREATE VIEW d.amb.v1;
 ----
 d.amb.v1
-CREATE VIEW "d"."amb"."v1" AS SELECT "amb"."t1"."x" FROM "materialize"."amb"."t1", "d"."amb"."t1"
+CREATE VIEW d.amb.v1 AS SELECT amb.t1.x FROM materialize.amb.t1, d.amb.t1;
 
-statement error db error: ERROR: renaming conflict: in d\.amb\.v1, which uses d\.amb, ambiguous reference to schema named amb
+statement error renaming conflict: in d\.amb\.v1, which uses d\.amb, ambiguous reference to schema named amb
 ALTER SCHEMA d.amb RENAME TO this_rename_will_fail;
 
 # Test subsource renames
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+CREATE SOURCE s FROM LOAD GENERATOR AUCTION;
 
 statement ok
-ALTER SOURCE users RENAME TO userz
+CREATE TABLE accounts FROM SOURCE s (REFERENCE accounts);
+
+statement ok
+CREATE TABLE auctions FROM SOURCE s (REFERENCE auctions);
+
+statement ok
+CREATE TABLE bids FROM SOURCE s (REFERENCE bids);
+
+statement ok
+CREATE TABLE organizations FROM SOURCE s (REFERENCE organizations);
+
+statement ok
+CREATE TABLE users FROM SOURCE s (REFERENCE users);
+
+statement ok
+ALTER TABLE users RENAME TO userz
 
 statement ok
 SELECT * FROM userz LIMIT 0
@@ -631,7 +645,7 @@ query TT
 SHOW CREATE VIEW temp_view;
 ----
 mz_temp.temp_view
-CREATE TEMPORARY VIEW "mz_temp"."temp_view" AS SELECT * FROM "materialize"."public_renamed"."non_temp_base"
+CREATE TEMPORARY VIEW mz_temp.temp_view AS SELECT * FROM materialize.public_renamed.non_temp_base;
 
 statement ok
 ALTER TABLE non_temp_base RENAME TO non_temp_table;
@@ -640,4 +654,67 @@ query TT
 SHOW CREATE VIEW temp_view;
 ----
 mz_temp.temp_view
-CREATE TEMPORARY VIEW "mz_temp"."temp_view" AS SELECT * FROM "materialize"."public_renamed"."non_temp_table"
+CREATE TEMPORARY VIEW mz_temp.temp_view AS SELECT * FROM materialize.public_renamed.non_temp_table;
+
+# Regression test: RENAME on a MATERIALIZED VIEW / INDEX must preserve the
+# plans and dataflow metainfo stored on the catalog item. Before the fix,
+# `EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW ...` would fail after a
+# rename with "cannot find dataflow metainformation for materialized view
+# ... in catalog", because `parse_item_inner` hardcoded `None` for those
+# fields when reconstructing the item from `create_sql`.
+
+statement ok
+CREATE TABLE t_rename_metainfo (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_rename_metainfo AS SELECT a + 1 AS b FROM t_rename_metainfo
+
+statement ok
+ALTER MATERIALIZED VIEW mv_rename_metainfo RENAME TO mv_rename_metainfo_renamed
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_rename_metainfo_renamed
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv_rename_metainfo_renamed
+
+# Same, for indexes.
+
+statement ok
+CREATE INDEX idx_rename_metainfo ON t_rename_metainfo (a)
+
+statement ok
+ALTER INDEX idx_rename_metainfo RENAME TO idx_rename_metainfo_renamed
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX idx_rename_metainfo_renamed
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR INDEX idx_rename_metainfo_renamed
+
+# Regression test: ALTER SCHEMA ... RENAME TO ... retracts+re-adds every
+# item in the schema via `tx.update_items`; plans on MV / INDEX items in
+# the schema must survive, so that EXPLAIN can still show them.
+statement ok
+CREATE SCHEMA s_rename_metainfo
+
+statement ok
+CREATE TABLE s_rename_metainfo.t (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW s_rename_metainfo.mv AS SELECT a + 1 AS b FROM s_rename_metainfo.t
+
+statement ok
+CREATE DEFAULT INDEX idx_in_schema ON s_rename_metainfo.mv
+
+statement ok
+ALTER SCHEMA s_rename_metainfo RENAME TO s_rename_metainfo_renamed
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW s_rename_metainfo_renamed.mv
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW s_rename_metainfo_renamed.mv
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX s_rename_metainfo_renamed.idx_in_schema

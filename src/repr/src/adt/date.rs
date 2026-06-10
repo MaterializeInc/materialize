@@ -12,11 +12,11 @@
 use std::convert::TryFrom;
 use std::fmt;
 use std::ops::Sub;
+use std::sync::LazyLock;
 
 use anyhow::anyhow;
 use chrono::NaiveDate;
 use mz_proto::{RustType, TryFromProtoError};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -31,7 +31,18 @@ pub enum DateError {
 /// A Postgres-compatible Date. Additionally clamp valid dates for the range
 /// that chrono supports to allow for safe string operations. Infinite dates are
 /// not yet supported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
+)]
 pub struct Date {
     /// Number of days from the postgres epoch (2000-01-01).
     days: i32,
@@ -55,7 +66,8 @@ impl std::str::FromStr for Date {
     }
 }
 
-static PG_EPOCH: Lazy<NaiveDate> = Lazy::new(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
+static PG_EPOCH: LazyLock<NaiveDate> =
+    LazyLock::new(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
 
 impl Date {
     pub const UNIX_EPOCH_TO_PG_EPOCH: i32 = 10957; // Number of days from 1970-01-01 to 2000-01-01.

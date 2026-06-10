@@ -7,30 +7,37 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 
-use arrow::array::BinaryArray;
+use mz_ore::str::redact;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::strategy::{Just, Strategy, Union};
 use serde::Serialize;
 
-use crate::columnar::Data;
-use crate::dyn_struct::ValidityRef;
-use crate::stats::json::{any_json_stats, JsonStats};
-use crate::stats::primitive::{any_primitive_vec_u8_stats, PrimitiveStats};
+use crate::stats::json::{JsonStats, any_json_stats};
+use crate::stats::primitive::{PrimitiveStats, any_primitive_vec_u8_stats};
 use crate::stats::{
-    proto_bytes_stats, proto_fixed_size_bytes_stats, ColumnStatKinds, ColumnStats, ColumnarStats,
-    DynStats, OptionStats, ProtoAtomicBytesStats, ProtoBytesStats, ProtoFixedSizeBytesStats,
-    StatsFrom, TrimStats,
+    ColumnStatKinds, ColumnStats, ColumnarStats, DynStats, OptionStats, ProtoAtomicBytesStats,
+    ProtoBytesStats, ProtoFixedSizeBytesStats, TrimStats, proto_bytes_stats,
+    proto_fixed_size_bytes_stats,
 };
 
 /// `PrimitiveStats<Vec<u8>>` that cannot safely be trimmed.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AtomicBytesStats {
     /// See [PrimitiveStats::lower]
     pub lower: Vec<u8>,
     /// See [PrimitiveStats::upper]
     pub upper: Vec<u8>,
+}
+
+impl Debug for AtomicBytesStats {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AtomicBytesStats")
+            .field("lower", &redact(&hex::encode(&self.lower)))
+            .field("upper", &redact(&hex::encode(&self.upper)))
+            .finish()
+    }
 }
 
 impl AtomicBytesStats {
@@ -62,7 +69,7 @@ impl RustType<ProtoAtomicBytesStats> for AtomicBytesStats {
 /// cannot safely be trimmed.
 ///
 /// [`FixedSizeCodec`]: crate::columnar::FixedSizeCodec
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FixedSizeBytesStats {
     /// See [PrimitiveStats::lower]
     pub lower: Vec<u8>,
@@ -70,6 +77,16 @@ pub struct FixedSizeBytesStats {
     pub upper: Vec<u8>,
     /// The kind of data these stats represent.
     pub kind: FixedSizeBytesStatsKind,
+}
+
+impl Debug for FixedSizeBytesStats {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FixedSizeBytesStats")
+            .field("lower", &redact(&hex::encode(&self.lower)))
+            .field("upper", &redact(&hex::encode(&self.upper)))
+            .field("kind", &self.kind)
+            .finish()
+    }
 }
 
 impl FixedSizeBytesStats {
@@ -163,7 +180,12 @@ pub enum BytesStats {
 
 impl Debug for BytesStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.debug_json(), f)
+        match self {
+            BytesStats::Primitive(stats) => stats.fmt(f),
+            BytesStats::Json(stats) => stats.fmt(f),
+            BytesStats::Atomic(stats) => stats.fmt(f),
+            BytesStats::FixedSize(stats) => stats.fmt(f),
+        }
     }
 }
 
@@ -185,8 +207,10 @@ impl DynStats for BytesStats {
     }
 }
 
-impl ColumnStats<Vec<u8>> for BytesStats {
-    fn lower<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
+impl ColumnStats for BytesStats {
+    type Ref<'a> = &'a [u8];
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         match self {
             BytesStats::Primitive(x) => Some(x.lower.as_slice()),
             BytesStats::Json(_) => None,
@@ -194,7 +218,7 @@ impl ColumnStats<Vec<u8>> for BytesStats {
             BytesStats::FixedSize(x) => Some(&x.lower),
         }
     }
-    fn upper<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         match self {
             BytesStats::Primitive(x) => Some(x.upper.as_slice()),
             BytesStats::Json(_) => None,
@@ -205,55 +229,19 @@ impl ColumnStats<Vec<u8>> for BytesStats {
     fn none_count(&self) -> usize {
         0
     }
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        match stats.as_non_null_values()? {
-            ColumnStatKinds::Bytes(bytes) => Some(bytes.clone()),
-            _ => None,
-        }
-    }
 }
 
-impl ColumnStats<Option<Vec<u8>>> for OptionStats<BytesStats> {
-    fn lower<'a>(&'a self) -> Option<<Option<Vec<u8>> as Data>::Ref<'a>> {
+impl ColumnStats for OptionStats<BytesStats> {
+    type Ref<'a> = Option<&'a [u8]>;
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         self.some.lower().map(Some)
     }
-    fn upper<'a>(&'a self) -> Option<<Option<Vec<u8>> as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         self.some.upper().map(Some)
     }
     fn none_count(&self) -> usize {
         self.none
-    }
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let inner = match &stats.values {
-            ColumnStatKinds::Bytes(s) => s,
-            _ => return None,
-        };
-        Some(OptionStats {
-            some: inner.clone(),
-            none: stats.nulls.as_ref().map_or(0, |n| n.count),
-        })
-    }
-}
-
-impl StatsFrom<BinaryArray> for BytesStats {
-    fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-        BytesStats::Primitive(<PrimitiveStats<Vec<u8>>>::stats_from(col, validity))
-    }
-}
-
-impl StatsFrom<BinaryArray> for OptionStats<BytesStats> {
-    fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-        let stats = OptionStats::<PrimitiveStats<Vec<u8>>>::stats_from(col, validity);
-        OptionStats {
-            none: stats.none,
-            some: BytesStats::Primitive(stats.some),
-        }
     }
 }
 

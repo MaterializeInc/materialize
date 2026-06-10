@@ -123,5 +123,18 @@ SELECT date('2020-01-01'), date('2020-01-01'::timestamp), date('2020-01-01'::tim
 query error invalid input syntax for type date
 SELECT date('2000')
 
-query error db error: ERROR: function date\(unknown, unknown\) does not exist
+query error function date\(unknown, unknown\) does not exist
 SELECT date('2000', 'a')
+
+query T
+SELECT CAST(5 + 3 AS text);
+----
+8
+
+query T
+SELECT (5 + 3)::text;
+----
+8
+
+query error operator does not exist: integer \+ text
+SELECT 5 + 3::text;

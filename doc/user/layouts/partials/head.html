@@ -1,3 +1,4 @@
+
 {{ $title := delimit (slice (cond (isset .Params "htmltitle") .Params.htmltitle
 .Page.Title) .Site.Title) " | " }} {{ $description := cond (isset .Params
 "description") .Params.description .Page.Description }}
@@ -5,6 +6,11 @@
 <meta charset="utf-8" />
 <meta http-equiv="X-UA-Compatible" content="IE=edge" />
 <meta name="description" content="{{ $description }}" />
+
+{{ if .Params.robots }}
+  <meta name="robots" content="{{ .Params.robots }}">
+{{ end }}
+
 <title>{{ $title }}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true" />
@@ -22,7 +28,7 @@
 <meta property="og:title" content="{{ $title }}" />
 <meta
   property="og:image"
-  content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif"
+  content="https://cdn.sanity.io/images/rz2gt56r/production/2b473d4149f203889e951e95aff805b7b88897f5-1200x630.jpg"
 />
 <meta property="og:description" content="{{ $description }}" />
 <meta property="og:site_name" content="Materialize" />
@@ -32,7 +38,7 @@
 <meta name="twitter:title" content="{{ $title }}" />
 <meta
   name="twitter:image"
-  content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif"
+  content="https://cdn.sanity.io/images/rz2gt56r/production/2b473d4149f203889e951e95aff805b7b88897f5-1200x630.jpg"
 />
 <meta name="twitter:description" content="{{ $description }}" />
 <link
@@ -70,108 +76,197 @@
 toCSS | fingerprint }}
 <link rel="stylesheet" href="{{ $style.RelPermalink }}" />
 
-{{/* Algolia DocSearch */}} {{if (isset .Params "pagerank")}}
-<meta name="docsearch_pagerank" content="{{ .Params.pagerank }}" />
-{{end}}
+{{/* Intercom */}}
+<script>
+  const APP_ID = "r8661p0d";
+  window.intercomSettings = {
+    api_base: "https://api-iam.intercom.io",
+    app_id: APP_ID
+  };
+</script>
+<script>
+  (function(){var w=window;var ic=w.Intercom;if(typeof ic==="function"){ic('update',w.intercomSettings);}else{var d=document;var i=function(){i.c(arguments);};i.q=[];i.c=function(args){i.q.push(args);};w.Intercom=i;var l=function(){var s=d.createElement('script');s.type='text/javascript';s.async=true;s.src='https://widget.intercom.io/widget/' + APP_ID;var x=d.getElementsByTagName('script')[0];x.parentNode.insertBefore(s, x);};if(document.readyState==='complete'){l();}else if(w.attachEvent){w.attachEvent('onload',l);}else{w.addEventListener('load',l,false);}}})();
+ </script>
+
+{{/* Algolia DocSearch */}}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@docsearch/css@3" />
 <script src="https://cdn.jsdelivr.net/npm/@docsearch/js@3"></script>
 <script defer>
   addEventListener("DOMContentLoaded", () => {
     docsearch({
-      apiKey: "c52bbb10b43c177106333976cfe07e11",
-      appId: "9LF5B9GMOF",
+      appId: "MB06X1VH88",
+      apiKey: "d3aa325086974cdfb3912f28e5a8c168",
       indexName: "materialize",
+      insights: true,
       container: "#docsearch",
     });
   });
 </script>
 
-{{if hugo.IsProduction}} {{/* Google Analytics */}}
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-HYXTGZN2KT"></script>
+{{if hugo.IsProduction}} {{/* Google Tag Manager */}}
 <script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-
-  gtag('config', 'G-HYXTGZN2KT');
+  (function (w, d, s, l, i) {
+    w[l] = w[l] || [];
+    w[l].push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
+    var f = d.getElementsByTagName(s)[0],
+      j = d.createElement(s),
+      dl = l != 'dataLayer' ? '&l=' + l : '';
+    j.async = true;
+    j.src = 'https://www.googletagmanager.com/gtm.js?id=' + i + dl;
+    f.parentNode.insertBefore(j, f);
+  })(window, document, 'script', 'dataLayer', 'GTM-5VDFPSJ');
 </script>
 
-{{/* Leadfeeder */}}
-<script>
-  (function () {
-    window.ldfdr = window.ldfdr || {};
-    (function (d, s, ss, fs) {
-      fs = d.getElementsByTagName(s)[0];
-      function ce(src) {
-        var cs = d.createElement(s);
-        cs.src = src;
-        setTimeout(function () {
-          fs.parentNode.insertBefore(cs, fs);
-        }, 1);
-      }
-      ce(ss);
-    })(
-      document,
-      "script",
-      "https://sc.lfeeder.com/lftracker_v1_bElvO73R0rE8ZMqj.js"
-    );
-  })();
+{{/* Reo tracking beacon */}}
+<script type="text/javascript">
+  !function(){var e,t,n;e="8480297053d21bd",t=function(){Reo.init({clientID:"8480297053d21bd"})},(n=document.createElement("script")).src="https://static.reo.dev/"+e+"/reo.js",n.defer=!0,n.onload=t,document.head.appendChild(n)}();
 </script>
-{{end}} {{/* Segment */}}
-<script>
-  !function(){var analytics=window.analytics=window.analytics||[];if(!analytics.initialize)if(analytics.invoked)window.console&&console.error&&console.error("Segment snippet included twice.");else{analytics.invoked=!0;analytics.methods=["trackSubmit","trackClick","trackLink","trackForm","pageview","identify","reset","group","track","ready","alias","debug","page","once","off","on","addSourceMiddleware","addIntegrationMiddleware","setAnonymousId","addDestinationMiddleware"];analytics.factory=function(e){return function(){var t=Array.prototype.slice.call(arguments);t.unshift(e);analytics.push(t);return analytics}};for(var e=0;e<analytics.methods.length;e++){var key=analytics.methods[e];analytics[key]=analytics.factory(key)}analytics.load=function(key,e){var t=document.createElement("script");t.type="text/javascript";t.async=!0;t.src="https://cdn.segment.materialize.com/analytics.js/v1/" + key + "/analytics.min.js";var n=document.getElementsByTagName("script")[0];n.parentNode.insertBefore(t,n);analytics._loadOptions=e};analytics.SNIPPET_VERSION="4.15.3";
-  {{ if hugo.IsProduction }}
-    {{/* Prod/Stage */}}
-    var SEGMENT_ID = 'NCe6YQCHM9g04X9yEBUFtoWOuqZU8J1m';
-    if(window.location.hostname.includes('preview')) {
-      SEGMENT_ID = 'fuo8pqI0wvoojiShBQXSZopWLZggS8ny';
-    }
-    analytics._writeKey=SEGMENT_ID;
-    analytics._cdn="https://cdn.segment.materialize.com";
-    {{/* Use cookies for storage by default, since they cross subdomains */}}
-    analytics.load(SEGMENT_ID, { storage: { stores: ["cookie", "localStorage", "memory"] } });
-  {{ else }}
-    {{/* Dev */}}
-    analytics._writeKey="dGeQYRjmGVsqDI0KIARrAhTvk1BdJJhk";
-    analytics.load("dGeQYRjmGVsqDI0KIARrAhTvk1BdJJhk", { storage: { stores: ["cookie", "localStorage", "memory"] } });
-  {{ end }}
-  analytics.page();
-  }}();
-</script>
+{{end}}
 
 {{/* Tabs */}}
 <script>
-  $(document).ready(function () {
-    // make nav-tab lists from tab-panes
-    $(".tab-content").each(function (idx, tab) {
-      $(tab)
-        .find(".tab-pane")
-        .each(function (item) {
-          var navTabs = $(this).closest(".code-tabs").find(".nav-tabs"),
-            title = $(this).attr("title"),
-            id = title
-              .toLowerCase()
-              .replace(/ /g, "-")
-              .replace(/[^\w-]+/g, "");
-          navTabs.append(`<li><a href="#${id}-t${idx}">${title}</a></li>`);
-        });
+document.addEventListener("DOMContentLoaded", function () {
+  let tabGroupCounter = 0;
+
+  document.querySelectorAll(".code-tabs").forEach(function (tabGroup) {
+    const navTabs = tabGroup.querySelector(".nav-tabs");
+    const tabContent = tabGroup.querySelector(".tab-content");
+    if (!navTabs || !tabContent) return;
+
+    if (navTabs.children.length > 0) return; // skip if already populated
+
+    const tabPanes = Array.from(tabContent.children).filter(child =>
+      child.classList.contains("tab-pane")
+    );
+
+    // Assign unique group ID
+    const groupId = `tabgroup-${tabGroupCounter++}`;
+
+    // Check if headings should be added to tab panes
+    const headingLevel = tabGroup.getAttribute("data-heading-level");
+
+    // Create tab navigation
+    tabPanes.forEach((pane, index) => {
+      const title = pane.getAttribute("title") || `Tab ${index + 1}`;
+      const originalPaneId = pane.getAttribute("id");
+      const paneId = `${groupId}-${originalPaneId}`;
+
+      // Update pane ID to be unique
+      pane.setAttribute("id", paneId);
+
+      // Add heading inside tab pane if level is specified
+      if (headingLevel) {
+        const level = parseInt(headingLevel);
+        if (level >= 1 && level <= 6) {
+          const heading = document.createElement(`h${level}`);
+          heading.textContent = title;
+          heading.id = `${paneId}-heading`;
+          pane.insertBefore(heading, pane.firstChild);
+        }
+      }
+
+      const tab = document.createElement("li");
+      tab.className = "nav-item";
+
+      const link = document.createElement("a");
+      link.className = "nav-link";
+      link.href = "#";
+      link.textContent = title;
+      link.setAttribute("data-tab", index);
+
+      tab.appendChild(link);
+      navTabs.appendChild(tab);
+
+      // Set first tab as active by default
+      if (index === 0) {
+        tab.classList.add("active");
+        pane.classList.add("active");
+      } else {
+        pane.classList.remove("active");
+      }
     });
 
-    // handle click events
-    $(".nav-tabs a").click(function (e) {
-      var tab = $(this).parent(),
-        tabIndex = tab.index(),
-        tabPanel = $(this).closest(".code-tabs"),
-        tabPane = tabPanel.find(".tab-pane").eq(tabIndex);
-      tabPanel.find(".active").removeClass("active");
-      tab.addClass("active");
-      tabPane.addClass("active");
+    // Add click handlers for tab switching
+    navTabs.addEventListener("click", function(e) {
+      if (e.target.classList.contains("nav-link")) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const tabIndex = parseInt(e.target.getAttribute("data-tab"));
+        if (!isNaN(tabIndex) && tabIndex >= 0 && tabIndex < tabPanes.length) {
+          activateTab(tabIndex);
+        }
+      }
     });
 
-    // activate first tab
-    $(".nav-tabs li:first-child a").click();
-    // if the url anchor matches the id of a tab, activate that tab
-    var deeplinkedTab = $(`.nav-tabs a[href='${document.location.hash}']`);
-    if (deeplinkedTab) deeplinkedTab.click().get(0).scrollIntoView();
+    // Function to activate a specific tab
+    function activateTab(tabIndex) {
+      // Remove active class from all tabs and panes
+      navTabs.querySelectorAll(".nav-item").forEach(item => item.classList.remove("active"));
+      tabPanes.forEach(pane => pane.classList.remove("active"));
+
+      // Add active class to specified tab and corresponding pane
+      const targetTab = navTabs.children[tabIndex];
+      const targetPane = tabPanes[tabIndex];
+
+      if (targetTab && targetPane) {
+        targetTab.classList.add("active");
+        targetPane.classList.add("active");
+      }
+
+      // Trigger scroll event to update TOC highlighting
+      $(window).trigger('scroll');
+    }
+
+    const updateOverflow = () => {
+      const scrollLeft = navTabs.scrollLeft;
+      const scrollRight = navTabs.scrollWidth - navTabs.clientWidth - scrollLeft;
+
+      tabGroup.classList.toggle('has-left-overflow', scrollLeft > 0);
+      tabGroup.classList.toggle('has-right-overflow', scrollRight > 1);
+    };
+
+    updateOverflow();
+    navTabs.addEventListener('scroll', updateOverflow);
+    window.addEventListener('resize', updateOverflow);
   });
+
+  // Function to synchronize tabs across all tab groups with matching tab titles
+  function syncTabsAcrossGroups(targetTabTitle) {
+    document.querySelectorAll(".code-tabs").forEach(function (otherTabGroup) {
+      const otherNavTabs = otherTabGroup.querySelector(".nav-tabs");
+      const otherTabContent = otherTabGroup.querySelector(".tab-content");
+      if (!otherNavTabs || !otherTabContent) return;
+
+      // Find all nav links in this tab group
+      const otherNavLinks = otherNavTabs.querySelectorAll(".nav-link");
+
+      // Look for a matching tab title
+      otherNavLinks.forEach((link, index) => {
+        if (link.textContent === targetTabTitle) {
+          // Found a match - activate this tab
+          const otherTabPanes = Array.from(otherTabContent.children).filter(child =>
+            child.classList.contains("tab-pane")
+          );
+
+          // Remove active class from all tabs and panes in this group
+          otherNavTabs.querySelectorAll(".nav-item").forEach(item => item.classList.remove("active"));
+          otherTabPanes.forEach(pane => pane.classList.remove("active"));
+
+          // Add active class to the matching tab and pane
+          const targetNavItem = link.parentElement;
+          const targetPane = otherTabPanes[index];
+
+          if (targetNavItem && targetPane) {
+            targetNavItem.classList.add("active");
+            targetPane.classList.add("active");
+          }
+        }
+      });
+    });
+
+    // Trigger scroll event to update TOC highlighting
+    $(window).trigger('scroll');
+  }
+});
 </script>

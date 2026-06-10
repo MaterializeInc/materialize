@@ -11,20 +11,120 @@
 //! they are written into batches.
 
 use std::collections::BTreeMap;
-use std::ops::{AddAssign, Bound, SubAssign};
+use std::fmt;
+use std::num::NonZeroIsize;
+use std::ops::{AddAssign, Bound, RangeBounds, SubAssign};
 
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
-use differential_dataflow::Data;
+use differential_dataflow::logging::{BatchEvent, DropEvent};
 use itertools::Itertools;
+use mz_compute_types::dyncfgs::{
+    CONSOLIDATING_VEC_GROWTH_DAMPENER, CORRECTION_V2_CHAIN_PROPORTIONALITY,
+    CORRECTION_V2_CHUNK_SIZE, ENABLE_CORRECTION_V2,
+};
+use mz_dyncfg::ConfigSet;
 use mz_ore::iter::IteratorExt;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use timely::progress::Antichain;
 use timely::PartialOrder;
+use timely::progress::Antichain;
+use tokio::sync::mpsc;
+
+use crate::logging::compute::{
+    ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
+    ArrangementHeapSizeOperator, ArrangementHeapSizeOperatorDrop, ComputeEvent,
+    Logger as ComputeLogger,
+};
+use crate::sink::correction_v2::{CorrectionV2, Data};
+
+/// A data structure suitable for storing updates in a self-correcting persist sink.
+///
+/// Selects one of two correction buffer implementations. `V1` is the original simple
+/// implementation that stores updates in non-spillable memory. `V2` improves on `V1` by supporting
+/// spill-to-disk but is less battle-tested so for now we want to keep the option of reverting to
+/// `V1` in a pinch. The plan is to remove `V1` eventually.
+pub enum Correction<D: Data> {
+    /// Correction buffer based on a [`CorrectionV1`].
+    V1(CorrectionV1<D>),
+    /// Correction buffer based on a [`CorrectionV2`].
+    V2(CorrectionV2<D>),
+}
+
+impl<D: Data> Correction<D> {
+    /// Construct a new `Correction` instance.
+    pub fn new(
+        metrics: SinkMetrics,
+        worker_metrics: SinkWorkerMetrics,
+        logging: Option<ChannelLogging>,
+        config: &ConfigSet,
+    ) -> Self {
+        if ENABLE_CORRECTION_V2.get(config) {
+            let prop = CORRECTION_V2_CHAIN_PROPORTIONALITY.get(config);
+            let chunk_size = CORRECTION_V2_CHUNK_SIZE.get(config);
+            Self::V2(CorrectionV2::new(
+                metrics,
+                worker_metrics,
+                logging,
+                prop,
+                chunk_size,
+            ))
+        } else {
+            let growth_dampener = CONSOLIDATING_VEC_GROWTH_DAMPENER.get(config);
+            Self::V1(CorrectionV1::new(metrics, worker_metrics, growth_dampener))
+        }
+    }
+
+    /// Insert a batch of updates.
+    pub fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
+        match self {
+            Self::V1(c) => c.insert(updates),
+            Self::V2(c) => c.insert(updates),
+        }
+    }
+
+    /// Insert a batch of updates, after negating their diffs.
+    pub fn insert_negated(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
+        match self {
+            Self::V1(c) => c.insert_negated(updates),
+            Self::V2(c) => c.insert_negated(updates),
+        }
+    }
+
+    /// Consolidate and return updates before the given `upper`.
+    pub fn updates_before(
+        &mut self,
+        upper: &Antichain<Timestamp>,
+    ) -> Box<dyn Iterator<Item = (D, Timestamp, Diff)> + Send + '_> {
+        match self {
+            Self::V1(c) => Box::new(c.updates_before(upper)),
+            Self::V2(c) => Box::new(c.updates_before(upper)),
+        }
+    }
+
+    /// Advance the since frontier.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given `since` is less than the current since frontier.
+    pub fn advance_since(&mut self, since: Antichain<Timestamp>) {
+        match self {
+            Self::V1(c) => c.advance_since(since),
+            Self::V2(c) => c.advance_since(since),
+        }
+    }
+
+    /// Consolidate all updates at the current `since`.
+    pub fn consolidate_at_since(&mut self) {
+        match self {
+            Self::V1(c) => c.consolidate_at_since(),
+            Self::V2(c) => c.consolidate_at_since(),
+        }
+    }
+}
 
 /// A collection holding `persist_sink` updates.
 ///
-/// The `Correction` data structure is purpose-built for the `persist_sink::write_batches`
+/// The `CorrectionV1` data structure is purpose-built for the `persist_sink::write_batches`
 /// operator:
 ///
 ///  * It stores updates by time, to enable efficient separation between updates that should
@@ -33,9 +133,11 @@ use timely::PartialOrder;
 ///    are removed by inserting them again, with negated diffs. Stored updates are continuously
 ///    consolidated to give them opportunity to cancel each other out.
 ///  * It provides an interface for advancing all contained updates to a given frontier.
-pub(super) struct Correction<D> {
+pub struct CorrectionV1<D> {
     /// Stashed updates by time.
     updates: BTreeMap<Timestamp, ConsolidatingVec<D>>,
+    /// Frontier to which all update times are advanced.
+    since: Antichain<Timestamp>,
 
     /// Total length and capacity of vectors in `updates`.
     ///
@@ -45,16 +147,24 @@ pub(super) struct Correction<D> {
     metrics: SinkMetrics,
     /// Per-worker persist sink metrics.
     worker_metrics: SinkWorkerMetrics,
+    /// Configuration for `ConsolidatingVec` driving the growth rate down from doubling.
+    growth_dampener: usize,
 }
 
-impl<D> Correction<D> {
-    /// Construct a new `Correction` instance.
-    pub fn new(metrics: SinkMetrics, worker_metrics: SinkWorkerMetrics) -> Self {
+impl<D> CorrectionV1<D> {
+    /// Construct a new `CorrectionV1` instance.
+    pub fn new(
+        metrics: SinkMetrics,
+        worker_metrics: SinkWorkerMetrics,
+        growth_dampener: usize,
+    ) -> Self {
         Self {
             updates: Default::default(),
+            since: Antichain::from_elem(Timestamp::MIN),
             total_size: Default::default(),
             metrics,
             worker_metrics,
+            growth_dampener,
         }
     }
 
@@ -72,15 +182,51 @@ impl<D> Correction<D> {
     }
 }
 
-impl<D: Data> Correction<D> {
+impl<D: Data> CorrectionV1<D> {
     /// Insert a batch of updates.
-    pub fn insert(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
-        consolidate_updates(&mut updates);
+    pub fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
+        let Some(since_ts) = self.since.as_option() else {
+            // If the since frontier is empty, discard all updates.
+            updates.clear();
+            return;
+        };
+
+        for (_, time, _) in &mut *updates {
+            *time = std::cmp::max(*time, *since_ts);
+        }
+        self.insert_inner(updates);
+    }
+
+    /// Insert a batch of updates, after negating their diffs.
+    pub fn insert_negated(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
+        let Some(since_ts) = self.since.as_option() else {
+            // If the since frontier is empty, discard all updates.
+            updates.clear();
+            return;
+        };
+
+        for (_, time, diff) in &mut *updates {
+            *time = std::cmp::max(*time, *since_ts);
+            *diff = -*diff;
+        }
+        self.insert_inner(updates);
+    }
+
+    /// Insert a batch of updates.
+    ///
+    /// The given `updates` must all have been advanced by `self.since`.
+    fn insert_inner(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
+        consolidate_updates(updates);
         updates.sort_unstable_by_key(|(_, time, _)| *time);
 
         let mut new_size = self.total_size;
-        let mut updates = updates.into_iter().peekable();
+        let mut updates = updates.drain(..).peekable();
         while let Some(&(_, time, _)) = updates.peek() {
+            debug_assert!(
+                self.since.less_equal(&time),
+                "update not advanced by `since`"
+            );
+
             let data = updates
                 .peeking_take_while(|(_, t, _)| *t == time)
                 .map(|(d, _, r)| (d, r));
@@ -88,7 +234,8 @@ impl<D: Data> Correction<D> {
             use std::collections::btree_map::Entry;
             match self.updates.entry(time) {
                 Entry::Vacant(entry) => {
-                    let vec: ConsolidatingVec<_> = data.collect();
+                    let mut vec: ConsolidatingVec<_> = data.collect();
+                    vec.growth_dampener = self.growth_dampener;
                     new_size += (vec.len(), vec.capacity());
                     entry.insert(vec);
                 }
@@ -109,11 +256,11 @@ impl<D: Data> Correction<D> {
     /// # Panics
     ///
     /// Panics if `lower` is not less than or equal to `upper`.
-    pub fn updates_within(
-        &mut self,
+    pub fn updates_within<'a>(
+        &'a mut self,
         lower: &Antichain<Timestamp>,
         upper: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + '_ {
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + use<'a, D> {
         assert!(PartialOrder::less_equal(lower, upper));
 
         let start = match lower.as_option() {
@@ -125,11 +272,34 @@ impl<D: Data> Correction<D> {
             None => Bound::Unbounded,
         };
 
+        let update_count = self.consolidate((start, end));
+
+        let range = self.updates.range((start, end));
+        range
+            .flat_map(|(t, data)| data.iter().map(|(d, r)| (d.clone(), *t, *r)))
+            .exact_size(update_count)
+    }
+
+    /// Consolidate and return updates before the given `upper`.
+    pub fn updates_before<'a>(
+        &'a mut self,
+        upper: &Antichain<Timestamp>,
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + Send + use<'a, D> {
+        let lower = Antichain::from_elem(Timestamp::MIN);
+        self.updates_within(&lower, upper)
+    }
+
+    /// Consolidate the updates at the times in the given range.
+    ///
+    /// Returns the number of updates remaining in the range afterwards.
+    fn consolidate<R>(&mut self, range: R) -> usize
+    where
+        R: RangeBounds<Timestamp>,
+    {
         let mut new_size = self.total_size;
 
-        // Consolidate relevant times and compute the total number of updates.
-        let range = self.updates.range_mut((start, end));
-        let update_count = range.fold(0, |acc, (_, data)| {
+        let updates = self.updates.range_mut(range);
+        let count = updates.fold(0, |acc, (_, data)| {
             new_size -= (data.len(), data.capacity());
             data.consolidate();
             new_size += (data.len(), data.capacity());
@@ -137,11 +307,21 @@ impl<D: Data> Correction<D> {
         });
 
         self.update_metrics(new_size);
+        count
+    }
 
-        let range = self.updates.range((start, end));
-        range
-            .flat_map(|(t, data)| data.iter().map(|(d, r)| (d.clone(), *t, *r)))
-            .exact_size(update_count)
+    /// Advance the since frontier.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given `since` is less than the current since frontier.
+    pub fn advance_since(&mut self, since: Antichain<Timestamp>) {
+        assert!(PartialOrder::less_equal(&self.since, &since));
+
+        if since != self.since {
+            self.advance_by(&since);
+            self.since = since;
+        }
     }
 
     /// Advance all contained updates by the given frontier.
@@ -179,19 +359,41 @@ impl<D: Data> Correction<D> {
 
         self.update_metrics(new_size);
     }
+
+    /// Consolidate all updates at the current `since`.
+    pub fn consolidate_at_since(&mut self) {
+        let Some(since_ts) = self.since.as_option() else {
+            return;
+        };
+
+        let start = Bound::Included(*since_ts);
+        let end = match since_ts.try_step_forward() {
+            Some(ts) => Bound::Excluded(ts),
+            None => Bound::Unbounded,
+        };
+
+        self.consolidate((start, end));
+    }
 }
 
-impl<D> Drop for Correction<D> {
+impl<D> Drop for CorrectionV1<D> {
     fn drop(&mut self) {
         self.update_metrics(Default::default());
     }
 }
 
 /// Helper type for convenient tracking of length and capacity together.
-#[derive(Clone, Copy, Default)]
-struct LengthAndCapacity {
-    length: usize,
-    capacity: usize,
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct LengthAndCapacity {
+    pub length: usize,
+    pub capacity: usize,
+}
+
+impl AddAssign<Self> for LengthAndCapacity {
+    fn add_assign(&mut self, size: Self) {
+        self.length += size.length;
+        self.capacity += size.capacity;
+    }
 }
 
 impl AddAssign<(usize, usize)> for LengthAndCapacity {
@@ -213,58 +415,76 @@ impl SubAssign<(usize, usize)> for LengthAndCapacity {
 /// The vector is filled with updates until it reaches capacity. At this point, the updates are
 /// consolidated to free up space. This process repeats until the consolidation recovered less than
 /// half of the vector's capacity, at which point the capacity is doubled.
-struct ConsolidatingVec<D>(Vec<(D, Diff)>);
+#[derive(Debug)]
+pub(crate) struct ConsolidatingVec<D> {
+    data: Vec<(D, Diff)>,
+    /// A lower bound for how small we'll shrink the Vec's capacity. NB: The cap
+    /// might start smaller than this.
+    min_capacity: usize,
+    /// Dampener in the growth rate. 0 corresponds to doubling and in general `n` to `1+1/(n+1)`.
+    ///
+    /// If consolidation didn't free enough space, at least a linear amount, increase the capacity
+    /// Setting this to 0 results in doubling whenever the list is at least half full.
+    /// Larger numbers result in more conservative approaches that use more CPU, but less memory.
+    growth_dampener: usize,
+}
 
 impl<D: Ord> ConsolidatingVec<D> {
     /// Return the length of the vector.
-    fn len(&self) -> usize {
-        self.0.len()
+    pub fn len(&self) -> usize {
+        self.data.len()
     }
 
     /// Return the capacity of the vector.
-    fn capacity(&self) -> usize {
-        self.0.capacity()
+    pub fn capacity(&self) -> usize {
+        self.data.capacity()
     }
 
-    // Pushes `item` into the vector.
-    //
-    // If the vector does not have sufficient capacity, we try to consolidate and/or double its
-    // capacity.
-    //
-    // The worst-case cost of this function is O(n log n) in the number of items the vector stores,
-    // but amortizes to O(1).
-    fn push(&mut self, item: (D, Diff)) {
-        let capacity = self.0.capacity();
-        if self.0.len() == capacity {
+    /// Pushes `item` into the vector.
+    ///
+    /// If the vector does not have sufficient capacity, we'll first consolidate and then increase
+    /// its capacity if the consolidated results still occupy a significant fraction of the vector.
+    ///
+    /// The worst-case cost of this function is O(n log n) in the number of items the vector stores,
+    /// but amortizes to O(log n).
+    pub fn push(&mut self, item: (D, Diff)) {
+        let capacity = self.data.capacity();
+        if self.data.len() == capacity {
             // The vector is full. First, consolidate to try to recover some space.
             self.consolidate();
 
-            // If consolidation didn't free at least half the available capacity, double the
-            // capacity. This ensures we won't consolidate over and over again with small gains.
-            if self.0.len() > capacity / 2 {
-                self.0.reserve(capacity);
+            // We may need more capacity if our current capacity is within `1+1/(n+1)` of the length.
+            // This corresponds to `cap < len + len/(n+1)`, which is the logic we use.
+            let length = self.data.len();
+            let dampener = self.growth_dampener;
+            if capacity < length + length / (dampener + 1) {
+                // We would like to increase the capacity by a factor of `1+1/(n+1)`, which involves
+                // determining the target capacity, and then reserving an amount that achieves this
+                // while working around the existing length.
+                let new_cap = capacity + capacity / (dampener + 1);
+                self.data.reserve_exact(new_cap - length);
             }
         }
 
-        self.0.push(item);
+        self.data.push(item);
     }
 
     /// Consolidate the contents.
-    fn consolidate(&mut self) {
-        consolidate(&mut self.0);
+    pub fn consolidate(&mut self) {
+        consolidate(&mut self.data);
 
         // We may have the opportunity to reclaim allocated memory.
-        // Given that `push` will double the capacity when the vector is more than half full, and
+        // Given that `push` will at most double the capacity when the vector is more than half full, and
         // we want to avoid entering into a resizing cycle, we choose to only shrink if the
         // vector's length is less than one fourth of its capacity.
-        if self.0.len() < self.0.capacity() / 4 {
-            self.0.shrink_to_fit();
+        if self.data.len() < self.data.capacity() / 4 {
+            self.data.shrink_to(self.min_capacity);
         }
     }
 
     /// Return an iterator over the borrowed items.
-    fn iter(&self) -> impl Iterator<Item = &(D, Diff)> {
-        self.0.iter()
+    pub fn iter(&self) -> impl Iterator<Item = &(D, Diff)> {
+        self.data.iter()
     }
 }
 
@@ -273,7 +493,7 @@ impl<D> IntoIterator for ConsolidatingVec<D> {
     type IntoIter = std::vec::IntoIter<(D, Diff)>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+        self.data.into_iter()
     }
 }
 
@@ -282,7 +502,11 @@ impl<D> FromIterator<(D, Diff)> for ConsolidatingVec<D> {
     where
         I: IntoIterator<Item = (D, Diff)>,
     {
-        Self(Vec::from_iter(iter))
+        Self {
+            data: Vec::from_iter(iter),
+            min_capacity: 0,
+            growth_dampener: 0,
+        }
     }
 }
 
@@ -294,5 +518,260 @@ impl<D: Ord> Extend<(D, Diff)> for ConsolidatingVec<D> {
         for item in iter {
             self.push(item);
         }
+    }
+}
+
+/// Helper type for convenient tracking of various size metrics together.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct SizeMetrics {
+    pub size: usize,
+    pub capacity: usize,
+    pub allocations: usize,
+}
+
+impl AddAssign<Self> for SizeMetrics {
+    fn add_assign(&mut self, other: Self) {
+        self.size += other.size;
+        self.capacity += other.capacity;
+        self.allocations += other.allocations;
+    }
+}
+
+/// A logging event sent from the Tokio task back to the Timely thread.
+#[derive(Debug)]
+pub enum LoggingEvent {
+    /// A chain with the given number of updates was created.
+    ChainCreated(usize),
+    /// A chain with the given number of updates was dropped.
+    ChainDropped(usize),
+    /// The heap size of the correction buffer changed by the given amount.
+    SizeDiff(NonZeroIsize),
+    /// The heap capacity of the correction buffer changed by the given amount.
+    CapacityDiff(NonZeroIsize),
+    /// The number of allocations of the correction buffer changed by the given amount.
+    AllocationsDiff(NonZeroIsize),
+}
+
+/// Channel-based logging for corrections on a Tokio task. `Send`-safe.
+///
+/// Sends logging events to the Timely thread, where they are applied to the real `Logging`
+/// instance. This allows corrections on the Tokio task to participate in introspection logging
+/// without holding `Rc<RefCell<..>>`.
+#[derive(Clone, Debug)]
+pub struct ChannelLogging(mpsc::UnboundedSender<LoggingEvent>);
+
+impl ChannelLogging {
+    /// Construct a new `ChannelLogging` sending events on the given channel.
+    pub fn new(tx: mpsc::UnboundedSender<LoggingEvent>) -> Self {
+        Self(tx)
+    }
+
+    /// Report the creation of a chain with the given number of updates.
+    pub fn chain_created(&self, updates: usize) {
+        let _ = self.0.send(LoggingEvent::ChainCreated(updates));
+    }
+
+    /// Report the dropping of a chain with the given number of updates.
+    pub fn chain_dropped(&self, updates: usize) {
+        let _ = self.0.send(LoggingEvent::ChainDropped(updates));
+    }
+
+    /// Report a change in heap size by the given amount.
+    pub fn report_size_diff(&self, diff: isize) {
+        if let Some(diff) = NonZeroIsize::new(diff) {
+            let _ = self.0.send(LoggingEvent::SizeDiff(diff));
+        }
+    }
+
+    /// Report a change in heap capacity by the given amount.
+    pub fn report_capacity_diff(&self, diff: isize) {
+        if let Some(diff) = NonZeroIsize::new(diff) {
+            let _ = self.0.send(LoggingEvent::CapacityDiff(diff));
+        }
+    }
+
+    /// Report a change in the number of allocations by the given amount.
+    pub fn report_allocations_diff(&self, diff: isize) {
+        if let Some(diff) = NonZeroIsize::new(diff) {
+            let _ = self.0.send(LoggingEvent::AllocationsDiff(diff));
+        }
+    }
+}
+
+/// State for correction buffer logging on the Timely thread.
+///
+/// Drains [`LoggingEvent`]s sent by [`ChannelLogging`] from the Tokio task and applies them
+/// to the compute and differential loggers. Emits `ArrangementHeapSizeOperator` on construction
+/// and `ArrangementHeapSizeOperatorDrop` on drop.
+// TODO: Correction buffer logging currently reuses the arrangement batch and size logging. This
+// isn't strictly correct as a correction buffer is not an arrangement. Consider refactoring this
+// to be about "operator sizes" instead.
+pub(super) struct CorrectionLogger {
+    compute_logger: ComputeLogger,
+    differential_logger: differential_dataflow::logging::Logger,
+    operator_id: usize,
+    rx: mpsc::UnboundedReceiver<LoggingEvent>,
+    /// Net number of batches logged (BatchEvent - DropEvent).
+    net_batches: isize,
+    /// Net number of records logged across all batch/drop/merge events.
+    net_records: isize,
+    /// Cumulative heap size delta, for retraction on drop.
+    net_size: isize,
+    /// Cumulative heap capacity delta, for retraction on drop.
+    net_capacity: isize,
+    /// Cumulative heap allocations delta, for retraction on drop.
+    net_allocations: isize,
+}
+
+impl fmt::Debug for CorrectionLogger {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CorrectionLogger")
+            .field("operator_id", &self.operator_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CorrectionLogger {
+    pub fn new(
+        compute_logger: ComputeLogger,
+        differential_logger: differential_dataflow::logging::Logger,
+        operator_id: usize,
+        address: Vec<usize>,
+        rx: mpsc::UnboundedReceiver<LoggingEvent>,
+    ) -> Self {
+        compute_logger.log(&ComputeEvent::ArrangementHeapSizeOperator(
+            ArrangementHeapSizeOperator {
+                operator_id,
+                address,
+            },
+        ));
+
+        Self {
+            compute_logger,
+            differential_logger,
+            operator_id,
+            rx,
+            net_batches: 0,
+            net_records: 0,
+            net_size: 0,
+            net_capacity: 0,
+            net_allocations: 0,
+        }
+    }
+
+    /// Drain logging events from the channel and apply them locally.
+    pub fn apply_events(&mut self) {
+        use LoggingEvent::*;
+
+        while let Ok(event) = self.rx.try_recv() {
+            match event {
+                ChainCreated(length) => {
+                    self.net_batches += 1;
+                    self.net_records += isize::try_from(length).expect("must fit");
+                    self.differential_logger.log(BatchEvent {
+                        operator: self.operator_id,
+                        length,
+                    });
+                }
+                ChainDropped(length) => {
+                    self.net_batches -= 1;
+                    self.net_records -= isize::try_from(length).expect("must fit");
+                    self.differential_logger.log(DropEvent {
+                        operator: self.operator_id,
+                        length,
+                    });
+                }
+                SizeDiff(delta_size) => {
+                    self.net_size += delta_size.get();
+                    self.compute_logger.log(&ComputeEvent::ArrangementHeapSize(
+                        ArrangementHeapSize {
+                            operator_id: self.operator_id,
+                            delta_size: delta_size.get(),
+                        },
+                    ));
+                }
+                CapacityDiff(delta_capacity) => {
+                    self.net_capacity += delta_capacity.get();
+                    self.compute_logger
+                        .log(&ComputeEvent::ArrangementHeapCapacity(
+                            ArrangementHeapCapacity {
+                                operator_id: self.operator_id,
+                                delta_capacity: delta_capacity.get(),
+                            },
+                        ));
+                }
+                AllocationsDiff(delta_allocations) => {
+                    self.net_allocations += delta_allocations.get();
+                    self.compute_logger
+                        .log(&ComputeEvent::ArrangementHeapAllocations(
+                            ArrangementHeapAllocations {
+                                operator_id: self.operator_id,
+                                delta_allocations: delta_allocations.get(),
+                            },
+                        ));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for CorrectionLogger {
+    fn drop(&mut self) {
+        // Drain any events that arrived before the drop. Note that the Tokio task
+        // may still be running (abort is async), so some events may not have arrived
+        // yet. We retract any remaining batch/record counts below.
+        self.apply_events();
+
+        // Retract any outstanding batch and record counts that weren't balanced by
+        // ChainDropped events. This handles the case where the Tokio task is aborted
+        // and its Correction destructors haven't run yet (abort is async).
+        //
+        // Each DropEvent retracts one batch and `length` records, so we emit one per
+        // outstanding batch, with the first carrying all outstanding records.
+        for i in 0..self.net_batches {
+            let length = if i == 0 {
+                usize::try_from(self.net_records).unwrap_or(0)
+            } else {
+                0
+            };
+            self.differential_logger.log(DropEvent {
+                operator: self.operator_id,
+                length,
+            });
+        }
+
+        // Retract any outstanding heap size/capacity/allocations deltas.
+        if self.net_size != 0 {
+            self.compute_logger
+                .log(&ComputeEvent::ArrangementHeapSize(ArrangementHeapSize {
+                    operator_id: self.operator_id,
+                    delta_size: -self.net_size,
+                }));
+        }
+        if self.net_capacity != 0 {
+            self.compute_logger
+                .log(&ComputeEvent::ArrangementHeapCapacity(
+                    ArrangementHeapCapacity {
+                        operator_id: self.operator_id,
+                        delta_capacity: -self.net_capacity,
+                    },
+                ));
+        }
+        if self.net_allocations != 0 {
+            self.compute_logger
+                .log(&ComputeEvent::ArrangementHeapAllocations(
+                    ArrangementHeapAllocations {
+                        operator_id: self.operator_id,
+                        delta_allocations: -self.net_allocations,
+                    },
+                ));
+        }
+
+        self.compute_logger
+            .log(&ComputeEvent::ArrangementHeapSizeOperatorDrop(
+                ArrangementHeapSizeOperatorDrop {
+                    operator_id: self.operator_id,
+                },
+            ));
     }
 }

@@ -12,30 +12,30 @@ syntax = "proto3";
 package mz_postgres_util.desc;
 
 message ProtoPostgresKeyDesc {
-    uint32 oid = 1;
-    string name = 2;
-    repeated uint32 cols = 3;
-    bool is_primary = 4;
-    bool nulls_not_distinct = 5;
+  uint32 oid = 1;
+  string name = 2;
+  repeated uint32 cols = 3;
+  bool is_primary = 4;
+  bool nulls_not_distinct = 5;
 }
 
 message ProtoPostgresTableDesc {
-    string name = 1;
-    string namespace = 2;
-    uint32 oid = 3;
-    repeated ProtoPostgresColumnDesc columns = 4;
-    repeated ProtoPostgresKeyDesc keys = 5;
+  string name = 1;
+  string namespace = 2;
+  uint32 oid = 3;
+  repeated ProtoPostgresColumnDesc columns = 4;
+  repeated ProtoPostgresKeyDesc keys = 5;
 }
 
 message ProtoPostgresColumnDesc {
-    reserved 5;
-    reserved "primary_key";
-    string name = 1;
-    uint32 type_oid = 2;
-    int32 type_mod = 3;
-    bool nullable = 4;
-    // This field does not need to be optional, but was originally marked as
-    // optional when it was added, and the migration required to remove the
-    // optional marker is more convoluted than it's worth.
-    optional uint32 col_num = 6;
+  reserved 5;
+  reserved "primary_key";
+  string name = 1;
+  uint32 type_oid = 2;
+  int32 type_mod = 3;
+  bool nullable = 4;
+  // This field does not need to be optional, but was originally marked as
+  // optional when it was added, and the migration required to remove the
+  // optional marker is more convoluted than it's worth.
+  optional uint32 col_num = 6;
 }

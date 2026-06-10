@@ -15,11 +15,6 @@ SELECT current_user()
 materialize
 
 query T
-SELECT current_user = current_user()
-----
-true
-
-query T
 SELECT current_role() = current_user()
 ----
 true

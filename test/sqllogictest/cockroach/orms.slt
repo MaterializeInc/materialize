@@ -44,8 +44,8 @@ name   text    NULL            false  25  -1
 rowid  bigint  unique_rowid()  true   20  -1
 
 
-# #12115
-# Skipped until #25148 is solved
+# materialize#12115
+# Skipped until database-issues#7510 is solved
 #query TT
 #SELECT t.typname enum_name, array_agg(e.enumlabel ORDER BY enumsortorder) enum_value
 #    FROM pg_type t

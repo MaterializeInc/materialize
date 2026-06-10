@@ -12,6 +12,6 @@ syntax = "proto3";
 import 'google/protobuf/timestamp.proto';
 
 message TimestampId {
-    string id = 1;
-    google.protobuf.Timestamp ts = 2;
+  string id = 1;
+  google.protobuf.Timestamp ts = 2;
 }

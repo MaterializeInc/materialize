@@ -22,8 +22,10 @@ from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.cockroach import cockroach_resources
 from materialize.cloudtest.k8s.debezium import debezium_resources
 from materialize.cloudtest.k8s.environmentd import (
+    EnvironmentdSecret,
     EnvironmentdService,
     EnvironmentdStatefulSet,
+    ListenersConfigMap,
     MaterializedAliasService,
 )
 from materialize.cloudtest.k8s.minio import Minio
@@ -50,6 +52,8 @@ class MaterializeApplication(CloudtestApplicationBase):
         apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
+        self.secret = EnvironmentdSecret()
+        self.listeners_configmap = ListenersConfigMap()
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
         self.testdrive = TestdrivePod(
@@ -79,6 +83,8 @@ class MaterializeApplication(CloudtestApplicationBase):
             Minio(apply_node_selectors=self.apply_node_selectors),
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
+            self.secret,
+            self.listeners_configmap,
             EnvironmentdStatefulSet(
                 release_mode=self.release_mode,
                 tag=self.tag,
@@ -101,7 +107,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             "-f",
             os.path.join(
                 os.path.abspath(self.mz_root),
-                "src/cloud-resources/src/crd/gen/vpcendpoints.json",
+                "src/cloud-resources/src/crd/generated/vpcendpoints.json",
             ),
         )
 
@@ -192,13 +198,6 @@ class MaterializeApplication(CloudtestApplicationBase):
             remove_quotes,
         )
 
-    def get_pod_label_value(
-        self, cluster_id: str, label: str, remove_quotes: bool = True
-    ) -> str:
-        return self.get_pod_value(
-            cluster_id, "{.items[*].metadata.labels." + label + "}", remove_quotes
-        )
-
     def get_cluster_node_names(self, cluster_name: str) -> list[str]:
         cluster_id = self.get_cluster_id(cluster_name)
         print(f"Cluster with name '{cluster_name}' has ID {cluster_id}")
@@ -214,12 +213,6 @@ class MaterializeApplication(CloudtestApplicationBase):
             f"SELECT id FROM mz_clusters WHERE name = '{cluster_name}'"
         )[0][0]
         return cluster_id
-
-    def get_cluster_and_replica_id(self, mz_table: str, name: str) -> tuple[str, str]:
-        [cluster_id, replica_id] = self.environmentd.sql_query(
-            f"SELECT s.cluster_id, r.id FROM {mz_table} s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = '{name}'"
-        )[0]
-        return cluster_id, replica_id
 
     def suspend_k8s_node(self, node_name: str) -> None:
         print(f"Suspending node {node_name}...")

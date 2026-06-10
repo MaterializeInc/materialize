@@ -9,18 +9,18 @@
 
 syntax = "proto3";
 
-import "repr/src/role_id.proto";
-
 package mz_repr.adt.mz_acl_item;
+
+import "repr/src/role_id.proto";
 
 message ProtoAclMode {
   uint64 acl_mode = 1;
 }
 
 message ProtoMzAclItem {
-    mz_repr.role_id.ProtoRoleId grantee = 1;
-    mz_repr.role_id.ProtoRoleId grantor = 2;
-    ProtoAclMode acl_mode = 3;
+  mz_repr.role_id.ProtoRoleId grantee = 1;
+  mz_repr.role_id.ProtoRoleId grantor = 2;
+  ProtoAclMode acl_mode = 3;
 }
 
 message ProtoAclItem {

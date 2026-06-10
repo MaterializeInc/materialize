@@ -8,12 +8,13 @@
 // by the Apache License, Version 2.0.
 
 use itertools::Itertools;
-use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_expr::{MirRelationExpr, MirScalarExpr, func};
 use mz_ore::soft_assert_eq_or_log;
+use mz_repr::Diff;
 
-use crate::plan::expr::{HirRelationExpr, HirScalarExpr};
-use crate::plan::lowering::{ColumnMap, Context, CteMap};
 use crate::plan::PlanError;
+use crate::plan::hir::{HirRelationExpr, HirScalarExpr};
+use crate::plan::lowering::{ColumnMap, Context, CteMap};
 
 /// Attempt to render a stack of left joins as an inner join against "enriched" right relations.
 ///
@@ -40,12 +41,6 @@ pub(crate) fn attempt_left_join_magic(
 ) -> Result<Option<MirRelationExpr>, PlanError> {
     use mz_expr::LocalId;
 
-    tracing::debug!(
-        inputs = rights.len() + 1,
-        outer_arity = get_outer.arity(),
-        "attempt_left_join_magic"
-    );
-
     let inc_metrics = |case: &str| {
         if let Some(metrics) = context.metrics {
             metrics.inc_outer_join_lowering(case);
@@ -53,6 +48,12 @@ pub(crate) fn attempt_left_join_magic(
     };
 
     let oa = get_outer.arity();
+    tracing::debug!(
+        inputs = rights.len() + 1,
+        outer_arity = oa,
+        "attempt_left_join_magic"
+    );
+
     if oa > 0 {
         // Bail out in correlated contexts for now. Even though the code below
         // supports them, we want to test this code path more thoroughly before
@@ -77,14 +78,20 @@ pub(crate) fn attempt_left_join_magic(
     let left = left
         .clone()
         .applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
-    let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
+    let full_left_typ = left.typ();
+    let lt = full_left_typ
+        .column_types
+        .iter()
+        .skip(oa)
+        .cloned()
+        .collect_vec();
     let la = lt.len();
 
     // Create a new let binding to use as input.
     // We may use these relations multiple times to extract augmenting values.
     let id = LocalId::new(id_gen.allocate_id());
     // The join body that we will iteratively develop.
-    let mut body = MirRelationExpr::local_get(id, left.typ());
+    let mut body = MirRelationExpr::local_get(id, full_left_typ.clone());
     bindings.push((id, body.clone(), left));
     bound_to.extend((0..la).map(|_| 1));
     arities.push(la);
@@ -112,10 +119,16 @@ pub(crate) fn attempt_left_join_magic(
             .clone()
             .map(vec![HirScalarExpr::literal_true()]) // add a bit to mark "real" rows.
             .applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map, context)?;
-        let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
+        let full_right_typ = right.typ();
+        let rt = full_right_typ
+            .column_types
+            .iter()
+            .skip(oa)
+            .cloned()
+            .collect_vec();
         let ra = rt.len() - 1; // don't count the new column
 
-        let mut right_type = right.typ();
+        let mut right_type = full_right_typ;
         // Create a binding for `right`, unadulterated.
         let id = LocalId::new(id_gen.allocate_id());
         let get_right = MirRelationExpr::local_get(id, right_type.clone());
@@ -127,7 +140,7 @@ pub(crate) fn attempt_left_join_magic(
         }
         right_type.keys.clear();
         let aug_id = LocalId::new(id_gen.allocate_id());
-        let aug_right = MirRelationExpr::local_get(aug_id, right_type);
+        let aug_right = MirRelationExpr::local_get(aug_id, right_type.clone());
 
         bindings.push((id, get_right.clone(), right));
         bound_to.extend((0..ra).map(|_| 2 + index));
@@ -152,7 +165,7 @@ pub(crate) fn attempt_left_join_magic(
 
         // if `on` added any new columns, .. no clue what to do.
         // Return with failure, to avoid any confusion.
-        if product.typ().column_types.len() > oa + ba + ra + 1 {
+        if product.arity() > oa + ba + ra + 1 {
             tracing::debug!(case = 3, index, "attempt_left_join_magic");
             inc_metrics("voj_3");
             return Ok(None);
@@ -163,13 +176,24 @@ pub(crate) fn attempt_left_join_magic(
         // then we can fish out values from that input. If it equates values
         // across multiple inputs, we would need to fish out valid tuples and
         // no idea how we would get those w/o doing a join or a cartesian product.
-        let equations = if let Some(list) = decompose_equations(&on) {
-            list
-        } else {
-            tracing::debug!(case = 4, index, "attempt_left_join_magic");
-            inc_metrics("voj_4");
+        let (equations, non_crossing_equations) =
+            if let Some(list) = decompose_left_to_right_equations(&on, oa + ba) {
+                list
+            } else {
+                tracing::debug!(case = 4, index, "attempt_left_join_magic");
+                inc_metrics("voj_4");
+                return Ok(None);
+            };
+
+        if !non_crossing_equations.is_empty() {
+            // TODO(mgree) This case isn't _impossible_, but it's complicated.
+            // We have equations that cross from left to right, but we also have
+            // left-left or right-right equations. Making sure we get exactly the
+            // right results here is hard enough that we don't attempt it.
+            tracing::debug!(case = 8, index, "attempt_left_join_magic");
+            inc_metrics("voj_8");
             return Ok(None);
-        };
+        }
 
         // We now need to see if all left columns exist in some input relation,
         // and that all right columns are actually in the right relation. Idk.
@@ -183,8 +207,9 @@ pub(crate) fn attempt_left_join_magic(
                 inc_metrics("voj_5");
                 return Ok(None);
             }
-            // Only columns not from the outer scope introduce bindings.
-            if left >= oa {
+            // Only columns not from the outer scope introduce bindings (`oa <= left`)
+            // And `left` needs to be a column in the left relation (`left < oa + ba`)
+            if oa <= left && left < oa + ba {
                 if let Some(bound) = bound_input {
                     // If left references come from different inputs, bail out.
                     if bound_to[left] != bound {
@@ -225,11 +250,11 @@ pub(crate) fn attempt_left_join_magic(
                 MirRelationExpr::Constant {
                     rows: Ok(vec![(
                         mz_repr::Row::pack(
-                            std::iter::repeat(mz_repr::Datum::Null).take(get_left.arity()),
+                            std::iter::repeat(mz_repr::Datum::Null).take(left_typ.arity()),
                         ),
-                        1,
+                        Diff::ONE,
                     )]),
-                    typ: left_typ,
+                    typ: left_typ.clone(),
                 },
             )
             .project(
@@ -329,11 +354,11 @@ pub(crate) fn attempt_left_join_magic(
                 .map(
                     (oa + ba..oa + ba + ra)
                         .map(|col| MirScalarExpr::If {
-                            cond: Box::new(MirScalarExpr::Column(oa + ba + ra).call_is_null()),
+                            cond: Box::new(MirScalarExpr::column(oa + ba + ra).call_is_null()),
                             then: Box::new(MirScalarExpr::literal_null(
                                 rt[col - (oa + ba)].scalar_type.clone(),
                             )),
-                            els: Box::new(MirScalarExpr::Column(col)),
+                            els: Box::new(MirScalarExpr::column(col)),
                         })
                         .collect(),
                 )
@@ -377,33 +402,47 @@ pub(crate) fn attempt_left_join_magic(
     Ok(Some(body))
 }
 
+use mz_expr::func::variadic::{And, Or};
 use mz_expr::{BinaryFunc, VariadicFunc};
 
 /// If `predicate` can be decomposed as any number of `col(x) = col(y)` expressions anded together, return them.
-fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>> {
-    let mut equations = Vec::new();
+/// In order to only find _useful_ equations, one column must be `< lhs_cutoff` and one must be `>= lhs_cutoff`.
+fn decompose_left_to_right_equations(
+    predicate: &MirScalarExpr,
+    lhs_cutoff: usize,
+) -> Option<(Vec<(usize, usize)>, Vec<(usize, usize)>)> {
+    let mut crossing_equations = Vec::new();
+    let mut non_crossing_equations = Vec::new();
+
+    let mut push_equation = |c1: usize, c2: usize| {
+        let l = usize::min(c1, c2);
+        let r = usize::max(c1, c2);
+
+        if l < lhs_cutoff && lhs_cutoff <= r {
+            crossing_equations.push((l, r))
+        } else {
+            non_crossing_equations.push((l, r))
+        }
+    };
 
     let mut todo = vec![predicate];
     while let Some(expr) = todo.pop() {
         match expr {
             MirScalarExpr::CallVariadic {
-                func: VariadicFunc::And,
+                func: VariadicFunc::And(_),
                 exprs,
             } => {
                 todo.extend(exprs.iter());
             }
             MirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
+                func: BinaryFunc::Eq(_),
                 expr1,
                 expr2,
             } => {
-                if let (MirScalarExpr::Column(c1), MirScalarExpr::Column(c2)) = (&**expr1, &**expr2)
+                if let (MirScalarExpr::Column(c1, _name1), MirScalarExpr::Column(c2, _name2)) =
+                    (&**expr1, &**expr2)
                 {
-                    if c1 < c2 {
-                        equations.push((*c1, *c2));
-                    } else {
-                        equations.push((*c2, *c1));
-                    }
+                    push_equation(*c1, *c2);
                 } else {
                     return None;
                 }
@@ -414,40 +453,45 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
     }
 
     // Remove duplicates
-    equations.sort();
-    equations.dedup();
+    crossing_equations.sort();
+    crossing_equations.dedup();
+    non_crossing_equations.sort();
+    non_crossing_equations.dedup();
 
     // Ensure that every rhs column c2 appears only once. Otherwise, we have at
     // least two lhs columns c1 and c1' that are rendered equal by the same c2
     // column. The VOJ lowering will then produce a plan that will incorrectly
-    // push down a local filter c1 = c1' to the lhs (see #26707).
-    if equations.iter().duplicates_by(|(_, c)| c).next().is_some() {
+    // push down a local filter c1 = c1' to the lhs (see database-issues#7892).
+    if crossing_equations
+        .iter()
+        .duplicates_by(|(_, c)| c)
+        .next()
+        .is_some()
+    {
         return None;
     }
 
-    Some(equations)
+    Some((crossing_equations, non_crossing_equations))
 }
 
 /// Turns column equation into idiomatic Rust equation, where nulls equate.
 fn recompose_equations(pairs: Vec<(usize, usize)>) -> Vec<MirScalarExpr> {
     pairs
         .iter()
-        .map(|(x, y)| MirScalarExpr::CallVariadic {
-            func: VariadicFunc::Or,
-            exprs: vec![
-                MirScalarExpr::CallBinary {
-                    func: BinaryFunc::Eq,
-                    expr1: Box::new(MirScalarExpr::Column(*x)),
-                    expr2: Box::new(MirScalarExpr::Column(*y)),
-                },
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::And,
-                    exprs: vec![
-                        MirScalarExpr::Column(*x).call_is_null(),
-                        MirScalarExpr::Column(*y).call_is_null(),
-                    ],
-                },
-            ],
+        .map(|(x, y)| {
+            MirScalarExpr::call_variadic(
+                Or,
+                vec![
+                    MirScalarExpr::column(*x).call_binary(MirScalarExpr::column(*y), func::Eq),
+                    MirScalarExpr::call_variadic(
+                        And,
+                        vec![
+                            MirScalarExpr::column(*x).call_is_null(),
+                            MirScalarExpr::column(*y).call_is_null(),
+                        ],
+                    ),
+                ],
+            )
         })
         .collect()
 }

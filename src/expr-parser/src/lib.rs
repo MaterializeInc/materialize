@@ -14,4 +14,4 @@ mod parser;
 pub use catalog::TestCatalog;
 pub use command::handle_define;
 pub use command::handle_roundtrip;
-pub use parser::{try_parse_def, try_parse_mir, Def};
+pub use parser::{Def, try_parse_def, try_parse_mir};

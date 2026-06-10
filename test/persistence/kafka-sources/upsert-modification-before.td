@@ -38,12 +38,16 @@ $ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE upsert_modification
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-modification-${testdrive.seed}')
+
+> CREATE TABLE upsert_modification_tbl FROM SOURCE upsert_modification (REFERENCE "testdrive-upsert-modification-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
-> SELECT COUNT(*) FROM upsert_modification;
+> SELECT COUNT(*) FROM upsert_modification_tbl;
 10000
 
 $ kafka-create-topic topic=textbytes
@@ -55,56 +59,72 @@ bírdmore:geese
 mammal1:moose
 bìrd1:
 
+> BEGIN
 > CREATE SOURCE texttext
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-textbytes-${testdrive.seed}')
+
+> CREATE TABLE texttext_tbl FROM SOURCE texttext (REFERENCE "testdrive-textbytes-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE textbytes
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-textbytes-${testdrive.seed}')
+
+> CREATE TABLE textbytes_tbl FROM SOURCE textbytes (REFERENCE "testdrive-textbytes-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE bytesbytes
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-textbytes-${testdrive.seed}')
+
+> CREATE TABLE bytesbytes_tbl FROM SOURCE bytesbytes (REFERENCE "testdrive-textbytes-${testdrive.seed}")
   KEY FORMAT BYTES VALUE FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE bytestext
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-textbytes-${testdrive.seed}')
+
+> CREATE TABLE bytestext_tbl FROM SOURCE bytestext (REFERENCE "testdrive-textbytes-${testdrive.seed}")
   KEY FORMAT BYTES VALUE FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
+> COMMIT
 
-> select * from texttext
+> select * from texttext_tbl
 key           text  kafka_partition  mz_offset
 ----------------------------------------------
 fish          fish  0                0
 bírdmore      geese 0                2
 mammal1       moose 0                3
 
-> select * from textbytes
+> select * from textbytes_tbl
 key           data  kafka_partition  mz_offset
 ----------------------------------------------
 fish          fish  0                0
 bírdmore      geese 0                2
 mammal1       moose 0                3
 
-> select * from bytestext
+> select * from bytestext_tbl
 key             text  kafka_partition  mz_offset
 ------------------------------------------------
 fish            fish  0                0
 b\xc3\xadrdmore geese 0                2
 mammal1         moose 0                3
 
-> select * from bytesbytes
+> select * from bytesbytes_tbl
 key             data  kafka_partition  mz_offset
 ------------------------------------------------
 fish            fish  0                0

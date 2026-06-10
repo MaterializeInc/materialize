@@ -10,6 +10,7 @@
 import os
 from pathlib import Path
 
+from ci import tarball_uploader
 from materialize import mzbuild, spawn
 from materialize.mz_version import MzCliVersion
 from materialize.rustc_flags import Sanitizer
@@ -19,7 +20,12 @@ from .deploy_util import APT_BUCKET, MZ_CLI_VERSION
 
 
 def main() -> None:
-    repo = mzbuild.Repository(Path("."), coverage=False, sanitizer=Sanitizer.none)
+    repo = mzbuild.Repository(
+        Path("."),
+        coverage=False,
+        sanitizer=Sanitizer.none,
+        image_registry="materialize",
+    )
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
     print("--- Checking version")
@@ -52,14 +58,18 @@ def main() -> None:
     mzbuild.chmod_x(mz)
 
     print(f"--- Uploading {target} binary tarball")
-    deploy_util.deploy_tarball(target, mz)
+    uploader = tarball_uploader.TarballUploader(
+        package_name="mz",
+        version=deploy_util.MZ_CLI_VERSION,
+    )
+    uploader.deploy_tarball(target, mz)
 
     print("--- Publishing Debian package")
     filename = f"mz_{MZ_CLI_VERSION.str_without_prefix()}_{repo.rd.arch.go_str()}.deb"
     print(f"Publishing {filename}")
     spawn.runv(
         [
-            *repo.rd.cargo("deb", rustflags=[]),
+            *repo.rd.build("deb", rustflags=[]),
             "--no-build",
             "--no-strip",
             "--deb-version",

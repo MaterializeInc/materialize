@@ -13,9 +13,11 @@
 
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
 pub use mz_lowertest_derive::MzReflect;
 use mz_ore::result::ResultExt;
-use mz_ore::str::{separated, StrExt};
+use mz_ore::str::{StrExt, separated};
+use mz_ore::treat_as_equal::TreatAsEqual;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -38,6 +40,10 @@ impl<T: MzReflect> MzReflect for Vec<T> {
     fn add_to_reflected_type_info(rti: &mut ReflectedTypeInfo) {
         T::add_to_reflected_type_info(rti);
     }
+}
+
+impl<T> MzReflect for TreatAsEqual<T> {
+    fn add_to_reflected_type_info(_rti: &mut ReflectedTypeInfo) {}
 }
 
 /// Info that must be combined with a spec to form deserializable JSON.
@@ -226,33 +232,30 @@ where
                     Delimiter::Bracket => {
                         if type_name.starts_with("Vec<") && type_name.ends_with('>') {
                             // This is a Vec<type_name>.
-                            Ok(Some(format!(
-                                "[{}]",
-                                separated(
-                                    ",",
-                                    parse_as_vec(
-                                        &mut inner_iter,
-                                        &type_name[4..(type_name.len() - 1)],
-                                        rti,
-                                        ctx
-                                    )?
-                                    .iter()
-                                )
-                            )))
+                            let vec = parse_as_vec(
+                                &mut inner_iter,
+                                &type_name[4..(type_name.len() - 1)],
+                                rti,
+                                ctx,
+                            )?;
+                            Ok(Some(format!("[{}]", separated(",", vec.iter()))))
+                        } else if type_name.starts_with("[") && type_name.ends_with(']') {
+                            // This is a [type_name].
+                            let vec = parse_as_vec(
+                                &mut inner_iter,
+                                &type_name[1..(type_name.len() - 1)],
+                                rti,
+                                ctx,
+                            )?;
+                            Ok(Some(format!("[{}]", separated(",", vec.iter()))))
                         } else if type_name.starts_with('(') && type_name.ends_with(')') {
-                            Ok(Some(format!(
-                                "[{}]",
-                                separated(
-                                    ",",
-                                    parse_as_tuple(
-                                        &mut inner_iter,
-                                        &type_name[1..(type_name.len() - 1)],
-                                        rti,
-                                        ctx
-                                    )?
-                                    .iter()
-                                )
-                            )))
+                            let vec = parse_as_tuple(
+                                &mut inner_iter,
+                                &type_name[1..(type_name.len() - 1)],
+                                rti,
+                                ctx,
+                            )?;
+                            Ok(Some(format!("[{}]", separated(",", vec.iter()))))
                         } else {
                             Err(format!(
                                 "Object specified with brackets {:?} has unsupported type `{}`",
@@ -601,14 +604,15 @@ where
     }
     if !f_names.is_empty() {
         // The JSON for named fields is
-        // `{"arg1":<val1>, ..}}`.
+        // `{"arg1":<val1>, ..}`.
         Ok(format!(
             "{{{}}}",
             separated(
                 ",",
                 f_names
                     .iter()
-                    .zip(f_values.into_iter())
+                    .take(f_values.len())
+                    .zip_eq(f_values.into_iter())
                     .map(|(n, v)| format!("\"{}\":{}", n, v))
             )
         ))
@@ -770,7 +774,7 @@ where
         // to retrieve values from the map in the order given by `f_names`.
         Value::Object(map) if !f_names.is_empty() => {
             let mut fields = Vec::with_capacity(f_types.len());
-            for (name, typ) in f_names.iter().zip(f_types.iter()) {
+            for (name, typ) in f_names.iter().zip_eq(f_types.iter()) {
                 fields.push(from_json(&map[*name], typ, rti, ctx))
             }
             separated(" ", fields).to_string()
@@ -779,7 +783,7 @@ where
         // JSON.
         Value::Array(inner) if f_types.len() > 1 => {
             let mut fields = Vec::with_capacity(f_types.len());
-            for (v, typ) in inner.iter().zip(f_types.iter()) {
+            for (v, typ) in inner.iter().zip_eq(f_types.iter()) {
                 fields.push(from_json(v, typ, rti, ctx))
             }
             separated(" ", fields).to_string()

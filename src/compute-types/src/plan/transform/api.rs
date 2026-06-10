@@ -14,20 +14,20 @@ use std::collections::BTreeSet;
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::GlobalId;
 
-use crate::plan::interpret::{BoundedLattice, FoldMut, Interpreter};
 use crate::plan::Plan;
+use crate::plan::interpret::{BoundedLattice, FoldMut, Interpreter};
 
 /// The type of configuration options passed to all [Transform::transform] calls
 /// as an immutable reference.
 #[derive(Debug)]
 pub struct TransformConfig {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub monotonic_ids: BTreeSet<GlobalId>,
 }
 
 /// A transform for [crate::plan::Plan] nodes.
-pub trait Transform<T = mz_repr::Timestamp> {
-    /// TODO(#25239): Add documentation.
+pub trait Transform {
+    /// TODO(database-issues#7533): Add documentation.
     fn name(&self) -> &'static str;
 
     /// Transform a [Plan] using the given [TransformConfig].
@@ -39,7 +39,7 @@ pub trait Transform<T = mz_repr::Timestamp> {
     fn transform(
         &self,
         config: &TransformConfig,
-        plan: &mut Plan<T>,
+        plan: &mut Plan,
     ) -> Result<(), RecursionLimitError> {
         let _span = tracing::span!(target: "optimizer",
             tracing::Level::TRACE,
@@ -54,19 +54,19 @@ pub trait Transform<T = mz_repr::Timestamp> {
     fn do_transform(
         &self,
         config: &TransformConfig,
-        plan: &mut Plan<T>,
+        plan: &mut Plan,
     ) -> Result<(), RecursionLimitError>;
 }
 
-/// TODO(#25239): Add documentation.
-pub trait BottomUpTransform<T = mz_repr::Timestamp> {
+/// TODO(database-issues#7533): Add documentation.
+pub trait BottomUpTransform {
     /// A type representing analysis information to be associated with each
     /// sub-term and exposed to the transformation action callback.
     type Info: BoundedLattice + Clone;
 
     /// A type responsible for synthesizing the [Self::Info] associated with
     /// each sub-term.
-    type Interpreter<'a>: Interpreter<T, Domain = Self::Info>;
+    type Interpreter<'a>: Interpreter<Domain = Self::Info>;
 
     /// The name for this transform.
     fn name(&self) -> &'static str;
@@ -76,12 +76,12 @@ pub trait BottomUpTransform<T = mz_repr::Timestamp> {
 
     /// A callback for manipulating the root of the given [Plan] using the
     /// [Self::Info] derived for itself and its children.
-    fn action(plan: &mut Plan<T>, plan_info: &Self::Info, input_infos: &[Self::Info]);
+    fn action(plan: &mut Plan, plan_info: &Self::Info, input_infos: &[Self::Info]);
 }
 
-impl<A, T> Transform<T> for A
+impl<A> Transform for A
 where
-    A: BottomUpTransform<T>,
+    A: BottomUpTransform,
 {
     fn name(&self) -> &'static str {
         self.name()
@@ -90,7 +90,7 @@ where
     fn do_transform(
         &self,
         config: &TransformConfig,
-        plan: &mut Plan<T>,
+        plan: &mut Plan,
     ) -> Result<(), RecursionLimitError> {
         let mut fold = FoldMut::new(Self::interpreter(config), Self::action);
         fold.apply(plan).map(|_| ())

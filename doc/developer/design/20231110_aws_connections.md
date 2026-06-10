@@ -2,7 +2,7 @@
 
 ## The Problem
 
-Github issue:  [Issue 23055](https://github.com/MaterializeInc/materialize/issues/23055)
+Github issue:  [Issue 23055](https://github.com/MaterializeInc/database-issues/issues/6945)
 
 We plan to build an AWS S3 sink, in which we write to an S3 bucket under the end user's
 control. We'll need to integrate with AWS IAM so that our users can grant their Materialize

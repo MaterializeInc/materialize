@@ -45,11 +45,11 @@ row 2
 
 $ set-regex match=u\d+ replacement=UID
 
-? EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
 Explained Query:
   CrossJoin type=differential
     ArrangeBy keys=[[]]
-      Filter (#0) IS NOT NULL
+      Filter (#0{f1}) IS NOT NULL
         ReadStorage materialize.public.t1
     ArrangeBy keys=[[]]
       ReadStorage materialize.public.t1
@@ -129,13 +129,17 @@ $ kafka-create-topic topic=kafka-ingest-repeat
 $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} repeat=2
 {"f1": "fish"}
 
+> BEGIN
 > CREATE SOURCE kafka_ingest_repeat_input
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-ingest-repeat-${testdrive.seed}')
+
+> CREATE TABLE kafka_ingest_repeat_input_tbl FROM SOURCE kafka_ingest_repeat_input (REFERENCE "testdrive-kafka-ingest-repeat-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM kafka_ingest_repeat_input;
+> SELECT * FROM kafka_ingest_repeat_input_tbl;
 fish
 fish
 
@@ -144,7 +148,7 @@ fish
 $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} repeat=2
 {"f1": "${kafka-ingest.iteration}"}
 
-> SELECT * FROM kafka_ingest_repeat_input;
+> SELECT * FROM kafka_ingest_repeat_input_tbl;
 0
 1
 fish
@@ -167,13 +171,17 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 "g" {"a": "g"}
 "h" {"a": "h"}
 
+> BEGIN
 > CREATE SOURCE kafka_ingest_no_partition
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-ingest-no-partition-${testdrive.seed}')
+
+> CREATE TABLE kafka_ingest_no_partition_tbl FROM SOURCE kafka_ingest_no_partition (REFERENCE "testdrive-kafka-ingest-no-partition-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
-> SELECT COUNT(*) FROM kafka_ingest_no_partition;
+> SELECT COUNT(*) FROM kafka_ingest_no_partition_tbl;
 8
 
 # kafka-verify with regexp (the set-regexp from above is used)

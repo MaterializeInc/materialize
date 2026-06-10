@@ -11,7 +11,7 @@
 //!
 //! # Snapshot reading
 //!
-//! Depending on the `subsource_resume_uppers` parameter this dataflow decides which tables to
+//! Depending on the `source_outputs resume_upper` parameters this dataflow decides which tables to
 //! snapshot and performs a simple `SELECT * FROM table` on them in order to get a snapshot.
 //! There are a few subtle points about this operation, described below.
 //!
@@ -84,116 +84,125 @@
 //! updates to be potentially negated by the replication operator, which will emit negated
 //! updates at the minimum timestamp (by convention) when it encounters rows from a table that
 //! occur before the GTID frontier in the Rewind Request for that table.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use futures::TryStreamExt;
+use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
+use mz_mysql_util::{
+    ER_NO_SUCH_TABLE, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
+};
+use mz_ore::cast::CastFrom;
+use mz_ore::future::InTask;
+use mz_ore::iter::IteratorExt;
+use mz_ore::metrics::MetricsFutureExt;
+use mz_repr::{Diff, Row};
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::MySqlSourceConnection;
+use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::containers::stack::FueledBuilder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 use tracing::{error, trace};
 
-use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, ER_NO_SUCH_TABLE};
-use mz_ore::future::InTask;
-use mz_ore::metrics::MetricsFutureExt;
-use mz_repr::Row;
-use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
-use mz_storage_types::sources::MySqlSourceConnection;
-use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
-use crate::source::types::{
-    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
-};
 use crate::source::RawSourceCreationConfig;
+use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedCollection};
+use crate::statistics::SourceStatistics;
 
 use super::schemas::verify_schemas;
 use super::{
-    return_definite_error, validate_mysql_repl_settings, DefiniteError, MySqlTableName,
-    ReplicationError, RewindRequest, SubsourceInfo, TransientError,
+    DefiniteError, MySqlTableName, ReplicationError, RewindRequest, SourceOutputInfo,
+    TransientError, return_definite_error, validate_mysql_repl_settings,
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
-pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
-    scope: G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, GtidPartition>,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
-    subsources: Vec<SubsourceInfo>,
+    source_outputs: Vec<SourceOutputInfo>,
     metrics: MySqlSnapshotMetrics,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, RewindRequest>,
-    Stream<G, ProgressStatisticsUpdate>,
-    Stream<G, ReplicationError>,
+    StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, GtidPartition, RewindRequest>,
+    StreamVec<'scope, GtidPartition, ReplicationError>,
     PressOnDropButton,
 ) {
     let mut builder =
         AsyncOperatorBuilder::new(format!("MySqlSnapshotReader({})", config.id), scope.clone());
 
-    let (mut raw_handle, raw_data) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (mut rewinds_handle, rewinds) = builder.new_output();
-    // Captures DefiniteErrors that affect the entire source, including all subsources
-    let (mut definite_error_handle, definite_errors) = builder.new_output();
-
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (raw_handle, raw_data) = builder.new_output::<FueledBuilder<_>>();
+    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    // Captures DefiniteErrors that affect the entire source, including all outputs
+    let (definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // A global view of all outputs that will be snapshot by all workers.
     let mut all_outputs = vec![];
     // A map containing only the table infos that this worker should snapshot.
     let mut reader_snapshot_table_info = BTreeMap::new();
-
-    for subsource in subsources.into_iter() {
-        mz_ore::soft_assert_or_log!(
-            subsource.output_index != 0,
-            "primary collection should not be represented in subsources info"
-        );
-        // Determine which collections need to be snapshot and which already have been.
-        if *subsource.resume_upper != [GtidPartition::minimum()] {
+    // Maps MySQL table name to export `SourceStatistics`. Same info exists in reader_snapshot_table_info,
+    // but this avoids having to iterate + map each time the statistics are needed.
+    let mut export_statistics = BTreeMap::new();
+    for output in source_outputs.into_iter() {
+        // Determine which outputs need to be snapshot and which already have been.
+        if *output.resume_upper != [GtidPartition::minimum()] {
             // Already has been snapshotted.
             continue;
         }
-        all_outputs.push(subsource.output_index);
-        if config.responsible_for(&subsource.name) {
+        all_outputs.push(output.output_index);
+        if config.responsible_for(&output.table_name) {
+            let export_stats = config
+                .statistics
+                .get(&output.export_id)
+                .expect("statistics have been intialized")
+                .clone();
+            export_statistics
+                .entry(output.table_name.clone())
+                .or_insert_with(Vec::new)
+                .push(export_stats);
+
             reader_snapshot_table_info
-                .insert(subsource.name, (subsource.output_index, subsource.desc));
+                .entry(output.table_name.clone())
+                .or_insert_with(Vec::new)
+                .push(output);
         }
     }
 
-    let (button, transient_errors): (_, Stream<G, Rc<TransientError>>) =
+    let (button, transient_errors): (_, StreamVec<'scope, GtidPartition, Rc<TransientError>>) =
         builder.build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
-                let [data_cap_set, rewind_cap_set, definite_error_cap_set, stats_cap]: &mut [_; 4] =
+                let [data_cap_set, rewind_cap_set, definite_error_cap_set]: &mut [_; 3] =
                     caps.try_into().unwrap();
 
                 let id = config.id;
                 let worker_id = config.worker_id;
 
+                if !all_outputs.is_empty() {
+                    // A worker *must* emit a count even if not responsible for snapshotting a table
+                    // as statistic summarization will return null if any worker hasn't set a value.
+                    // This will also reset snapshot stats for any exports not snapshotting.
+                    for statistics in config.statistics.values() {
+                        statistics.set_snapshot_records_known(0);
+                        statistics.set_snapshot_records_staged(0);
+                    }
+                }
+
                 // If this worker has no tables to snapshot then there is nothing to do.
                 if reader_snapshot_table_info.is_empty() {
                     trace!(%id, "timely-{worker_id} initializing table reader \
                                  with no tables to snapshot, exiting");
-                    if !all_outputs.is_empty() {
-                        // Emit 0, to mark this worker as having started up correctly,
-                        // but having done no snapshotting. Otherwise leave
-                        // this not filled in (no snapshotting is occurring in this instance of
-                        // the dataflow).
-                        stats_output.give(
-                            &stats_cap[0],
-                            ProgressStatisticsUpdate::Snapshot {
-                                records_known: 0,
-                                records_staged: 0,
-                            },
-                        );
-                    }
                     return Ok(());
                 } else {
                     trace!(%id, "timely-{worker_id} initializing table reader \
@@ -253,9 +262,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         return Ok(return_definite_error(
                             err,
                             &all_outputs,
-                            &mut raw_handle,
+                            &raw_handle,
                             data_cap_set,
-                            &mut definite_error_handle,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         )
                         .await);
@@ -276,9 +285,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         return Ok(return_definite_error(
                             err,
                             &all_outputs,
-                            &mut raw_handle,
+                            &raw_handle,
                             data_cap_set,
-                            &mut definite_error_handle,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         )
                         .await);
@@ -302,9 +311,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         return Ok(return_definite_error(
                             DefiniteError::ServerConfigurationError(err.to_string()),
                             &all_outputs,
-                            &mut raw_handle,
+                            &raw_handle,
                             data_cap_set,
-                            &mut definite_error_handle,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         )
                         .await);
@@ -353,55 +362,42 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 trace!(%id, "timely-{worker_id} started transaction");
 
                 // Verify the schemas of the tables we are snapshotting
-                let errored_tables = verify_schemas(
-                    &mut tx,
-                    &reader_snapshot_table_info
-                        .iter()
-                        .map(|(table, (_, desc))| (table, desc))
-                        .collect::<Vec<_>>(),
-                    &connection.text_columns,
-                    &connection.ignore_columns,
-                )
-                .await?;
-                let mut removed_tables = vec![];
-                for (table, err) in errored_tables {
-                    let (output_index, _) = reader_snapshot_table_info.get(table).unwrap();
+                let errored_outputs =
+                    verify_schemas(&mut tx, reader_snapshot_table_info.iter().collect()).await?;
+                let mut removed_outputs = BTreeSet::new();
+                for (output, err) in errored_outputs {
                     // Publish the error for this table and stop ingesting it
-                    raw_handle
-                        .give_fueled(
-                            &data_cap_set[0],
-                            (
-                                (*output_index, Err(err.clone().into())),
-                                GtidPartition::minimum(),
-                                1,
-                            ),
-                        )
-                        .await;
-                    trace!(%id, "timely-{worker_id} stopping snapshot of table {table} \
-                                    due to schema mismatch");
-                    removed_tables.push(table.clone());
+                    let update = (
+                        (output.output_index, Err(err.clone().into())),
+                        GtidPartition::minimum(),
+                        Diff::ONE,
+                    );
+                    let size = update.fuel_size();
+                    raw_handle.give_fueled(&data_cap_set[0], update, size).await;
+                    tracing::warn!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
+                                due to schema mismatch");
+                    removed_outputs.insert(output.output_index);
                 }
-                for table in removed_tables {
-                    reader_snapshot_table_info.remove(&table);
+                for (_, outputs) in reader_snapshot_table_info.iter_mut() {
+                    outputs.retain(|output| !removed_outputs.contains(&output.output_index));
                 }
+                reader_snapshot_table_info.retain(|_, outputs| !outputs.is_empty());
 
                 let snapshot_total = fetch_snapshot_size(
                     &mut tx,
                     reader_snapshot_table_info
-                        .values()
-                        .map(|(_, table_desc)| Into::<MySqlTableName>::into(table_desc))
+                        .iter()
+                        .map(|(name, outputs)| {
+                            (
+                                name.clone(),
+                                outputs.len(),
+                                export_statistics.get(name).unwrap(),
+                            )
+                        })
                         .collect(),
                     metrics,
                 )
                 .await?;
-
-                stats_output.give(
-                    &stats_cap[0],
-                    ProgressStatisticsUpdate::Snapshot {
-                        records_known: snapshot_total,
-                        records_staged: 0,
-                    },
-                );
 
                 // This worker has nothing else to do
                 if reader_snapshot_table_info.is_empty() {
@@ -411,50 +407,60 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // Read the snapshot data from the tables
                 let mut final_row = Row::default();
 
-                let mut snapshot_staged = 0;
-                for (table, (output_index, table_desc)) in &reader_snapshot_table_info {
-                    let query = format!("SELECT * FROM {}", table);
-                    trace!(%id, "timely-{worker_id} reading snapshot from \
-                                 table '{table}':\n{table_desc:?}");
+                let mut snapshot_staged_total = 0;
+                for (table, outputs) in &reader_snapshot_table_info {
+                    let mut snapshot_staged = 0;
+                    let query = build_snapshot_query(outputs);
+                    trace!(%id, "timely-{worker_id} reading snapshot query='{}'", query);
                     let mut results = tx.exec_stream(query, ()).await?;
-                    let mut count = 0;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
-                        let event = match pack_mysql_row(&mut final_row, row, table_desc) {
-                            Ok(row) => Ok(SourceMessage {
-                                key: Row::default(),
-                                value: row,
-                                metadata: Row::default(),
-                            }),
-                            // Produce a DefiniteError in the stream for any rows that fail to decode
-                            Err(err @ MySqlError::ValueDecodeError { .. }) => {
-                                Err(DataflowError::from(DefiniteError::ValueDecodeError(
-                                    err.to_string(),
-                                )))
-                            }
-                            Err(err) => Err(err)?,
-                        };
-                        raw_handle
-                            .give_fueled(
-                                &data_cap_set[0],
-                                ((*output_index, event), GtidPartition::minimum(), 1),
-                            )
-                            .await;
-                        count += 1;
                         snapshot_staged += 1;
-                        // TODO(guswynn): does this 1000 need to be configurable?
-                        if snapshot_staged % 1000 == 0 {
-                            stats_output.give(
-                                &stats_cap[0],
-                                ProgressStatisticsUpdate::Snapshot {
-                                    records_known: snapshot_total,
-                                    records_staged: snapshot_staged,
-                                },
+                        for (output, row_val) in outputs.iter().repeat_clone(row) {
+                            // We don't need to verify if binlog_row_metadata matches the expected when snapshotting as
+                            // the snapshot query always returns rows with full metadata. If the output is configured
+                            // with binlog_full_metadata = false, then we will just ignore the metadata when decoding.
+                            let event = match pack_mysql_row(
+                                &mut final_row,
+                                row_val,
+                                &output.desc,
+                                None,
+                                output.binlog_full_metadata,
+                            ) {
+                                Ok(row) => Ok(SourceMessage {
+                                    key: Row::default(),
+                                    value: row,
+                                    metadata: Row::default(),
+                                }),
+                                // Produce a DefiniteError in the stream for any rows that fail to decode
+                                Err(err @ MySqlError::ValueDecodeError { .. }) => {
+                                    Err(DataflowError::from(DefiniteError::ValueDecodeError(
+                                        err.to_string(),
+                                    )))
+                                }
+                                Err(err) => Err(err)?,
+                            };
+                            let update = (
+                                (output.output_index, event),
+                                GtidPartition::minimum(),
+                                Diff::ONE,
                             );
+                            let size = update.fuel_size();
+                            raw_handle.give_fueled(&data_cap_set[0], update, size).await;
+                        }
+                        // This overcounting maintains existing behavior but will be removed one readers no longer rely on the value.
+                        snapshot_staged_total += u64::cast_from(outputs.len());
+                        if snapshot_staged_total % 1000 == 0 {
+                            for statistics in export_statistics.get(table).unwrap() {
+                                statistics.set_snapshot_records_staged(snapshot_staged);
+                            }
                         }
                     }
-                    trace!(%id, "timely-{worker_id} snapshotted {count} records from \
-                                 table '{table}'");
+                    for statistics in export_statistics.get(table).unwrap() {
+                        statistics.set_snapshot_records_staged(snapshot_staged);
+                    }
+                    trace!(%id, "timely-{worker_id} snapshotted {} records from \
+                                 table '{table}'", snapshot_staged * u64::cast_from(outputs.len()));
                 }
 
                 // We are done with the snapshot so now we will emit rewind requests. It is
@@ -463,61 +469,87 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // seem like a good idea to read the replication stream concurrently with the
                 // snapshot but it actually leads to a lot of data being staged for the future,
                 // which needlesly consumed memory in the cluster.
-                for table in reader_snapshot_table_info.keys() {
-                    trace!(%id, "timely-{worker_id} producing rewind request for {table}");
-                    let req = RewindRequest {
-                        table: table.clone(),
-                        snapshot_upper: snapshot_gtid_frontier.clone(),
-                    };
-                    rewinds_handle.give(&rewind_cap_set[0], req);
+                for (table, outputs) in reader_snapshot_table_info {
+                    for output in outputs {
+                        trace!(%id, "timely-{worker_id} producing rewind request for {table}\
+                                     output {}", output.output_index);
+                        let req = RewindRequest {
+                            output_index: output.output_index,
+                            snapshot_upper: snapshot_gtid_frontier.clone(),
+                        };
+                        rewinds_handle.give(&rewind_cap_set[0], req);
+                    }
                 }
                 *rewind_cap_set = CapabilitySet::new();
 
-                if snapshot_staged < snapshot_total {
-                    error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow
-                                 bigger than records staged {snapshot_staged}");
-                    snapshot_staged = snapshot_total;
+                // TODO (maz): Should we remove this to match Postgres?
+                if snapshot_staged_total < snapshot_total {
+                    error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow \
+                                 bigger than records staged {snapshot_staged_total}");
                 }
-                stats_output.give(
-                    &stats_cap[0],
-                    ProgressStatisticsUpdate::Snapshot {
-                        records_known: snapshot_total,
-                        records_staged: snapshot_staged,
-                    },
-                );
+
                 Ok(())
             }))
         });
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
 
-    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
+    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
     (
         raw_data.as_collection(),
         rewinds,
-        stats_stream,
         errors,
         button.press_on_drop(),
     )
 }
 
-/// Fetch the size of the snapshot on this worker.
-async fn fetch_snapshot_size<'a, Q>(
+/// Fetch the size of the snapshot on this worker and emits the appropriate emtrics and statistics
+/// for each table.
+async fn fetch_snapshot_size<Q>(
     conn: &mut Q,
-    tables: Vec<MySqlTableName>,
+    tables: Vec<(MySqlTableName, usize, &Vec<SourceStatistics>)>,
     metrics: MySqlSnapshotMetrics,
 ) -> Result<u64, anyhow::Error>
 where
     Q: Queryable,
 {
     let mut total = 0;
-    for table in tables {
+    for (table, num_outputs, export_statistics) in tables {
         let stats = collect_table_statistics(conn, &table).await?;
         metrics.record_table_count_latency(table.1, table.0, stats.count_latency);
-        total += stats.count;
+        for export_stat in export_statistics {
+            export_stat.set_snapshot_records_known(stats.count);
+            export_stat.set_snapshot_records_staged(0);
+        }
+        total += stats.count * u64::cast_from(num_outputs);
     }
     Ok(total)
+}
+
+/// Builds the SQL query to be used for creating the snapshot using the first entry in outputs.
+///
+/// Expect `outputs` to contain entries for a single table, and to have at least 1 entry.
+/// Expect that each MySqlTableDesc entry contains all columns described in information_schema.columns.
+#[must_use]
+fn build_snapshot_query(outputs: &[SourceOutputInfo]) -> String {
+    let info = outputs.first().expect("MySQL table info");
+    for output in &outputs[1..] {
+        // the columns may be decoded based on position, and different outputs may replicate
+        // different columns, so we need to ensure that all columns are accounted for.
+        assert!(
+            info.desc.columns.len() == output.desc.columns.len(),
+            "Mismatch in table descriptions for {}",
+            info.table_name
+        );
+    }
+    let columns = info
+        .desc
+        .columns
+        .iter()
+        .map(|col| quote_identifier(&col.name))
+        .join(", ");
+    format!("SELECT {} FROM {}", columns, info.table_name)
 }
 
 #[derive(Default)]
@@ -543,4 +575,51 @@ where
     stats.count = count_row.ok_or_else(|| anyhow::anyhow!("failed to COUNT(*) {table}"))?;
 
     Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_mysql_util::{MySqlColumnDesc, MySqlTableDesc};
+    use timely::progress::Antichain;
+
+    #[mz_ore::test]
+    fn snapshot_query_duplicate_table() {
+        let schema_name = "myschema".to_string();
+        let table_name = "mytable".to_string();
+        let table = MySqlTableName(schema_name.clone(), table_name.clone());
+        let columns = ["c1", "c2", "c3"]
+            .iter()
+            .map(|col| MySqlColumnDesc {
+                name: col.to_string(),
+                column_type: None,
+                meta: None,
+            })
+            .collect::<Vec<_>>();
+        let desc = MySqlTableDesc {
+            schema_name: schema_name.clone(),
+            name: table_name.clone(),
+            columns,
+            keys: BTreeSet::default(),
+        };
+        let info = SourceOutputInfo {
+            output_index: 1, // ignored
+            table_name: table.clone(),
+            desc,
+            text_columns: vec![],
+            exclude_columns: vec![],
+            initial_gtid_set: Antichain::default(),
+            resume_upper: Antichain::default(),
+            export_id: mz_repr::GlobalId::User(1),
+            binlog_full_metadata: false,
+        };
+        let query = build_snapshot_query(&[info.clone(), info]);
+        assert_eq!(
+            format!(
+                "SELECT `c1`, `c2`, `c3` FROM `{}`.`{}`",
+                &schema_name, &table_name
+            ),
+            query
+        );
+    }
 }

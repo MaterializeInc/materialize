@@ -9,12 +9,14 @@
 
 """Buildkite utilities."""
 
-import hashlib
 import os
+import subprocess
 from collections.abc import Callable
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any, TypeVar
+
+import yaml
 
 from materialize import git, spawn, ui
 
@@ -24,6 +26,7 @@ T = TypeVar("T")
 class BuildkiteEnvVar(Enum):
     # environment
     BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE = auto()
+    BUILDKITE_AGENT_META_DATA_INSTANCE_TYPE = auto()
 
     # build
     BUILDKITE_PULL_REQUEST = auto()
@@ -41,7 +44,6 @@ class BuildkiteEnvVar(Enum):
     BUILDKITE_PARALLEL_JOB = auto()
     BUILDKITE_PARALLEL_JOB_COUNT = auto()
     BUILDKITE_STEP_KEY = auto()
-    BUILDKITE_STEP_LABEL = auto()
     # will be the same for sharded and retried build steps
     BUILDKITE_STEP_ID = auto()
     # assumed to be unique
@@ -73,7 +75,7 @@ def is_in_pull_request() -> bool:
     if git.is_on_release_version():
         return False
 
-    if git.contains_commit("HEAD", "main", fetch=True):
+    if git.contains_commit("HEAD", "main"):
         return False
 
     return True
@@ -101,7 +103,7 @@ def get_pipeline_default_branch(fallback: str = "main"):
 def get_merge_base(url: str = "https://github.com/MaterializeInc/materialize") -> str:
     base_branch = get_pull_request_base_branch() or get_pipeline_default_branch()
     merge_base = git.get_common_ancestor_commit(
-        remote=git.get_remote(url), branch=base_branch, fetch_branch=True
+        remote=git.get_remote(url), branch=base_branch
     )
     return merge_base
 
@@ -119,7 +121,7 @@ def inline_link(url: str, label: str | None = None) -> str:
 
 def inline_image(url: str, alt: str) -> str:
     """See https://buildkite.com/docs/pipelines/links-and-images-in-log-output#images-syntax-for-inlining-images"""
-    content = f"url='\"{url}\"';alt='\"{alt}\"'"
+    content = f"url='{url}';alt='{alt}'"
     # These escape codes are not supported by terminals
     return f"\033]1338;{content}\a" if is_in_buildkite() else f"{alt},{url}"
 
@@ -155,15 +157,19 @@ def find_modified_lines() -> set[tuple[str, int]]:
     return modified_lines
 
 
-def upload_artifact(path: Path | str, cwd: Path | None = None):
-    spawn.runv(
-        [
-            "buildkite-agent",
-            "artifact",
-            "upload",
-            path,
-        ],
-        cwd=cwd,
+def upload_artifact(path: Path | str, cwd: Path | None = None, quiet: bool = False):
+    spawn.run_with_retries(
+        lambda: spawn.runv(
+            [
+                "buildkite-agent",
+                "artifact",
+                "upload",
+                "--log-level",
+                "fatal" if quiet else "notice",
+                path,
+            ],
+            cwd=cwd,
+        )
     )
 
 
@@ -175,25 +181,6 @@ def get_parallelism_index() -> int:
 def get_parallelism_count() -> int:
     _validate_parallelism_configuration()
     return int(get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB_COUNT, 1))
-
-
-def _accepted_by_shard(
-    identifier: str,
-    parallelism_index: int | None = None,
-    parallelism_count: int | None = None,
-) -> bool:
-    if parallelism_index is None:
-        parallelism_index = get_parallelism_index()
-    if parallelism_count is None:
-        parallelism_count = get_parallelism_count()
-
-    if parallelism_count == 1:
-        return True
-
-    hash_value = int.from_bytes(
-        hashlib.md5(identifier.encode("utf-8")).digest(), byteorder="big"
-    )
-    return hash_value % parallelism_count == parallelism_index
 
 
 def _upload_shard_info_metadata(items: list[str]) -> None:
@@ -209,23 +196,23 @@ def notify_qa_team_about_failure(failure: str) -> None:
     if not is_in_buildkite():
         return
 
-    # TODO(def-) Reenable after figuring out how to make it write only once
-    # step_label = get_var(BuildkiteEnvVar.BUILDKITE_STEP_LABEL)
-    # message = f"{step_label}: {failure}"
-    # print(message)
-    # pipeline = {
-    #     "notify": [
-    #         {
-    #             "slack": {
-    #                 "channels": ["#team-testing-bots"],
-    #                 "message": message,
-    #             }
-    #         }
-    #     ]
-    # }
-    # spawn.runv(
-    #     ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
-    # )
+    label = get_var(BuildkiteEnvVar.BUILDKITE_LABEL)
+    message = f"{label}: {failure}"
+    print(message)
+    pipeline = {
+        "notify": [
+            {
+                "slack": {
+                    "channels": ["#team-testing-bots"],
+                    "message": message,
+                },
+                "if": 'build.state == "passed" || build.state == "failed" || build.state == "canceled"',
+            }
+        ]
+    }
+    spawn.runv(
+        ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
+    )
 
 
 def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
@@ -240,8 +227,8 @@ def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
 
     accepted_items = [
         item
-        for item in items
-        if _accepted_by_shard(to_identifier(item), parallelism_index, parallelism_count)
+        for i, item in enumerate(items)
+        if i % parallelism_count == parallelism_index
     ]
 
     if is_in_buildkite() and accepted_items:
@@ -324,3 +311,10 @@ def get_job_url_from_pipeline_and_build(
 ) -> str:
     build_url = f"https://buildkite.com/materialize/{pipeline}/builds/{build_number}"
     return get_job_url_from_build_url(build_url, build_job_id)
+
+
+def get_build_status(build: str) -> str:
+    return spawn.capture(
+        ["buildkite-agent", "meta-data", "get", build],
+        stderr=subprocess.DEVNULL,
+    )

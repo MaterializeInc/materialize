@@ -9,9 +9,9 @@
 
 import argparse
 
-import pg8000
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
+import psycopg
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition
@@ -51,6 +51,9 @@ from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.runner.test_runner import ConsistencyTestRunner
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
+from materialize.output_consistency.validation.error_message_normalizer import (
+    ErrorMessageNormalizer,
+)
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
@@ -79,6 +82,7 @@ class OutputConsistencyTest:
             args.max_cols_per_query,
             override_max_runtime_in_sec or args.max_runtime_in_sec,
             args.max_iterations,
+            args.max_failures_until_abort,
             args.avoid_expressions_expecting_db_error,
             args.disable_predefined_queries,
             query_output_mode=query_output_mode,
@@ -107,6 +111,7 @@ class OutputConsistencyTest:
         parser.add_argument("--max-cols-per-query", default=20, type=int)
         parser.add_argument("--max-runtime-in-sec", default=600, type=int)
         parser.add_argument("--max-iterations", default=100000, type=int)
+        parser.add_argument("--max-failures-until-abort", default=15, type=int)
         parser.add_argument(
             "--avoid-expressions-expecting-db-error",
             default=False,
@@ -133,6 +138,7 @@ class OutputConsistencyTest:
         max_cols_per_query: int,
         max_runtime_in_sec: int,
         max_iterations: int,
+        max_failures_until_abort: int,
         avoid_expressions_expecting_db_error: bool,
         disable_predefined_queries: bool,
         query_output_mode: QueryOutputMode,
@@ -141,15 +147,18 @@ class OutputConsistencyTest:
 
         scenario = self.get_scenario()
 
+        if fail_fast:
+            max_failures_until_abort = 1
+
         config = ConsistencyTestConfiguration(
             random_seed=random_seed,
             scenario=scenario,
             dry_run=dry_run,
-            fail_fast=fail_fast,
             verbose_output=verbose_output,
             max_cols_per_query=max_cols_per_query,
             max_runtime_in_sec=max_runtime_in_sec,
             max_iterations=max_iterations,
+            max_failures_until_abort=max_failures_until_abort,
             avoid_expressions_expecting_db_error=avoid_expressions_expecting_db_error,
             queries_per_tx=20,
             max_pending_expressions=100,
@@ -158,6 +167,7 @@ class OutputConsistencyTest:
             print_reproduction_code=True,
             disable_predefined_queries=disable_predefined_queries,
             query_output_mode=query_output_mode,
+            vertical_join_tables=4,
         )
 
         output_printer = OutputPrinter(input_data, config.query_output_mode)
@@ -183,7 +193,7 @@ class OutputConsistencyTest:
             config, randomized_picker, input_data
         )
         query_generator = QueryGenerator(
-            config, randomized_picker, input_data, ignore_filter
+            config, randomized_picker, input_data, expression_generator, ignore_filter
         )
         output_comparator = self.create_result_comparator(ignore_filter)
 
@@ -293,7 +303,7 @@ class OutputConsistencyTest:
     def create_result_comparator(
         self, ignore_filter: GenericInconsistencyIgnoreFilter
     ) -> ResultComparator:
-        return ResultComparator(ignore_filter)
+        return ResultComparator(ignore_filter, ErrorMessageNormalizer())
 
     def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
         return InternalOutputInconsistencyIgnoreFilter()
@@ -343,8 +353,8 @@ def connect(host: str, port: int, user: str, password: str | None = None) -> Con
         print(
             f"Connecting to database (host={host}, port={port}, user={user}, password={'****' if password else 'None'})"
         )
-        return pg8000.connect(host=host, port=port, user=user, password=password)
-    except InterfaceError:
+        return psycopg.connect(host=host, port=port, user=user, password=password)
+    except OperationalError:
         print(f"Connecting to database failed (host={host}, port={port}, user={user})!")
         raise
 
@@ -368,7 +378,7 @@ def main() -> int:
     try:
         default_connection = connect(args.host, args.port, default_db_user)
         mz_system_connection = connect(args.host, args.system_port, mz_system_db_user)
-    except InterfaceError:
+    except OperationalError:
         return 1
 
     result = test.run_output_consistency_tests(

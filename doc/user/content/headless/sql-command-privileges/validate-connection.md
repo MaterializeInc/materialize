@@ -1,0 +1,5 @@
+---
+headless: true
+---
+- `USAGE` privileges on the containing schema.
+- `USAGE` privileges on the connection.

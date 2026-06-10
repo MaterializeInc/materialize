@@ -11,6 +11,7 @@
 
 import argparse
 import atexit
+import json
 import os
 import pathlib
 import shlex
@@ -25,9 +26,14 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import psutil
+import psycopg
 
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
-from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose import (
+    bootstrap_cluster_replica_size,
+    cluster_replica_size_map,
+    get_default_system_parameters,
+)
 from materialize.ui import UIError
 from materialize.xcompile import Arch
 
@@ -40,6 +46,9 @@ SANITIZER_TARGET = (
     else f"{Arch.host()}-apple-darwin"
 )
 DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
+MZDATA = MZ_ROOT / "mzdata"
+DEFAULT_BLOB = f"file://{MZDATA}/persist/blob"
+RUST_MIN_STACK = os.getenv("RUST_MIN_STACK", "8388608")
 
 # sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
 MACOS_ENTITLEMENTS_DATA = """
@@ -52,6 +61,32 @@ MACOS_ENTITLEMENTS_DATA = """
     </dict>
 </plist>
 """
+
+
+def update_sqlite_repo() -> None:
+    """Since the SQLite SLT repository is >2x the size of the entire Materialize repository we don't want it as a submodule for everyone to have to fetch, especially in CI. Instead only clone it when we run the tests."""
+    path = pathlib.Path(MZ_ROOT / "test" / "sqllogictest" / "sqlite")
+    if (path / ".git").is_dir():
+        if ui.env_is_truthy("CI"):
+            spawn.runv(["git", "-C", str(path), "pull"])
+        else:
+            spawn.runv(["git", "-C", str(path), "fetch"])
+            local = spawn.capture(["git", "-C", str(path), "rev-parse", "@"])
+            remote = spawn.capture(["git", "-C", str(path), "rev-parse", "@{upstream}"])
+            if local != remote:
+                spawn.runv(["git", "-C", str(path), "pull"])
+    else:
+        path.mkdir(exist_ok=True)
+        spawn.runv(
+            [
+                "git",
+                "clone",
+                # This is currently way slower, I guess GitHub doesn't have it cached:
+                # "--depth=1",
+                "https://github.com/MaterializeInc/sqllogictest",
+                str(path),
+            ]
+        )
 
 
 def main() -> int:
@@ -81,8 +116,18 @@ def main() -> int:
         default=os.getenv("MZDEV_POSTGRES", DEFAULT_POSTGRES),
     )
     parser.add_argument(
+        "--blob",
+        help="Blob storage connection string",
+        default=os.getenv("MZDEV_BLOB", DEFAULT_BLOB),
+    )
+    parser.add_argument(
         "--release",
         help="Build artifacts in release mode, with optimizations",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--optimized",
+        help="Build artifacts in optimized mode, with optimizations (but no LTO and debug symbols)",
         action="store_true",
     )
     parser.add_argument(
@@ -97,6 +142,11 @@ def main() -> int:
     parser.add_argument(
         "--no-default-features",
         help="Do not activate the `default` feature",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--foundationdb",
+        help="Build with the foundationdb feature, enabling FoundationDB as a consensus and timestamp oracle backend",
         action="store_true",
     )
     parser.add_argument(
@@ -130,7 +180,7 @@ def main() -> int:
     parser.add_argument(
         "--coverage",
         help="Build with coverage",
-        default=False,
+        default=ui.env_is_truthy("CI_COVERAGE_ENABLED"),
         action="store_true",
     )
     parser.add_argument(
@@ -150,10 +200,9 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
-        "--bazel",
-        help="Build with Bazel (not supported by all options)",
-        default=False,
-        action="store_true",
+        "--listeners-config-path",
+        help="Path to json file with environmentd listeners configuration.",
+        default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
     )
     args = parser.parse_intermixed_args()
 
@@ -165,14 +214,9 @@ def main() -> int:
 
     env = dict(os.environ)
     if args.program in KNOWN_PROGRAMS:
-        if args.bazel:
-            build_func = _bazel_build
-        else:
-            build_func = _cargo_build
+        build_func = _cargo_build
 
-        (build_retcode, built_programs) = build_func(
-            args, extra_programs=[args.program]
-        )
+        build_retcode, built_programs = build_func(args, extra_programs=[args.program])
 
         if args.build_only:
             return build_retcode
@@ -183,8 +227,6 @@ def main() -> int:
                     _macos_codesign(program)
             if sys.platform != "darwin":
                 print("Ignoring --enable-mac-codesigning since we're not on macOS")
-        else:
-            print("Disabled macOS Codesigning")
 
         if args.wrapper:
             command = shlex.split(args.wrapper)
@@ -213,14 +255,13 @@ def main() -> int:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
-            mzdata = MZ_ROOT / "mzdata"
             scratch = MZ_ROOT / "scratch"
-            db = urlparse(args.postgres).path.removeprefix("/")
-            _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
-            for schema in ["consensus", "tsoracle", "storage"]:
-                if args.reset:
-                    _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-                _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            dbconn = _connect_sql(args.postgres)
+            if dbconn:
+                for schema in ["consensus", "tsoracle", "storage"]:
+                    if args.reset:
+                        _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+                    _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
             # Keep this after clearing out Postgres. Otherwise there is a race
             # where a ctrl-c could leave persist with references in Postgres to
             # files that have been deleted. There's no race if we reset in the
@@ -228,10 +269,10 @@ def main() -> int:
             if args.reset:
                 # Remove everything in the `mzdata`` directory *except* for
                 # the `prometheus` directory and all contents of `tempo`.
-                paths = list(mzdata.glob("prometheus/*"))
+                paths = list(MZDATA.glob("prometheus/*"))
                 paths.extend(
                     p
-                    for p in mzdata.glob("*")
+                    for p in MZDATA.glob("*")
                     if p.name != "prometheus" and p.name != "tempo"
                 )
                 paths.extend(p for p in scratch.glob("*"))
@@ -242,61 +283,98 @@ def main() -> int:
                     else:
                         path.unlink()
 
-            mzdata.mkdir(exist_ok=True)
+            MZDATA.mkdir(exist_ok=True)
             scratch.mkdir(exist_ok=True)
-            environment_file = mzdata / "environment-id"
+            environment_file = MZDATA / "environment-id"
             try:
                 environment_id = environment_file.read_text().rstrip()
             except FileNotFoundError:
                 environment_id = f"local-az1-{uuid.uuid4()}-0"
                 environment_file.write_text(environment_id)
 
+            print(f"persist-blob-url: {args.blob}")
+            print(f"listeners config path: {args.listeners_config_path}")
             command += [
-                # Setting the listen addresses below to 0.0.0.0 is required
-                # to allow Prometheus running in Docker (misc/prometheus)
-                # access these services to scrape metrics.
-                "--internal-http-listen-addr=0.0.0.0:6878",
+                f"--listeners-config-path={args.listeners_config_path}",
                 "--orchestrator=process",
-                f"--orchestrator-process-secrets-directory={mzdata}/secrets",
+                f"--orchestrator-process-secrets-directory={MZDATA}/secrets",
                 "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
-                f"--orchestrator-process-prometheus-service-discovery-directory={mzdata}/prometheus",
+                f"--orchestrator-process-prometheus-service-discovery-directory={MZDATA}/prometheus",
                 f"--orchestrator-process-scratch-directory={scratch}",
                 "--secrets-controller=local-file",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
-                f"--persist-blob-url=file://{mzdata}/persist/blob",
+                f"--persist-blob-url={args.blob}",
                 f"--timestamp-oracle-url={args.postgres}?options=--search_path=tsoracle",
                 f"--environment-id={environment_id}",
                 "--bootstrap-role=materialize",
+                f"--cluster-replica-sizes={json.dumps(cluster_replica_size_map())}",
+                f"--bootstrap-default-cluster-replica-size={bootstrap_cluster_replica_size()}",
                 *args.args,
             ]
             if args.monitoring:
                 command += ["--opentelemetry-endpoint=http://localhost:4317"]
+            # Common stack overflows in Debug mode
+            if not args.release and not args.optimized:
+                env["RUST_MIN_STACK"] = RUST_MIN_STACK
         elif args.program == "sqllogictest":
-            formatted_params = [
-                f"{key}={value}" for key, value in DEFAULT_SYSTEM_PARAMETERS.items()
-            ]
-            env["MZ_SYSTEM_PARAMETER_DEFAULT"] = ";".join(formatted_params)
-            db = urlparse(args.postgres).path.removeprefix("/")
-            _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
-            command += [f"--postgres-url={args.postgres}", *args.args]
-    elif args.program == "test":
-        if args.bazel:
-            raise UIError(
-                "testing with Bazel is not yet supported, go bug Parker about it"
-            )
+            for arg in args.args:
+                if arg.startswith("test/sqllogictest/sqlite/") or arg.startswith(
+                    "./test/sqllogictest/sqlite/"
+                ):
+                    update_sqlite_repo()
+                    break
 
-        (build_retcode, _) = _cargo_build(args)
+            formatted_params = [
+                f"{key}={value}"
+                for key, value in get_default_system_parameters().items()
+            ]
+
+            system_parameter_default = ";".join(formatted_params)
+            # Connect to the database to ensure it exists.
+            _connect_sql(args.postgres)
+            command += [
+                f"--postgres-url={args.postgres}",
+                f"--system-parameter-default={system_parameter_default}",
+                *args.args,
+            ]
+            # Common stack overflows in Debug mode
+            if not args.release and not args.optimized:
+                env["RUST_MIN_STACK"] = RUST_MIN_STACK
+            # Always enable soft assertions in SLTs for un-redacted debug formatting and additional testing.
+            env["MZ_SOFT_ASSERTIONS"] = "1"
+    elif args.program == "test":
+        build_retcode, _ = _cargo_build(args)
         if args.build_only:
             return build_retcode
 
-        command = _cargo_command(args, "test")
+        try:
+            subprocess.check_output(
+                _cargo_command(args, "nextest") + ["--version"],
+                env=env,
+                stderr=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError:
+            raise UIError("cargo nextest not found, run `cargo install cargo-nextest`")
+
+        command = _cargo_command(args, "nextest", "run")
+
+        features = []
+        if args.foundationdb:
+            features.append("foundationdb")
+        if args.features:
+            features.extend(args.features.split(","))
+        if features:
+            command += [f"--features={','.join(features)}"]
+
         for package in args.package:
             command += ["--package", package]
         for test in args.test:
             command += ["--test", test]
         command += args.args
-        command += ["--", "--nocapture"]
-        env["COCKROACH_URL"] = args.postgres
+        env["METADATA_BACKEND_URL"] = args.postgres
+        # some tests run into stack overflows
+        env["RUST_MIN_STACK"] = RUST_MIN_STACK
+        dbconn = _connect_sql(args.postgres)
     else:
         raise UIError(f"unknown program {args.program}")
 
@@ -336,7 +414,8 @@ def main() -> int:
     os.setpgid(child_pid, child_pid)
 
     # Then, spawn the desired command.
-    print(f"$ {' '.join(command)}")
+    if args.program != "sqllogictest":
+        print(f"$ {' '.join(command)}")
     if args.program == "environmentd":
         # Automatically restart `environmentd` after it halts, but not more than
         # once every 5s to prevent hot loops. This simulates what happens when
@@ -347,7 +426,7 @@ def main() -> int:
         while True:
             last_start_time = datetime.now()
             proc = subprocess.run(command, env=env)
-            if proc.returncode == 2:
+            if proc.returncode == 166:
                 wait = max(
                     timedelta(seconds=5) - (datetime.now() - last_start_time),
                     timedelta(seconds=0),
@@ -362,48 +441,6 @@ def main() -> int:
     exit(proc.returncode)
 
 
-def _bazel_build(
-    args: argparse.Namespace, extra_programs: list[str] = []
-) -> tuple[int, list[str]]:
-    dict(os.environ)
-    command = _bazel_command(args, ["build"])
-
-    programs = [*REQUIRED_SERVICES, *extra_programs]
-    targets = [_bazel_target(program) for program in programs]
-    command += targets
-
-    completed_proc = spawn.runv(command)
-    artifacts = [str(_bazel_artifact_path(args, t)) for t in targets]
-
-    return (completed_proc.returncode, artifacts)
-
-
-def _bazel_target(program: str) -> str:
-    if program == "environmentd":
-        return "//src/environmentd:environmentd"
-    elif program == "clusterd":
-        return "//src/clusterd:clusterd"
-    elif program == "sqllogictest":
-        return "//src/sqllogictest:sqllogictest"
-    else:
-        raise UIError(f"unknown program {program}")
-
-
-def _bazel_command(args: argparse.Namespace, subcommands: list[str]) -> list[str]:
-    command = ["bazel"] + subcommands
-
-    if args.release:
-        command += ["-c", "opt"]
-    return command
-
-
-def _bazel_artifact_path(args: argparse.Namespace, program: str) -> pathlib.Path:
-    cmd = _bazel_command(args, ["cquery", "--output=files"]) + [program]
-    raw_path = subprocess.check_output(cmd, text=True)
-    relative_path = pathlib.Path(raw_path.strip())
-    return MZ_ROOT / relative_path
-
-
 def _cargo_build(
     args: argparse.Namespace, extra_programs: list[str] = []
 ) -> tuple[int, list[str]]:
@@ -415,6 +452,7 @@ def _cargo_build(
         env["RUSTFLAGS"] = (
             env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.coverage)
         )
+        env["LLVM_PROFILE_FILE"] = "/dev/null"
     if args.sanitizer != "none":
         env["RUSTFLAGS"] = (
             env.get("RUSTFLAGS", "")
@@ -436,6 +474,8 @@ def _cargo_build(
             + " "
             + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
         )
+    if args.foundationdb:
+        features.append("foundationdb")
     if args.features:
         features.extend(args.features.split(","))
     if features:
@@ -444,20 +484,31 @@ def _cargo_build(
     programs = [*REQUIRED_SERVICES, *extra_programs]
     for program in programs:
         command += ["--bin", program]
-    completed_proc = spawn.runv(command, env=env)
+    completed_proc = spawn.runv(
+        command,
+        env=env,
+        cwd=pathlib.Path(
+            os.path.abspath(os.path.join(os.path.realpath(sys.argv[0]), "../.."))
+        ),
+    )
 
     artifacts = [str(_cargo_artifact_path(args, program)) for program in programs]
 
     return (completed_proc.returncode, artifacts)
 
 
-def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
+def _cargo_command(args: argparse.Namespace, *subcommands: str) -> list[str]:
     command = ["cargo"]
     if args.channel:
         command += [args.channel]
-    command += [subcommand]
+    command += subcommands
     if args.release:
         command += ["--release"]
+    if args.optimized:
+        command += [
+            "--cargo-profile" if subcommands == ("nextest", "run") else "--profile",
+            "optimized",
+        ]
     if args.timings:
         command += ["--timings"]
     if args.no_default_features:
@@ -468,16 +519,11 @@ def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
 
 
 def _cargo_artifact_path(args: argparse.Namespace, program: str) -> pathlib.Path:
-    if args.release:
-        if args.sanitizer != "none":
-            artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / "release"
-        else:
-            artifact_path = MZ_ROOT / "target" / "release"
+    dir_name = "release" if args.release else "optimized" if args.optimized else "debug"
+    if args.sanitizer != "none":
+        artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / dir_name
     else:
-        if args.sanitizer != "none":
-            artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / "debug"
-        else:
-            artifact_path = MZ_ROOT / "target" / "debug"
+        artifact_path = MZ_ROOT / "target" / dir_name
 
     return artifact_path / program
 
@@ -498,14 +544,57 @@ def _macos_codesign(path: str) -> None:
     spawn.runv(command, env=env)
 
 
-def _run_sql(url: str, sql: str) -> None:
+def _connect_sql(urlstr: str) -> psycopg.Connection | None:
+    if urlstr.startswith("foundationdb:"):
+        return None
+
+    hint = """Have you correctly configured CockroachDB or PostgreSQL?
+
+For CockroachDB:
+    Follow the instructions in doc/developer/guide.md#CockroachDB
+
+For PostgreSQL:
+    1. Install PostgreSQL
+    2. Create a database: `createdb materialize`
+    3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://$(whoami)@localhost/materialize`"""
     try:
-        spawn.runv(["psql", "-AtX", url, "-c", sql])
-    except Exception as e:
+        dbconn = psycopg.connect(urlstr)
+        dbconn.autocommit = True
+    except psycopg.DatabaseError as e:
         raise UIError(
-            f"unable to execute postgres statement: {e}",
-            hint="Have you installed and started CockroachDB?",
+            f"unable to connect to metadata database: {e}",
+            hint=hint,
         )
+    except psycopg.InterfaceError as e:
+        raise UIError(
+            f"unable to connect to metadata database: {e}",
+            hint=hint,
+        )
+
+    # For CockroachDB, after connecting, we can ensure the database exists. For
+    # PostgreSQL, the database must exist for us to connect to it at all--we
+    # declare it to be the user's problem to create this database.
+    url = urlparse(urlstr)
+    database = url.path.removeprefix("/")
+    with dbconn.cursor() as cur:
+        try:
+            cur.execute("SHOW crdb_version")
+            if not database:
+                raise UIError(
+                    f"database name is missing in the postgres URL: {urlstr}",
+                    hint="When connecting to CockroachDB, the database name is required.",
+                )
+        except psycopg.errors.UndefinedObject:
+            return dbconn
+
+    _run_sql(dbconn, f"CREATE DATABASE IF NOT EXISTS {database}")
+    return dbconn
+
+
+def _run_sql(conn: psycopg.Connection, sql: str) -> None:
+    print(f"> {sql}")
+    with conn.cursor() as cur:
+        cur.execute(sql.encode("utf-8"))
 
 
 def _handle_lingering_services(kill: bool = False) -> None:

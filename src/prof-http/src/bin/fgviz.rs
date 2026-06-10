@@ -21,7 +21,7 @@ fn main() {
         })
         .unwrap_or_else(|| "".into());
     let rendered = FlamegraphTemplate {
-        version: &bi.human_version(),
+        version: &bi.human_version(None),
         title: "Flamegraph Visualizer",
         mzfg: &mzfg,
     }

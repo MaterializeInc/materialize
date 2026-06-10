@@ -8,43 +8,37 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized
-view.
+`CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized view.
 
-Indexes assemble and maintain a query's results in memory within a [cluster](/concepts/clusters/),
-which provides future queries the data
-they need in a format they can immediately use. In particular, creating indexes
-can be very helpful for the [`JOIN`](../join) operator, which needs to build
-and maintain the appropriate indexes if they do not otherwise exist.
+In Materialize, indexes store query results in memory within a specific [cluster](/concepts/clusters/), and keep these results **incrementally updated** as new data arrives. This ensures that indexed data remains [fresh](/concepts/reaction-time), reflecting the latest changes with minimal latency.
 
-### Usage patterns
+The primary use case for indexes is to accelerate direct queries issued via [`SELECT`](/sql/select/) statements.
+By maintaining fresh, up-to-date results in memory, indexes can significantly [optimize query performance](/transform-data/optimization/), reducing both response time and compute load—especially for resource-intensive operations such as joins, aggregations, and repeated subqueries.
 
-You might want to create indexes when...
+Because indexes are scoped to a single cluster, they are most useful for accelerating queries within that cluster. For results that must be shared across clusters or persisted to durable storage, consider using a [materialized view](/sql/create-materialized-view), which also maintains fresh results but is accessible system-wide.
 
--   You want to use non-primary keys (e.g. foreign keys) as a join condition. In
-    this case, you could create an index on the columns in the join condition.
--   You want to speed up searches filtering by literal values or expressions.
-
-[//]: # "TODO(morsapaes) Point to relevant operational guide on indexes once
-this exists."
 
 ## Syntax
 
-{{< diagram "create-index.svg" >}}
+{{< tabs >}}
+{{< tab "CREATE INDEX" >}}
+### Create index
 
-### `with_options`
+Create an index using the specified columns as the index key.
 
-{{< diagram "with-options-retain-history.svg" >}}
+{{% include-syntax file="examples/create_index" example="syntax" %}}
 
-Field | Use
-------|-----
-**DEFAULT** | Creates a default index using a set of columns that uniquely identify each row. If this set of columns can't be inferred, all columns are used.
-_index&lowbar;name_ | A name for the index.
-_obj&lowbar;name_ | The name of the source, view, or materialized view on which you want to create an index.
-_cluster_name_ | The [cluster](/sql/create-cluster) to maintain this index. If not specified, defaults to the active cluster.
-_method_ | The name of the index method to use. The only supported method is [`arrangement`](/overview/arrangements).
-_col&lowbar;expr_**...** | The expressions to use as the key for the index.
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{< /tab >}}
+{{< tab "CREATE DEFAULT INDEX" >}}
+### Create default index
+
+Create a default index using a set of columns that uniquely identify each row.
+If this set of columns cannot be inferred, all columns are used.
+
+{{% include-syntax file="examples/create_index" example="syntax-default" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Details
 
@@ -92,13 +86,34 @@ When creating your own indexes, you can choose the indexed expressions.
 The in-memory sizes of indexes are proportional to the current size of the source
 or view they represent. The actual amount of memory required depends on several
 details related to the rate of compaction and the representation of the types of
-data in the source or view. We are working on a feature to let you see the size
-each index consumes {{% gh 1532 %}}.
+data in the source or view.
 
 Creating an index may also force the first materialization of a view, which may
 cause Materialize to install a dataflow to determine and maintain the results of
 the view. This dataflow may have a memory footprint itself, in addition to that
 of the index.
+
+#### Best practices
+
+{{% include-from-yaml data="index_view_details" name="index-best-practices" %}}
+
+### Usage patterns
+
+#### Indexes on views vs. materialized views
+
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern-intro" %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
+
+#### Indexes and query optimizations
+
+You might want to create indexes when...
+
+-   You want to use non-primary keys (e.g. foreign keys) as a join condition. In
+    this case, you could create an index on the columns in the join condition.
+-   You want to speed up searches filtering by literal values or expressions.
+
+{{% include-from-yaml data="index_view_details" name="index-query-optimization-specific-instances" %}}
+
 
 ## Examples
 
@@ -168,11 +183,7 @@ For more details on using indexes to optimize queries, see [Optimization](../../
 
 The privileges required to execute this statement are:
 
-- Ownership of `obj_name`.
-- `CREATE` privileges on the containing schema.
-- `CREATE` privileges on the containing cluster.
-- `USAGE` privileges on all types used in the index definition.
-- `USAGE` privileges on the schemas that all types in the statement are contained in.
+{{% include-headless "/headless/sql-command-privileges/create-index" %}}
 
 ## Related pages
 

@@ -43,6 +43,7 @@ class DbOperationOrFunction:
         return_type_spec: ReturnTypeSpec,
         args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
+        is_table_function: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         comment: str | None = None,
         is_enabled: bool = True,
@@ -63,6 +64,7 @@ class DbOperationOrFunction:
         self.return_type_spec = return_type_spec
         self.args_validators: set[OperationArgsValidator] = args_validators
         self.is_aggregation = is_aggregation
+        self.is_table_function = is_table_function
         self.relevance = relevance
         self.comment = comment
         self.is_enabled = is_enabled
@@ -198,6 +200,7 @@ class DbFunction(DbOperationOrFunction):
         return_type_spec: ReturnTypeSpec,
         args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
+        is_table_function: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         comment: str | None = None,
         is_enabled: bool = True,
@@ -214,6 +217,7 @@ class DbFunction(DbOperationOrFunction):
             return_type_spec=return_type_spec,
             args_validators=args_validators,
             is_aggregation=is_aggregation,
+            is_table_function=is_table_function,
             relevance=relevance,
             comment=comment,
             is_enabled=is_enabled,
@@ -262,6 +266,7 @@ class DbFunctionWithCustomPattern(DbFunction):
         return_type_spec: ReturnTypeSpec,
         args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
+        is_table_function: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         comment: str | None = None,
         is_enabled: bool = True,
@@ -273,6 +278,7 @@ class DbFunctionWithCustomPattern(DbFunction):
             return_type_spec,
             args_validators=args_validators,
             is_aggregation=is_aggregation,
+            is_table_function=is_table_function,
             relevance=relevance,
             comment=comment,
             is_enabled=is_enabled,

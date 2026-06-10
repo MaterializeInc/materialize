@@ -14,10 +14,12 @@ from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
 from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
 from materialize.checks.executors import Executor
+from materialize.checks.features import Features
 from materialize.checks.mzcompose_actions import (
     ConfigureMz,
     KillClusterdCompute,
     KillMz,
+    SetupSqlServerTesting,
     StartClusterdCompute,
     StartMz,
     UseClusterdCompute,
@@ -45,10 +47,15 @@ from materialize.mz_version import MzVersion
 
 class Scenario:
     def __init__(
-        self, checks: list[type[Check]], executor: Executor, seed: str | None = None
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
     ) -> None:
         self._checks = checks
         self.executor = executor
+        self.features = features
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
 
@@ -82,12 +89,20 @@ class Scenario:
         if not isinstance(actions[0], StartMz):
             actions.insert(0, ConfigureMz(self))
 
+        sql_server_testing_setup = False
         for index, action in enumerate(actions):
             # Implicitly call configure to raise version-dependent limits
             if isinstance(action, StartMz) and not action.deploy_generation:
                 actions.insert(
                     index + 1, ConfigureMz(self, mz_service=action.mz_service)
                 )
+                if not sql_server_testing_setup:
+                    # Can only be run once
+                    actions.insert(
+                        index + 1,
+                        SetupSqlServerTesting(self, mz_service=action.mz_service),
+                    )
+                    sql_server_testing_setup = True
             elif isinstance(action, ReplaceEnvironmentdStatefulSet):
                 actions.insert(index + 1, ConfigureMz(self))
 
@@ -98,10 +113,20 @@ class Scenario:
     def requires_external_idempotence(self) -> bool:
         return False
 
+    def does_forced_migrations(self) -> bool:
+        return False
+
     def _include_check_class(self, check_class: type[Check]) -> bool:
-        return not check_class.__name__.endswith("Base") and (
-            not self.requires_external_idempotence()
-            or check_class.externally_idempotent
+        return (
+            not check_class.__name__.endswith("Base")
+            and (
+                not self.requires_external_idempotence()
+                or check_class.externally_idempotent
+            )
+            and (
+                not self.does_forced_migrations()
+                or check_class.supports_forced_migrations
+            )
         )
 
 
@@ -269,10 +294,11 @@ class SystemVarChange(Scenario):
         self,
         checks: list[type[Check]],
         executor: Executor,
+        features: Features,
         seed: str | None,
         change_entries: list[SystemVarChangeEntry],
     ):
-        super().__init__(checks, executor, seed)
+        super().__init__(checks, executor, features, seed)
         self.change_entries = change_entries
 
     def actions(self) -> list[Action]:
@@ -318,19 +344,3 @@ class SystemVarChange(Scenario):
             ],
             Validate(self),
         ]
-
-
-class TogglePersistBatchColumnarFormat(SystemVarChange):
-    def __init__(self, checks: list[type[Check]], executor: Executor, seed: str | None):
-        super().__init__(
-            checks,
-            executor,
-            seed,
-            [
-                SystemVarChangeEntry(
-                    name="persist_batch_columnar_format",
-                    value_for_manipulate_phase_1="row",
-                    value_for_manipulate_phase_2="both_v2",
-                )
-            ],
-        )

@@ -21,6 +21,7 @@ stdenv.mkDerivation {
     pkg-config
     python3
     openssl
+    bazel_7
 
     # CLI tools
     postgresql

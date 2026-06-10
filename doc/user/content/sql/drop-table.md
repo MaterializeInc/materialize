@@ -8,21 +8,18 @@ menu:
 
 `DROP TABLE` removes a table from Materialize.
 
-## Conceptual framework
-
-[Tables](../create-table) store non-streaming data that is inserted via [INSERT](../insert)
-statements. `DROP TABLE` removes a table from Materialize.
-
 ## Syntax
 
-{{< diagram "drop-table.svg" >}}
+```mzsql
+DROP TABLE [IF EXISTS] <table_name> [RESTRICT|CASCADE];
+```
 
-Field | Use
-------|-----
-**IF EXISTS**  | Do not return an error if the named table doesn't exist.
-_table_name_ | The name of the table to remove.
-**CASCADE** | Remove the table and its dependent objects.
-**RESTRICT**  | Don't remove the table if any non-index objects depend on it. _(Default.)_
+Syntax element | Description
+---------------|------------
+**IF EXISTS**  | Optional. If specified, do not return an error if the named table doesn't exist.
+`<table_name>` | The name of the table to remove.
+**CASCADE** | Optional. If specified, remove the table and its dependent objects.
+**RESTRICT**  | Optional. Don't remove the table if any non-index objects depend on it. _(Default.)_
 
 ## Examples
 
@@ -102,11 +99,10 @@ DROP TABLE IF EXISTS t;
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped table.
-- `USAGE` privileges on the containing schema.
+{{% include-headless "/headless/sql-command-privileges/drop-table" %}}
 
 ## Related pages
 
 - [`CREATE TABLE`](../create-table)
 - [`INSERT`](../insert)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)

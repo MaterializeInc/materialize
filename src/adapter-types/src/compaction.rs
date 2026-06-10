@@ -13,7 +13,6 @@ use std::time::Duration;
 use mz_repr::{Timestamp, TimestampManipulation};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
-use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
 /// `DEFAULT_LOGICAL_COMPACTION_WINDOW`, in milliseconds.
@@ -66,23 +65,16 @@ impl CompactionWindow {
     }
 }
 
-impl From<CompactionWindow> for ReadPolicy<Timestamp> {
+impl From<CompactionWindow> for ReadPolicy {
     fn from(value: CompactionWindow) -> Self {
         let time = match value {
             CompactionWindow::Default => DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
             CompactionWindow::Duration(time) => time,
             CompactionWindow::DisableCompaction => {
-                return ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum()))
+                return ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum()));
             }
         };
         ReadPolicy::lag_writes_by(time, SINCE_GRANULARITY)
-    }
-}
-
-impl From<CompactionWindow> for ReadCapability<Timestamp> {
-    fn from(value: CompactionWindow) -> Self {
-        let policy: ReadPolicy<Timestamp> = value.into();
-        policy.into()
     }
 }
 
@@ -91,40 +83,5 @@ impl TryFrom<Duration> for CompactionWindow {
 
     fn try_from(value: Duration) -> Result<Self, Self::Error> {
         Ok(Self::Duration(value.try_into()?))
-    }
-}
-
-/// Information about the read capability requirements of a collection.
-///
-/// This type tracks both a default policy, as well as various holds that may
-/// be expressed, as by transactions to ensure collections remain readable.
-#[derive(Debug, Serialize)]
-pub struct ReadCapability<T = mz_repr::Timestamp>
-where
-    T: timely::progress::Timestamp,
-{
-    /// The default read policy for the collection when no holds are present.
-    pub base_policy: ReadPolicy<T>,
-    /// Holds expressed by transactions, that should prevent compaction.
-    pub holds: MutableAntichain<T>,
-}
-
-impl<T: timely::progress::Timestamp> From<ReadPolicy<T>> for ReadCapability<T> {
-    fn from(base_policy: ReadPolicy<T>) -> Self {
-        Self {
-            base_policy,
-            holds: MutableAntichain::new(),
-        }
-    }
-}
-
-impl<T: timely::progress::Timestamp> ReadCapability<T> {
-    /// Acquires the effective read policy, reflecting both the base policy and any holds.
-    pub fn policy(&self) -> ReadPolicy<T> {
-        // TODO: This could be "optimized" when `self.holds.frontier` is empty.
-        ReadPolicy::Multiple(vec![
-            ReadPolicy::ValidFrom(self.holds.frontier().to_owned()),
-            self.base_policy.clone(),
-        ])
     }
 }

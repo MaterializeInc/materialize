@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class BooleanType(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE boolean_type_table (boolean_col BOOLEAN);
             > INSERT INTO boolean_type_table VALUES (TRUE), (FALSE), (NULL);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -47,9 +43,7 @@ class BooleanType(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM boolean_type_view1;
                 <null> true false
                 <null> true false
@@ -77,6 +71,4 @@ class BooleanType(Check):
                 true true false
                 true true false
                 true true false
-            """
-            )
-        )
+            """))

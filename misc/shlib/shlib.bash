@@ -63,7 +63,7 @@ git_empty_tree() {
 #     3. symlinks are excluded.
 #
 git_files() {
-    git diff --ignore-submodules=all --raw "$(git_empty_tree)" -- "$@" \
+    git diff --raw "$(git_empty_tree)" -- "$@" \
         | awk '$2 != 120000 {print $6}'
 }
 
@@ -76,9 +76,11 @@ try() {
 
     # Try the command.
     if "$@"; then
+        result=$?
         try_last_failed=false
         ((++ci_try_passed))
     else
+        result=$?
         try_last_failed=true
         # The command failed. Tell Buildkite to uncollapse this log section, so
         # that the errors are immediately visible.
@@ -216,6 +218,28 @@ white() {
     echo -ne "\e[97m$*\e[0m"
 }
 
+# retry [N] COMMAND [ARGS...]
+#
+# Runs COMMAND up to N times (default 3), waiting 10 seconds between attempts.
+# Returns the exit status of the last attempt.
+retry() {
+    local max=3
+    if [[ "$1" =~ ^[0-9]+$ ]]; then
+        max=$1
+        shift
+    fi
+    local attempts=0
+    until "$@"; do
+        attempts=$((attempts + 1))
+        if [[ $attempts -ge $max ]]; then
+            echo "$(basename "$1") failed after $max attempts" >&2
+            return 1
+        fi
+        echo "$(basename "$1") attempt $((attempts)) failed, retrying in 10s..." >&2
+        sleep 10
+    done
+}
+
 # in_ci
 #
 # Returns 0 if in CI and 1 otherwise
@@ -232,4 +256,89 @@ is_truthy() {
         return 1
     fi
     return 0
+}
+
+# trufflehog_jq_filter_common
+#
+# Filters out secrets we expect in both checked in files and logs
+trufflehog_jq_filter_common() {
+  jq -c '
+    select(
+      (.Raw | contains("user1:password") | not) and
+      (.Raw | contains("infra+nightly-canary@materialize.com:XXX") | not) and
+      .Raw != "postgres://mz_system:materialize@materialized:5432" and
+      .Raw != "postgres://materialize:materialize@materialized:6875" and
+      .Raw != "postgres://mz_system:materialize@materialized:6877" and
+      .Raw != "postgres://superuser_login:some_bogus_password@materialized2:6875" and
+      .Raw != "jdbc:postgresql://127.0.0.1:26257/defaultdb?sslmode=disable" and
+      .Raw != "postgres://any:user@materialized:6875" and
+      .Raw != "https://materialize:sekurity@schema-registry:8081" and
+      .Raw != "postgresql://postgres:postgres@postgres:5432" and
+      .Raw != "postgres://postgres:postgres@postgres:5432" and
+      .Raw != "sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe" and
+      .Raw != "jdbc:postgresql://localhost:6875/materialize" and
+      .Raw != "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432" and
+      .Raw != "jdbc:postgresql://%s:%s/materialize" and
+      .Raw != "postgres://postgres:$MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD@$MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME:5432" and
+      .Raw != "http://user:pass@example.com" and
+      .Raw != "https://user:pass@issuer.example.com" and
+      .Raw != "https://user@issuer.example.com" and
+      .Raw != "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDDC5MP3v1BHOgI\n5SsmrW8mjxzQGOz0IlC5jp1muW/kpEoE9TG317TEnO5Uye6zZudkFCP8YGEiN3Mc\nFbTM7eX6PjAPdnGU7khuUt/20ZM+NX5kWZPrmPTh4WQaDCL7ah1LqzBaUAMaSXq8\niuy7LGJNF8wdx8L5BjDiGTTxZXOg0Haxknc7Mbiwc9z8eb7omvzQzsOwyqocrF2u\nz86TzX1jtHP48i5CxoRHKxE94De3tNxjT/Y3OZlS4QS7iekAOQ04DVV3GIHvRUXN\n2H8ayy4+yOdhHn6ER5Jn3lti1Q5XSrxkrYn7L1Vcj6IwZQhhF5vc+ovxOYb+8ert\nEo97tIkLAgMBAAECggEAQteHHRPKz9Mzs8Sxvo4GPv0hnzFDl0DhUE4PJCKdtYoV\n8dADq2DJiu3LAZS4cJPt7Y63bGitMRg2oyPPM8G9pD5Goy3wq9zjRqexKDlXUCTt\n/T7zofRny7c94m1RWb7ablGq/vBXt90BqnajvVtvDsN+iKAqccQM4ZdI3QdrEmt1\ncHex924itzG/mqbFTAfAmVj1ZsRnJp55Txy2gqq7jX00xDM8+H49SRvUu49N64LQ\n6BUWCgWCJePRtgjSHjboAzPqSkMdaTE/WDY2zgGF3Qfq4f6JCHKfm4QylCH4gYUU\n1Kf7ttmhu9NoZO+hczobKkxP9RtXfyTRH2bsJXy2HQKBgQDhHgavxk/ln5mdMGGw\nrQud2vF9n7UwFiysYxocIC5/CWD0GAhnawchjPypbW/7vKM5Z9zhW3eH1U9P13sa\n2xHfrU5BZ16rxoBbKNpcr7VeEbUBAsDoGV24xjoecp7rB2hZ+mGik5/5Ig1Rk1KH\ndcvYy2KSi1h4Sm+mXwimmA4VDQKBgQDdzW+5FPbdM2sUB2gLMQtn3ICjDSu6IQ+k\nd0p3WlTIT51RUsPXXKkk96O5anUbeB3syY8tSKPGggsaXaeL3o09yIamtERgCnn3\nd9IS+4VKPWQlFUICU1KrD+TO7IYIX04iXBuVE5ihv0q3mslhDotmX4kS38NtKEFF\njLjA2RvAdwKBgAFkIxxw+Ett+hALnX7vAtRd5wIku4TpjisejanA1Si50RyRDXQ+\nKBQf/+u4HmoK12Nibe4Cl7GCMvRGW59l3S1pr8MdtWsQVfi6Puc1usQzDdBMyQ5m\nIbsjlnZbtPm02QM9Vd8gVGvAtx5a77aglrrnPtuy+r/7jccUbURCSkv9AoGAH9m3\nWGmVRZBzqO2jWDATxjdY1ZE3nUPQHjrvG5KCKD2ehqYO72cj9uYEwcRyyp4GFhGf\nmM4cjo3wEDowrBoqSBv6kgfC5dO7TfkL1qP9sPp93gFeeD0E2wGuRrSaTqt46eA2\nKcMloNx6W0FD98cB55KCeY5eXtdwAA/EHBVRMeMCgYAd3n6PcL6rVXyE3+wRTKK4\n+zvx5sjTAnljr5ttbEnpZafzrYIfDpB8NNjexy83AeC0O13LvSHIFoTwP8sywJRO\nRxbPMjhEBdVZ5NxlxYer7yKN+h5OBJfrLswPku7y4vdFYK3x/lMuNQO61hb1VFHc\nT2BDTbF0QSlPxFsv18B9zg==\n-----END PRIVATE KEY-----\n" and
+      .Raw != "postgres://materialize:materialize@environmentd:6875" and
+      .Raw != "postgres://MATERIALIZE_USERNAME:APP_SPECIFIC_PASSWORD@MATERIALIZE_HOST:6875" and
+      .Raw != "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize" and
+      .Raw != "postgres://user:password@host:6875" and
+      .Raw != "postgres" and
+      .Raw != "slt" and
+      .Raw != "e6d5833015b170e23ae819e8c5d7eaedb472ca98" and
+      .Raw != "postgresql://materialize:AbC123dEf@ep-cool-darkness-123456.us-east-2.aws.neon.tech:5432" and
+      .Raw != "d3aa325086974cdfb3912f28e5a8c168" and
+      .Raw != "jdbc:postgresql://postgres:5432/postgres" and
+      .Raw != "RPSsql12345" and
+      .Raw != "RPSsql1234" and
+      .Raw != "RPSsql123" and
+      .Raw != "RPSsql12" and
+      .Raw != "RPSsql1" and
+      .Raw != "RPSsql" and
+      .Raw != "RPSsq" and
+      .Raw != "RPSs" and
+      .Raw != "RPS" and
+      .Raw != "RP" and
+      .Raw != "R"
+    )'
+}
+
+# trufflehog_jq_filter_files
+#
+# Filters out secrets we expect only in checked in files
+trufflehog_jq_filter_files() {
+  trufflehog_jq_filter_common | jq -c '
+  select(
+    .Raw != "{SqlSe" and
+    .Raw != "{SqlServe" and
+    .Raw != "ghp_9fK8sL3x7TqR1vEzYm2pDaN4WjXbQzUtV0aN" and
+    (.SourceMetadata.Data.Filesystem.file | startswith("src/catalog/src/durable/upgrade/snapshots") | not)
+  )'
+}
+
+# trufflehog_jq_filter_logs
+#
+# Filters out secrets we expect only in logs during CI runs
+trufflehog_jq_filter_logs() {
+  trufflehog_jq_filter_common | jq -c '
+  select(
+    (.Raw | contains("mz_system:materialize") | not) and
+    (.Raw | contains("jdbc:postgresql://postgres") | not) and
+    (.Raw | contains("mz_analytics:materialize") | not) and
+    (.Raw | contains("mz_support:materialize") | not) and
+    (.Raw | contains("jdbc:mysql://mysql") | not) and
+    (.Raw | contains("superuser_login:some_bogus_password") | not) and
+    (.Raw | contains("postgres:postgres") | not) and
+    (.Raw | contains("jdbc:postgresql://127.0.0") | not) and
+    (.Raw | contains("jdbc:postgresql://cockroach") | not) and
+    (.Raw | contains("materialize:materialize") | not) and
+    (.Raw | contains("ExpirationReaper") | not) and
+    (.Raw | contains("u1@example.com") | not) and
+    .Raw != "[REDACTED]"
+  )'
 }

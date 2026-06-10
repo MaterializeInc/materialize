@@ -16,11 +16,12 @@ use std::iter;
 
 use mz_expr::visit::Visit;
 use mz_expr::{
-    AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
+    AggregateExpr, ColumnOrder, Eval, EvalError, MirRelationExpr, MirScalarExpr, RowComparator,
+    TableFunc, UnaryFunc,
 };
-use mz_repr::{Datum, Diff, RelationType, Row, RowArena};
+use mz_repr::{Datum, Diff, ReprRelationType, Row, RowArena};
 
-use crate::{any, TransformCtx, TransformError};
+use crate::{TransformCtx, TransformError, any};
 
 /// Replace operators on constant collections with constant collections.
 #[derive(Debug)]
@@ -34,12 +35,16 @@ pub struct FoldConstants {
 }
 
 impl crate::Transform for FoldConstants {
+    fn name(&self) -> &'static str {
+        "FoldConstants"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "fold_constants")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -68,14 +73,14 @@ impl FoldConstants {
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
-        relation_type: &mut RelationType,
+        relation_type: &mut ReprRelationType,
     ) -> Result<(), TransformError> {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
             MirRelationExpr::Let { .. } | MirRelationExpr::LetRec { .. } => {
                 // Constant propagation through bindings is currently handled by in NormalizeLets.
-                // Maybe we should move it / replicate it here (see #18180 for context)?
+                // Maybe we should move it / replicate it here (see database-issues#5346 for context)?
             }
             MirRelationExpr::Reduce {
                 input,
@@ -132,7 +137,9 @@ impl FoldConstants {
                     limit.is_none(),
                     limit.as_ref().and_then(|l| l.as_literal_int64()) >= Some(0),
                 ] {
-                    let limit = limit.as_ref().and_then(|l| l.as_literal_int64());
+                    let limit = limit
+                        .as_ref()
+                        .and_then(|l| l.as_literal_int64().map(Into::into));
                     if let Some((rows, ..)) = (**input).as_const_mut() {
                         if let Ok(rows) = rows {
                             Self::fold_topk_constant(group_key, order_key, &limit, offset, rows);
@@ -145,7 +152,7 @@ impl FoldConstants {
                 if let Some((rows, ..)) = (**input).as_const_mut() {
                     if let Ok(rows) = rows {
                         for (_row, diff) in rows {
-                            *diff *= -1;
+                            *diff = -*diff;
                         }
                     }
                     *relation = input.take_dangerous();
@@ -154,7 +161,7 @@ impl FoldConstants {
             MirRelationExpr::Threshold { input } => {
                 if let Some((rows, ..)) = (**input).as_const_mut() {
                     if let Ok(rows) = rows {
-                        rows.retain(|(_, diff)| *diff > 0);
+                        rows.retain(|(_, diff)| diff.is_positive());
                     }
                     *relation = input.take_dangerous();
                 }
@@ -187,7 +194,6 @@ impl FoldConstants {
                     let new_rows = match rows {
                         Ok(rows) => rows
                             .iter()
-                            .cloned()
                             .map(|(input_row, diff)| {
                                 // TODO: reduce allocations to zero.
                                 let mut unpacked = input_row.unpack();
@@ -195,7 +201,7 @@ impl FoldConstants {
                                 for scalar in scalars.iter() {
                                     unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
                                 }
-                                Ok::<_, EvalError>((Row::pack_slice(&unpacked), diff))
+                                Ok::<_, EvalError>((Row::pack_slice(&unpacked), *diff))
                             })
                             .collect::<Result<_, _>>(),
                         Err(e) => Err(e.clone()),
@@ -246,7 +252,7 @@ impl FoldConstants {
                     .iter()
                     .any(|p| p.is_literal_false() || p.is_literal_null())
                 {
-                    relation.take_safely();
+                    relation.take_safely(Some(relation_type.clone()));
                 } else if let Some((rows, ..)) = (**input).as_const() {
                     // Evaluate errors last, to reduce risk of spurious errors.
                     predicates.sort_by_key(|p| p.is_literal_err());
@@ -287,7 +293,7 @@ impl FoldConstants {
                 ..
             } => {
                 if inputs.iter().any(|e| e.is_empty()) {
-                    relation.take_safely();
+                    relation.take_safely(Some(relation_type.clone()));
                 } else if let Some(e) = inputs.iter().find_map(|i| i.as_const_err()) {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),
@@ -307,7 +313,7 @@ impl FoldConstants {
 
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
                     // We start with a single 0-ary row.
-                    let mut old_rows = vec![(Row::pack::<_, Datum>(None), 1)];
+                    let mut old_rows = vec![(Row::pack::<_, Datum>(None), Diff::ONE)];
                     let mut row_buf = Row::default();
                     for input in inputs.iter() {
                         if let Some((Ok(rows), ..)) = input.as_const() {
@@ -431,23 +437,23 @@ impl FoldConstants {
         let mut groups = BTreeMap::new();
         let temp_storage2 = RowArena::new();
         let mut row_buf = Row::default();
-        let mut limit_remaining = limit.unwrap_or(usize::MAX);
+        let mut limit_remaining =
+            limit.map_or(Diff::MAX, |limit| Diff::try_from(limit).expect("must fit"));
         for (row, diff) in rows {
             // We currently maintain the invariant that any negative
             // multiplicities will be consolidated away before they
             // arrive at a reduce.
 
-            if *diff <= 0 {
-                return Some(Err(EvalError::InvalidParameterValue(String::from(
-                    "constant folding encountered reduce on collection \
-                                               with non-positive multiplicities",
-                ))));
+            if *diff <= Diff::ZERO {
+                return Some(Err(EvalError::InvalidParameterValue(
+                    "constant folding encountered reduce on collection with non-positive multiplicities".into()
+                )));
             }
 
-            if limit_remaining < *diff as usize {
+            if limit_remaining < *diff {
                 return None;
             }
-            limit_remaining -= *diff as usize;
+            limit_remaining -= diff;
 
             let datums = row.unpack();
             let temp_storage = RowArena::new();
@@ -473,7 +479,7 @@ impl FoldConstants {
                 Err(e) => return Some(Err(e)),
             };
             let entry = groups.entry(key).or_insert_with(Vec::new);
-            for _ in 0..*diff {
+            for _ in 0..diff.into_inner() {
                 entry.push(val.clone());
             }
         }
@@ -506,7 +512,7 @@ impl FoldConstants {
                             }
                         }),
                     ));
-                    (row_buf.clone(), 1)
+                    (row_buf.clone(), Diff::ONE)
                 }
             })
             .collect();
@@ -516,17 +522,15 @@ impl FoldConstants {
     fn fold_topk_constant<'a>(
         group_key: &[usize],
         order_key: &[ColumnOrder],
-        limit: &Option<i64>,
+        limit: &Option<Diff>,
         offset: &usize,
         rows: &'a mut [(Row, Diff)],
     ) {
         // helper functions for comparing elements by order_key and group_key
-        let mut lhs_datum_vec = mz_repr::DatumVec::new();
-        let mut rhs_datum_vec = mz_repr::DatumVec::new();
+        let comparator = RowComparator::new(order_key);
+
         let mut cmp_order_key = |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
-            let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
-            let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
-            mz_expr::compare_columns(order_key, lhs_datums, rhs_datums, || lhs.cmp(rhs))
+            comparator.compare_rows(&lhs.0, &rhs.0, || lhs.cmp(rhs))
         };
         let mut cmp_group_key = {
             let group_key = group_key
@@ -540,12 +544,9 @@ impl FoldConstants {
                     nulls_last: false,
                 })
                 .collect::<Vec<ColumnOrder>>();
-            let mut lhs_datum_vec = mz_repr::DatumVec::new();
-            let mut rhs_datum_vec = mz_repr::DatumVec::new();
+            let comparator = RowComparator::new(group_key);
             move |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
-                let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
-                let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
-                mz_expr::compare_columns(&group_key, lhs_datums, rhs_datums, || Ordering::Equal)
+                comparator.compare_rows(&lhs.0, &rhs.0, || Ordering::Equal)
             }
         };
 
@@ -557,7 +558,7 @@ impl FoldConstants {
             rows.sort_by(&mut cmp_group_key);
         };
 
-        let mut same_group_key =
+        let same_group_key =
             |lhs: &(Row, Diff), rhs: &(Row, Diff)| cmp_group_key(lhs, rhs) == Ordering::Equal;
 
         let mut cursor = 0;
@@ -568,9 +569,9 @@ impl FoldConstants {
 
             let mut finger = cursor;
             while finger < rows.len() && same_group_key(&rows[cursor], &rows[finger]) {
-                if rows[finger].1 < 0 {
+                if rows[finger].1.is_negative() {
                     // ignore elements with negative diff
-                    rows[finger].1 = 0;
+                    rows[finger].1 = Diff::ZERO;
                 } else {
                     // determine how many of the leading rows to ignore,
                     // then decrement the diff and remaining offset by that number

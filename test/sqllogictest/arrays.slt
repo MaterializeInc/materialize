@@ -255,7 +255,7 @@ SELECT array_agg(1)
 query T
 select array_agg(unnest) FROM (SELECT NULL) x JOIN LATERAL unnest(ARRAY[1,2,NULL]) ON true;
 ----
-{NULL,1,2}
+{1,2,NULL}
 
 statement ok
 CREATE TABLE t1 (a int)
@@ -276,12 +276,12 @@ SELECT array_agg(a) FROM (select a from t1 where a IS NULL)
 query T
 SELECT array_agg(a) FROM t1
 ----
-{NULL,NULL,1,2,3}
+{1,2,3,NULL,NULL}
 
 query T
 SELECT array_agg(a::text) FROM t1
 ----
-{NULL,NULL,1,2,3}
+{1,2,3,NULL,NULL}
 
 query T
 SELECT array_agg(a) FILTER (WHERE a IS NOT NULL) FROM t1
@@ -911,7 +911,7 @@ SELECT ARRAY[ARRAY[customer.first_name], ARRAY[customer.zip], ARRAY[customer.id:
 {{alice},{10003},{1}}
 {{charlie},{11217},{3}}
 
-# Regression for #18144
+# Regression for database-issues#5326
 query error array_in not yet supported
 SELECT array_in('', 0, 0)
 ----
@@ -1096,7 +1096,7 @@ SELECT array_position(ARRAY[['mon']]::text[], 'mon', null)
 
 # multi-dimensional arrays
 # how else can we handle whitespace terminals in strings?
-query T
+query T rowsort
 SELECT
     concat_ws(
         E'\t',
@@ -1175,7 +1175,7 @@ end
 {{{{b},{b}}},{{{b},{b}}},{{{b},{b}}}}	3	1	2	1	b	end
 
 # Test that whitespace produces same results
-query T
+query T rowsort
 SELECT
     concat_ws(
         E'\t',
@@ -1393,7 +1393,7 @@ SELECT ARRAY[2,7] @> ARRAY[1,7,4,2,6] AS is_contained_by
 ----
 false
 
-# verify fix for issue #28035
+# verify fix for issue database-issues#8223
 query T
 SELECT '{}'::TEXT[][] @> '{{a, b}, {a, A}}'::TEXT[][];
 ----
@@ -1450,3 +1450,26 @@ query T
 SELECT ARRAY[1,3,7,NULL] @> ARRAY[1,3,7,NULL] AS contains;
 ----
 false
+
+# Make sure we can index into a CAST-ed array.
+
+statement ok
+CREATE TABLE jsons (payload jsonb, random_index int, random_id uuid);
+
+statement ok
+CREATE MATERIALIZED VIEW json_mv AS (
+    SELECT * FROM jsons WHERE random_id = CAST(payload->>'my_field' AS uuid[])[random_index]
+)
+
+# Regression test for issue MaterializeInc/database-issues#9757
+
+query error number of array elements \(1\) does not match declared cardinality \(0\)
+SELECT ARRAY[NULL::BIGINT[], ARRAY[1::BIGINT, 2::BIGINT]];
+
+query T
+SELECT ARRAY[NULL::BIGINT[], ARRAY[]::BIGINT[], NULL::BIGINT[]];
+----
+{}
+
+query error number of array elements \(3\) does not match declared cardinality \(2\)
+SELECT ARRAY[ARRAY[1, 2], ARRAY[3, 4, 5], ARRAY[6]];

@@ -7,10 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test that setting feature flags works
+"""
+
 import argparse
 from textwrap import dedent, indent
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -32,29 +40,23 @@ USER_CONNECTION_URL = (
 
 def header(test_name: str, drop_schema: bool) -> str:
     """Generate a TD header for a SQL feature test scenario."""
-    header = dedent(
-        f"""
+    header = dedent(f"""
         # Feature test for SQL feature test: {test_name}
         #####################################{'#' * len(test_name)}
-        """
-    )
+        """)
     # Re-create schema (optional).
     if drop_schema:
-        header += dedent(
-            f"""
+        header += dedent(f"""
             $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
             DROP SCHEMA IF EXISTS public CASCADE;
             CREATE SCHEMA public /* {test_name} */;
             GRANT ALL PRIVILEGES ON SCHEMA public TO materialize;
-            """
-        )
+            """)
     # Create connections.
-    header += dedent(
-        f"""
+    header += dedent(f"""
         $ postgres-connect name=user url={USER_CONNECTION_URL}
         $ postgres-connect name=mz_system url={MZ_SYSTEM_CONNECTION_URL}
-        """
-    )
+        """)
     return header.strip()
 
 
@@ -85,32 +87,26 @@ def query_ok(query: str) -> str:
 
 def alter_system_set(name: str, value: str) -> str:
     """Generate a TD command that sets a system parameter."""
-    return dedent(
-        f"""
+    return dedent(f"""
         $ postgres-execute connection=mz_system
         ALTER SYSTEM SET {name} = '{value}';
-        """
-    ).strip()
+        """).strip()
 
 
 def alter_system_reset(name: str) -> str:
     """Generate a TD command that resets a system parameter."""
-    return dedent(
-        f"""
+    return dedent(f"""
         $ postgres-execute connection=mz_system
         ALTER SYSTEM RESET {name};
-        """
-    ).strip()
+        """).strip()
 
 
 def alter_system_reset_all() -> str:
     """Generate a TD command that reset all system parameters."""
-    return dedent(
-        """
+    return dedent("""
         $ postgres-execute connection=mz_system
         ALTER SYSTEM RESET ALL;
-        """
-    ).strip()
+        """).strip()
 
 
 class FeatureTestScenario:
@@ -226,8 +222,7 @@ class FeatureTestScenario:
 
 
 def run_test(c: Composition, args: argparse.Namespace) -> None:
-    c.up("redpanda", "materialized")
-    c.up("testdrive", persistent=True)
+    c.up("redpanda", "materialized", Service("testdrive", idle=True))
 
     scenarios = (
         [globals()[args.scenario]]

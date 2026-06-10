@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro deploy_promote(wait=False, poll_interval=15, lag_threshold='1s', dry_run=False) %}
+{% macro deploy_promote(wait=False, poll_interval=15, lag_threshold='1s', dry_run=False, max_retries=3, retry_backoff=1.0) %}
 {#
   Performs atomic deployment of current dbt targets to production,
   based on the deployment configuration specified in the dbt_project.yml file.
@@ -34,6 +34,15 @@
   - `dry_run` (boolean, optional): When `true`, prints out the sequence of
     commands dbt would execute without actually promoting the deployment, for
     validation.
+  - `max_retries` (integer, optional): Maximum number of times to retry the
+    atomic swap transaction when it is aborted by a concurrent-DDL conflict
+    (Materialize SQLSTATE 40001). Other errors (permissions, syntax, missing
+    objects) are surfaced immediately and are not retried. Default: 3.
+    Values below zero produce zero attempts and raise the retry-exhausted
+    error immediately.
+  - `retry_backoff` (number, optional): Seconds to sleep before each retry
+    of the atomic swap. Gives concurrent DDL a chance to complete before
+    retrying. Default: 1.0.
 
   ## Returns
   None: This macro performs deployment actions but does not return a value.
@@ -67,8 +76,9 @@
 
 {% for cluster in clusters %}
     {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
-    {% if not cluster_exists(cluster) %}
-        {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " does not exist") }}
+    {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
+    {% if not cluster_exists(origin_cluster) %}
+        {{ exceptions.raise_compiler_error("Production cluster " ~ origin_cluster ~ " does not exist") }}
     {% endif %}
     {% if not cluster_exists(deploy_cluster) %}
         {{ exceptions.raise_compiler_error("Deployment cluster " ~ deploy_cluster ~ " does not exist") }}
@@ -80,23 +90,48 @@
 {% endif %}
 
 {% if not dry_run %}
-    {% call statement('swap', fetch_result=True, auto_begin=False) -%}
-    BEGIN;
-
+    {# Build the ordered list of ALTER ... SWAP statements. Schemas are
+       swapped before clusters so that cluster renames don't strand objects
+       referencing the old schema name. #}
+    {% set swap_statements = [] %}
     {% for schema in schemas %}
         {% set deploy_schema = schema ~ "_dbt_deploy" %}
         {{ log("Swapping schemas " ~ schema ~ " and " ~ deploy_schema, info=True) }}
-        ALTER SCHEMA {{ adapter.quote(schema) }} SWAP WITH {{ adapter.quote(deploy_schema) }};
+        {% do swap_statements.append("ALTER SCHEMA " ~ adapter.quote(schema) ~ " SWAP WITH " ~ adapter.quote(deploy_schema)) %}
     {% endfor %}
 
     {% for cluster in clusters %}
         {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
-        {{ log("Swapping clusters " ~ adapter.generate_final_cluster_name(cluster) ~ " and " ~ deploy_cluster, info=True) }}
-        ALTER CLUSTER {{ adapter.quote(cluster) }} SWAP WITH {{ adapter.quote(deploy_cluster) }};
+        {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
+        {{ log("Swapping clusters " ~ origin_cluster ~ " and " ~ deploy_cluster, info=True) }}
+        {% do swap_statements.append("ALTER CLUSTER " ~ adapter.quote(origin_cluster) ~ " SWAP WITH " ~ adapter.quote(deploy_cluster)) %}
     {% endfor %}
 
-    COMMIT;
-    {%- endcall %}
+    {% set swap_sql = "BEGIN; " ~ (swap_statements | join("; ")) ~ "; COMMIT;" %}
+
+    {% set ns = namespace(success=False) %}
+    {% for attempt in range(max_retries + 1) %}
+        {% if attempt > 0 %}
+            {{ log("Retrying atomic swap (attempt " ~ (attempt + 1) ~ " of " ~ (max_retries + 1) ~ ") due to concurrent-DDL conflict", info=True) }}
+            {% if retry_backoff > 0 %}
+                {% do adapter.sleep(retry_backoff) %}
+            {% endif %}
+        {% endif %}
+
+        {% if adapter.try_atomic_swap(swap_sql) %}
+            {% if attempt > 0 %}
+                {{ log("Atomic swap succeeded on attempt " ~ (attempt + 1), info=True) }}
+            {% endif %}
+            {% set ns.success = True %}
+            {% break %}
+        {% endif %}
+    {% endfor %}
+
+    {% if not ns.success %}
+        {{ exceptions.raise_compiler_error("Atomic swap transaction failed after " ~ (max_retries + 1) ~ " attempts due to concurrent-DDL conflicts. Consider increasing max_retries or reducing concurrent DDL activity during the deploy.") }}
+    {% endif %}
+
+    {{ tag_deployed_schemas(schemas) }}
 {% else %}
     {{ log("Starting dry run...", info=True) }}
     {% for schema in schemas %}
@@ -107,8 +142,9 @@
 
     {% for cluster in clusters %}
         {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
+        {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
         {{ log("DRY RUN: Swapping clusters " ~ adapter.generate_final_cluster_name(cluster) ~ " and " ~ deploy_cluster, info=True) }}
-        {{ log("DRY RUN: ALTER CLUSTER " ~ adapter.quote(cluster) ~ " SWAP WITH " ~ adapter.quote(deploy_cluster), info=True) }}
+        {{ log("DRY RUN: ALTER CLUSTER " ~ adapter.quote(origin_cluster) ~ " SWAP WITH " ~ adapter.quote(deploy_cluster), info=True) }}
     {% endfor %}
     {{ log("Dry run completed. The statements above were **not** executed against Materialize.", info=True) }}
 {% endif %}
@@ -199,4 +235,32 @@
     {% else %}
         {{ log("No sinks to process.", info=True) }}
     {% endif %}
+{% endmacro %}
+
+{% macro tag_deployed_schemas(schemas) %}
+    {% set commit_sha = adapter.get_git_commit_sha() %}
+
+    {% set result = run_query("SELECT current_user, now();") %}
+    {% if result is not none and result.rows|length > 0 %}
+        {% set db_user = result.columns[0][0] %}
+        {% set deploy_time = result.columns[0][1] %}
+    {% else %}
+        {% set db_user = "unknown" %}
+        {% set deploy_time = "unknown" %}
+    {% endif %}
+
+    {% set schema_comment %}
+        Deployment by {{ db_user }} on {{ deploy_time }}
+        {%- if commit_sha is not none and commit_sha != '' %}
+            | Commit SHA: {{ commit_sha }}
+        {%- endif %}
+    {% endset %}
+
+    {% for schema in schemas %}
+        {{ log("Tagging schema: " ~ schema, info=True) }}
+        {% set comment_sql %}
+            COMMENT ON SCHEMA {{ adapter.quote(schema) }} IS {{ dbt.string_literal(schema_comment) }}
+        {% endset %}
+        {% do run_query(comment_sql) %}
+    {% endfor %}
 {% endmacro %}

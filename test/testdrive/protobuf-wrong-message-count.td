@@ -32,14 +32,18 @@ message Message2 {}
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-! CREATE SOURCE fail
+> CREATE SOURCE fail_too_few
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-too-few-${testdrive.seed}')
+
+! CREATE TABLE fail_tbl FROM SOURCE fail_too_few (REFERENCE "testdrive-too-few-${testdrive.seed}")
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Protobuf schemas with no messages not yet supported
 
-! CREATE SOURCE fail
+> CREATE SOURCE fail_too_many
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-too-many-${testdrive.seed}')
+
+! CREATE TABLE fail_tbl FROM SOURCE fail_too_many (REFERENCE "testdrive-too-many-${testdrive.seed}")
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Protobuf schemas with multiple messages not yet supported

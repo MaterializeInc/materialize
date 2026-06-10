@@ -47,10 +47,12 @@ With
       - ("a", 1, 2)
       - ("b", 3, 4)
 ----
-Return
-  Filter
-    Get l1
 With
+  cte l0 =
+    Filter (#0 = "a")
+      Constant
+        - ("a", 1, 2)
+        - ("b", 3, 4)
   cte l1 =
     Distinct project=[#0..=#2]
       Union
@@ -62,11 +64,9 @@ With
               Get t1
         Filter (#0 = "a")
           Get t1
-  cte l0 =
-    Filter (#0 = "a")
-      Constant
-        - ("a", 1, 2)
-        - ("b", 3, 4)
+Return
+  Filter
+    Get l1
 
 
 ## LetRec cases
@@ -88,9 +88,6 @@ With Mutually Recursive
             Get l0
             Get l0
 ----
-Return
-  Filter (#0 = "foo")
-    Get l0
 With Mutually Recursive
   cte l0 =
     Distinct project=[#0, #1]
@@ -101,3 +98,6 @@ With Mutually Recursive
           Join on=(#1 = #2)
             Get l0
             Get l0
+Return
+  Filter (#0 = "foo")
+    Get l0

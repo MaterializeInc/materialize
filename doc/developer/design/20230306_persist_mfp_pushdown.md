@@ -1,5 +1,5 @@
 - Feature name: Persist Filter Pushdown
-- Associated: https://github.com/MaterializeInc/materialize/issues/12684
+- Associated: https://github.com/MaterializeInc/database-issues/issues/3657
 
 # Summary
 [summary]: #summary
@@ -266,7 +266,7 @@ with minimal impact on read performance.
 ### Schema evaluation
 
 Understanding schemas at the persistent data level gives us a building block [to explore schema evolution at
-the Persist level](https://github.com/MaterializeInc/materialize/issues/16625).
+the Persist level](https://github.com/MaterializeInc/database-issues/issues/4818).
 
 ### Internal improvements
 

@@ -7,19 +7,26 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Tests that Materialize can connect to Kafka's various connection modes:
+plaintext, ssl, mssl, sasl_plaintext, sasl_ssl, sasl_mssl
+"""
+
+import glob
+
+from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     TestCerts(),
     SshBastionHost(),
-    Zookeeper(),
     Kafka(
         depends_on_extra=["test-certs"],
         advertised_listeners=[
@@ -33,9 +40,10 @@ SERVICES = [
             "sasl_ssl://kafka:9096",
             "sasl_mssl://kafka:9097",
         ],
+        # Move the KRaft controller port off 9093, which is used for SSL above.
+        controller_port=29093,
         environment_extra=[
-            "ZOOKEEPER_SASL_ENABLED=FALSE",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,ssl:SSL,mssl:SSL,sasl_plaintext:SASL_PLAINTEXT,sasl_ssl:SASL_SSL,sasl_mssl:SASL_SSL",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,ssl:SSL,mssl:SSL,sasl_plaintext:SASL_PLAINTEXT,sasl_ssl:SASL_SSL,sasl_mssl:SASL_SSL",
             "KAFKA_INTER_BROKER_LISTENER_NAME=plaintext",
             "KAFKA_SASL_ENABLED_MECHANISMS=PLAIN,SCRAM-SHA-256,SCRAM-SHA-512",
             "KAFKA_SSL_KEY_PASSWORD=mzmzmz",
@@ -46,12 +54,20 @@ SERVICES = [
             "KAFKA_OPTS=-Djava.security.auth.login.config=/etc/kafka/jaas.config",
             "KAFKA_LISTENER_NAME_MSSL_SSL_CLIENT_AUTH=required",
             "KAFKA_LISTENER_NAME_SASL__MSSL_SSL_CLIENT_AUTH=required",
-            "KAFKA_AUTHORIZER_CLASS_NAME=kafka.security.authorizer.AclAuthorizer",
+            "KAFKA_AUTHORIZER_CLASS_NAME=org.apache.kafka.metadata.authorizer.StandardAuthorizer",
             "KAFKA_SUPER_USERS=User:materialize;User:CN=materialized;User:ANONYMOUS",
+            # Bootstrap SCRAM users at storage-format time. See
+            # `misc/mzcompose/kafka/ensure-with-scram.sh` for why the runtime
+            # `kafka-configs --add-config=SCRAM-*` path is unreliable on
+            # Kafka 4.x KRaft.
+            "KAFKA_INIT_SCRAM_USERS="
+            "SCRAM-SHA-256=[name=materialize,password=sekurity];"
+            "SCRAM-SHA-512=[name=materialize,password=sekurity]",
         ],
         volumes=[
             "secrets:/etc/kafka/secrets",
             "./kafka.jaas.config:/etc/kafka/jaas.config",
+            "../../misc/mzcompose/kafka/ensure-with-scram.sh:/etc/confluent/docker/ensure",
         ],
     ),
     SchemaRegistry(
@@ -68,6 +84,22 @@ SERVICES = [
         aliases=["basic.schema-registry.local"],
         environment_extra=[
             "SCHEMA_REGISTRY_LEADER_ELIGIBILITY=false",
+            "SCHEMA_REGISTRY_AUTHENTICATION_METHOD=BASIC",
+            "SCHEMA_REGISTRY_AUTHENTICATION_ROLES=user",
+            "SCHEMA_REGISTRY_AUTHENTICATION_REALM=SchemaRegistry",
+            "SCHEMA_REGISTRY_OPTS=-Djava.security.auth.login.config=/etc/schema-registry/jaas.config",
+        ],
+        volumes=[
+            "./schema-registry.jaas.config:/etc/schema-registry/jaas.config",
+            "./schema-registry.user.properties:/etc/schema-registry/user.properties",
+        ],
+    ),
+    SchemaRegistry(
+        name="schema-registry-default-port",
+        aliases=["default-port.schema-registry.local"],
+        environment_extra=[
+            "SCHEMA_REGISTRY_LEADER_ELIGIBILITY=false",
+            "SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081,http://0.0.0.0:80",
             "SCHEMA_REGISTRY_AUTHENTICATION_METHOD=BASIC",
             "SCHEMA_REGISTRY_AUTHENTICATION_ROLES=user",
             "SCHEMA_REGISTRY_AUTHENTICATION_REALM=SchemaRegistry",
@@ -154,10 +186,13 @@ SERVICES = [
     ),
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
+        default_replication_factor=2,
     ),
     Testdrive(
         volumes_extra=["secrets:/share/secrets"],
+        default_timeout="30s",
     ),
+    Mz(app_password=""),
 ]
 
 
@@ -175,16 +210,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # Kafka topic.
     c.up("ssh-bastion-host", "schema-registry", "materialized")
 
-    # Add `materialize` SCRAM user to Kafka.
-    c.exec(
-        "kafka",
-        "kafka-configs",
-        "--bootstrap-server=localhost:9092",
-        "--alter",
-        "--add-config=SCRAM-SHA-256=[password=sekurity],SCRAM-SHA-512=[password=sekurity]",
-        "--entity-type=users",
-        "--entity-name=materialize",
-    )
+    # The `materialize` SCRAM user is bootstrapped by Kafka's storage-format
+    # step via `KAFKA_INIT_SCRAM_USERS` (see `ensure-with-scram.sh`), so no
+    # runtime `kafka-configs` call is needed here.
 
     # Restrict the `materialize_no_describe_configs` user from running the
     # `DescribeConfigs` cluster operation, but allow it to idempotently read and
@@ -206,10 +234,38 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     add_acl(c, user, "allow", "ALL", "group=lockdown", pattern_type="prefixed")
     add_acl(c, user, "allow", "ALL", "topic=testdrive-data", pattern_type="prefixed")
 
+    # Allow the `materialize_no_create_progress` user to read and write to the
+    # progress and data topics, but NOT to create them. This user is used to
+    # test that Materialize does not require the Create ACL on the progress
+    # topic when it has been pre-created by an admin.
+    user = "materialize_no_create_progress"
+    for op in ["Read", "Write", "Describe", "DescribeConfigs"]:
+        add_acl(
+            c,
+            user,
+            "allow",
+            op,
+            "topic=testdrive-no-create-progress",
+            pattern_type="prefixed",
+        )
+        add_acl(
+            c,
+            user,
+            "allow",
+            op,
+            "topic=testdrive-no-create-data",
+            pattern_type="prefixed",
+        )
+    add_acl(
+        c, user, "allow", "Write", "transactional-id=no-create", pattern_type="prefixed"
+    )
+    add_acl(c, user, "allow", "Read", "group=no-create", pattern_type="prefixed")
+
     # Now that the Kafka topic has been bootstrapped, it's safe to bring up all
     # the other schema registries in parallel.
     c.up(
         "schema-registry-basic",
+        "schema-registry-default-port",
         "schema-registry-ssl",
         "schema-registry-mssl",
         "schema-registry-ssl-basic",
@@ -217,16 +273,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     # Set up SSH connection.
-    c.sql(
-        """
+    c.sql("""
         CREATE DATABASE IF NOT EXISTS testdrive_no_reset_connections;
         CREATE CONNECTION IF NOT EXISTS testdrive_no_reset_connections.public.ssh TO SSH TUNNEL (
             HOST 'ssh-bastion-host',
             USER 'mz',
             PORT 22
         );
-    """
-    )
+    """)
     public_key = c.sql_query(
         "select public_key_1 from mz_ssh_tunnel_connections where id = 'u1';"
     )[0][0]
@@ -238,16 +292,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     # Set up backup SSH connection.
-    c.sql(
-        """
+    c.sql("""
         CREATE DATABASE IF NOT EXISTS testdrive_no_reset_connections;
         CREATE CONNECTION IF NOT EXISTS testdrive_no_reset_connections.public.ssh_backup TO SSH TUNNEL (
             HOST 'ssh-bastion-host',
             USER 'mz',
             PORT 22
         );
-    """
-    )
+    """)
     public_key = c.sql_query(
         "select public_key_1 from mz_ssh_tunnel_connections where id = 'u2';"
     )[0][0]
@@ -258,7 +310,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"echo '{public_key}' >> /etc/authorized_keys/mz",
     )
 
-    c.run_testdrive_files(f"test-{args.filter}.td")
+    files = buildkite.shard_list(
+        sorted(
+            [
+                file
+                for file in glob.glob(
+                    f"test-{args.filter}.td", root_dir=MZ_ROOT / "test" / "kafka-auth"
+                )
+            ]
+        ),
+        lambda file: file,
+    )
+    c.test_parts(files, c.run_testdrive_files)
 
 
 def add_acl(

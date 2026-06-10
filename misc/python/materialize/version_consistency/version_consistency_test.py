@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 import argparse
 
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
 from materialize.mz_version import MzVersion
 from materialize.output_consistency.common.configuration import (
@@ -41,15 +41,11 @@ from materialize.output_consistency.output_consistency_test import (
     OutputConsistencyTest,
     connect,
 )
-from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.version_consistency.execution.multi_version_executors import (
     MultiVersionSqlExecutors,
 )
 from materialize.version_consistency.ignore_filter.version_consistency_ignore_filter import (
     VersionConsistencyIgnoreFilter,
-)
-from materialize.version_consistency.validation.version_consistency_error_message_normalizer import (
-    VersionConsistencyErrorMessageNormalizer,
 )
 
 
@@ -60,8 +56,8 @@ class VersionConsistencyTest(OutputConsistencyTest):
         self.evaluation_strategy_name: str | None = None
         self.allow_same_version_comparison = False
         # values will be available after create_sql_executors is called
-        self.mz1_version: MzVersion | None = None
-        self.mz2_version: MzVersion | None = None
+        self.mz1_version_without_dev_suffix: MzVersion | None = None
+        self.mz2_version_without_dev_suffix: MzVersion | None = None
 
     def shall_run(self, sql_executors: SqlExecutors) -> bool:
         assert isinstance(sql_executors, MultiVersionSqlExecutors)
@@ -104,10 +100,10 @@ class VersionConsistencyTest(OutputConsistencyTest):
             "mz2",
         )
 
-        self.mz1_version = MzVersion.parse_mz(
+        self.mz1_version_without_dev_suffix = MzVersion.parse_mz(
             mz1_sql_executor.query_version(), drop_dev_suffix=True
         )
-        self.mz2_version = MzVersion.parse_mz(
+        self.mz2_version_without_dev_suffix = MzVersion.parse_mz(
             mz2_sql_executor.query_version(), drop_dev_suffix=True
         )
 
@@ -116,18 +112,20 @@ class VersionConsistencyTest(OutputConsistencyTest):
             mz2_sql_executor,
         )
 
-    def create_result_comparator(
-        self, ignore_filter: GenericInconsistencyIgnoreFilter
-    ) -> ResultComparator:
-        return ResultComparator(
-            ignore_filter, VersionConsistencyErrorMessageNormalizer()
-        )
-
     def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
-        assert self.mz1_version is not None
-        assert self.mz2_version is not None
+        assert self.mz1_version_without_dev_suffix is not None
+        assert self.mz2_version_without_dev_suffix is not None
 
-        return VersionConsistencyIgnoreFilter(self.mz1_version, self.mz2_version)
+        assert (
+            self.evaluation_strategy_name is not None
+        ), "Evaluation strategy name is not initialized"
+
+        uses_dfr = self.evaluation_strategy_name == EVALUATION_STRATEGY_NAME_DFR
+        return VersionConsistencyIgnoreFilter(
+            self.mz1_version_without_dev_suffix,
+            self.mz2_version_without_dev_suffix,
+            uses_dfr,
+        )
 
     def create_evaluation_strategies(
         self, sql_executors: SqlExecutors
@@ -170,12 +168,12 @@ class VersionConsistencyTest(OutputConsistencyTest):
         if operation.since_mz_version is None:
             return False
 
-        assert self.mz1_version is not None
-        assert self.mz2_version is not None
+        assert self.mz1_version_without_dev_suffix is not None
+        assert self.mz2_version_without_dev_suffix is not None
 
         return (
-            operation.since_mz_version > self.mz1_version
-            or operation.since_mz_version > self.mz2_version
+            operation.since_mz_version > self.mz1_version_without_dev_suffix
+            or operation.since_mz_version > self.mz2_version_without_dev_suffix
         )
 
 
@@ -241,7 +239,7 @@ def main() -> int:
         )
         test.evaluation_strategy_name = args.evaluation_strategy
         test.allow_same_version_comparison = args.allow_same_version_comparison
-    except InterfaceError:
+    except OperationalError:
         return 1
 
     result = test.run_output_consistency_tests(

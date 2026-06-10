@@ -60,3 +60,6 @@ CREATE OR REPLACE VIEW v_build_annotation_overview AS
       bae.test_suite,
       bae.test_retry_count
 ;
+
+ALTER VIEW v_build_annotation_error OWNER TO qa;
+ALTER VIEW v_build_annotation_overview OWNER TO qa;

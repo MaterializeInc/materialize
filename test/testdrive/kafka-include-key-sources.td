@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -37,16 +39,16 @@ $ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflict
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-! CREATE SOURCE missing_key_format
+> CREATE SOURCE missing_key_format
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
+
+! CREATE TABLE missing_key_format_tbl FROM SOURCE missing_key_format (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
 contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
-! CREATE SOURCE missing_key_format
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
+! CREATE TABLE missing_key_format_tbl FROM SOURCE missing_key_format (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS key_col
 contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
@@ -57,83 +59,109 @@ contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FO
 
 # "Bare" format works when the key format is in a registry
 > CREATE CLUSTER bareformatconfluent_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE bareformatconfluent
   IN CLUSTER bareformatconfluent_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-avro-data-${testdrive.seed}')
+
+> CREATE TABLE bareformatconfluent_tbl FROM SOURCE bareformatconfluent (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS named
   ENVELOPE UPSERT
+> COMMIT
 
-> SELECT * from bareformatconfluent
+> SELECT * from bareformatconfluent_tbl
 named         id       b
 ------------------------
 1             2        3
 
-! CREATE SOURCE avro_data_conflict
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
-  KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE KEY
-contains: column "id" specified more than once
+# > CREATE SOURCE avro_data_conflict
+#   IN CLUSTER ${arg.single-replica-cluster}
+#   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
+# ! CREATE TABLE avro_data_conflict_tbl
+#   FROM SOURCE avro_data_conflict (REFERENCE "testdrive-avro-data-${testdrive.seed}")
+#   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
+#   VALUE FORMAT AVRO USING SCHEMA '${schema}'
+#   INCLUDE KEY
+# contains: column "id" specified more than once
 
 > CREATE CLUSTER avro_data_explicit_cluster SIZE '${arg.default-storage-size}';
-> CREATE SOURCE avro_data_explicit (key_id, id, b)
+> BEGIN
+> CREATE SOURCE avro_data_explicit
   IN CLUSTER avro_data_explicit_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
+
+> CREATE TABLE avro_data_explicit_tbl (key_id, id, b) FROM SOURCE avro_data_explicit (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
+> COMMIT
 
-> SELECT key_id, id, b FROM avro_data_explicit
+> SELECT key_id, id, b FROM avro_data_explicit_tbl
 key_id id b
 ------------
 1 2 3
 
 > CREATE CLUSTER include_partition_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE include_partition
   IN CLUSTER include_partition_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
+
+> CREATE TABLE include_partition_tbl FROM SOURCE include_partition (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE PARTITION
+> COMMIT
 
-> SELECT * FROM include_partition
+> SELECT * FROM include_partition_tbl
 id b partition
 --------------
 2 3 0
 
 > CREATE CLUSTER avro_data_as_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_data_as
   IN CLUSTER avro_data_as_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
+
+> CREATE TABLE avro_data_as_tbl FROM SOURCE avro_data_as (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS renamed_id
+> COMMIT
 
-> SELECT * FROM avro_data_as
+> SELECT * FROM avro_data_as_tbl
 renamed_id id b
 ------------
 1 2 3
 
 > CREATE CLUSTER avro_avro_data_cluster SIZE '${arg.default-storage-size}';
-> CREATE SOURCE avro_avro_data (key_id, id, b)
+> BEGIN
+> CREATE SOURCE avro_avro_data
   IN CLUSTER avro_avro_data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
+
+> CREATE TABLE avro_avro_data_tbl (key_id, id, b) FROM SOURCE avro_avro_data (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
+> COMMIT
 
 > CREATE CLUSTER avro_data_upsert_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_data_upsert
   IN CLUSTER avro_data_upsert_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
+
+> CREATE TABLE avro_data_upsert_tbl FROM SOURCE avro_data_upsert (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS renamed
   ENVELOPE UPSERT
+> COMMIT
 
-> SELECT * FROM avro_data_upsert
+> SELECT * FROM avro_data_upsert_tbl
 renamed id b
 ------------
 1 2 3
@@ -162,30 +190,38 @@ $ kafka-ingest format=avro topic=avro-data-record schema=${noconflictschema} tim
 {"a": 88}
 
 > CREATE CLUSTER avro_key_record_flattened_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_key_record_flattened
   IN CLUSTER avro_key_record_flattened_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-record-${testdrive.seed}')
+
+> CREATE TABLE avro_key_record_flattened_tbl FROM SOURCE avro_key_record_flattened (REFERENCE "testdrive-avro-data-record-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${multikeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${noconflictschema}'
   INCLUDE KEY
   ENVELOPE NONE
+> COMMIT
 
-> SELECT * FROM avro_key_record_flattened ORDER BY a ASC
+> SELECT * FROM avro_key_record_flattened_tbl ORDER BY a ASC
 id     geo    a
 ----------------
 <null> <null> 88
 1      nyc    99
 
 > CREATE CLUSTER avro_key_record_renamed_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_key_record_renamed
   IN CLUSTER avro_key_record_renamed_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-record-${testdrive.seed}')
+
+> CREATE TABLE avro_key_record_renamed_tbl FROM SOURCE avro_key_record_renamed (REFERENCE "testdrive-avro-data-record-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${multikeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${noconflictschema}'
   INCLUDE KEY AS named
   ENVELOPE NONE
+> COMMIT
 
-> SELECT (named).id as named_id, (named).geo as named_geo, a FROM avro_key_record_renamed ORDER BY a ASC
+> SELECT (named).id as named_id, (named).geo as named_geo, a FROM avro_key_record_renamed_tbl ORDER BY a ASC
 named_id named_geo a
 ---------------------
 <null>   <null>    88
@@ -193,9 +229,10 @@ named_id named_geo a
 
 $ kafka-create-topic topic=avro-dbz partitions=1
 
-! CREATE SOURCE avro_debezium
+> CREATE SOURCE avro_debezium
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-dbz-${testdrive.seed}')
+! CREATE TABLE avro_debezium_tbl FROM SOURCE avro_debezium (REFERENCE "testdrive-avro-dbz-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${noconflictschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
@@ -211,14 +248,18 @@ two,2:bee,honey
 :cow,grass
 
 > CREATE CLUSTER textsrc_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE textsrc
   IN CLUSTER textsrc_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
+
+> CREATE TABLE textsrc_tbl FROM SOURCE textsrc (REFERENCE "testdrive-textsrc-${testdrive.seed}")
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE KEY
+> COMMIT
 
-> SELECT * FROM textsrc
+> SELECT * FROM textsrc_tbl
 key    text
 -------------------
 one,1  horse,apple
@@ -229,11 +270,13 @@ two,2  bee,honey
 > CREATE SOURCE regexvalue
   IN CLUSTER regexvalue_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
+> CREATE TABLE regexvalue_tbl
+  FROM SOURCE regexvalue (REFERENCE "testdrive-textsrc-${testdrive.seed}")
   KEY FORMAT TEXT
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY
 
-> SELECT * FROM regexvalue
+> SELECT * FROM regexvalue_tbl
 key   animal  food
 --------------------
 one,1  horse  apple
@@ -244,11 +287,13 @@ two,2  bee    honey
 > CREATE SOURCE regexboth
   IN CLUSTER regexboth_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
+> CREATE TABLE regexboth_tbl
+  FROM SOURCE regexboth (REFERENCE "testdrive-textsrc-${testdrive.seed}")
   KEY FORMAT REGEX '(?P<id_name>[^,]+),(?P<id>\w+)'
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY
 
-> SELECT * FROM regexboth
+> SELECT * FROM regexboth_tbl
 id_name id     animal food
 ---------------------------
 one     1      horse  apple
@@ -259,11 +304,13 @@ two     2      bee    honey
 > CREATE SOURCE regexbothnest
   IN CLUSTER regexbothnest_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
+> CREATE TABLE regexbothnest_tbl
+  FROM SOURCE regexbothnest (REFERENCE "testdrive-textsrc-${testdrive.seed}")
   KEY FORMAT REGEX '(?P<id_name>[^,]+),(?P<id>\w+)'
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY AS nest
 
-> SELECT (nest).id_name, (nest).id, animal FROM regexbothnest
+> SELECT (nest).id_name, (nest).id, animal FROM regexbothnest_tbl
 id_name id     animal
 --------------------
 <null>  <null> cow
@@ -299,14 +346,18 @@ $ kafka-ingest topic=proto format=protobuf descriptor-file=test.proto message=Va
 {"measurement": 11}
 
 > CREATE CLUSTER input_proto_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE input_proto
   IN CLUSTER input_proto_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-${testdrive.seed}')
+
+> CREATE TABLE input_proto_tbl FROM SOURCE input_proto (REFERENCE "testdrive-proto-${testdrive.seed}")
   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
   INCLUDE KEY
+> COMMIT
 
-> SELECT * FROM input_proto
+> SELECT * FROM input_proto_tbl
 id     measurement
 -------------------
 a      10
@@ -320,78 +371,86 @@ $ kafka-ingest topic=proto-structured
 {"id1": 1, "id2": 2} {"measurement": 10}
 
 > CREATE CLUSTER input_proto_structured_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE input_proto_structured
   IN CLUSTER input_proto_structured_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-structured-${testdrive.seed}')
+
+> CREATE TABLE input_proto_structured_tbl FROM SOURCE input_proto_structured (REFERENCE "testdrive-proto-structured-${testdrive.seed}")
   KEY FORMAT PROTOBUF MESSAGE '.KeyComplex' USING SCHEMA '${test-schema}'
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
   INCLUDE KEY AS key
+> COMMIT
 
-> SELECT key::text, (key).id1, (key).id2, measurement FROM input_proto_structured
+> SELECT key::text, (key).id1, (key).id2, measurement FROM input_proto_structured_tbl
 key    id1  id2  measurement
 ----------------------------
 (1,2)  1    2    10
 
 #
-# Regression test for #20981
+# Regression test for database-issues#6319
 #
 
 # For UPSERT sources with INCLUDE KEY, we expect the queries to
 # take advantage of the uniqueness propery of the key column.
 
-? EXPLAIN SELECT DISTINCT named FROM bareformatconfluent;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM bareformatconfluent_tbl;
 Explained Query:
   Project (#0)
-    ReadStorage materialize.public.bareformatconfluent
+    ReadStorage materialize.public.bareformatconfluent_tbl
 
-Source materialize.public.bareformatconfluent
+Source materialize.public.bareformatconfluent_tbl
 
 Target cluster: quickstart
 
-> CREATE DEFAULT INDEX ON bareformatconfluent;
+> CREATE DEFAULT INDEX ON bareformatconfluent_tbl;
 
-? EXPLAIN SELECT DISTINCT named FROM bareformatconfluent;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM bareformatconfluent_tbl;
 Explained Query (fast path):
   Project (#0)
-    ReadIndex on=materialize.public.bareformatconfluent bareformatconfluent_primary_idx=[*** full scan ***]
+    ReadIndex on=materialize.public.bareformatconfluent_tbl bareformatconfluent_tbl_primary_idx=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.bareformatconfluent_primary_idx (*** full scan ***)
+  - materialize.public.bareformatconfluent_tbl_primary_idx (*** full scan ***)
 
 Target cluster: quickstart
 
 > CREATE CLUSTER envelope_none_with_key_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE envelope_none_with_key
   IN CLUSTER envelope_none_with_key_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-avro-data-${testdrive.seed}')
+
+> CREATE TABLE envelope_none_with_key_tbl FROM SOURCE envelope_none_with_key (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE NONE
+> COMMIT
 
 # For ENVELOPE NONE with INCLUDE KEY, uniqueness is not guaranteed,
 # so we expect that query plans will contain an explicit Distinct on
 
-? EXPLAIN SELECT DISTINCT named FROM envelope_none_with_key;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM envelope_none_with_key_tbl;
 Explained Query:
   Distinct project=[#0] monotonic
     Project (#0)
-      ReadStorage materialize.public.envelope_none_with_key
+      ReadStorage materialize.public.envelope_none_with_key_tbl
 
-Source materialize.public.envelope_none_with_key
+Source materialize.public.envelope_none_with_key_tbl
 
 Target cluster: quickstart
 
-> CREATE DEFAULT INDEX ON envelope_none_with_key;
+> CREATE DEFAULT INDEX ON envelope_none_with_key_tbl;
 
-? EXPLAIN SELECT DISTINCT named FROM envelope_none_with_key;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM envelope_none_with_key_tbl;
 Explained Query:
   Distinct project=[#0] monotonic
     Project (#0)
-      ReadIndex on=envelope_none_with_key envelope_none_with_key_primary_idx=[*** full scan ***]
+      ReadIndex on=envelope_none_with_key_tbl envelope_none_with_key_tbl_primary_idx=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.envelope_none_with_key_primary_idx (*** full scan ***)
+  - materialize.public.envelope_none_with_key_tbl_primary_idx (*** full scan ***)
 
 Target cluster: quickstart

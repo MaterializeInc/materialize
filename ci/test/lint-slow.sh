@@ -15,13 +15,5 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-try cargo clippy --all-targets -- -D warnings
-
-try bin/doc
-try bin/doc --document-private-items
-
-try bin/xcompile cargo test --locked --doc
-
-try bin/ci-closed-issues-detect --changed-lines-only
-
-try_status_report
+ci/test/lint-clippy-doc.sh
+ci/test/lint-cargo-doc-test.sh

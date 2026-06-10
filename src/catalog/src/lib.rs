@@ -9,6 +9,8 @@
 
 // Disallow usage of `unwrap()`.
 #![warn(clippy::unwrap_used)]
+// Latest Rust beta complains: queries overflow the depth limit!
+#![recursion_limit = "256"]
 
 //! Persistent metadata storage for the coordinator.
 
@@ -17,6 +19,7 @@ use mz_adapter_types::connection::ConnectionId;
 pub mod builtin;
 pub mod config;
 pub mod durable;
+pub mod expr_cache;
 pub mod memory;
 
 pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);

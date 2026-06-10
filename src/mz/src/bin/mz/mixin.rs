@@ -24,7 +24,10 @@ pub fn validate_profile_name(val: &str) -> Result<String, String> {
     }
     for c in val.chars() {
         if !(c.is_ascii_alphabetic() || c.is_ascii_digit() || c == '_' || c == '-') {
-            return Err(format!("Invalid character '{}' in profile name.\nThe profile name must consist of only ASCII letters, ASCII digits, underscores, and dashes.", c));
+            return Err(format!(
+                "Invalid character '{}' in profile name.\nThe profile name must consist of only ASCII letters, ASCII digits, underscores, and dashes.",
+                c
+            ));
         }
     }
     Ok(String::from(val))
@@ -33,9 +36,9 @@ pub fn validate_profile_name(val: &str) -> Result<String, String> {
 #[derive(Debug, clap::Args)]
 pub struct EndpointArgs {
     /// Use the specified cloud endpoint.
-    #[clap(long, hidden = true, env = "CLOUD_ENDPOINT")]
+    #[clap(long, hide = true, env = "CLOUD_ENDPOINT")]
     pub cloud_endpoint: Option<Url>,
     /// Use the specified admin endpoint.
-    #[clap(long, hidden = true, env = "ADMIN_ENDPOINT")]
+    #[clap(long, hide = true, env = "ADMIN_ENDPOINT")]
     pub admin_endpoint: Option<Url>,
 }

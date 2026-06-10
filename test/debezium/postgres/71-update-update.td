@@ -17,6 +17,7 @@ CREATE TABLE update_update (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE update_update REPLICA IDENTITY FULL;
 INSERT INTO update_update VALUES (1);
 INSERT INTO update_update VALUES (10);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.update_update
 
@@ -26,10 +27,14 @@ $ schema-registry-wait topic=postgres.public.update_update
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE update_update
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.update_update')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.update_update');
+
+> CREATE TABLE update_update_tbl FROM SOURCE update_update (REFERENCE "postgres.public.update_update")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 BEGIN;
@@ -39,6 +44,6 @@ UPDATE update_update SET f1 = f1 * 10 WHERE f1 = 51;
 UPDATE update_update SET f1 = f1 + 150 WHERE f1 = 200;
 COMMIT;
 
-> SELECT * FROM update_update;
+> SELECT * FROM update_update_tbl;
 510
 350

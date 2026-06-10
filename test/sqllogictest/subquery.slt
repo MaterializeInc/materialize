@@ -10,7 +10,7 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ----
 COMPLETE 0
 
@@ -180,7 +180,7 @@ query BBBBBBBBBBBBBBB
 ----
 true  false  false  true  false  false  NULL  true  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
-query error subquery has 0 columns available but 1 columns specified
+query error subquery1 has 0 columns available but 1 columns specified
 SELECT 1 < ALL(SELECT * FROM nullary)
 
 query error Expected subselect to return 1 column, got 0 columns
@@ -192,7 +192,7 @@ SELECT * FROM (SELECT);
 ----
 
 
-query error subquery has 2 columns available but 1 columns specified
+query error subquery1 has 2 columns available but 1 columns specified
 SELECT 1 < ALL(SELECT 1, 2)
 
 statement ok
@@ -249,7 +249,7 @@ mode standard
 # Verify that the plans for some simple non-correlated subqueries are sane.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 1 }
@@ -270,18 +270,18 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
 Explained Query:
-  Project (#0, #0, #2) // { arity: 3 }
-    Join on=(#0 = #1) type=delta // { arity: 3 }
+  Project (#0{a}, #0{a}, #2{b}) // { arity: 3 }
+    Join on=(#0{a} = #1{a}) type=delta // { arity: 3 }
       implementation
-        %0:t1 » %2[×]UA » %1:t3[#0]K
-        %1:t3 » %2[×]UA » %0:t1[#0]K
-        %2 » %0:t1[×] » %1:t3[#0]K
-      ArrangeBy keys=[[], [#0]] // { arity: 1 }
+        %0:t1 » %2[×]UA » %1:t3[#0{a}]K
+        %1:t3 » %2[×]UA » %0:t1[#0{a}]K
+        %2 » %0:t1[×] » %1:t3[#0{a}]K
+      ArrangeBy keys=[[], [#0{a}]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
+      ArrangeBy keys=[[#0{a}]] // { arity: 2 }
         ReadStorage materialize.public.t3 // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 0 }
         Distinct project=[] // { arity: 0 }
@@ -297,21 +297,21 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
 ----
 Explained Query:
-  Project (#0, #0, #2) // { arity: 3 }
-    Join on=(#0 = #1 AND #2 = #3) type=delta // { arity: 4 }
+  Project (#0{a}, #0{a}, #2{b}) // { arity: 3 }
+    Join on=(#0{a} = #1{a} AND #2{b} = #3{b}) type=delta // { arity: 4 }
       implementation
-        %0:t1 » %1:t3[#0]K » %2[#0]UKA
-        %1:t3 » %2[#0]UKA » %0:t1[#0]K
-        %2 » %1:t3[#1]K » %0:t1[#0]K
-      ArrangeBy keys=[[#0]] // { arity: 1 }
+        %0:t1 » %1:t3[#0{a}]K » %2[#0]UKA
+        %1:t3 » %2[#0]UKA » %0:t1[#0{a}]K
+        %2 » %1:t3[#1]K » %0:t1[#0{a}]K
+      ArrangeBy keys=[[#0{a}]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
-      ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
+      ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 2 }
         ReadStorage materialize.public.t3 // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Distinct project=[#0] // { arity: 1 }
+      ArrangeBy keys=[[#0{b}]] // { arity: 1 }
+        Distinct project=[#0{b}] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
@@ -322,12 +322,12 @@ Target cluster: quickstart
 
 EOF
 
-# Regression test for materialize#1158
+# Regression test for database-issues#396
 # The following subquery currently generates a plan with a map with
 # 4 scalars that refer to other scalars in the map. If query planning optimizes away
 # this particular case, replace with another query that generates such a plan
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT age, ascii_num * 2 as result FROM (
   SELECT age, ascii(letter) AS ascii_num FROM (
     SELECT age, substr(replaced, 2, 1) AS letter FROM (
@@ -339,22 +339,22 @@ SELECT age, ascii_num * 2 as result FROM (
 )
 ----
 Explained Query:
-  Project (#3, #4) // { arity: 2 }
-    Map ((ascii(substr(replace(#1, "o", "i"), 2, 1)) * 2)) // { arity: 5 }
-      Join on=(#0 = #2) type=differential // { arity: 4 }
+  Project (#3{age}, #4) // { arity: 2 }
+    Map ((ascii(substr(replace(#1{likee}, "o", "i"), 2, 1)) * 2)) // { arity: 5 }
+      Join on=(#0{liker} = #2{peep}) type=differential // { arity: 4 }
         implementation
-          %0:likes[#0]K » %1:age[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
+          %0:likes[#0{liker}]K » %1:age[#0{peep}]K
+        ArrangeBy keys=[[#0{liker}]] // { arity: 2 }
+          Filter (#0{liker}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.likes // { arity: 2 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
+        ArrangeBy keys=[[#0{peep}]] // { arity: 2 }
+          Filter (#0{peep}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.age // { arity: 2 }
 
 Source materialize.public.likes
-  filter=((#0) IS NOT NULL)
+  filter=((#0{liker}) IS NOT NULL)
 Source materialize.public.age
-  filter=((#0) IS NOT NULL)
+  filter=((#0{peep}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -377,7 +377,7 @@ SELECT age, ascii_num * 2 as result FROM (
 103  210
 103  236
 
-# regression test for https://github.com/MaterializeInc/materialize/issues/1708
+# regression test for https://github.com/MaterializeInc/database-issues/issues/621
 
 statement ok
 CREATE TABLE tab0(pk INTEGER PRIMARY KEY, col0 INTEGER, col1 FLOAT, col3 INTEGER)
@@ -471,17 +471,31 @@ false
 true
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT b IN (SELECT a FROM x) FROM y
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT b IN (SELECT a FROM x) FROM y
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0{b}] // { arity: 1 }
+        ReadStorage materialize.public.y // { arity: 1 }
+    cte l1 =
+      Project (#0{b}) // { arity: 1 }
+        Join on=(#0{b} = #1{a}) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1[#0]UKA
+          ArrangeBy keys=[[#0{b}]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0{a}]] // { arity: 1 }
+            Distinct project=[#0{a}] // { arity: 1 }
+              ReadStorage materialize.public.x // { arity: 1 }
   Return // { arity: 1 }
     Project (#2) // { arity: 1 }
-      Join on=(#0 = #1) type=differential // { arity: 3 }
+      Join on=(#0{b} = #1{b}) type=differential // { arity: 3 }
         implementation
           %0:y[#0]K » %1[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 1 }
+        ArrangeBy keys=[[#0{b}]] // { arity: 1 }
           ReadStorage materialize.public.y // { arity: 1 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
+        ArrangeBy keys=[[#0{b}]] // { arity: 2 }
           Union // { arity: 2 }
             Map (true) // { arity: 2 }
               Get l1 // { arity: 1 }
@@ -490,20 +504,6 @@ Explained Query:
                 Negate // { arity: 1 }
                   Get l1 // { arity: 1 }
                 Get l0 // { arity: 1 }
-  With
-    cte l1 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
-          implementation
-            %0:l0[#0]UKA » %1[#0]UKA
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct project=[#0] // { arity: 1 }
-              ReadStorage materialize.public.x // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.y // { arity: 1 }
 
 Source materialize.public.x
 Source materialize.public.y
@@ -513,18 +513,32 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT b != ALL(SELECT a FROM x) FROM y
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT b != ALL(SELECT a FROM x) FROM y
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0{b}] // { arity: 1 }
+        ReadStorage materialize.public.y // { arity: 1 }
+    cte l1 =
+      Project (#0{b}) // { arity: 1 }
+        Join on=(#0{b} = #1{a}) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1[#0]UKA
+          ArrangeBy keys=[[#0{b}]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0{a}]] // { arity: 1 }
+            Distinct project=[#0{a}] // { arity: 1 }
+              ReadStorage materialize.public.x // { arity: 1 }
   Return // { arity: 1 }
     Project (#3) // { arity: 1 }
       Map (NOT(#2)) // { arity: 4 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
+        Join on=(#0{b} = #1{b}) type=differential // { arity: 3 }
           implementation
             %0:y[#0]K » %1[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
+          ArrangeBy keys=[[#0{b}]] // { arity: 1 }
             ReadStorage materialize.public.y // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
+          ArrangeBy keys=[[#0{b}]] // { arity: 2 }
             Union // { arity: 2 }
               Map (true) // { arity: 2 }
                 Get l1 // { arity: 1 }
@@ -533,20 +547,6 @@ Explained Query:
                   Negate // { arity: 1 }
                     Get l1 // { arity: 1 }
                   Get l0 // { arity: 1 }
-  With
-    cte l1 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
-          implementation
-            %0:l0[#0]UKA » %1[#0]UKA
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct project=[#0] // { arity: 1 }
-              ReadStorage materialize.public.x // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.y // { arity: 1 }
 
 Source materialize.public.x
 Source materialize.public.y
@@ -557,18 +557,33 @@ EOF
 
 # Check that we correctly invert the filter here via De Morgan.
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT b > ALL(SELECT a FROM x) FROM y
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT b > ALL(SELECT a FROM x) FROM y
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0{b}] // { arity: 1 }
+        ReadStorage materialize.public.y // { arity: 1 }
+    cte l1 =
+      Distinct project=[#0{b}] // { arity: 1 }
+        Project (#0{b}) // { arity: 1 }
+          Filter (#0{b} <= #1{a}) // { arity: 2 }
+            CrossJoin type=differential // { arity: 2 }
+              implementation
+                %0:l0[×] » %1:x[×]
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Get l0 // { arity: 1 }
+              ArrangeBy keys=[[]] // { arity: 1 }
+                ReadStorage materialize.public.x // { arity: 1 }
   Return // { arity: 1 }
     Project (#3) // { arity: 1 }
       Map (NOT(#2)) // { arity: 4 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
+        Join on=(#0{b} = #1{b}) type=differential // { arity: 3 }
           implementation
             %0:y[#0]K » %1[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
+          ArrangeBy keys=[[#0{b}]] // { arity: 1 }
             ReadStorage materialize.public.y // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
+          ArrangeBy keys=[[#0{b}]] // { arity: 2 }
             Union // { arity: 2 }
               Map (true) // { arity: 2 }
                 Get l1 // { arity: 1 }
@@ -577,21 +592,6 @@ Explained Query:
                   Negate // { arity: 1 }
                     Get l1 // { arity: 1 }
                   Get l0 // { arity: 1 }
-  With
-    cte l1 =
-      Distinct project=[#0] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Filter (#0 <= #1) // { arity: 2 }
-            CrossJoin type=differential // { arity: 2 }
-              implementation
-                %0:l0[×] » %1:x[×]
-              ArrangeBy keys=[[]] // { arity: 1 }
-                Get l0 // { arity: 1 }
-              ArrangeBy keys=[[]] // { arity: 1 }
-                ReadStorage materialize.public.x // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.y // { arity: 1 }
 
 Source materialize.public.x
 Source materialize.public.y
@@ -635,14 +635,14 @@ from ys
 1  -1
 2  0.5
 
-# Regression test for #3924, in which quantified comparision simplification was
+# Regression test for database-issues#1221, in which quantified comparision simplification was
 # not correctly handling LATERAL joins.
 query II
 SELECT * FROM (VALUES (1)), LATERAL (SELECT * FROM (SELECT column1) WHERE true)
 ----
 1  1
 
-# Regression test for #3933, in which the query planner mishandled the outer
+# Regression test for database-issues#1222, in which the query planner mishandled the outer
 # scope of a nested LATERAL join.
 query IIII
 SELECT * FROM
@@ -651,7 +651,7 @@ SELECT * FROM
 ----
 1  1  1  1
 
-# Regression test for #4157, in which quantified expression simplification
+# Regression test for database-issues#1287, in which quantified expression simplification
 # failed to handle map expressions which depended upon a column introduced by
 # an earlier expression in the same map node.
 query I
@@ -663,7 +663,7 @@ FROM (SELECT 1 col1)
 query error aggregate functions that refer exclusively to outer columns not yet supported
 SELECT (SELECT count(likes.likee)) FROM likes
 
-# Regression test for #7121, where the multiplicity of the outer query was not
+# Regression test for database-issues#2209, where the multiplicity of the outer query was not
 # preserved when an EXISTS subquery only involves constants/mpf/flatmaps.
 query I
 SELECT x FROM xs WHERE EXISTS (SELECT y FROM (SELECT 1 as y) WHERE x = y)
@@ -671,7 +671,7 @@ SELECT x FROM xs WHERE EXISTS (SELECT y FROM (SELECT 1 as y) WHERE x = y)
 1
 1
 
-# Regression test for #9921, in which the presence of a SELECT subquery inside
+# Regression test for database-issues#2994, in which the presence of a SELECT subquery inside
 # of another subexpression produced a degenerate join that was not elided before
 # join implementation planning.
 query I
@@ -687,7 +687,7 @@ WHERE a IN (9, 0)
 1
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
 WHERE a IN (9, 0)
   OR 0  <  ALL (
       SELECT agg1  NULL
@@ -704,6 +704,61 @@ Explained Query:
 
 Source materialize.public.x
 Source materialize.public.y
+
+Target cluster: quickstart
+
+EOF
+
+# Regression test: try_simplify_quantified_comparisons (= ANY -> EXISTS) must
+# also apply inside JOIN ON clauses, not just WHERE. The decorrelated plan
+# should use Filter/Distinct/Map(true) (the EXISTS semijoin pattern), not
+# Reduce with an any() aggregate (the generic scalar subquery path).
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT * FROM x JOIN y ON y.b = ANY(SELECT a FROM x)
+----
+With
+  cte l0 =
+    Project (#0{a}, #1{b})
+      CrossJoin
+        CrossJoin
+          Constant
+            - ()
+          Get materialize.public.x
+        CrossJoin
+          Constant
+            - ()
+          Get materialize.public.y
+  cte l1 =
+    Distinct project=[#1{b}]
+      Get l0
+  cte l2 =
+    Map (true)
+      Distinct project=[#0{b}]
+        Filter (#0{b} = #1{a})
+          CrossJoin
+            Get l1
+            Get materialize.public.x
+Return
+  Project (#0{a}, #1{b})
+    Filter #2
+      Project (#0{a}, #1{b}, #3)
+        Join on=(#1{b} = #2{b})
+          Get l0
+          Union
+            Get l2
+            CrossJoin
+              Project (#0{b})
+                Join on=(#0{b} = #1{b})
+                  Union
+                    Negate
+                      Distinct project=[#0{b}]
+                        Get l2
+                    Distinct project=[#0{b}]
+                      Get l1
+                  Get l1
+              Constant
+                - (false)
 
 Target cluster: quickstart
 

@@ -7,51 +7,56 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
-use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
-use timely::container::columnation::Columnation;
+use differential_dataflow::trace::implementations::spine_fueled::Spine;
+use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
+use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
+use timely::Container;
+use timely::container::{ContainerBuilder, PushInto};
+use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::progress::Timestamp;
-use timely::Container;
 
-use crate::logging::compute::ComputeEvent;
-use crate::typedefs::{KeyAgent, KeyValAgent, RowAgent, RowRowAgent, RowValAgent};
+use crate::logging::compute::{
+    ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
+    ArrangementHeapSizeOperator, ComputeEvent, ComputeEventBuilder,
+};
+use crate::typedefs::{
+    KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowRowAgent, RowValAgent,
+};
 
 /// Extension trait to arrange data.
-pub trait MzArrange: MzArrangeCore
-where
-    <Self::Scope as ScopeParent>::Timestamp: Lattice,
-{
+pub trait MzArrange<'scope>: MzArrangeCore<'scope> {
     /// Arranges a stream of `(Key, Val)` updates by `Key` into a trace of type `Tr`.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
+    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
+        Ba: Batcher<Time = Self::Timestamp> + 'static,
+        Chu: ContainerBuilder<Container = Ba::Output>
+            + for<'a> PushInto<&'a mut Self::Input>
+            + 'static,
+        Bu: Builder<Time = Self::Timestamp, Input = Ba::Output, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = Self::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp>,
-        Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize;
 }
 
 /// Extension trait to arrange data.
-pub trait MzArrangeCore
-where
-    <Self::Scope as ScopeParent>::Timestamp: Lattice,
-{
+pub trait MzArrangeCore<'scope> {
     /// The current scope.
-    type Scope: Scope;
+    type Timestamp: Timestamp + Lattice;
     /// The data input container type.
-    type Input: Container;
+    type Input: Container + Clone + 'static;
 
     /// Arranges a stream of `(Key, Val)` updates by `Key` into a trace of type `Tr`. Partitions
     /// the data according to `pact`.
@@ -59,128 +64,168 @@ where
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Chu, Ba, Bu, Tr>(
+        self,
+        pact: P,
+        name: &str,
+    ) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<<Self::Scope as ScopeParent>::Timestamp, Self::Input>,
-        Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
+        P: ParallelizationContract<Self::Timestamp, Self::Input>,
+        Ba: Batcher<Time = Self::Timestamp> + 'static,
+        Chu: ContainerBuilder<Container = Ba::Output>
+            + for<'a> PushInto<&'a mut Self::Input>
+            + 'static,
+        Bu: Builder<Time = Self::Timestamp, Input = Ba::Output, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = Self::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp>,
-        Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize;
 }
 
-impl<G, C> MzArrangeCore for StreamCore<G, C>
+impl<'scope, T, C> MzArrangeCore<'scope> for Stream<'scope, T, C>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
-    C: Container,
+    T: Timestamp + Lattice,
+    C: Container + Clone + 'static,
 {
-    type Scope = G;
+    type Timestamp = T;
     type Input = C;
 
-    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Chu, Ba, Bu, Tr>(
+        self,
+        pact: P,
+        name: &str,
+    ) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, Self::Input>,
-        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
+        P: ParallelizationContract<T, Self::Input>,
+        Ba: Batcher<Time = T> + 'static,
+        Chu: ContainerBuilder<Container = Ba::Output>
+            + for<'a> PushInto<&'a mut Self::Input>
+            + 'static,
+        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = T> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input = Self::Input>,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        arrange_core(self, pact, name).log_arrangement_size()
+        arrange_core::<_, _, Chu, Ba, Bu, _>(self, pact, name).log_arrangement_size()
     }
 }
 
-impl<G, K, V, R> MzArrange for Collection<G, (K, V), R>
+impl<'scope, T, K, V, R> MzArrange<'scope> for VecCollection<'scope, T, (K, V), R>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
+    T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
     V: ExchangeData,
     R: ExchangeData,
 {
-    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
+        Ba: Batcher<Time = T> + 'static,
+        Chu: ContainerBuilder<Container = Ba::Output>
+            + for<'a> PushInto<&'a mut Self::Input>
+            + 'static,
+        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = T> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input = Self::Input>,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
-        let exchange =
-            Exchange::new(move |update: &((K, V), G::Timestamp, R)| (update.0).0.hashed().into());
-        self.mz_arrange_core(exchange, name)
+        let exchange = Exchange::new(move |update: &((K, V), T, R)| (update.0).0.hashed().into());
+        self.mz_arrange_core::<_, Chu, Ba, Bu, _>(exchange, name)
     }
 }
 
-impl<G, K, V, R, C> MzArrangeCore for Collection<G, (K, V), R, C>
+impl<'scope, T, C> MzArrangeCore<'scope> for Collection<'scope, T, C>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
-    C: Container,
+    T: Timestamp + Lattice,
+    C: Container + Clone + 'static,
 {
-    type Scope = G;
+    type Timestamp = T;
     type Input = C;
 
-    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Chu, Ba, Bu, Tr>(
+        self,
+        pact: P,
+        name: &str,
+    ) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, Self::Input>,
-        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
+        P: ParallelizationContract<T, Self::Input>,
+        Ba: Batcher<Time = T> + 'static,
+        Chu: ContainerBuilder<Container = Ba::Output>
+            + for<'a> PushInto<&'a mut Self::Input>
+            + 'static,
+        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = T> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input = Self::Input>,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.inner.mz_arrange_core(pact, name)
+        self.inner.mz_arrange_core::<_, Chu, Ba, Bu, _>(pact, name)
     }
 }
 
 /// A specialized collection where data only has a key, but no associated value.
 ///
 /// Created by calling `collection.into()`.
-pub struct KeyCollection<G: Scope, K, R = usize>(Collection<G, K, R>);
+pub struct KeyCollection<'scope, T: Timestamp, K: 'static, R: 'static = usize>(
+    VecCollection<'scope, T, K, R>,
+);
 
-impl<G: Scope, K, R: Semigroup> From<Collection<G, K, R>> for KeyCollection<G, K, R> {
-    fn from(value: Collection<G, K, R>) -> Self {
+impl<'scope, T: Timestamp, K, R: Semigroup> From<VecCollection<'scope, T, K, R>>
+    for KeyCollection<'scope, T, K, R>
+{
+    fn from(value: VecCollection<'scope, T, K, R>) -> Self {
         KeyCollection(value)
     }
 }
 
-impl<G, K, R> MzArrange for KeyCollection<G, K, R>
+impl<'scope, T, K, R> MzArrange<'scope> for KeyCollection<'scope, T, K, R>
 where
-    G: Scope,
+    T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
-    G::Timestamp: Lattice,
     R: ExchangeData,
 {
-    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
+        Ba: Batcher<Time = T> + 'static,
+        Chu: ContainerBuilder<Container = Ba::Output>
+            + for<'a> PushInto<&'a mut Self::Input>
+            + 'static,
+        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = T> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input = Self::Input, Time = G::Timestamp>,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.0.map(|d| (d, ())).mz_arrange(name)
+        self.0.map(|d| (d, ())).mz_arrange::<Chu, Ba, Bu, _>(name)
     }
 }
 
-impl<G, K, R> MzArrangeCore for KeyCollection<G, K, R>
+impl<'scope, T, K, R> MzArrangeCore<'scope> for KeyCollection<'scope, T, K, R>
 where
-    G: Scope,
-    K: Data,
-    G::Timestamp: Lattice,
-    R: Data,
+    T: Timestamp + Lattice,
+    K: Clone + 'static,
+    R: Clone + 'static,
 {
-    type Scope = G;
-    type Input = Vec<((K, ()), G::Timestamp, R)>;
+    type Timestamp = T;
+    type Input = Vec<((K, ()), T, R)>;
 
-    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Chu, Ba, Bu, Tr>(
+        self,
+        pact: P,
+        name: &str,
+    ) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, Self::Input>,
-        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
+        P: ParallelizationContract<T, Self::Input>,
+        Ba: Batcher<Time = T> + 'static,
+        Chu: ContainerBuilder<Container = Ba::Output>
+            + for<'a> PushInto<&'a mut Self::Input>
+            + 'static,
+        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = T> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input = Self::Input, Time = G::Timestamp>,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.0.map(|d| (d, ())).mz_arrange_core(pact, name)
+        self.0
+            .map(|d| (d, ()))
+            .mz_arrange_core::<_, Chu, Ba, Bu, _>(pact, name)
     }
 }
 
@@ -193,27 +238,24 @@ pub trait ArrangementSize {
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
 ///
 /// * `arranged`: The arrangement to inspect.
-/// * `logic`: Closure that calculates the heap size/capacity/allocations for a trace. The return
+/// * `logic`: Closure that calculates the heap size/capacity/allocations for a batch. The return
 ///    value are size and capacity in bytes, and number of allocations, all in absolute values.
-fn log_arrangement_size_inner<G, Tr, L>(
-    arranged: Arranged<G, TraceAgent<Tr>>,
+fn log_arrangement_size_inner<'scope, B, L>(
+    arranged: Arranged<'scope, TraceAgent<Spine<Rc<B>>>>,
     mut logic: L,
-) -> Arranged<G, TraceAgent<Tr>>
+) -> Arranged<'scope, TraceAgent<Spine<Rc<B>>>>
 where
-    G: Scope,
-    G::Timestamp: Timestamp + Lattice + Ord,
-    Tr: TraceReader + 'static,
-    Tr::Time: Timestamp + Lattice + Ord + Clone + 'static,
-    L: FnMut(&Tr) -> (usize, usize, usize) + 'static,
+    B: Batch + 'static,
+    L: FnMut(&B) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
     let Some(logger) = scope
-        .log_register()
-        .get::<ComputeEvent>("materialize/compute")
+        .worker()
+        .logger_for::<ComputeEventBuilder>("materialize/compute")
     else {
         return arranged;
     };
-    let operator = arranged.trace.operator().global_id;
+    let operator_id = arranged.trace.operator().global_id;
     let trace = Rc::downgrade(&arranged.trace.trace_box_unstable());
 
     let (mut old_size, mut old_capacity, mut old_allocations) = (0isize, 0isize, 0isize);
@@ -221,42 +263,70 @@ where
     let stream = arranged
         .stream
         .unary(Pipeline, "ArrangementSize", |_cap, info| {
-            let mut buffer = Default::default();
             let address = info.address;
-            logger.log(ComputeEvent::ArrangementHeapSizeOperator { operator, address });
+            logger.log(&ComputeEvent::ArrangementHeapSizeOperator(
+                ArrangementHeapSizeOperator {
+                    operator_id,
+                    address: address.to_vec(),
+                },
+            ));
+
+            // Weak references to batches, so we can observe batches outside the trace.
+            let mut batches = BTreeMap::new();
+
             move |input, output| {
-                while let Some((time, data)) = input.next() {
-                    data.swap(&mut buffer);
-                    output.session(&time).give_container(&mut buffer);
-                }
+                input.for_each(|time, data| {
+                    batches.extend(
+                        data.iter()
+                            .map(|batch| (Rc::as_ptr(batch), Rc::downgrade(batch))),
+                    );
+                    output.session(&time).give_container(data);
+                });
                 let Some(trace) = trace.upgrade() else {
                     return;
                 };
 
-                let (size, capacity, allocations) = logic(&trace.borrow().trace);
+                trace.borrow().trace().map_batches(|batch| {
+                    batches.insert(Rc::as_ptr(batch), Rc::downgrade(batch));
+                });
+
+                let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+                batches.retain(|_, weak| {
+                    if let Some(batch) = weak.upgrade() {
+                        let (sz, c, a) = logic(&batch);
+                        (size += sz, capacity += c, allocations += a);
+                        true
+                    } else {
+                        false
+                    }
+                });
 
                 let size = size.try_into().expect("must fit");
                 if size != old_size {
-                    logger.log(ComputeEvent::ArrangementHeapSize {
-                        operator,
+                    logger.log(&ComputeEvent::ArrangementHeapSize(ArrangementHeapSize {
+                        operator_id,
                         delta_size: size - old_size,
-                    });
+                    }));
                 }
 
                 let capacity = capacity.try_into().expect("must fit");
                 if capacity != old_capacity {
-                    logger.log(ComputeEvent::ArrangementHeapCapacity {
-                        operator,
-                        delta_capacity: capacity - old_capacity,
-                    });
+                    logger.log(&ComputeEvent::ArrangementHeapCapacity(
+                        ArrangementHeapCapacity {
+                            operator_id,
+                            delta_capacity: capacity - old_capacity,
+                        },
+                    ));
                 }
 
                 let allocations = allocations.try_into().expect("must fit");
                 if allocations != old_allocations {
-                    logger.log(ComputeEvent::ArrangementHeapAllocations {
-                        operator,
-                        delta_allocations: allocations - old_allocations,
-                    });
+                    logger.log(&ComputeEvent::ArrangementHeapAllocations(
+                        ArrangementHeapAllocations {
+                            operator_id,
+                            delta_allocations: allocations - old_allocations,
+                        },
+                    ));
                 }
 
                 old_size = size;
@@ -270,219 +340,122 @@ where
     }
 }
 
-impl<G, K, V, T, R> ArrangementSize for Arranged<G, KeyValAgent<K, V, T, R>>
+impl<'scope, T, K, V, R> ArrangementSize for Arranged<'scope, KeyValAgent<K, V, T, R>>
 where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord + Columnation,
-    K: Data + Columnation,
-    V: Data + Columnation,
-    T: Lattice + Timestamp,
-    R: Semigroup + Ord + Columnation + 'static,
+    T: MzTimestamp,
+    K: Data + MzData,
+    V: Data + MzData,
+    R: Semigroup + Ord + MzData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
+        log_arrangement_size_inner(self, |batch| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
                 allocations += usize::from(cap > 0);
             };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.vals.heap_size(&mut callback);
-                batch.storage.vals_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.vals.offs.heap_size(&mut callback);
+            batch.storage.vals.vals.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
 }
 
-impl<G, K, T, R> ArrangementSize for Arranged<G, KeyAgent<K, T, R>>
+impl<'scope, T, K, R> ArrangementSize for Arranged<'scope, KeyAgent<K, T, R>>
 where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord,
-    K: Data + Columnation,
-    T: Lattice + Timestamp + Columnation,
-    R: Semigroup + Ord + Columnation + 'static,
+    T: MzTimestamp,
+    K: Data + MzArrangeData,
+    R: Semigroup + Ord + MzData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
+        log_arrangement_size_inner(self, |batch| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
                 allocations += usize::from(cap > 0);
             };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
 }
 
-impl<G, V, T, R> ArrangementSize for Arranged<G, RowValAgent<V, T, R>>
+impl<'scope, T, V, R> ArrangementSize for Arranged<'scope, RowValAgent<V, T, R>>
 where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord + Columnation,
-    V: Data + Columnation,
-    T: Lattice + Timestamp,
-    R: Semigroup + Ord + Columnation + 'static,
+    T: MzTimestamp,
+    V: Data + MzArrangeData,
+    R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
+        log_arrangement_size_inner(self, |batch| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
                 allocations += usize::from(cap > 0);
             };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.vals.heap_size(&mut callback);
-                batch.storage.vals_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.vals.offs.heap_size(&mut callback);
+            batch.storage.vals.vals.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
 }
 
-impl<G, T, R> ArrangementSize for Arranged<G, RowRowAgent<T, R>>
+impl<'scope, T, R> ArrangementSize for Arranged<'scope, RowRowAgent<T, R>>
 where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord + Columnation,
-    T: Lattice + Timestamp,
-    R: Semigroup + Ord + Columnation + 'static,
+    T: MzTimestamp,
+    R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
+        log_arrangement_size_inner(self, |batch| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
                 allocations += usize::from(cap > 0);
             };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.vals.heap_size(&mut callback);
-                batch.storage.vals_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.vals.offs.heap_size(&mut callback);
+            batch.storage.vals.vals.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
 }
 
-impl<G, T, R> ArrangementSize for Arranged<G, RowAgent<T, R>>
+impl<'scope, T, R> ArrangementSize for Arranged<'scope, RowAgent<T, R>>
 where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord + Columnation,
-    T: Lattice + Timestamp,
-    R: Semigroup + Ord + Columnation + 'static,
+    T: MzTimestamp,
+    R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
+        log_arrangement_size_inner(self, |batch| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
                 allocations += usize::from(cap > 0);
             };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
-    }
-}
-
-mod flatcontainer {
-    use differential_dataflow::difference::Semigroup;
-    use differential_dataflow::lattice::Lattice;
-    use differential_dataflow::operators::arrange::Arranged;
-    use differential_dataflow::trace::TraceReader;
-    use mz_ore::flatcontainer::MzRegionPreference;
-    use timely::container::flatcontainer::{IntoOwned, Push, Region, ReserveItems};
-    use timely::dataflow::Scope;
-    use timely::progress::Timestamp;
-    use timely::PartialOrder;
-
-    use crate::extensions::arrange::{log_arrangement_size_inner, ArrangementSize};
-    use crate::typedefs::{FlatKeyValAgent, FlatKeyValSpine};
-
-    impl<G, K, V, T, R, C> ArrangementSize for Arranged<G, FlatKeyValAgent<K, V, T, R, C>>
-    where
-        Self: Clone,
-        G: Scope<Timestamp = T::Owned>,
-        G::Timestamp: Lattice + Ord + MzRegionPreference,
-        K: Region
-            + Clone
-            + Push<<K as Region>::Owned>
-            + for<'a> Push<<K as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<K as Region>::ReadItem<'a>>
-            + 'static,
-        V: Region
-            + Clone
-            + Push<<V as Region>::Owned>
-            + for<'a> Push<<V as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<V as Region>::ReadItem<'a>>
-            + 'static,
-        T: Region
-            + Clone
-            + Push<<T as Region>::Owned>
-            + for<'a> Push<<T as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<T as Region>::ReadItem<'a>>
-            + 'static,
-        R: Region
-            + Clone
-            + Push<<R as Region>::Owned>
-            + for<'a> Push<&'a <R as Region>::Owned>
-            + for<'a> Push<<R as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<R as Region>::ReadItem<'a>>
-            + 'static,
-        K::Owned: Clone + Ord,
-        V::Owned: Clone + Ord,
-        T::Owned: Lattice + for<'a> PartialOrder<<T as Region>::ReadItem<'a>> + Timestamp,
-        R::Owned:
-            Default + Ord + Semigroup + for<'a> Semigroup<<R as Region>::ReadItem<'a>> + 'static,
-        for<'a> <K as Region>::ReadItem<'a>: Copy + Ord,
-        for<'a> <V as Region>::ReadItem<'a>: Copy + Ord,
-        for<'a> <T as Region>::ReadItem<'a>: Copy + IntoOwned<'a> + Ord + PartialOrder<T::Owned>,
-        for<'a> <R as Region>::ReadItem<'a>: Copy + IntoOwned<'a, Owned = R::Owned> + Ord,
-        C: 'static,
-    {
-        fn log_arrangement_size(self) -> Self {
-            log_arrangement_size_inner::<_, FlatKeyValSpine<K, V, T, R, C>, _>(self, |trace| {
-                let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-                let mut callback = |siz, cap| {
-                    size += siz;
-                    capacity += cap;
-                    allocations += usize::from(cap > 0);
-                };
-                trace.map_batches(|batch| {
-                    batch.storage.keys.heap_size(&mut callback);
-                    batch.storage.keys_offs.heap_size(&mut callback);
-                    batch.storage.vals.heap_size(&mut callback);
-                    batch.storage.vals_offs.heap_size(&mut callback);
-                    batch.storage.times.heap_size(&mut callback);
-                    batch.storage.diffs.heap_size(&mut callback);
-                });
-                (size, capacity, allocations)
-            })
-        }
     }
 }

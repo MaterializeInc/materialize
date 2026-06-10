@@ -7,7 +7,6 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- depends_on: {{ ref('table') }}
 {{ config(materialized='materialized_view', cluster='qa_canary_environment_compute', indexes=[{'default': True}]) }}
-
-SELECT max(c) FROM {{ source('table','table') }}
+-- table public_table.table is created directly in mzcompose
+SELECT max(c) FROM public_table.table

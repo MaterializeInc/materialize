@@ -15,10 +15,9 @@ import json
 import subprocess
 from typing import TypeVar
 
-try:
-    from semver.version import Version
-except ImportError:
-    from semver import VersionInfo as Version  # type: ignore
+from semver.version import Version
+
+from materialize import MZ_ROOT
 
 T = TypeVar("T", bound="TypedVersionBase")
 
@@ -48,7 +47,7 @@ class TypedVersionBase(Version):
 
     @classmethod
     def parse(cls: type[T], version: str, drop_dev_suffix: bool = False) -> T:
-        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1)"""
+        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1) or v0.115.0-dev.0"""
         expected_prefix = cls.get_prefix()
         if not version.startswith(expected_prefix):
             raise ValueError(
@@ -62,9 +61,11 @@ class TypedVersionBase(Version):
             # Hash ignored
 
         if drop_dev_suffix:
-            version = version.replace("-dev", "")
+            version, _, _ = version.partition("-dev")
 
-        return super().parse(version)
+        result = super().parse(version)
+        assert isinstance(result, cls)
+        return result
 
     @classmethod
     def try_parse(
@@ -86,6 +87,9 @@ class TypedVersionBase(Version):
     def __str__(self) -> str:
         return f"{self.get_prefix()}{self.str_without_prefix()}"
 
+    def is_dev_version(self) -> bool:
+        return self.prerelease == "dev"
+
 
 class MzVersion(TypedVersionBase):
     """Version of Materialize, can be parsed from version string, SQL, cargo"""
@@ -96,7 +100,7 @@ class MzVersion(TypedVersionBase):
 
     @classmethod
     def parse_mz(cls: type[T], version: str, drop_dev_suffix: bool = False) -> T:
-        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1)"""
+        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1) or v0.115.0-dev.0"""
         return cls.parse(version=version, drop_dev_suffix=drop_dev_suffix)
 
     @classmethod
@@ -104,7 +108,8 @@ class MzVersion(TypedVersionBase):
         """Uses the cargo mz-environmentd package info to get the version of current source code state"""
         metadata = json.loads(
             subprocess.check_output(
-                ["cargo", "metadata", "--no-deps", "--format-version=1"]
+                ["cargo", "metadata", "--no-deps", "--format-version=1"],
+                cwd=MZ_ROOT,
             )
         )
         for package in metadata["packages"]:
@@ -122,9 +127,9 @@ class MzCliVersion(TypedVersionBase):
         return "mz-v"
 
 
-class MzLspServerVersion(TypedVersionBase):
-    """Version of Materialize LSP Server"""
+class MzDebugVersion(TypedVersionBase):
+    """Version of Materialize Debug Tool"""
 
     @classmethod
     def get_prefix(cls) -> str:
-        return "mz-lsp-server-v"
+        return "mz-debug-v"

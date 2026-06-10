@@ -18,25 +18,23 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use mz_repr::GlobalId;
-use proptest::prelude::Arbitrary;
-use proptest_derive::Arbitrary;
+use mz_repr::CatalogItemId;
 use serde::{Deserialize, Serialize};
 
 use crate::AlterCompatible;
 
 use super::Connection;
 
-/// Permits any struct to take a `GlobalId` into an inlined connection.
+/// Permits any struct to take a [`CatalogItemId`] into an inlined connection.
 ///
 /// It is safe to assume that if this `id` does not refer to a catalog
 /// connection, this function will panic.
 pub trait ConnectionResolver {
-    fn resolve_connection(&self, id: GlobalId) -> Connection<InlinedConnection>;
+    fn resolve_connection(&self, id: CatalogItemId) -> Connection<InlinedConnection>;
 }
 
 impl<R: ConnectionResolver + ?Sized> ConnectionResolver for &R {
-    fn resolve_connection(&self, id: GlobalId) -> Connection<InlinedConnection> {
+    fn resolve_connection(&self, id: CatalogItemId) -> Connection<InlinedConnection> {
         (*self).resolve_connection(id)
     }
 }
@@ -54,11 +52,8 @@ pub trait IntoInlineConnection<T, R: ConnectionResolver + ?Sized> {
 
 /// Expresses how a struct/enum can access details about any connections it
 /// uses. Meant to be used as a type constraint on structs that use connections.
-pub trait ConnectionAccess:
-    Arbitrary + Clone + Debug + Eq + PartialEq + Serialize + 'static
-{
-    type Kafka: Arbitrary
-        + Clone
+pub trait ConnectionAccess: Clone + Debug + Eq + PartialEq + Serialize + 'static {
+    type Kafka: Clone
         + Debug
         + Eq
         + PartialEq
@@ -66,8 +61,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type Pg: Arbitrary
-        + Clone
+    type Pg: Clone
         + Debug
         + Eq
         + PartialEq
@@ -75,8 +69,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type Aws: Arbitrary
-        + Clone
+    type Aws: Clone
         + Debug
         + Eq
         + PartialEq
@@ -84,8 +77,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type Ssh: Arbitrary
-        + Clone
+    type Ssh: Clone
         + Debug
         + Eq
         + PartialEq
@@ -93,8 +85,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type Csr: Arbitrary
-        + Clone
+    type Csr: Clone
         + Debug
         + Eq
         + PartialEq
@@ -102,8 +93,31 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type MySql: Arbitrary
-        + Clone
+    type GlueSchemaRegistry: Clone
+        + Debug
+        + Eq
+        + PartialEq
+        + Hash
+        + Serialize
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
+    type MySql: Clone
+        + Debug
+        + Eq
+        + PartialEq
+        + Hash
+        + Serialize
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
+    type SqlServer: Clone
+        + Debug
+        + Eq
+        + PartialEq
+        + Hash
+        + Serialize
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
+    type IcebergCatalog: Clone
         + Debug
         + Eq
         + PartialEq
@@ -116,20 +130,23 @@ pub trait ConnectionAccess:
 /// Expresses that the struct contains references to connections. Use a
 /// combination of [`IntoInlineConnection`] and [`ConnectionResolver`] to take
 /// this into [`InlinedConnection`].
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ReferencedConnection;
 
 impl ConnectionAccess for ReferencedConnection {
-    type Kafka = GlobalId;
-    type Pg = GlobalId;
-    type Aws = GlobalId;
-    type Ssh = GlobalId;
-    type Csr = GlobalId;
-    type MySql = GlobalId;
+    type Kafka = CatalogItemId;
+    type Pg = CatalogItemId;
+    type Aws = CatalogItemId;
+    type Ssh = CatalogItemId;
+    type Csr = CatalogItemId;
+    type GlueSchemaRegistry = CatalogItemId;
+    type MySql = CatalogItemId;
+    type SqlServer = CatalogItemId;
+    type IcebergCatalog = CatalogItemId;
 }
 
 /// Expresses that the struct contains an inlined definition of a connection.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct InlinedConnection;
 
 impl ConnectionAccess for InlinedConnection {
@@ -138,5 +155,8 @@ impl ConnectionAccess for InlinedConnection {
     type Aws = super::aws::AwsConnection;
     type Ssh = super::SshConnection;
     type Csr = super::CsrConnection;
+    type GlueSchemaRegistry = super::GlueSchemaRegistryConnection;
     type MySql = super::MySqlConnection;
+    type SqlServer = super::SqlServerConnectionDetails;
+    type IcebergCatalog = super::IcebergCatalogConnection;
 }

@@ -10,6 +10,7 @@
 //! Implementation of [Consensus] backed by Postgres.
 
 use std::fmt::Formatter;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,18 +18,39 @@ use anyhow::anyhow;
 use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
-use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
+use deadpool_postgres::tokio_postgres::Config;
+use deadpool_postgres::tokio_postgres::types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 use deadpool_postgres::{Object, PoolError};
 use futures_util::StreamExt;
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::url::SensitiveUrl;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
+use postgres_protocol::escape::escape_identifier;
 use tokio_postgres::error::SqlState;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
+
+/// Flag to use concensus queries that are tuned for vanilla Postgres.
+pub const USE_POSTGRES_TUNED_QUERIES: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
+    "persist_use_postgres_tuned_queries",
+    false,
+    "Use a set of queries for consensus that have specifically been tuned against
+    Postgres to ensure we acquire a minimal number of locks.",
+);
+
+const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS consensus (
+    shard text NOT NULL,
+    sequence_number bigint NOT NULL,
+    data bytea NOT NULL,
+    PRIMARY KEY(shard, sequence_number)
+)
+";
 
 // These `sql_stats_automatic_collection_enabled` are for the cost-based
 // optimizer but all the queries against this table are single-table and very
@@ -36,14 +58,15 @@ use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, 
 // really get us anything. OTOH, the background jobs that crdb creates to
 // collect these stats fill up the jobs table (slowing down all sorts of
 // things).
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS consensus (
-    shard text NOT NULL,
-    sequence_number bigint NOT NULL,
-    data bytea NOT NULL,
-    PRIMARY KEY(shard, sequence_number)
-) WITH (sql_stats_automatic_collection_enabled = false);
-";
+const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled = false)";
+// The `consensus` table creates and deletes rows at a high frequency, generating many
+// tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
+// these tombstones accumulate, scanning over the table will take increasingly and
+// prohibitively long.
+//
+// See: https://github.com/MaterializeInc/database-issues/issues/4001
+// See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+const CRDB_CONFIGURE_ZONE: &str = "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600";
 
 impl ToSql for SeqNo {
     fn to_sql(
@@ -84,9 +107,10 @@ impl<'a> FromSql<'a> for SeqNo {
 /// Configuration to connect to a Postgres backed implementation of [Consensus].
 #[derive(Clone, Debug)]
 pub struct PostgresConsensusConfig {
-    url: String,
+    url: SensitiveUrl,
     knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
+    dyncfg: Arc<ConfigSet>,
 }
 
 impl From<PostgresConsensusConfig> for PostgresClientConfig {
@@ -101,14 +125,16 @@ impl PostgresConsensusConfig {
 
     /// Returns a new [PostgresConsensusConfig] for use in production.
     pub fn new(
-        url: &str,
+        url: &SensitiveUrl,
         knobs: Box<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
+        dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
         Ok(PostgresConsensusConfig {
-            url: url.to_string(),
+            url: url.clone(),
             knobs: Arc::from(knobs),
             metrics,
+            dyncfg,
         })
     }
 
@@ -123,7 +149,7 @@ impl PostgresConsensusConfig {
     /// [1]: https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url
     pub fn new_for_test() -> Result<Option<Self>, Error> {
         let url = match std::env::var(Self::EXTERNAL_TESTS_POSTGRES_URL) {
-            Ok(url) => url,
+            Ok(url) => SensitiveUrl::from_str(&url).map_err(|e| e.to_string())?,
             Err(_) => {
                 if mz_ore::env::is_var_truthy("CI") {
                     panic!("CI is supposed to run this test but something has gone wrong!");
@@ -159,20 +185,45 @@ impl PostgresConsensusConfig {
             fn tcp_user_timeout(&self) -> Duration {
                 Duration::ZERO
             }
+
+            fn keepalives_idle(&self) -> Duration {
+                Duration::from_secs(10)
+            }
+
+            fn keepalives_interval(&self) -> Duration {
+                Duration::from_secs(5)
+            }
+
+            fn keepalives_retries(&self) -> u32 {
+                5
+            }
         }
 
+        let dyncfg = ConfigSet::default().add(&USE_POSTGRES_TUNED_QUERIES);
         let config = PostgresConsensusConfig::new(
             &url,
             Box::new(TestConsensusKnobs),
             PostgresClientMetrics::new(&MetricsRegistry::new(), "mz_persist"),
+            Arc::new(dyncfg),
         )?;
         Ok(Some(config))
     }
 }
 
+/// What flavor of Postgres are we connected to for consensus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostgresMode {
+    /// CockroachDB, used in our cloud offering.
+    CockroachDB,
+    /// Vanilla Postgres, the default for our self-hosted offering.
+    Postgres,
+}
+
 /// Implementation of [Consensus] over a Postgres database.
 pub struct PostgresConsensus {
     postgres_client: PostgresClient,
+    dyncfg: Arc<ConfigSet>,
+    mode: PostgresMode,
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -185,32 +236,59 @@ impl PostgresConsensus {
     /// Open a Postgres [Consensus] instance with `config`, for the collection
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
+        // don't need to unredact here because we just want to pull out the username
+        let pg_config: Config = config.url.to_string().parse()?;
+        let role = pg_config.get_user().expect("failed to get PostgreSQL user");
+        let create_schema = format!(
+            "CREATE SCHEMA IF NOT EXISTS consensus AUTHORIZATION {}",
+            escape_identifier(role),
+        );
+
+        let dyncfg = Arc::clone(&config.dyncfg);
         let postgres_client = PostgresClient::open(config.into())?;
 
         let client = postgres_client.get_connection().await?;
 
-        // The `consensus` table creates and deletes rows at a high frequency, generating many
-        // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
-        // these tombstones accumulate, scanning over the table will take increasingly and
-        // prohibitively long.
-        //
-        // See: https://github.com/MaterializeInc/materialize/issues/13975
-        // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-        match client
+        let mode = match client
             .batch_execute(&format!(
-                "{} {}",
-                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;",
+                "{}; {}{}; {};",
+                create_schema, SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
             ))
             .await
         {
-            Ok(()) => {}
+            Ok(()) => PostgresMode::CockroachDB,
             Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
-                warn!("unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user");
+                warn!(
+                    "unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user"
+                );
+                PostgresMode::CockroachDB
+            }
+            // Vanilla Postgres doesn't support the Cockroach zone configuration
+            // that we attempted, so we use that to determine what mode we're in.
+            Err(e)
+                if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
+                    || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
+            {
+                info!(
+                    "unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}",
+                    e
+                );
+                PostgresMode::Postgres
             }
             Err(e) => return Err(e.into()),
+        };
+
+        if mode != PostgresMode::CockroachDB {
+            client
+                .batch_execute(&format!("{}; {};", create_schema, SCHEMA))
+                .await?;
         }
 
-        Ok(PostgresConsensus { postgres_client })
+        Ok(PostgresConsensus {
+            postgres_client,
+            dyncfg,
+            mode,
+        })
     }
 
     /// Drops and recreates the `consensus` table in Postgres
@@ -220,7 +298,36 @@ impl PostgresConsensus {
         // this could be a TRUNCATE if we're confident the db won't reuse any state
         let client = self.get_connection().await?;
         client.execute("DROP TABLE consensus", &[]).await?;
-        client.execute(SCHEMA, &[]).await?;
+        let crdb_mode = match client
+            .batch_execute(&format!(
+                "{}{}; {}",
+                SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
+            ))
+            .await
+        {
+            Ok(()) => true,
+            Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
+                warn!(
+                    "unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user"
+                );
+                true
+            }
+            Err(e)
+                if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
+                    || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
+            {
+                info!(
+                    "unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}",
+                    e
+                );
+                false
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        if !crdb_mode {
+            client.execute(SCHEMA, &[]).await?;
+        }
         Ok(())
     }
 
@@ -231,7 +338,7 @@ impl PostgresConsensus {
 
 #[async_trait]
 impl Consensus for PostgresConsensus {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         let q = "SELECT DISTINCT shard FROM consensus";
 
         Box::pin(try_stream! {
@@ -273,31 +380,50 @@ impl Consensus for PostgresConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
-        if let Some(expected) = expected {
-            if new.seqno <= expected {
-                return Err(Error::from(
-                        format!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
-                                 new.seqno, expected)).into());
-            }
-        }
+        let expected = new.seqno.previous();
 
         let result = if let Some(expected) = expected {
-            // This query has been written to execute within a single
-            // network round-trip. The insert performance has been tuned
-            // against CockroachDB, ensuring it goes through the fast-path
-            // 1-phase commit of CRDB. Any changes to this query should
-            // confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
-            // `auto commit`
-            let q = r#"
+            /// This query has been written to execute within a single
+            /// network round-trip. The insert performance has been tuned
+            /// against CockroachDB, ensuring it goes through the fast-path
+            /// 1-phase commit of CRDB. Any changes to this query should
+            /// confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
+            /// `auto commit`
+            static CRDB_CAS_QUERY: &str = "
                 INSERT INTO consensus (shard, sequence_number, data)
                 SELECT $1, $2, $3
                 WHERE (SELECT sequence_number FROM consensus
                        WHERE shard = $1
                        ORDER BY sequence_number DESC LIMIT 1) = $4;
-            "#;
+            ";
+
+            /// This query has been written to ensure we only get row level
+            /// locks on the `(shard, seq_no)` we're trying to update. The insert
+            /// performance has been tuned against Postgres 15 to ensure it
+            /// minimizes possible serialization conflicts.
+            static POSTGRES_CAS_QUERY: &str = "
+            WITH last_seq AS (
+                SELECT sequence_number FROM consensus
+                WHERE shard = $1
+                ORDER BY sequence_number DESC
+                LIMIT 1
+                FOR UPDATE
+            )
+            INSERT INTO consensus (shard, sequence_number, data)
+            SELECT $1, $2, $3
+            FROM last_seq
+            WHERE last_seq.sequence_number = $4;
+            ";
+
+            let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
+                && self.mode == PostgresMode::Postgres
+            {
+                POSTGRES_CAS_QUERY
+            } else {
+                CRDB_CAS_QUERY
+            };
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client
@@ -360,13 +486,55 @@ impl Consensus for PostgresConsensus {
         Ok(results)
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
-        let q = "DELETE FROM consensus
-                WHERE shard = $1 AND sequence_number < $2 AND
-                EXISTS(
-                    SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
-                )";
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
+        static CRDB_TRUNCATE_QUERY: &str = "
+        DELETE FROM consensus
+        WHERE shard = $1 AND sequence_number < $2 AND
+        EXISTS (
+            SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
+        )
+        ";
 
+        /// This query has been specifically tuned to ensure we get the minimal
+        /// number of __row__ locks possible, and that it doesn't conflict with
+        /// concurrently running compare and swap operations that are trying to
+        /// evolve the shard.
+        ///
+        /// It's performance has been benchmarked against Postgres 15.
+        ///
+        /// Note: The `ORDER BY` in the newer_exists CTE exists so we obtain a
+        /// row lock on the lowest possible sequence number. This ensures
+        /// minimal conflict between concurrently running truncate and append
+        /// operations.
+        static POSTGRES_TRUNCATE_QUERY: &str = "
+        WITH newer_exists AS (
+            SELECT * FROM consensus
+            WHERE shard = $1
+                AND sequence_number >= $2
+            ORDER BY sequence_number ASC
+            LIMIT 1
+            FOR UPDATE
+        ),
+        to_lock AS (
+            SELECT ctid FROM consensus
+            WHERE shard = $1
+            AND sequence_number < $2
+            AND EXISTS (SELECT * FROM newer_exists)
+            ORDER BY sequence_number DESC
+            FOR UPDATE
+        )
+        DELETE FROM consensus
+        USING to_lock
+        WHERE consensus.ctid = to_lock.ctid;
+        ";
+
+        let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
+            && self.mode == PostgresMode::Postgres
+        {
+            POSTGRES_TRUNCATE_QUERY
+        } else {
+            CRDB_TRUNCATE_QUERY
+        };
         let result = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
@@ -393,7 +561,7 @@ impl Consensus for PostgresConsensus {
             }
         }
 
-        Ok(usize::cast_from(result))
+        Ok(Some(usize::cast_from(result)))
     }
 }
 
@@ -427,12 +595,12 @@ mod tests {
         let consensus = PostgresConsensus::open(config.clone()).await?;
         let key = Uuid::new_v4().to_string();
         let state = VersionedData {
-            seqno: SeqNo(5),
+            seqno: SeqNo(0),
             data: Bytes::from("abc"),
         };
 
         assert_eq!(
-            consensus.compare_and_set(&key, None, state.clone()).await,
+            consensus.compare_and_set(&key, state.clone()).await,
             Ok(CaSResult::Committed),
         );
 
@@ -442,12 +610,9 @@ mod tests {
 
         assert_eq!(consensus.head(&key).await, Ok(None));
 
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-    async fn postgres_consensus_blocking() -> Result<(), ExternalError> {
+        // This should be a separate postgres_consensus_blocking test, but nextest makes it
+        // difficult since we can't specify that both tests touch the consensus table and thus
+        // interfere with each other.
         let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,
             None => {

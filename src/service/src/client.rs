@@ -17,6 +17,7 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
+use itertools::Itertools;
 use tokio_stream::StreamMap;
 use tracing::trace;
 
@@ -52,6 +53,12 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     ///
     /// The stream produces the responses that would be produced by repeated
     /// calls to `recv`.
+    ///
+    /// # Cancel safety
+    ///
+    /// The returned stream is cancel safe. If `stream.next()` is used as the event in a
+    /// [`tokio::select!`] statement and some other branch completes first, it is guaranteed that
+    /// no messages were received by this client.
     fn as_stream<'a>(
         &'a mut self,
     ) -> Pin<Box<dyn Stream<Item = Result<R, anyhow::Error>> + Send + 'a>>
@@ -60,6 +67,7 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     {
         Box::pin(async_stream::stream!({
             loop {
+                // `GenericClient::recv` is required to be cancel safe.
                 match self.recv().await {
                     Ok(Some(response)) => yield Ok(response),
                     Err(error) => yield Err(error),
@@ -80,7 +88,14 @@ where
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         (**self).send(cmd).await
     }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
+    /// statement and some other branch completes first, it is guaranteed that no messages were
+    /// received by this client.
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
+        // `GenericClient::recv` is required to be cancel safe.
         (**self).recv().await
     }
 }
@@ -126,7 +141,7 @@ where
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         trace!(command = ?cmd, "splitting command");
         let cmd_parts = self.state.split_command(cmd);
-        for (index, (shard, cmd_part)) in self.parts.iter_mut().zip(cmd_parts).enumerate() {
+        for (index, (shard, cmd_part)) in self.parts.iter_mut().zip_eq(cmd_parts).enumerate() {
             if let Some(cmd) = cmd_part {
                 trace!(shard = ?index, command = ?cmd, "sending command");
                 shard.send(cmd).await?;
@@ -135,6 +150,11 @@ where
         Ok(())
     }
 
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
+    /// statement and some other branch completes first, it is guaranteed that no messages were
+    /// received by this client.
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
         let mut stream: StreamMap<_, _> = self
             .parts
@@ -142,6 +162,10 @@ where
             .map(|shard| shard.as_stream())
             .enumerate()
             .collect();
+
+        // `stream` is a cancel safe stream: It only awaits streams created with
+        // `GenericClient::as_stream`, which is documented to produce cancel safe streams.
+        // Thus no messages are lost if `stream` is dropped while awaiting its next element.
         while let Some((index, response)) = stream.next().await {
             match response {
                 Err(e) => {
@@ -182,5 +206,5 @@ pub trait PartitionedState<C, R>: fmt::Debug + Send {
     /// If responses from all partitions have been absorbed, returns an
     /// amalgamated response.
     fn absorb_response(&mut self, shard_id: usize, response: R)
-        -> Option<Result<R, anyhow::Error>>;
+    -> Option<Result<R, anyhow::Error>>;
 }

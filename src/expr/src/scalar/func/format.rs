@@ -17,8 +17,10 @@ use std::fmt;
 
 use aho_corasick::AhoCorasickBuilder;
 use enum_iterator::Sequence;
+use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::TimestampLike;
 
@@ -403,7 +405,19 @@ impl DateTimeToken {
 }
 
 /// Specifies the ordinal suffix that should be attached to numeric fields.
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+#[derive(
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Copy,
+    Clone,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 enum OrdinalMode {
     /// No ordinal suffix.
     None,
@@ -442,7 +456,19 @@ impl OrdinalMode {
 
 /// Specifies the capitalization of a word.
 #[allow(clippy::enum_variant_names)] // Having "Caps" in the variant names is clarifying.
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+#[derive(
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Copy,
+    Clone,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 enum WordCaps {
     /// All of the letters should be capitalized.
     AllCaps,
@@ -456,7 +482,18 @@ enum WordCaps {
 ///
 /// The variants are largely self-evident, but are described in detail in the
 /// PostgreSQL documentation if necessary.
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Clone,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 enum DateTimeField {
     Hour12,
     Hour24,
@@ -497,7 +534,18 @@ enum DateTimeField {
 }
 
 /// An element of a date-time format string.
-#[derive(Debug)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 enum DateTimeFormatNode {
     /// A field whose value will be computed from the input timestamp.
     Field {
@@ -642,9 +690,7 @@ impl DateTimeFormatNode {
                 }
 
                 macro_rules! write_str {
-                    ($s:expr, $width:expr) => {{
-                        write!(buf, "{:width$}", $s, width = if *fill { $width } else { 0 })
-                    }};
+                    ($s:expr, $width:expr) => {{ write!(buf, "{:width$}", $s, width = if *fill { $width } else { 0 }) }};
                     ($s:expr) => {
                         write_str!($s, 0)
                     };
@@ -792,6 +838,18 @@ impl DateTimeFormatNode {
 }
 
 /// A compiled date-time format string.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 pub struct DateTimeFormat(Vec<DateTimeFormatNode>);
 
 impl DateTimeFormat {

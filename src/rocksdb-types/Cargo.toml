@@ -10,24 +10,10 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
+anyhow.workspace = true
 mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
-mz-proto = { path = "../proto" }
-num_cpus = "1.14.0"
-prost = { version = "0.13.1", features = ["no-recursion-limit"] }
-proptest = { version = "1.0.0", default-features = false, features = ["std"]}
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
-serde = { version = "1.0.152", features = ["derive"] }
-uncased = "0.9.7"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.1"
-tonic-build = "0.12.1"
+serde.workspace = true
+uncased.workspace = true
 
 [features]
-default = ["mz-build-tools/default"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

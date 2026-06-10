@@ -45,16 +45,19 @@ impl ProtobufDecoderState {
                 } else {
                     self.events_error += 1;
                     Some(Err(DecodeErrorKind::Text(
-                        "protobuf deserialization returned None".to_string(),
+                        "protobuf deserialization returned None".into(),
                     )))
                 }
             }
             Err(err) => {
                 self.events_error += 1;
-                Some(Err(DecodeErrorKind::Text(format!(
-                    "protobuf deserialization error: {}",
-                    err.display_with_causes()
-                ))))
+                Some(Err(DecodeErrorKind::Text(
+                    format!(
+                        "protobuf deserialization error: {}",
+                        err.display_with_causes()
+                    )
+                    .into(),
+                )))
             }
         }
     }

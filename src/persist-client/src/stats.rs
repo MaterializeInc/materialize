@@ -13,15 +13,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use mz_dyncfg::{Config, ConfigSet};
-use mz_persist::indexed::columnar::ColumnarRecordsStructuredExt;
-use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
-use mz_persist_types::columnar::codec_to_schema2;
-use mz_persist_types::part::PartBuilder;
-use mz_persist_types::stats::{ColumnStatKinds, PartStats};
-use mz_persist_types::Codec;
 
 use crate::batch::UntrimmableColumns;
-use crate::internal::encoding::Schemas;
 use crate::metrics::Metrics;
 use crate::read::LazyPartStats;
 
@@ -30,8 +23,17 @@ use crate::ShardId;
 /// Percent of filtered data to opt in to correctness auditing.
 pub(crate) const STATS_AUDIT_PERCENT: Config<usize> = Config::new(
     "persist_stats_audit_percent",
-    0,
+    1,
     "Percent of filtered data to opt in to correctness auditing (Materialize).",
+);
+
+/// See description for usage.
+pub const STATS_AUDIT_PANIC: Config<bool> = Config::new(
+    "persist_stats_audit_panic",
+    true,
+    "If set (as it is by default), panic on any auditing failure. If not, report an error but \
+    pass along the data as normal. This should almost certainly be paired with an audit rate of 100%, \
+    so all parts are audited, for consistency.",
 );
 
 /// Computes and stores statistics about each batch part.
@@ -120,62 +122,6 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
         equals: split(STATS_UNTRIMMABLE_COLUMNS_EQUALS.get(cfg)),
         prefixes: split(STATS_UNTRIMMABLE_COLUMNS_PREFIX.get(cfg)),
         suffixes: split(STATS_UNTRIMMABLE_COLUMNS_SUFFIX.get(cfg)),
-    }
-}
-
-/// Encodes a [`BlobTraceUpdates`] and calculates [`PartStats`].
-/// We also return structured data iff [BatchColumnarFormat::is_structured] is enabled.
-pub(crate) fn encode_updates<K, V>(
-    schemas: &Schemas<K, V>,
-    updates: &BlobTraceUpdates,
-    format: &BatchColumnarFormat,
-) -> Result<(Option<ColumnarRecordsStructuredExt>, PartStats), String>
-where
-    K: Codec,
-    V: Codec,
-{
-    let records = updates.records();
-
-    if format.is_structured() {
-        // At the moment, the only way to collect stats is to re-encode the key column.
-        // However, we only need to re-encode the structured values if they weren't passed in.
-        // TODO(bkirwi): reuse the existing encoded data once we have separate stats collection methods.
-        let (key, key_stats) = codec_to_schema2::<K>(schemas.key.as_ref(), records.keys())
-            .map_err(|e| e.to_string())?;
-        let val = match updates {
-            BlobTraceUpdates::Row(_) => {
-                let (val, _) = codec_to_schema2::<V>(schemas.val.as_ref(), records.vals())
-                    .map_err(|e| e.to_string())?;
-                val
-            }
-            BlobTraceUpdates::Both(_, ext) => Arc::clone(&ext.val),
-        };
-        let key_stats = match key_stats.into_non_null_values() {
-            Some(ColumnStatKinds::Struct(stats)) => stats,
-            key_stats => Err(format!(
-                "found non-StructStats when encoding updates, {key_stats:?}"
-            ))?,
-        };
-
-        Ok((
-            Some(ColumnarRecordsStructuredExt { key, val }),
-            PartStats { key: key_stats },
-        ))
-    } else {
-        let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
-        for ((k, v), t, d) in records.iter() {
-            let k = K::decode(k, &schemas.key)?;
-            let v = V::decode(v, &schemas.val)?;
-            let t = i64::from_le_bytes(t);
-            let d = i64::from_le_bytes(d);
-
-            builder.push(&k, &v, t, d);
-        }
-
-        let part = builder.finish();
-        let stats = PartStats::new(&part)?;
-
-        Ok((None, stats))
     }
 }
 

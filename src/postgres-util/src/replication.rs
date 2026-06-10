@@ -8,11 +8,16 @@
 // by the Apache License, Version 2.0.
 
 use std::str::FromStr;
-use tokio_postgres::{types::PgLsn, Client};
+
+use mz_sql_parser::ast::{Ident, display::AstDisplay};
+use tokio_postgres::{
+    Client,
+    types::{Oid, PgLsn},
+};
 
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
-use crate::{simple_query_opt, Config, PostgresError};
+use crate::{Config, PostgresError, simple_query_opt};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WalLevel {
@@ -86,24 +91,89 @@ pub async fn available_replication_slots(client: &Client) -> Result<i64, Postgre
     Ok(available_replication_slots)
 }
 
+/// Returns true if BYPASSRLS is set for the current user, false otherwise.
+///
+/// See <https://www.postgresql.org/docs/current/ddl-rowsecurity.html>
+pub async fn bypass_rls_attribute(client: &Client) -> Result<bool, PostgresError> {
+    let rls_attribute = client
+        .query_one(
+            "SELECT rolbypassrls FROM pg_roles WHERE rolname = CURRENT_USER;",
+            &[],
+        )
+        .await?;
+    Ok(rls_attribute.get("rolbypassrls"))
+}
+
+/// Returns an error if the tables identified by the oid's have RLS policies which
+/// affect the current user. Two checks are made:
+///
+/// 1. Identify which tables, from the provided oid's, have RLS SELECT or ALL policies that affect
+///    the user or public.
+/// 2. If there are policies that affect the user, check if the BYPASSRLS attribute is set. If set,
+///    the role is unaffected by the policies.
+pub async fn validate_no_rls_policies(
+    client: &Client,
+    table_oids: &[Oid],
+) -> Result<(), PostgresError> {
+    if table_oids.is_empty() {
+        return Ok(());
+    }
+    let tables_with_rls_for_user = client
+        .query(
+            "SELECT
+                    format('%I.%I', n.nspname, pc.relname) AS qualified_name
+                FROM pg_policy pp
+                JOIN pg_class pc ON pc.oid = pp.polrelid
+                JOIN pg_namespace n ON n.oid = pc.relnamespace
+                WHERE
+                    pp.polrelid = ANY($1::oid[])
+                    AND pp.polcmd IN ('r', '*')
+                    AND (
+                        0 = ANY(pp.polroles)
+                        OR EXISTS (
+                            SELECT 1
+                            FROM unnest(pp.polroles) AS r(role_oid)
+                            WHERE pg_has_role(CURRENT_USER, r.role_oid, 'USAGE')
+                        )
+                    );",
+            &[&table_oids],
+        )
+        .await
+        .map_err(PostgresError::from)?;
+
+    let mut tables_with_rls_for_user = tables_with_rls_for_user
+        .into_iter()
+        .map(|row| row.get("qualified_name"))
+        .collect::<Vec<String>>();
+
+    // If the user has the BYPASSRLS flag set, then the policies don't apply, so we can
+    // return success.
+    if tables_with_rls_for_user.is_empty() || bypass_rls_attribute(client).await? {
+        Ok(())
+    } else {
+        tables_with_rls_for_user.sort();
+        Err(PostgresError::BypassRLSRequired(tables_with_rls_for_user))
+    }
+}
+
 pub async fn drop_replication_slots(
     ssh_tunnel_manager: &SshTunnelManager,
     config: Config,
-    slots: &[&str],
+    slots: &[(&str, bool)],
 ) -> Result<(), PostgresError> {
     let client = config
         .connect("postgres_drop_replication_slots", ssh_tunnel_manager)
         .await?;
     let replication_client = config.connect_replication(ssh_tunnel_manager).await?;
-    for slot in slots {
+    for (slot, should_wait) in slots {
         let rows = client
             .query(
                 "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
                 &[&slot],
             )
             .await?;
-        match rows.len() {
-            0 => {
+        match &*rows {
+            [] => {
                 // DROP_REPLICATION_SLOT will error if the slot does not exist
                 tracing::info!(
                     "drop_replication_slots called on non-existent slot {}",
@@ -111,25 +181,41 @@ pub async fn drop_replication_slots(
                 );
                 continue;
             }
-            1 => {
+            [row] => {
+                // The drop of a replication slot happens concurrently with an ingestion dataflow
+                // shutting down, therefore there is the possibility that the slot is still in use.
+                // We really don't want to leak the slot and not forcefully terminating the
+                // dataflow's connection risks timing out. For this reason we always kill the
+                // active backend and drop the slot.
+                let active_pid: Option<i32> = row.get("active_pid");
+                if let Some(active_pid) = active_pid {
+                    client
+                        .simple_query(&format!("SELECT pg_terminate_backend({active_pid})"))
+                        .await?;
+                }
+
+                let wait_str = if *should_wait { " WAIT" } else { "" };
+                let slot = Ident::new_unchecked(*slot).to_ast_string_simple();
                 replication_client
-                    .simple_query(&format!("DROP_REPLICATION_SLOT {} WAIT", slot))
+                    .simple_query(&format!("DROP_REPLICATION_SLOT {slot}{wait_str}"))
                     .await?;
             }
             _ => {
                 return Err(PostgresError::Generic(anyhow::anyhow!(
                     "multiple pg_replication_slots entries for slot {}",
                     &slot
-                )))
+                )));
             }
         }
     }
     Ok(())
 }
 
-pub async fn get_timeline_id(replication_client: &Client) -> Result<u64, PostgresError> {
-    if let Some(r) = simple_query_opt(replication_client, "IDENTIFY_SYSTEM").await? {
-        r.get("timeline")
+pub async fn get_timeline_id(client: &Client) -> Result<u64, PostgresError> {
+    if let Some(r) =
+        simple_query_opt(client, "SELECT timeline_id FROM pg_control_checkpoint()").await?
+    {
+        r.get("timeline_id")
             .expect("Returns a row with a timeline ID")
             .parse::<u64>()
             .map_err(|err| {

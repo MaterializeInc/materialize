@@ -16,16 +16,16 @@
 //! such as creating and managing users, or listing passwords.
 //!
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
-use once_cell::sync::Lazy;
 use url::Url;
 
 use crate::client::Client;
 
 /// The default endpoint the client will use to issue the requests.
-pub static DEFAULT_ENDPOINT: Lazy<Url> =
-    Lazy::new(|| "https://api.cloud.materialize.com".parse().unwrap());
+pub static DEFAULT_ENDPOINT: LazyLock<Url> =
+    LazyLock::new(|| "https://api.cloud.materialize.com".parse().unwrap());
 
 /// The header used by the Region API to specify which API version this client supports
 pub static API_VERSION_HEADER: &str = "X-Materialize-Api-Version";

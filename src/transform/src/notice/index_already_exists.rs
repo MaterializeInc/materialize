@@ -12,16 +12,16 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use mz_expr::explain::{HumanizedNotice, HumanizerMode};
 use mz_expr::MirScalarExpr;
+use mz_expr::explain::{HumanizedNotice, HumanizerMode};
 use mz_ore::str::separated;
-use mz_repr::explain::ExprHumanizer;
 use mz_repr::GlobalId;
+use mz_repr::explain::ExprHumanizer;
 
 use crate::notice::{ActionKind, OptimizerNoticeApi};
 
 /// Trying to re-create an index that already exists.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct IndexAlreadyExists {
     /// The id of the identical index.
     pub index_id: GlobalId,

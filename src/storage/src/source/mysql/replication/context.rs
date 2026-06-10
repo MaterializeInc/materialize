@@ -16,13 +16,15 @@ use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::progress::Antichain;
 use tracing::trace;
 
-use mz_mysql_util::{Config, MySqlTableDesc};
-use mz_storage_types::sources::mysql::{GtidPartition, GtidState, MySqlColumnRef};
+use mz_mysql_util::Config;
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
-use crate::source::mysql::{MySqlTableName, RewindRequest, StackedAsyncOutputHandle};
-use crate::source::types::SourceMessage;
 use crate::source::RawSourceCreationConfig;
+use crate::source::mysql::{
+    MySqlTableName, RewindRequest, SourceOutputInfo, StackedAsyncOutputHandle,
+};
+use crate::source::types::SourceMessage;
 
 /// A container to hold various context information for the replication process, used when
 /// processing events from the binlog stream.
@@ -30,19 +32,16 @@ pub(super) struct ReplContext<'a> {
     pub(super) config: &'a RawSourceCreationConfig,
     pub(super) connection_config: &'a Config,
     pub(super) stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
-    pub(super) table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+    pub(super) table_info: &'a BTreeMap<MySqlTableName, Vec<SourceOutputInfo>>,
     pub(super) metrics: &'a MySqlSourceMetrics,
-    pub(super) text_columns: &'a Vec<MySqlColumnRef>,
-    pub(super) ignore_columns: &'a Vec<MySqlColumnRef>,
     pub(super) data_output: &'a mut StackedAsyncOutputHandle<
         GtidPartition,
         (usize, Result<SourceMessage, DataflowError>),
     >,
     pub(super) data_cap_set: &'a mut CapabilitySet<GtidPartition>,
-    pub(super) upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
     // Owned values:
-    pub(super) rewinds: BTreeMap<MySqlTableName, (Capability<GtidPartition>, RewindRequest)>,
-    pub(super) errored_tables: BTreeSet<MySqlTableName>,
+    pub(super) rewinds: BTreeMap<usize, (Capability<GtidPartition>, RewindRequest)>,
+    pub(super) errored_outputs: BTreeSet<usize>,
 }
 
 impl<'a> ReplContext<'a> {
@@ -50,17 +49,14 @@ impl<'a> ReplContext<'a> {
         config: &'a RawSourceCreationConfig,
         connection_config: &'a Config,
         stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
-        table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+        table_info: &'a BTreeMap<MySqlTableName, Vec<SourceOutputInfo>>,
         metrics: &'a MySqlSourceMetrics,
-        text_columns: &'a Vec<MySqlColumnRef>,
-        ignore_columns: &'a Vec<MySqlColumnRef>,
         data_output: &'a mut StackedAsyncOutputHandle<
             GtidPartition,
             (usize, Result<SourceMessage, DataflowError>),
         >,
         data_cap_set: &'a mut CapabilitySet<GtidPartition>,
-        upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
-        rewinds: BTreeMap<MySqlTableName, (Capability<GtidPartition>, RewindRequest)>,
+        rewinds: BTreeMap<usize, (Capability<GtidPartition>, RewindRequest)>,
     ) -> Self {
         Self {
             config,
@@ -68,13 +64,10 @@ impl<'a> ReplContext<'a> {
             stream,
             table_info,
             metrics,
-            text_columns,
-            ignore_columns,
             data_output,
             data_cap_set,
-            upper_cap_set,
             rewinds,
-            errored_tables: BTreeSet::new(),
+            errored_outputs: BTreeSet::new(),
         }
     }
 
@@ -111,16 +104,5 @@ impl<'a> ReplContext<'a> {
             }
             res
         });
-    }
-
-    /// Advances the frontier of the upper capability set to `new_upper`,
-    pub(super) fn downgrade_progress_cap_set(
-        &mut self,
-        reason: &str,
-        new_upper: Antichain<GtidPartition>,
-    ) {
-        let (id, worker_id) = (self.config.id, self.config.worker_id);
-        trace!(%id, "timely-{worker_id} [{reason}] advancing progress frontier to {new_upper:?}");
-        self.upper_cap_set.downgrade(&*new_upper);
     }
 }

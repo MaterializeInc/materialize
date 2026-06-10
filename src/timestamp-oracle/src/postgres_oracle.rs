@@ -11,50 +11,68 @@
 //! all oracle operations are self-sufficiently linearized, without requiring
 //! any external precautions/machinery.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use deadpool_postgres::tokio_postgres::Config;
+use deadpool_postgres::tokio_postgres::error::SqlState;
 use deadpool_postgres::{Object, PoolError};
 use dec::Decimal;
 use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNECT_TIMEOUT, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL,
-    DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER, DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT,
+    DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER, DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_IDLE,
+    DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_INTERVAL,
+    DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_RETRIES, DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT,
 };
 use mz_ore::error::ErrorExt;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::url::SensitiveUrl;
 use mz_pgrepr::Numeric;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 use mz_repr::Timestamp;
+use postgres_protocol::escape::escape_identifier;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
+use crate::WriteTimestamp;
 use crate::metrics::{Metrics, RetryMetrics};
 use crate::retry::Retry;
-use crate::WriteTimestamp;
 use crate::{GenericNowFn, TimestampOracle};
 
 // The timestamp columns are a `DECIMAL` that is big enough to hold
 // `18446744073709551615`, the maximum value of `u64` which is our underlying
 // timestamp type.
-//
-// These `sql_stats_automatic_collection_enabled` are for the cost-based
-// optimizer but all the queries against this table are single-table and very
-// carefully tuned to hit the primary index, so the cost-based optimizer doesn't
-// really get us anything. OTOH, the background jobs that crdb creates to
-// collect these stats fill up the jobs table (slowing down all sorts of
-// things).
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS timestamp_oracle (
     timeline text NOT NULL,
     read_ts DECIMAL(20,0) NOT NULL,
     write_ts DECIMAL(20,0) NOT NULL,
     PRIMARY KEY(timeline)
-) WITH (sql_stats_automatic_collection_enabled = false);
+)
 ";
+
+// These `sql_stats_automatic_collection_enabled` are for the cost-based
+// optimizer but all the queries against this table are single-table and very
+// carefully tuned to hit the primary index, so the cost-based optimizer doesn't
+// really get us anything. OTOH, the background jobs that crdb creates to
+// collect these stats fill up the jobs table (slowing down all sorts of
+// things).
+const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled = false)";
+// The `timestamp_oracle` table creates and deletes rows at a high
+// frequency, generating many tombstoned rows. If Cockroach's GC
+// interval is set high (the default is 25h) and these tombstones
+// accumulate, scanning over the table will take increasingly and
+// prohibitively long.
+//
+// See: https://github.com/MaterializeInc/database-issues/issues/4001
+// See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+const CRDB_CONFIGURE_ZONE: &str =
+    "ALTER TABLE timestamp_oracle CONFIGURE ZONE USING gc.ttlseconds = 600;";
 
 /// A [`TimestampOracle`] backed by "Postgres".
 #[derive(Debug)]
@@ -75,8 +93,8 @@ where
 /// [`TimestampOracle`].
 #[derive(Clone, Debug)]
 pub struct PostgresTimestampOracleConfig {
-    url: String,
-    pub metrics: Arc<Metrics>,
+    url: SensitiveUrl,
+    metrics: Arc<Metrics>,
 
     /// Configurations that can be dynamically updated.
     pub dynamic: Arc<DynamicConfig>,
@@ -90,16 +108,16 @@ impl From<PostgresTimestampOracleConfig> for PostgresClientConfig {
 }
 
 impl PostgresTimestampOracleConfig {
-    pub(crate) const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "COCKROACH_URL";
+    pub(crate) const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "METADATA_BACKEND_URL";
 
     /// Returns a new instance of [`PostgresTimestampOracleConfig`] with default tuning.
-    pub fn new(url: &str, metrics_registry: &MetricsRegistry) -> Self {
+    pub fn new(url: &SensitiveUrl, metrics_registry: &MetricsRegistry) -> Self {
         let metrics = Arc::new(Metrics::new(metrics_registry));
 
         let dynamic = DynamicConfig::default();
 
         PostgresTimestampOracleConfig {
-            url: url.to_string(),
+            url: url.clone(),
             metrics,
             dynamic: Arc::new(dynamic),
         }
@@ -109,13 +127,13 @@ impl PostgresTimestampOracleConfig {
     ///
     /// By default, postgres oracle tests are no-ops so that `cargo test` works
     /// on new environments without any configuration. To activate the tests for
-    /// [`PostgresTimestampOracle`] set the `COCKROACH_URL` environment variable
+    /// [`PostgresTimestampOracle`] set the `METADATA_BACKEND_URL` environment variable
     /// with a valid connection url [1].
     ///
     /// [1]: https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url
     pub fn new_for_test() -> Option<Self> {
         let url = match std::env::var(Self::EXTERNAL_TESTS_POSTGRES_URL) {
-            Ok(url) => url,
+            Ok(url) => SensitiveUrl::from_str(&url).expect("invalid Postgres URL"),
             Err(_) => {
                 if mz_ore::env::is_var_truthy("CI") {
                     panic!("CI is supposed to run this test but something has gone wrong!");
@@ -127,12 +145,17 @@ impl PostgresTimestampOracleConfig {
         let dynamic = DynamicConfig::default();
 
         let config = PostgresTimestampOracleConfig {
-            url: url.to_string(),
+            url,
             metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
             dynamic: Arc::new(dynamic),
         };
 
         Some(config)
+    }
+
+    /// Returns the metrics associated with this config.
+    pub(crate) fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
     }
 }
 
@@ -144,8 +167,8 @@ impl PostgresTimestampOracleConfig {
 /// defined by the tradeoffs of complexity vs promptness.
 ///
 /// These are hooked up to LaunchDarkly. Specifically, LaunchDarkly configs are
-/// serialized into a [`PostgresTimestampOracleParameters`]. In environmentd,
-/// these are applied directly via [`PostgresTimestampOracleParameters::apply`]
+/// serialized into a [`TimestampOracleParameters`]. In environmentd,
+/// these are applied directly via [`TimestampOracleParameters::apply`]
 /// to the [`PostgresTimestampOracleConfig`].
 #[derive(Debug)]
 pub struct DynamicConfig {
@@ -177,6 +200,18 @@ pub struct DynamicConfig {
     /// amount of time that transmitted data may remain unacknowledged before
     /// the TCP connection is forcibly closed.
     pg_connection_pool_tcp_user_timeout: RwLock<Duration>,
+
+    /// The amount of idle time before a TCP keepalive packet is sent on
+    /// Postgres/CRDB connections.
+    pg_connection_pool_keepalives_idle: RwLock<Duration>,
+
+    /// The time interval between TCP keepalive probes on Postgres/CRDB
+    /// connections.
+    pg_connection_pool_keepalives_interval: RwLock<Duration>,
+
+    /// The maximum number of TCP keepalive probes that will be sent before
+    /// dropping a Postgres/CRDB connection.
+    pg_connection_pool_keepalives_retries: AtomicU32,
 }
 
 impl Default for DynamicConfig {
@@ -200,6 +235,15 @@ impl Default for DynamicConfig {
             ),
             pg_connection_pool_tcp_user_timeout: RwLock::new(
                 DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT,
+            ),
+            pg_connection_pool_keepalives_idle: RwLock::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_IDLE,
+            ),
+            pg_connection_pool_keepalives_interval: RwLock::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_INTERVAL,
+            ),
+            pg_connection_pool_keepalives_retries: AtomicU32::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_RETRIES,
             ),
         }
     }
@@ -245,6 +289,25 @@ impl DynamicConfig {
             .read()
             .expect("lock poisoned")
     }
+
+    fn keepalives_idle(&self) -> Duration {
+        *self
+            .pg_connection_pool_keepalives_idle
+            .read()
+            .expect("lock poisoned")
+    }
+
+    fn keepalives_interval(&self) -> Duration {
+        *self
+            .pg_connection_pool_keepalives_interval
+            .read()
+            .expect("lock poisoned")
+    }
+
+    fn keepalives_retries(&self) -> u32 {
+        self.pg_connection_pool_keepalives_retries
+            .load(Self::LOAD_ORDERING)
+    }
 }
 
 impl PostgresClientKnobs for PostgresTimestampOracleConfig {
@@ -271,6 +334,18 @@ impl PostgresClientKnobs for PostgresTimestampOracleConfig {
     fn tcp_user_timeout(&self) -> Duration {
         self.dynamic.tcp_user_timeout()
     }
+
+    fn keepalives_idle(&self) -> Duration {
+        self.dynamic.keepalives_idle()
+    }
+
+    fn keepalives_interval(&self) -> Duration {
+        self.dynamic.keepalives_interval()
+    }
+
+    fn keepalives_retries(&self) -> u32 {
+        self.dynamic.keepalives_retries()
+    }
 }
 
 /// Updates to values in [`PostgresTimestampOracleConfig`].
@@ -280,7 +355,7 @@ impl PostgresClientKnobs for PostgresTimestampOracleConfig {
 /// Parameters can be set (`Some`) or unset (`None`). Unset parameters should be
 /// interpreted to mean "use the previous value".
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PostgresTimestampOracleParameters {
+pub struct TimestampOracleParameters {
     /// Configures `DynamicConfig::pg_connection_pool_max_size`.
     pub pg_connection_pool_max_size: Option<usize>,
     /// Configures `DynamicConfig::pg_connection_pool_max_wait`.
@@ -300,11 +375,17 @@ pub struct PostgresTimestampOracleParameters {
     pub pg_connection_pool_connect_timeout: Option<Duration>,
     /// Configures `DynamicConfig::pg_connection_pool_tcp_user_timeout`.
     pub pg_connection_pool_tcp_user_timeout: Option<Duration>,
+    /// Configures `DynamicConfig::pg_connection_pool_keepalives_idle`.
+    pub pg_connection_pool_keepalives_idle: Option<Duration>,
+    /// Configures `DynamicConfig::pg_connection_pool_keepalives_interval`.
+    pub pg_connection_pool_keepalives_interval: Option<Duration>,
+    /// Configures `DynamicConfig::pg_connection_pool_keepalives_retries`.
+    pub pg_connection_pool_keepalives_retries: Option<u32>,
 }
 
-impl PostgresTimestampOracleParameters {
+impl TimestampOracleParameters {
     /// Update the parameter values with the set ones from `other`.
-    pub fn update(&mut self, other: PostgresTimestampOracleParameters) {
+    pub fn update(&mut self, other: TimestampOracleParameters) {
         // Deconstruct self and other so we get a compile failure if new fields
         // are added.
         let Self {
@@ -314,6 +395,9 @@ impl PostgresTimestampOracleParameters {
             pg_connection_pool_ttl_stagger: self_pg_connection_pool_ttl_stagger,
             pg_connection_pool_connect_timeout: self_pg_connection_pool_connect_timeout,
             pg_connection_pool_tcp_user_timeout: self_pg_connection_pool_tcp_user_timeout,
+            pg_connection_pool_keepalives_idle: self_pg_connection_pool_keepalives_idle,
+            pg_connection_pool_keepalives_interval: self_pg_connection_pool_keepalives_interval,
+            pg_connection_pool_keepalives_retries: self_pg_connection_pool_keepalives_retries,
         } = self;
         let Self {
             pg_connection_pool_max_size: other_pg_connection_pool_max_size,
@@ -322,6 +406,9 @@ impl PostgresTimestampOracleParameters {
             pg_connection_pool_ttl_stagger: other_pg_connection_pool_ttl_stagger,
             pg_connection_pool_connect_timeout: other_pg_connection_pool_connect_timeout,
             pg_connection_pool_tcp_user_timeout: other_pg_connection_pool_tcp_user_timeout,
+            pg_connection_pool_keepalives_idle: other_pg_connection_pool_keepalives_idle,
+            pg_connection_pool_keepalives_interval: other_pg_connection_pool_keepalives_interval,
+            pg_connection_pool_keepalives_retries: other_pg_connection_pool_keepalives_retries,
         } = other;
         if let Some(v) = other_pg_connection_pool_max_size {
             *self_pg_connection_pool_max_size = Some(v);
@@ -341,6 +428,15 @@ impl PostgresTimestampOracleParameters {
         if let Some(v) = other_pg_connection_pool_tcp_user_timeout {
             *self_pg_connection_pool_tcp_user_timeout = Some(v);
         }
+        if let Some(v) = other_pg_connection_pool_keepalives_idle {
+            *self_pg_connection_pool_keepalives_idle = Some(v);
+        }
+        if let Some(v) = other_pg_connection_pool_keepalives_interval {
+            *self_pg_connection_pool_keepalives_interval = Some(v);
+        }
+        if let Some(v) = other_pg_connection_pool_keepalives_retries {
+            *self_pg_connection_pool_keepalives_retries = Some(v);
+        }
     }
 
     /// Applies the parameter values to the given in-memory config object.
@@ -359,6 +455,9 @@ impl PostgresTimestampOracleParameters {
             pg_connection_pool_ttl_stagger,
             pg_connection_pool_connect_timeout,
             pg_connection_pool_tcp_user_timeout,
+            pg_connection_pool_keepalives_idle,
+            pg_connection_pool_keepalives_interval,
+            pg_connection_pool_keepalives_retries,
         } = self;
         if let Some(pg_connection_pool_max_size) = pg_connection_pool_max_size {
             cfg.dynamic
@@ -405,6 +504,29 @@ impl PostgresTimestampOracleParameters {
                 .expect("lock poisoned");
             *timeout = *pg_connection_pool_tcp_user_timeout;
         }
+        if let Some(pg_connection_pool_keepalives_idle) = pg_connection_pool_keepalives_idle {
+            let mut timeout = cfg
+                .dynamic
+                .pg_connection_pool_keepalives_idle
+                .write()
+                .expect("lock poisoned");
+            *timeout = *pg_connection_pool_keepalives_idle;
+        }
+        if let Some(pg_connection_pool_keepalives_interval) = pg_connection_pool_keepalives_interval
+        {
+            let mut timeout = cfg
+                .dynamic
+                .pg_connection_pool_keepalives_interval
+                .write()
+                .expect("lock poisoned");
+            *timeout = *pg_connection_pool_keepalives_interval;
+        }
+        if let Some(pg_connection_pool_keepalives_retries) = pg_connection_pool_keepalives_retries {
+            cfg.dynamic.pg_connection_pool_keepalives_retries.store(
+                *pg_connection_pool_keepalives_retries,
+                DynamicConfig::STORE_ORDERING,
+            );
+        }
     }
 }
 
@@ -427,25 +549,44 @@ where
         let fallible = || async {
             let metrics = Arc::clone(&config.metrics);
 
+            // don't need to unredact here because we're just pulling out the username
+            let pg_config: Config = config.url.to_string().parse()?;
+            let role = pg_config.get_user().unwrap();
+            let create_schema = format!(
+                "CREATE SCHEMA IF NOT EXISTS tsoracle AUTHORIZATION {}",
+                escape_identifier(role),
+            );
+
             let postgres_client = PostgresClient::open(config.clone().into())?;
 
             let client = postgres_client.get_connection().await?;
 
-            // The `timestamp_oracle` table creates and deletes rows at a high
-            // frequency, generating many tombstoned rows. If Cockroach's GC
-            // interval is set high (the default is 25h) and these tombstones
-            // accumulate, scanning over the table will take increasingly and
-            // prohibitively long.
-            //
-            // See: https://github.com/MaterializeInc/materialize/issues/13975
-            // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-            client
+            let crdb_mode = match client
                 .batch_execute(&format!(
-                    "{} {}",
-                    SCHEMA,
-                    "ALTER TABLE timestamp_oracle CONFIGURE ZONE USING gc.ttlseconds = 600;",
+                    "{}; {}{}; {}",
+                    create_schema, SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
                 ))
-                .await?;
+                .await
+            {
+                Ok(()) => true,
+                Err(e)
+                    if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
+                        || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
+                {
+                    info!(
+                        "unable to initiate timestamp_oracle with CRDB params, this is expected and OK when running against Postgres: {:?}",
+                        e
+                    );
+                    false
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            if !crdb_mode {
+                client
+                    .batch_execute(&format!("{}; {};", create_schema, SCHEMA))
+                    .await?;
+            }
 
             let oracle = PostgresTimestampOracle {
                 timeline: timeline.clone(),
@@ -676,7 +817,7 @@ where
     // We could add `From` impls for these but for now keep the code local to
     // the oracle.
     fn decimal_to_ts(ts: Numeric) -> Timestamp {
-        ts.0 .0.try_into().expect("we only use u64 timestamps")
+        ts.0.0.try_into().expect("we only use u64 timestamps")
     }
 }
 
@@ -800,7 +941,7 @@ where
                         err.display_with_causes()
                     );
                 } else {
-                    info!(
+                    debug!(
                         "external operation {} failed, retrying in {:?}: {}",
                         metrics.name,
                         retry.next_sleep(),

@@ -13,37 +13,41 @@
 # Increased from the default because of CI flakiness.
 $ set-sql-timeout duration=180s
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
 two
 three
-> SELECT * from remote2
+four
+> SELECT * from remote2_tbl
 one
 two
 three
+four
 
 $ kafka-ingest format=bytes topic=remote1
-four
+five
 $ kafka-ingest format=bytes topic=remote2
-four
+five
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
 two
 three
 four
-> SELECT * from remote2
+five
+> SELECT * from remote2_tbl
 one
 two
 three
 four
+five
 
 > SELECT s.name,
   SUM(u.offset_known),
   SUM(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 4 4
-remote2 4 4
+remote1 5 5
+remote2 5 5

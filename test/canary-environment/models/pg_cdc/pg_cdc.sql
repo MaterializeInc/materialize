@@ -10,4 +10,3 @@
 {{ config(materialized='source', cluster='qa_canary_environment_storage') }}
 FROM POSTGRES
 CONNECTION pg (PUBLICATION 'mz_source')
-FOR TABLES (people, relationships)

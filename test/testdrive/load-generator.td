@@ -7,28 +7,38 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-replica-size=1
+$ set-arg-default default-replica-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_load_generator_clock = true;
+ALTER SYSTEM SET enable_load_generator_datums = true;
 
 > CREATE SOURCE counter_empty
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (AS OF 5, UP TO 5)
 
-> SELECT count(*) FROM counter_empty
+> CREATE TABLE counter_empty_tbl FROM SOURCE counter_empty;
+
+> SELECT count(*) FROM counter_empty_tbl
 0
 
 > CREATE SOURCE counter_single
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (AS OF 0, UP TO 1)
 
-> SELECT count(*) FROM counter_single
+> CREATE TABLE counter_single_tbl FROM SOURCE counter_single;
+
+> SELECT count(*) FROM counter_single_tbl
 1
 
 > CREATE SOURCE counter_five
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (AS OF 4, UP TO 5)
 
-> SELECT count(*) FROM counter_five
+> CREATE TABLE counter_five_tbl FROM SOURCE counter_five;
+
+> SELECT count(*) FROM counter_five_tbl
 5
 
 ! CREATE SOURCE counter
@@ -41,50 +51,95 @@ contains:UP TO cannot be less than AS OF
   FROM LOAD GENERATOR COUNTER (SCALE FACTOR 1)
 exact:COUNTER load generators do not support SCALE FACTOR values
 
-> DROP SOURCE counter_empty, counter_single, counter_five
+> DROP SOURCE counter_empty, counter_single, counter_five CASCADE
 
 > CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301) FOR ALL TABLES;
+  FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301);
+
+# Error if trying to create with subsources
+! CREATE SOURCE g FROM LOAD GENERATOR COUNTER FOR ALL TABLES;
+contains:FOR ALL TABLES is only valid for multi-output sources
+
+! CREATE SOURCE g FROM LOAD GENERATOR CLOCK FOR ALL TABLES;
+contains:FOR ALL TABLES is only valid for multi-output sources
+
+! CREATE SOURCE g FROM LOAD GENERATOR DATUMS FOR ALL TABLES;
+contains:FOR ALL TABLES is only valid for multi-output sources
+
+! CREATE SOURCE g FROM LOAD GENERATOR COUNTER FOR TABLES ("foo");
+regex:.*FOR TABLES.*unsupported
+
+! CREATE SOURCE g FROM LOAD GENERATOR CLOCK FOR TABLES ("foo");
+regex:.*FOR TABLES.*unsupported
+
+! CREATE SOURCE g FROM LOAD GENERATOR DATUMS FOR TABLES ("foo");
+regex:.*FOR TABLES.*unsupported
+
+! CREATE SOURCE g FROM LOAD GENERATOR COUNTER FOR SCHEMAS ("foo");
+regex:.*FOR SCHEMAS.*unsupported
+
+! CREATE SOURCE g FROM LOAD GENERATOR CLOCK FOR SCHEMAS ("foo");
+regex:.*FOR SCHEMAS.*unsupported
+
+! CREATE SOURCE g FROM LOAD GENERATOR DATUMS FOR SCHEMAS ("foo");
+regex:.*FOR SCHEMAS.*unsupported
+
+> CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
 
 > SHOW CREATE SOURCE auction_house
-"materialize.public.auction_house" "CREATE SOURCE \"materialize\".\"public\".\"auction_house\" IN CLUSTER \"${arg.single-replica-cluster}\" FROM LOAD GENERATOR AUCTION (AS OF = 300, UP TO = 301) FOR ALL TABLES EXPOSE PROGRESS AS \"materialize\".\"public\".\"auction_house_progress\""
+"materialize.public.auction_house" "CREATE SOURCE materialize.public.auction_house\nIN CLUSTER ${arg.single-replica-cluster}\nFROM LOAD GENERATOR AUCTION (AS OF = 300, UP TO = 301);"
+
+>[version<2600700] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (DETAILS = '1a040a021002');"
+
+>[version>=2600700] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (DETAILS = '1a040a021002');"
 
 > SHOW SOURCES
-accounts                subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
-auction_house           load-generator ${arg.default-replica-size}    ${arg.single-replica-cluster}
-auction_house_progress  progress       <null> <null>
-auctions                subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
-bids                    subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
-organizations           subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
-users                   subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
+auction_house           load-generator ${arg.single-replica-cluster}    ""
+
+> SHOW TABLES
+accounts                ""
+auctions                ""
+bids                    ""
+organizations           ""
+users                   ""
 
 > SELECT count(*) FROM bids
 255
 
-# FOR TABLES doesn't always work.
-# A previous test here checked bids, which worked.
-# It did not check users, which causes a panic.
-# If this is fixed in the future, tests should probably exhaustively check each subsource.
 ! CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION FOR TABLES (user);
-contains:LOAD GENERATOR source validation: FOR TABLES (..) unsupported
+contains:reference to user not found in source
 
-# For Tables with mentioned schema should work
 > CREATE SCHEMA another;
+> BEGIN
 > CREATE SOURCE another.auction_house
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+  FROM LOAD GENERATOR AUCTION;
+
+> CREATE TABLE another.accounts FROM SOURCE another.auction_house (REFERENCE accounts);
+> CREATE TABLE another.auctions FROM SOURCE another.auction_house (REFERENCE auctions);
+> CREATE TABLE another.bids FROM SOURCE another.auction_house (REFERENCE bids);
+> CREATE TABLE another.organizations FROM SOURCE another.auction_house (REFERENCE organizations);
+> CREATE TABLE another.users FROM SOURCE another.auction_house (REFERENCE users);
+> COMMIT
 
 > SHOW SOURCES FROM another;
-accounts                subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-auction_house           load-generator ${arg.default-replica-size}  ${arg.single-replica-cluster}
-auction_house_progress  progress       <null> <null>
-auctions                subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-bids                    subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-organizations           subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-users                   subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
+auction_house           load-generator ${arg.single-replica-cluster}    ""
+
+> SHOW TABLES FROM another;
+accounts                ""
+auctions                ""
+bids                    ""
+organizations           ""
+users                   ""
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
@@ -97,9 +152,27 @@ users                   subsource      ${arg.default-replica-size}  ${arg.single
   FORMAT JSON
   ENVELOPE UPSERT;
 
-# Show that AST of subsource contains REFERENCES option
-> SHOW CREATE SOURCE accounts
-materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) OF SOURCE \"materialize\".\"public\".\"auction_house\" WITH (EXTERNAL REFERENCE = \"mz_load_generators\".\"auction\".\"accounts\")"
+$ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
+
+>[version<2600700] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (<DETAILS>);"
+
+>[version>=2600700] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (<DETAILS>);"
+
+# CLOCK load generator source
+
+> CREATE SOURCE clock
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR CLOCK (TICK INTERVAL '1s')
+
+> CREATE TABLE clock_tbl FROM SOURCE clock;
+
+> SELECT count(*) FROM clock_tbl;
+1
+
+> SELECT time < now() + INTERVAL '5s', time > now() - INTERVAL '5s' FROM clock_tbl
+true true
 
 # Check that non-append-only `COUNTER` sources reach the proper size
 
@@ -107,14 +180,16 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
 
-> SELECT count(*) FROM counter
+> CREATE TABLE counter_tbl FROM SOURCE counter;
+
+> SELECT count(*) FROM counter_tbl
 8
 
 # Now make sure it doesn't change
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
 
-> SELECT count(*) FROM counter
+> SELECT count(*) FROM counter_tbl
 8
 
 # Check that negative max cardinalities are rejected
@@ -127,13 +202,15 @@ contains:invalid MAX CARDINALITY: invalid unsigned numeric value: invalid digit 
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 0)
 
-> SELECT count(*) FROM counter3
+> CREATE TABLE counter3_tbl FROM SOURCE counter3;
+
+> SELECT count(*) FROM counter3_tbl
 0
 
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
 
-> SELECT count(*) FROM counter3
+> SELECT count(*) FROM counter3_tbl
 0
 
 # Check that negative tick intervals are rejected
@@ -150,20 +227,13 @@ contains: out of range integral type conversion
 
 # Query automatically generated progress topic
 $ set-regex match=\d+ replacement=<NUMBER>
-> SELECT "offset" FROM another.auction_house_progress
+> SELECT "offset" FROM another.auction_house
 <NUMBER>
 
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
-> EXPLAIN TIMESTAMP FOR SELECT * FROM another.auction_house_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.another.auction_house_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
-
-# Check that for all tables clause is rejected with no subsources
-! CREATE SOURCE counter6
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
-  FOR ALL TABLES;
-contains: FOR ALL TABLES is only valid for multi-output sources
+> EXPLAIN TIMESTAMP FOR SELECT * FROM another.auction_house
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.another.auction_house (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (Isolation level: StrictSerializable): [<> <>]\n"
 
 > DROP SOURCE auction_house CASCADE
 > DROP SOURCE another.auction_house CASCADE

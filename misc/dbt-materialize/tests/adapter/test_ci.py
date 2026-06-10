@@ -33,7 +33,7 @@ class TestClusterOps:
                 "run-operation",
                 "create_cluster",
                 "--args",
-                '{"cluster_name": "test_cluster", "size": "1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
+                '{"cluster_name": "test_cluster", "size": "scale=1,workers=1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
             ]
         )
 
@@ -46,7 +46,7 @@ class TestClusterOps:
 
         # Verify cluster properties
         properties = get_cluster_properties(project, "test_cluster_dbt_deploy")
-        assert properties[1] == "1"
+        assert properties[1] == "scale=1,workers=1"
         assert properties[2] == "1"
         assert properties[5] == "manual"
         assert properties[6] is None
@@ -75,7 +75,7 @@ class TestClusterOps:
                 "run-operation",
                 "create_cluster",
                 "--args",
-                '{"cluster_name": "test_cluster", "size": "1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
+                '{"cluster_name": "test_cluster", "size": "scale=1,workers=1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
             ]
         )
 
@@ -85,7 +85,7 @@ class TestClusterOps:
                 "run-operation",
                 "create_cluster",
                 "--args",
-                '{"cluster_name": "test_cluster", "size": "1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
+                '{"cluster_name": "test_cluster", "size": "scale=1,workers=1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
             ]
         )
 
@@ -100,7 +100,7 @@ class TestClusterOps:
 
         # Verify cluster properties
         properties = get_cluster_properties(project, "test_cluster_dbt_deploy")
-        assert properties[1] == "1"
+        assert properties[1] == "scale=1,workers=1"
         assert properties[2] == "1"
         assert properties[5] == "manual"
         assert properties[6] is None
@@ -140,7 +140,7 @@ class TestClusterOps:
                 "run-operation",
                 "create_cluster",
                 "--args",
-                '{"cluster_name": "test_cluster", "size": "1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
+                '{"cluster_name": "test_cluster", "size": "scale=1,workers=1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
             ]
         )
         project.run_sql("CREATE MATERIALIZED VIEW test_view AS SELECT 1")
@@ -152,7 +152,7 @@ class TestClusterOps:
                     "run-operation",
                     "create_cluster",
                     "--args",
-                    '{"cluster_name": "test_cluster", "size": "1", "replication_factor": 1, "ignore_existing_objects": false, "force_deploy_suffix": true}',
+                    '{"cluster_name": "test_cluster", "size": "scale=1,workers=1", "replication_factor": 1, "ignore_existing_objects": false, "force_deploy_suffix": true}',
                 ],
                 expect_pass=False,
             )
@@ -175,7 +175,7 @@ class TestClusterOps:
                 "run-operation",
                 "create_cluster",
                 "--args",
-                '{"cluster_name": "test_manual_schedule", "size": "1", "replication_factor": 2, "schedule_type": "manual", "ignore_existing_objects": true, "force_deploy_suffix": true}',
+                '{"cluster_name": "test_manual_schedule", "size": "scale=1,workers=1", "replication_factor": 2, "schedule_type": "manual", "ignore_existing_objects": true, "force_deploy_suffix": true}',
             ]
         )
 
@@ -190,7 +190,7 @@ class TestClusterOps:
 
         # Verify cluster properties
         properties = get_cluster_properties(project, "test_manual_schedule_dbt_deploy")
-        assert properties[1] == "1"
+        assert properties[1] == "scale=1,workers=1"
         assert properties[2] == "2"
         assert properties[5] == "manual"
         assert properties[6] is None
@@ -212,7 +212,7 @@ class TestClusterOps:
                 "run-operation",
                 "create_cluster",
                 "--args",
-                '{"cluster_name": "test_on_refresh_schedule", "size": "1", "schedule_type": "on-refresh", "refresh_hydration_time_estimate": "10m", "ignore_existing_objects": true, "force_deploy_suffix": true}',
+                '{"cluster_name": "test_on_refresh_schedule", "size": "scale=1,workers=1", "schedule_type": "on-refresh", "refresh_hydration_time_estimate": "10m", "ignore_existing_objects": true, "force_deploy_suffix": true}',
             ]
         )
 
@@ -229,7 +229,7 @@ class TestClusterOps:
         properties = get_cluster_properties(
             project, "test_on_refresh_schedule_dbt_deploy"
         )
-        assert properties[1] == "1"
+        assert properties[1] == "scale=1,workers=1"
         assert properties[5] == "on-refresh"
         assert str(properties[6]) == "0:10:00"
 
@@ -250,7 +250,7 @@ class TestClusterOps:
                 "run-operation",
                 "create_cluster",
                 "--args",
-                '{"cluster_name": "test_cluster", "size": "1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": false}',
+                '{"cluster_name": "test_cluster", "size": "scale=1,workers=1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": false}',
             ]
         )
 
@@ -265,7 +265,7 @@ class TestClusterOps:
 
         # Verify cluster properties
         properties = get_cluster_properties(project, "test_cluster")
-        assert properties[1] == "1"
+        assert properties[1] == "scale=1,workers=1"
         assert properties[2] == "1"
         assert properties[5] == "manual"
         assert properties[6] is None
@@ -298,7 +298,7 @@ class TestClusterOps:
                 "run-operation",
                 "create_cluster",
                 "--args",
-                '{"size": "1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
+                '{"size": "scale=1,workers=1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
             ],
             expect_pass=False,
         )

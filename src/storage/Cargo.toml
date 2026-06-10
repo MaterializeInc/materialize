@@ -14,42 +14,44 @@ name = "upsert_open_loop"
 bench = false
 
 [dependencies]
-anyhow = "1.0.66"
-async-stream = "0.3.3"
-async-trait = "0.1.68"
-bytes = { version = "1.3.0", features = ["serde"] }
-bytesize = "1.1.0"
-bincode = "1"
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
-clap = { version = "3.2.24", features = ["derive", "env"] }
-columnation = { git = "https://github.com/frankmcsherry/columnation" }
-crossbeam-channel = "0.5.8"
-csv-core = { version = "0.1.10" }
-dec = "0.4.8"
-differential-dataflow = "0.12.0"
-either = { version = "1.8.0", features = ["serde"] }
-fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.25"
-globset = { version = "0.4.14", features = ["serde1"] }
-http = "1.1.0"
-indexmap = { version = "2.0.0", default-features = false, features = ["std"] }
-itertools = { version = "0.10.5" }
-maplit = "1.0.2"
-mysql_async = { version = "0.34.1", default-features = false, features = ["minimal", "binlog"] }
-mysql_common = { version = "0.32.4", default-features = false, features = ["chrono"] }
-mz-avro = { path = "../avro", features = ["snappy"] }
-mz-aws-util = { path = "../aws-util", features = ["s3"] }
+anyhow.workspace = true
+async-stream.workspace = true
+async-trait.workspace = true
+aws-credential-types.workspace = true
+aws-sdk-sts.workspace = true
+arrow.workspace = true
+bytemuck.workspace = true
+bytes = { workspace = true, features = ["serde"] }
+bytesize.workspace = true
+bincode.workspace = true
+chrono.workspace = true
+clap = { workspace = true, features = ["env"] }
+columnar.workspace = true
+columnation.workspace = true
+crossbeam-channel.workspace = true
+csv-core.workspace = true
+dec.workspace = true
+differential-dataflow.workspace = true
+fail.workspace = true
+futures.workspace = true
+iceberg.workspace = true
+indexmap.workspace = true
+itertools.workspace = true
+maplit.workspace = true
+mysql_async.workspace = true
+mysql_common.workspace = true
+mz-arrow-util = { path = "../arrow-util" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
-mz-cloud-resources = { path = "../cloud-resources" }
+mz-cluster-client = { path = "../cluster-client" }
+mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-cluster = { path = "../cluster" }
-mz-dyncfg = { path = "../dyncfg" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-mysql-util = { path = "../mysql-util" }
-mz-ore = { path = "../ore", features = ["async", "tracing_", "chrono", "metrics"] }
+mz-ore = { path = "../ore", features = ["async", "tracing", "chrono", "metrics", "columnar", "columnation"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
@@ -57,68 +59,55 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-rocksdb = { path = "../rocksdb" }
-mz-secrets = { path = "../secrets" }
-mz-service = { path = "../service" }
+mz-row-spine = { path = "../row-spine" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-sql-server-util = { path = "../sql-server-util" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-once_cell = { version = "1.16.0" }
-pin-project = "1.0.12"
-postgres-protocol = { version = "0.6.5" }
-prometheus = { version = "0.13.3", default-features = false }
-prost = { version = "0.13.1", features = ["no-recursion-limit"] }
-rand = "0.8.5"
-rdkafka = { version = "0.29.0", features = [
-    "cmake-build",
-    "ssl-vendored",
-    "libz-static",
-    "zstd",
-] }
-regex = { version = "1.7.0" }
-rocksdb = { version = "0.22.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
-seahash = "4"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = { version = "1.0.89" }
-serde_bytes = { version = "0.11.14" }
-sha2 = "0.10.6"
-timely = { version = "0.12.0", default-features = false, features = [
-    "bincode",
-] }
-tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "test-util"] }
-tokio-postgres = { version = "0.7.8", features = ["serde"] }
-tokio-stream = "0.1.11"
-tokio-util = { version = "0.7.4", features = ["io"] }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
-thiserror = { version = "1.0.37" }
-url = { version = "2.3.1", features = ["serde"] }
-uuid = { version = "1.7.0", features = ["serde", "v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
-tonic-build = "0.12.1"
+parquet.workspace = true
+pin-project.workspace = true
+postgres-replication.workspace = true
+prometheus.workspace = true
+prost.workspace = true
+# Loadgen sources need reproducible randomness, so we need to continue using
+# the old version of `rand`.
+rand-8.workspace = true
+rdkafka.workspace = true
+regex.workspace = true
+rocksdb.workspace = true
+seahash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_bytes.workspace = true
+sha2.workspace = true
+tiberius.workspace = true
+timely.workspace = true
+tokio.workspace = true
+tokio-postgres = { workspace = true, features = ["serde"] }
+tokio-stream.workspace = true
+tokio-util = { workspace = true, features = ["io"] }
+tracing.workspace = true
+thiserror.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
+arrow-ipc.workspace = true
 
 [dev-dependencies]
-async-trait = "0.1.68"
-axum = "0.7.5"
-clap = { version = "3.2.24", features = ["derive", "env"] }
-datadriven = { version = "0.8.0", features = ["async"] }
-humantime = "2.1.0"
+async-trait.workspace = true
+axum.workspace = true
+clap = { workspace = true, features = ["env"] }
+humantime.workspace = true
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-itertools = "0.10.5"
-num_cpus = "1.14.0"
-tempfile = "3.8.1"
-tokio = { version = "1.38.0", features = ["test-util"] }
+itertools.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
 
 [features]
-default = ["mz-build-tools/default"]
+default = []
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
-normal = ["inotify", "workspace-hack", "rocksdb"]

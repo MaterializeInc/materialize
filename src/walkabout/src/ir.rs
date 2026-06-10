@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use itertools::Itertools;
 use quote::ToTokens;
 
@@ -40,7 +40,7 @@ pub enum Item {
 }
 
 impl Item {
-    pub fn fields<'a>(&'a self) -> Box<dyn Iterator<Item = &Field> + 'a> {
+    pub fn fields<'a>(&'a self) -> Box<dyn Iterator<Item = &'a Field> + 'a> {
         match self {
             Item::Struct(s) => Box::new(s.fields.iter()),
             Item::Enum(e) => Box::new(e.variants.iter().flat_map(|v| &v.fields)),
@@ -236,7 +236,10 @@ fn analyze_generics(generics: &syn::Generics) -> Result<Vec<ItemGeneric>> {
                 // Generic parameter names that end in '2' conflict with the
                 // folder's name generation.
                 if name.ends_with('2') {
-                    bail!("Generic parameters whose name ends in '2' conflict with folder's naming scheme: {}", name);
+                    bail!(
+                        "Generic parameters whose name ends in '2' conflict with folder's naming scheme: {}",
+                        name
+                    );
                 }
                 out.push(ItemGeneric { name, bounds });
             }
@@ -289,7 +292,10 @@ fn analyze_type(ty: &syn::Type) -> Result<Type> {
                                 let inner = Box::new(analyze_type(ty)?);
                                 Ok(construct_ty(inner))
                             }
-                            _ => bail!("Container type argument is not a basic (i.e., non-lifetime, non-constraint) type argument: {}", ty.into_token_stream()),
+                            _ => bail!(
+                                "Container type argument is not a basic (i.e., non-lifetime, non-constraint) type argument: {}",
+                                ty.into_token_stream()
+                            ),
                         }
                     }
                     syn::PathArguments::AngleBracketed(_) => bail!(

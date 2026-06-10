@@ -7,11 +7,19 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test toxiproxy disruptions in the persist pubsub connection.
+"""
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -22,11 +30,10 @@ SERVICES = [
     Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),
     Redpanda(),
     Toxiproxy(),
-    Testdrive(no_reset=True, seed=1),
+    Testdrive(no_reset=True, seed=1, default_timeout="60s"),
 ]
 
-SCHEMA = dedent(
-    """
+SCHEMA = dedent("""
     $ set keyschema={
         "type" : "record",
         "name" : "test",
@@ -42,8 +49,7 @@ SCHEMA = dedent(
             {"name":"f2", "type":"long"}
         ]
       }
-    """
-)
+    """)
 
 
 @dataclass
@@ -76,15 +82,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     for disruption in selected_by_name(args.disruptions, disruptions):
         c.down(destroy_volumes=True)
-        c.up("redpanda", "materialized")
-        c.up("testdrive", persistent=True)
+        c.up("redpanda", "materialized", Service("testdrive", idle=True))
 
         toxiproxy_start(c)
 
-        c.testdrive(
-            input=SCHEMA
-            + dedent(
-                """
+        c.testdrive(input=SCHEMA + dedent("""
                 > CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
                 $ kafka-create-topic topic=pubsub-disruption partitions=4
 
@@ -101,6 +103,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 > CREATE SOURCE s1
                   FROM KAFKA CONNECTION kafka_conn
                   (TOPIC 'testdrive-pubsub-disruption-${testdrive.seed}')
+
+                > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-pubsub-disruption-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -112,21 +116,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 > CREATE MATERIALIZED VIEW v2 AS
                   SELECT COUNT(*) AS c1, COUNT(DISTINCT f1) AS c2, COUNT(DISTINCT f2) AS c3,
                          MIN(f1) AS min1, MIN(f2) AS min2, MAX(f1) AS max1, MAX(f2) AS max2
-                  FROM s1;
+                  FROM s1_tbl;
 
                 > UPDATE t1 SET f2 = 2;
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000
                 {"f1": ${kafka-ingest.iteration}} {"f2": 2}
-                """
-            )
-        )
+                """))
 
         disruption.breakage(c)
 
-        c.testdrive(
-            input=SCHEMA
-            + dedent(
-                """
+        c.testdrive(input=SCHEMA + dedent("""
+                $ set-sql-timeout duration=120s
+
                 > UPDATE t1 SET f2 = 3;
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000
                 {"f1": ${kafka-ingest.iteration}} {"f2": 3}
@@ -146,18 +147,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 > CREATE MATERIALIZED VIEW v4 AS
                   SELECT COUNT(*) AS c1, COUNT(DISTINCT f1) AS c2, COUNT(DISTINCT f2) AS c3,
                          MIN(f1) AS min1, MIN(f2) AS min2, MAX(f1) AS max1, MAX(f2) AS max2
-                  FROM s1;
+                  FROM s1_tbl;
 
-                """
-            )
-        )
+                """))
 
         disruption.fixage(c)
 
-        c.testdrive(
-            input=SCHEMA
-            + dedent(
-                """
+        c.testdrive(input=SCHEMA + dedent("""
+                $ set-sql-timeout duration=120s
                 > UPDATE t1 SET f2 = 4;
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000
                 {"f1": ${kafka-ingest.iteration}} {"f2": 4}
@@ -173,16 +170,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
                 > SELECT * FROM v4
                 1000000 1000000 1 1 4 1000000 4
-                """
-            )
-        )
+                """))
 
 
 def toxiproxy_start(c: Composition) -> None:
     c.up("toxiproxy")
-    c.testdrive(
-        input=dedent(
-            """
+    c.testdrive(input=dedent("""
                 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
                 {
                    "name": "pubsub",
@@ -190,6 +183,4 @@ def toxiproxy_start(c: Composition) -> None:
                    "upstream": "materialized:6879",
                    "enabled": true
                 }
-                """
-        )
-    )
+                """))

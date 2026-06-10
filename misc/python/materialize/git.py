@@ -10,10 +10,13 @@
 """Git utilities."""
 
 import functools
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import TypeVar
+
+import requests
 
 from materialize import spawn
 from materialize.mz_version import MzVersion, TypedVersionBase
@@ -24,6 +27,24 @@ VERSION_TYPE = TypeVar("VERSION_TYPE", bound=TypedVersionBase)
 MATERIALIZE_REMOTE_URL = "https://github.com/MaterializeInc/materialize"
 
 fetched_tags_in_remotes: set[str | None] = set()
+
+
+def get_config(key: str) -> str | None:
+    """Read a git config value, returning None if unset."""
+    try:
+        return spawn.capture(["git", "config", key]).strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def get_user_name() -> str | None:
+    """Get the configured git user.name."""
+    return get_config("user.name")
+
+
+def get_user_email() -> str | None:
+    """Get the configured git user.email."""
+    return get_config("user.email")
 
 
 def rev_count(rev: str) -> int:
@@ -37,6 +58,19 @@ def rev_count(rev: str) -> int:
             initial commit and ending with the specified commit, inclusive.
     """
     return int(spawn.capture(["git", "rev-list", "--count", rev, "--"]).strip())
+
+
+def get_first_parent_commits(rev: str, limit: int) -> list[str]:
+    """Get commit hashes along the first-parent chain starting from rev.
+
+    Returns up to `limit` commit hashes (including rev itself), following
+    only first parents (i.e., staying on the main branch).
+    """
+    return (
+        spawn.capture(["git", "rev-list", "--first-parent", f"-{limit}", rev])
+        .strip()
+        .splitlines()
+    )
 
 
 def rev_parse(rev: str, *, abbrev: bool = False) -> str:
@@ -124,21 +158,28 @@ def get_version_tags(
 
 
 def get_latest_version(
-    version_type: type[VERSION_TYPE], excluded_versions: set[VERSION_TYPE] | None = None
+    version_type: type[VERSION_TYPE],
+    excluded_versions: set[VERSION_TYPE] | None = None,
+    current_version: VERSION_TYPE | None = None,
 ) -> VERSION_TYPE:
     all_version_tags: list[VERSION_TYPE] = get_version_tags(
         version_type=version_type, fetch=True
     )
 
     if excluded_versions is not None:
-        all_version_tags = [v for v in all_version_tags if v not in excluded_versions]
+        all_version_tags = [
+            v
+            for v in all_version_tags
+            if v not in excluded_versions
+            and (not current_version or v < current_version)
+        ]
 
     return max(all_version_tags)
 
 
 def get_tags_of_current_commit(include_tags: YesNoOnce = YesNoOnce.ONCE) -> list[str]:
     if include_tags:
-        fetch(include_tags=include_tags, only_tags=True)
+        fetch(get_remote(), include_tags=include_tags, only_tags=True)
 
     result = spawn.capture(["git", "tag", "--points-at", "HEAD"])
 
@@ -151,10 +192,33 @@ def get_tags_of_current_commit(include_tags: YesNoOnce = YesNoOnce.ONCE) -> list
 def is_ancestor(earlier: str, later: str) -> bool:
     """True if earlier is in an ancestor of later"""
     try:
-        spawn.capture(["git", "merge-base", "--is-ancestor", earlier, later])
-    except subprocess.CalledProcessError:
-        return False
-    return True
+        headers = {"Accept": "application/vnd.github+json"}
+        if token := os.getenv("GITHUB_TOKEN"):
+            headers["Authorization"] = f"Bearer {token}"
+
+        resp = requests.get(
+            f"https://api.github.com/repos/materializeinc/materialize/compare/{earlier}...{later}",
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("status") in ("ahead", "identical")
+    except Exception as e:
+        # Try locally if Github is down or the change has not been pushed yet when running locally
+        print(f"Failed to get ancestor status from Github, running locally: {e}")
+
+        # Make sure we have an up to date view of main.
+        command = ["git", "fetch"]
+        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+            command.append("--unshallow")
+        spawn.runv(command + [get_remote(), earlier, later])
+
+        return (
+            spawn.run_and_get_return_code(
+                ["git", "merge-base", "--is-ancestor", earlier, later]
+            )
+            == 0
+        )
 
 
 def is_dirty() -> bool:
@@ -162,16 +226,6 @@ def is_dirty() -> bool:
     proc = subprocess.run("git diff --no-ext-diff --quiet --exit-code".split())
     idx = subprocess.run("git diff --cached --no-ext-diff --quiet --exit-code".split())
     return proc.returncode != 0 or idx.returncode != 0
-
-
-def first_remote_matching(pattern: str) -> str | None:
-    """Get the name of the remote that matches the pattern"""
-    remotes = spawn.capture(["git", "remote", "-v"])
-    for remote in remotes.splitlines():
-        if pattern in remote:
-            return remote.split()[0]
-
-    return None
 
 
 def describe() -> str:
@@ -186,7 +240,6 @@ def fetch(
     force: bool = False,
     branch: str | None = None,
     only_tags: bool = False,
-    include_submodules: bool = False,
 ) -> str:
     """Fetch from remotes"""
 
@@ -200,6 +253,8 @@ def fetch(
         raise RuntimeError("branch must not be specified if only_tags is set")
 
     command = ["git", "fetch"]
+    if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+        command.append("--unshallow")
 
     if remote:
         command.append(remote)
@@ -209,12 +264,6 @@ def fetch(
 
     if all_remotes:
         command.append("--all")
-
-    # explicitly specify both cases to be independent of the git config
-    if include_submodules:
-        command.append("--recurse-submodules")
-    else:
-        command.append("--no-recurse-submodules")
 
     fetch_tags = (
         include_tags == YesNoOnce.YES
@@ -274,12 +323,33 @@ def get_remote(
     return remote
 
 
-def get_common_ancestor_commit(remote: str, branch: str, fetch_branch: bool) -> str:
-    if fetch_branch:
-        fetch(remote=remote, branch=branch)
+def get_common_ancestor_commit(remote: str, branch: str) -> str:
+    try:
+        head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
+        headers = {"Accept": "application/vnd.github+json"}
+        if token := os.getenv("GITHUB_TOKEN"):
+            headers["Authorization"] = f"Bearer {token}"
 
-    command = ["git", "merge-base", "HEAD", f"{remote}/{branch}"]
-    return spawn.capture(command).strip()
+        resp = requests.get(
+            f"https://api.github.com/repos/materializeinc/materialize/compare/{head}...{branch}",
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["merge_base_commit"]["sha"]
+    except Exception as e:
+        # Try locally if Github is down or the change has not been pushed yet when running locally
+        print(f"Failed to get ancestor commit from Github, running locally: {e}")
+
+        # Make sure we have an up to date view
+        command = ["git", "fetch"]
+        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+            command.append("--unshallow")
+        spawn.runv(command + [remote, branch])
+
+        return spawn.capture(
+            ["git", "merge-base", "HEAD", f"{remote}/{branch}"]
+        ).strip()
 
 
 def is_on_release_version() -> bool:
@@ -290,16 +360,9 @@ def is_on_release_version() -> bool:
 def contains_commit(
     commit_sha: str,
     target: str = "HEAD",
-    fetch: bool = False,
     remote_url: str = MATERIALIZE_REMOTE_URL,
 ) -> bool:
-    if fetch:
-        remote = get_remote(remote_url)
-        _fetch(remote=remote)
-        target = f"{remote}/{target}"
-    command = ["git", "merge-base", "--is-ancestor", commit_sha, target]
-    return_code = spawn.run_and_get_return_code(command)
-    return return_code == 0
+    return is_ancestor(commit_sha, target)
 
 
 def get_tagged_release_version(version_type: type[VERSION_TYPE]) -> VERSION_TYPE | None:
@@ -350,9 +413,17 @@ def create_branch(name: str) -> None:
     spawn.runv(["git", "checkout", "-b", name])
 
 
-def checkout(rev: str, branch: str | None = None) -> None:
+def checkout(rev: str, path: str | None = None) -> None:
     """Git checkout the rev"""
-    spawn.runv(["git", "checkout", rev])
+    cmd = ["git", "checkout", rev]
+    if path:
+        cmd.extend(["--", path])
+    spawn.runv(cmd)
+
+
+def add_file(file: str) -> None:
+    """Git add a file"""
+    spawn.runv(["git", "add", file])
 
 
 def commit_all_changed(message: str) -> None:

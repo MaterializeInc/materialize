@@ -13,63 +13,67 @@
 # Increased from the default because of CI flakiness.
 $ set-sql-timeout duration=180s
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
-> SELECT * from remote2
+two
+> SELECT * from remote2_tbl
 one
+two
 
 # ensure after envd has restarted, we have maintained statistics.
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received),
+  SUM(u.messages_received) >= 2,
   SUM(u.offset_known),
   SUM(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 1 1 1
-remote2 true 1 1 1
+remote1 true true 2 2
+remote2 true true 2 2
 
 > SELECT s.name,
   SUM(u.updates_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
   GROUP BY s.id, s.name
 webhook_text 1
 
 $ kafka-ingest format=bytes topic=remote1
-two
+three
 $ kafka-ingest format=bytes topic=remote2
-two
+three
 $ webhook-append database=materialize schema=public name=webhook_text
 b
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
 two
-> SELECT * from remote2
+three
+> SELECT * from remote2_tbl
 one
 two
+three
 
 # Ensure that offsets/counters can be updated correctly.
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received),
+  SUM(u.messages_received) >= 3,
   SUM(u.offset_known),
   SUM(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 2 2 2
-remote2 true 2 2 2
+remote1 true true 3 3
+remote2 true true 3 3
 
 > SELECT s.name,
   SUM(u.updates_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
   GROUP BY s.id, s.name
 webhook_text 2

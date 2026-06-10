@@ -6,8 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-
 from textwrap import dedent
 
 from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
@@ -16,6 +14,7 @@ from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_credentials,
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 ANY_PIPELINE_VALUE = "*"
 ANY_BRANCH_VALUE = "*"
@@ -48,14 +47,20 @@ class TestAnalyticsDataSource:
         only_failed_builds: bool,
     ) -> list[tuple[Build, BuildAnnotation]]:
         pipeline_clause = (
-            f" AND bae.pipeline = '{pipeline}'"
+            f" AND bae.pipeline = {as_sanitized_literal(pipeline)}"
             if pipeline != ANY_PIPELINE_VALUE
             else ""
         )
-        branch_clause = f" AND bae.branch = '{branch}'" if branch is not None else ""
+        branch_clause = (
+            f" AND bae.branch = {as_sanitized_literal(branch)}"
+            if branch is not None
+            else ""
+        )
         failed_builds_clause = " AND bsu.has_failed_steps" if only_failed_builds else ""
         if len(build_step_keys) > 0:
-            in_build_step_keys = ",".join(f"'{key}'" for key in build_step_keys)
+            in_build_step_keys = ",".join(
+                as_sanitized_literal(key) for key in build_step_keys
+            )
             build_steps_keys_clause = (
                 f" AND bae.build_step_key IN ({in_build_step_keys})"
             )
@@ -75,20 +80,20 @@ class TestAnalyticsDataSource:
         )
 
         result_rows = self.test_analytics_db.build_annotations.query_data(
-            dedent(
-                f"""
+            dedent(f"""
             SELECT
                 bae.build_number,
                 bae.pipeline,
                 CASE WHEN bsu.has_failed_steps THEN 'FAILED' else 'PASSED' END AS state,
                 bae.branch,
                 bsu.build_url,
+                bae.build_date,
                 bae.test_suite,
                 bae.content
             FROM v_build_annotation_error bae
             INNER JOIN v_build_success bsu
             ON bae.build_id = bsu.build_id
-            WHERE bae.content ILIKE '{like_pattern}'
+            WHERE bae.content ILIKE {as_sanitized_literal(like_pattern)}
             {pipeline_clause}
             {branch_clause}
             {failed_builds_clause}
@@ -97,8 +102,7 @@ class TestAnalyticsDataSource:
             ORDER BY
                 {order_clause}
             LIMIT {max_entries}
-            """
-            ),
+            """),
             verbose=False,
             statement_timeout="5s",
         )
@@ -112,8 +116,9 @@ class TestAnalyticsDataSource:
                 state=row[2],
                 branch=row[3],
                 web_url=row[4],
+                created_at=row[5],
             )
-            annotation = BuildAnnotation(title=row[5], content=row[6])
+            annotation = BuildAnnotation(title=row[6], content=row[7])
 
             result.append((build, annotation))
 

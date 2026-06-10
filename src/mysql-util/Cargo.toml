@@ -10,37 +10,50 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
-indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
-itertools = "0.10.5"
+anyhow.workspace = true
+aws-config.workspace = true
+aws-credential-types.workspace = true
+aws-sigv4.workspace = true
+aws-types.workspace = true
+chrono.workspace = true
+indexmap.workspace = true
+itertools.workspace = true
+maplit.workspace = true
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
-mysql_common = { version = "0.32.4", default-features = false, features = ["chrono"] }
-mysql_async = { version = "0.34.1", default-features = false, features = ["minimal", "tracing"] }
-once_cell = "1.16.0"
-prost = { version = "0.13.1", features = ["no-recursion-limit"] }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
-fancy-regex = "0.11.0"
-regex = "1.7.0"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = { version = "1.0.89" }
-thiserror = "1.0.37"
-tracing = "0.1.37"
-uuid = { version = "1.7.0", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+mysql_common.workspace = true
+mysql_async.workspace = true
+prost.workspace = true
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
+fancy-regex.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.1"
-tonic-build = "0.12.1"
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
+prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
+proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest"]
+
+[dev-dependencies]
+mz-mysql-util = { path = ".", features = ["proptest"] }
+proptest.workspace = true
+proptest-derive.workspace = true
+tokio.workspace = true
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+# The self-dep above activates the `proptest` feature for tests so that
+# `cfg(test)`-gated `Arbitrary` derives can find `mz-repr`'s proptest impls.
+# cargo-udeps doesn't recognize feature-activation as usage.
+development = ["mz-mysql-util"]

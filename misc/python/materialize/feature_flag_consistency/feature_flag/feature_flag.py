@@ -56,11 +56,11 @@ def create_boolean_feature_flag_configuration_pair(
         config1=FeatureFlagSystemConfiguration(
             name="default",
             shortcut="default",
-            flags=[FeatureFlagValue(flag_name, FEATURE_FLAG_TRUE_VALUE)],
+            flags=[FeatureFlagValue(flag_name, FEATURE_FLAG_FALSE_VALUE)],
         ),
         config2=FeatureFlagSystemConfiguration(
             name=f"w/ {flag_name}",
             shortcut=shortcut,
-            flags=[FeatureFlagValue(flag_name, FEATURE_FLAG_FALSE_VALUE)],
+            flags=[FeatureFlagValue(flag_name, FEATURE_FLAG_TRUE_VALUE)],
         ),
     )

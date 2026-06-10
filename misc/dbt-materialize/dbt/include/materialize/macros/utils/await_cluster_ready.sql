@@ -13,15 +13,22 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro await_cluster_ready(cluster, poll_interval=15, lag_threshold='1s') %}
+{% macro await_cluster_ready(cluster, poll_interval=15, lag_threshold='10s') %}
 
 {% for i in range(1, 100000) %}
-    {% if is_cluster_ready(cluster, lag_threshold) %}
-        {{ return(true) }}
+    {% set result = is_cluster_ready(cluster, lag_threshold) %}
+    {% if result.ready %}
+        {{ return(result) }}
     {% endif %}
+
+    {#- Log progress for non-ready states -#}
+    {% if result.status == 'failing' %}
+        {{ log("Cluster " ~ cluster ~ " is in a failing state: " ~ result.failure_reason ~ ". Retrying...", info=True) }}
+    {% endif %}
+
     -- Hydration takes time. Be a good
     -- citizen and don't overwhelm mz_catalog_server
     {{ adapter.sleep(poll_interval) }}
 {% endfor %}
-{{ exceptions.raise_compiler_error("Cluster " ~ deploy_cluster ~ " failed to hydrate within a reasonable amount of time") }}
+{{ exceptions.raise_compiler_error("Cluster " ~ cluster ~ " failed to become ready within a reasonable amount of time") }}
 {% endmacro %}

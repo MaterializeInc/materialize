@@ -15,12 +15,16 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.operation.operation_param import OperationParam
+from materialize.output_consistency.generators.arg_context import ArgContext
+from materialize.output_consistency.operation.volatile_data_operation_param import (
+    VolatileDataOperationParam,
+)
+from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 
 _INDEX_OF_NULL_VALUE = 0
 
 
-class EnumConstantOperationParam(OperationParam):
+class EnumConstantOperationParam(VolatileDataOperationParam):
     def __init__(
         self,
         values: list[str],
@@ -34,8 +38,6 @@ class EnumConstantOperationParam(OperationParam):
         super().__init__(
             DataTypeCategory.ENUM,
             optional=optional,
-            incompatibilities=None,
-            incompatibility_combinations=None,
         )
         assert len(values) == len(set(values)), f"Values contain duplicates {values}"
         self.values = values
@@ -100,3 +102,9 @@ class EnumConstantOperationParam(OperationParam):
             if value != self.invalid_value
             and (index != _INDEX_OF_NULL_VALUE or not self.add_null_value)
         ]
+
+    def generate_expression(
+        self, arg_context: ArgContext, randomized_picker: RandomizedPicker
+    ) -> Expression:
+        enum_constant_index = randomized_picker.random_number(0, len(self.values) - 1)
+        return self.get_enum_constant(enum_constant_index)

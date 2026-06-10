@@ -17,11 +17,7 @@ be other lists, known as "layered lists."
 
 ## Syntax
 
-{{< diagram "type-list.svg" >}}
-
-| Field     | Use                                                                                                       |
-| --------- | --------------------------------------------------------------------------------------------------------- |
-| _element_ | An element of any [data type](../) to place in the list. Note that all elements must be of the same type. |
+{{% include-syntax file="examples/sql_types/list" example="syntax" %}}
 
 ## List functions + operators
 
@@ -427,12 +423,9 @@ You can create [custom `list` types](/sql/types/#custom-types), which lets you
 create a named entry in the catalog for a specific type of list.
 
 Currently, custom types only provides a shorthand for referring to
-otherwise-annoying-to-type names, but in the future will provide [binary
-encoding and decoding][binary] for these types, as well.
+otherwise-annoying-to-type names.
 
 Note that custom `list` types have special rules regarding [polymorphism](/sql/types/#polymorphism).
-
-[binary]:https://github.com/MaterializeInc/materialize/issues/4628
 
 ### Valid casts
 

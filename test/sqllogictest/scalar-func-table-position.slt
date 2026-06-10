@@ -163,15 +163,15 @@ a ordinality
 1
 
 # Aggregates
-query error db error: ERROR: aggregate functions are not supported in functions in FROM
+query error aggregate functions are not supported in functions in FROM
 SELECT * FROM sum(4)
 
-query error db error: ERROR: aggregate functions are not supported in functions in FROM
+query error aggregate functions are not supported in functions in FROM
 SELECT * FROM (VALUES (1), (3)) AS t(a), LATERAL(SELECT * FROM sum(a));
 
 # Aggregates that exist as catalog only
-query error db error: ERROR: aggregate functions are not supported in functions in FROM
+query error aggregate functions are not supported in functions in FROM
 SELECT * FROM avg(4)
 
-query error db error: ERROR: aggregate functions are not supported in functions in FROM
+query error aggregate functions are not supported in functions in FROM
 SELECT * FROM (VALUES (1), (3)) AS t(a), LATERAL(SELECT * FROM avg(a));

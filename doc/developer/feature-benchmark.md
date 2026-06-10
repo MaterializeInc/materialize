@@ -59,7 +59,7 @@ interference of any defaults that may be in effect and that can change over time
 
 ## Running manually in Buildkite
 
-Go to [Trigger CI](https://trigger-ci.dev.materialize.com/) and enter your pull request, select Feature Benchmark to only run that test.
+Go to [Trigger CI](https://ci.dev.materialize.com/trigger) and enter your pull request, select Feature Benchmark to only run that test.
 If you want to run a specific senario only, enter a Feature Benchmark Scenario in the extra args.
 For example, to run all scenarios that are subclasses of `Kafka`, use `--scenario=Kafka`.
 
@@ -82,7 +82,7 @@ The table is printed periodically as new rows arrive so that the information is 
 
 # Available scenarios
 
-The `test/feature-benchmark/scenarios.py` file contains the definitive list of scenarios. Scenarios follow a hierarchical structure.
+The `misc/python/materialize/feature_benchmark/scenarios` directory contains the definitive list of scenarios. Scenarios follow a hierarchical structure.
 
 The default scenarios derive from the `Scenario` class, those that take longer to execute derive from the `ScenarioBig` class.
 
@@ -142,11 +142,10 @@ be reported.
 
 ## Retry policy
 
-Any suspected performance regressions will be retried up to `--max-retries` times (default is 3). Only regressions that are
-repeatedly reproducible will cause the benchmark to exit with a nonzero exit code. The bottom of the Buildkite log will show
-the retry attempts.
+Any scenario will be run exactly `--runs-per-scenario` times (default is 3). The run with the median wallclock duration
+will be chosen and other runs will be discarded.
 
-Reported performance improvements are not retried to establish reprodicibility, so should be considered flukes if seen in the CI
+Reported performance improvements are not retried to establish reproducibility, so should be considered flakes if seen in the CI
 output until reliably reproduced locally.
 
 # Measuring memory consumption

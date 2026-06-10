@@ -82,6 +82,8 @@ public              mz_support=U/mz_system
 query TT rowsort
 SELECT * FROM cluster_privileges ORDER BY name, privilege
 ----
+mz_analytics  mz_analytics=UC/mz_analytics
+mz_analytics  mz_system=UC/mz_analytics
 mz_catalog_server  =U/mz_system
 mz_catalog_server  mz_support=UC/mz_system
 mz_catalog_server  mz_system=UC/mz_system
@@ -100,15 +102,17 @@ quickstart  mz_system=UC/mz_system
 ### The materialize privilege comes from the views created above
 ### The mz_support privilege comes from the `_redacted`
 ### statement logging views.
-query T
+query T rowsort
 SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'view' OR type = 'materialized view' OR type = 'source'
 ----
 =r/mz_system
-mz_system=r/mz_system
-mz_monitor=r/mz_system
-mz_support=r/mz_system
 materialize=r/materialize
+mz_analytics=r/mz_system
+mz_monitor=r/mz_system
 mz_monitor_redacted=r/mz_system
+mz_support=r/mz_system
+mz_system=arwd/mz_system
+mz_system=r/mz_system
 
 query T
 SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'table'
@@ -126,7 +130,7 @@ mz_system=U/mz_system
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 ## Test user created objects
 
@@ -193,7 +197,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 'conn'
 conn  materialize=U/materialize
 
 statement ok
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 query TT rowsort
 SELECT * FROM cluster_privileges WHERE name = 'c'
@@ -2213,7 +2217,7 @@ query T
 SELECT privileges::text FROM mz_system_privileges
 ----
 joe=B/mz_system
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
@@ -2240,7 +2244,7 @@ query T
 SELECT privileges::text FROM mz_system_privileges
 ----
 joe=B/mz_system
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 simple conn=mz_system,user=mz_system
 GRANT CREATEROLE, CREATECLUSTER ON SYSTEM TO PUBLIC
@@ -2252,7 +2256,7 @@ SELECT privileges::text FROM mz_system_privileges
 ----
 =RN/mz_system
 joe=B/mz_system
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 statement error role "joe" cannot be dropped because some objects depend on it
 DROP ROLE joe
@@ -2266,7 +2270,7 @@ query T
 SELECT privileges::text FROM mz_system_privileges
 ----
 =RN/mz_system
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
@@ -2293,7 +2297,7 @@ query T
 SELECT privileges::text FROM mz_system_privileges
 ----
 =RN/mz_system
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 statement ok
 DROP ROLE joe
@@ -2312,7 +2316,7 @@ COMPLETE 0
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
@@ -2433,7 +2437,7 @@ GRANT SELECT ON t1 TO joe, other
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 't1'
 ----
 t1  joe=r/mz_system
@@ -2445,7 +2449,7 @@ GRANT SELECT, INSERT ON t1 TO test_role, other
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 't1'
 ----
 t1  joe=r/mz_system
@@ -2458,7 +2462,7 @@ REVOKE INSERT ON t1 FROM joe, test_role, other
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 't1'
 ----
 t1  joe=r/mz_system
@@ -2483,7 +2487,7 @@ GRANT ALL ON t1 TO joe, test_role
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 't1'
 ----
 t1  joe=arwd/mz_system
@@ -2515,7 +2519,7 @@ GRANT ALL ON v1 TO joe
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 'v1'
 ----
 v1  joe=r/mz_system
@@ -2539,8 +2543,8 @@ COMPLETE 0
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-joe=RBN/mz_system
-mz_system=RBN/mz_system
+joe=RBNP/mz_system
+mz_system=RBNP/mz_system
 
 simple conn=mz_system,user=mz_system
 REVOKE ALL ON SYSTEM FROM joe
@@ -2550,7 +2554,7 @@ COMPLETE 0
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 ## Test system objects
 
@@ -2752,7 +2756,7 @@ SELECT has_cluster_privilege('joe', 'c', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_connection_privilege('fake_role', 'conn', 'USAGE')
 
-query error db error: ERROR: connection "fake_connection" does not exist
+query error connection "fake_connection" does not exist
 SELECT has_connection_privilege('joe', 'fake_connection', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
@@ -2785,7 +2789,7 @@ SELECT has_schema_privilege('joe', 'sch', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_secret_privilege('fake_role', 'se', 'USAGE')
 
-query error db error: ERROR: secret "fake_secret" does not exist
+query error secret "fake_secret" does not exist
 SELECT has_secret_privilege('joe', 'fake_secret', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
@@ -2796,7 +2800,7 @@ SELECT has_secret_privilege('joe', 'se', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_table_privilege('fake_role', 't', 'SELECT')
 
-query error db error: ERROR: relation "fake_table" does not exist
+query error relation "fake_table" does not exist
 SELECT has_table_privilege('joe', 'fake_table', 'SELECT')
 
 query error unrecognized privilege type: "fake privilege"
@@ -2807,7 +2811,7 @@ SELECT has_table_privilege('joe', 't', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_type_privilege('fake_role', 'ty', 'USAGE')
 
-query error db error: ERROR: type "fake_type" does not exist
+query error type "fake_type" does not exist
 SELECT has_type_privilege('joe', 'fake_type', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
@@ -3553,7 +3557,7 @@ COMPLETE 0
 
 ## Tables
 
-query error db error: ERROR: relation "t3" does not exist
+query error relation "t3" does not exist
 SELECT has_table_privilege('t3', 'SELECT')
 
 query B
@@ -3633,7 +3637,7 @@ REVOKE USAGE ON ALL TYPES FROM PUBLIC
 ----
 COMPLETE 0
 
-query error db error: ERROR: type "ty1" does not exist
+query error type "ty1" does not exist
 SELECT has_type_privilege('ty1', 'USAGE')
 
 query B
@@ -4584,12 +4588,12 @@ false
 ## Clusters
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c1 REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER c2 REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c2 REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -4694,7 +4698,7 @@ COMPLETE 0
 
 ## table_privileges
 
-simple conn=r1,user=r1
+simple conn=r1,user=r1,rowsort
 SELECT * FROM information_schema.table_privileges WHERE grantee != 'PUBLIC'
 ----
 r1,r1,materialize,public,mv,SELECT,NO,YES
@@ -4710,51 +4714,57 @@ SELECT COUNT(*) >= 166 FROM information_schema.table_privileges WHERE grantee = 
 t
 COMPLETE 1
 
-simple conn=mz_system,user=mz_system
+simple conn=mz_system,user=mz_system,rowsort
 SELECT * FROM information_schema.table_privileges WHERE grantee != 'PUBLIC' AND grantee != 'mz_system'
 ----
-r1,r1,materialize,public,mv,SELECT,NO,YES
-r1,r2,materialize,public,mv,SELECT,NO,YES
+COMPLETE 47
+materialize,materialize,materialize,public,s,SELECT,NO,YES
+materialize,materialize,materialize,public,t,DELETE,NO,NO
+materialize,materialize,materialize,public,t,INSERT,NO,NO
+materialize,materialize,materialize,public,t,SELECT,NO,YES
+materialize,materialize,materialize,public,t,UPDATE,NO,NO
+materialize,materialize,materialize,public,v,SELECT,NO,YES
 materialize,r1,materialize,public,t,INSERT,NO,NO
 materialize,r2,materialize,public,s,SELECT,NO,YES
 materialize,r2,materialize,public,v,SELECT,NO,YES
 materialize,r3,materialize,public,v,SELECT,NO,YES
-materialize,materialize,materialize,public,t,DELETE,NO,NO
-materialize,materialize,materialize,public,t,INSERT,NO,NO
-materialize,materialize,materialize,public,t,UPDATE,NO,NO
-materialize,materialize,materialize,public,s,SELECT,NO,YES
-materialize,materialize,materialize,public,t,SELECT,NO,YES
-materialize,materialize,materialize,public,v,SELECT,NO,YES
-materialize,mz_support,materialize,public,s_progress,SELECT,NO,YES
-materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_notices,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_sql_text,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_optimizer_notices,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_activity_log_thinned,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_notices,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_optimizer_notices,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_thinned,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_thinned,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_sql_text,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-COMPLETE 41
+mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+r1,r1,materialize,public,mv,SELECT,NO,YES
+r1,r2,materialize,public,mv,SELECT,NO,YES
 
 simple conn=mz_system,user=mz_system
 SELECT COUNT(*) >= 166 FROM information_schema.table_privileges WHERE grantee = 'PUBLIC'
@@ -4770,7 +4780,7 @@ COMPLETE 1
 
 ## role_table_grants
 
-simple conn=r1,user=r1
+simple conn=r1,user=r1,rowsort
 SELECT * FROM information_schema.role_table_grants
 ----
 r1,r1,materialize,public,mv,SELECT,NO,YES
@@ -4780,51 +4790,57 @@ materialize,r2,materialize,public,s,SELECT,NO,YES
 materialize,r2,materialize,public,v,SELECT,NO,YES
 COMPLETE 5
 
-simple conn=mz_system,user=mz_system
+simple conn=mz_system,user=mz_system,rowsort
 SELECT * FROM information_schema.role_table_grants WHERE grantee != 'PUBLIC' AND grantee != 'mz_system'
 ----
-r1,r1,materialize,public,mv,SELECT,NO,YES
-r1,r2,materialize,public,mv,SELECT,NO,YES
+COMPLETE 47
+materialize,materialize,materialize,public,s,SELECT,NO,YES
+materialize,materialize,materialize,public,t,DELETE,NO,NO
+materialize,materialize,materialize,public,t,INSERT,NO,NO
+materialize,materialize,materialize,public,t,SELECT,NO,YES
+materialize,materialize,materialize,public,t,UPDATE,NO,NO
+materialize,materialize,materialize,public,v,SELECT,NO,YES
 materialize,r1,materialize,public,t,INSERT,NO,NO
 materialize,r2,materialize,public,s,SELECT,NO,YES
 materialize,r2,materialize,public,v,SELECT,NO,YES
 materialize,r3,materialize,public,v,SELECT,NO,YES
-materialize,materialize,materialize,public,t,DELETE,NO,NO
-materialize,materialize,materialize,public,t,INSERT,NO,NO
-materialize,materialize,materialize,public,t,UPDATE,NO,NO
-materialize,materialize,materialize,public,s,SELECT,NO,YES
-materialize,materialize,materialize,public,t,SELECT,NO,YES
-materialize,materialize,materialize,public,v,SELECT,NO,YES
-materialize,mz_support,materialize,public,s_progress,SELECT,NO,YES
-materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_notices,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_sql_text,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_optimizer_notices,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_activity_log_thinned,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_notices,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_optimizer_notices,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_thinned,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_thinned,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_sql_text,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-COMPLETE 41
+mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+r1,r1,materialize,public,mv,SELECT,NO,YES
+r1,r2,materialize,public,mv,SELECT,NO,YES
 
 simple conn=mz_system,user=mz_system
 SELECT COUNT(*) >= 166 FROM information_schema.role_table_grants WHERE grantee = 'PUBLIC'
@@ -4845,3 +4861,42 @@ GRANT SELECT ON t TO mz_monitor
 ----
 db error: ERROR: role name "mz_monitor" is reserved
 DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
+
+statement ok
+CREATE TABLE t0(c0 INT4 LIST NOT NULL, c1 NAME NOT NULL);
+
+statement ok
+INSERT INTO t0 VALUES (LIST[1,2,3], 'foo');
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/10074.
+#
+# TODO: Bad error msg, because we handle ExprContext names badly when inner contexts are created by `with_name`. See
+# https://github.com/MaterializeInc/database-issues/issues/10074
+statement error db error: ERROR: static function definition \(or its outer context 'mz_internal\.mz_role_oid'\) does not allow subqueries
+UPDATE t0 SET c1=has_secret_privilege(t0.c1, '30 minutes') WHERE (t0.c1 BETWEEN t0.c1 AND t0.c1);
+
+query B
+SELECT has_secret_privilege(t0.c1, 'USAGE') FROM t0 LIMIT 1;
+----
+NULL
+
+# Go wild on nesting.
+query B
+SELECT
+    has_secret_privilege(
+        t0.c1,
+        CASE
+            WHEN
+                        (
+                            SELECT has_secret_privilege(t0.c1, 'USAGE') FROM t0
+                            LIMIT 1
+                        )
+                            IS NULL
+                    THEN 'USAGE'
+                ELSE has_secret_privilege(t0.c1, 'USAGE')::text
+        END
+    )
+FROM t0
+LIMIT 3;
+----
+NULL

@@ -32,7 +32,11 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
 
 INSERT INTO t1 VALUES ('(1,1)', '{1,2,3}', '(1,1),(2,2)');
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-! CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+! CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 contains:referenced tables use unsupported types

@@ -24,15 +24,16 @@ NUM_SOURCES = 4
 
 
 def populate(mz: MaterializeApplication, seed: int) -> None:
-    create_sources_sinks = "\n".join(
-        f"""
+    create_sources_sinks = "\n".join(f"""
             > CREATE SOURCE source{i}
               IN CLUSTER storage_shared_fate
-              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-${{testdrive.seed}}')
+              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-${{testdrive.seed}}');
+
+            > CREATE TABLE source{i}_tbl FROM SOURCE source{i} (REFERENCE "testdrive-storage-shared-fate-${{testdrive.seed}}")
               FORMAT BYTES
               ENVELOPE NONE;
 
-            > CREATE MATERIALIZED VIEW v{i} AS SELECT COUNT(*) FROM source{i};
+            > CREATE MATERIALIZED VIEW v{i} AS SELECT COUNT(*) FROM source{i}_tbl;
 
             > CREATE TABLE t{i} (f1 INTEGER);
 
@@ -50,32 +51,28 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > CREATE SOURCE sink{i}_check
               IN CLUSTER storage_shared_fate
-              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}')
+              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}');
+
+            > CREATE TABLE sink{i}_check_tbl FROM SOURCE sink{i}_check (REFERENCE "testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
-    """
-        for i in range(NUM_SOURCES)
-    )
+    """ for i in range(NUM_SOURCES))
 
-    check_counts = "\n".join(
-        f"""
-            > SELECT COUNT(*) FROM source{i};
+    check_counts = "\n".join(f"""
+            > SELECT COUNT(*) FROM source{i}_tbl;
             2000
 
-            > SELECT COUNT(*) FROM sink{i}_check;
+            > SELECT COUNT(*) FROM sink{i}_check_tbl;
             1000
-    """
-        for i in range(NUM_SOURCES)
-    )
+    """ for i in range(NUM_SOURCES))
 
     mz.testdrive.run(
-        input=dedent(
-            f"""
+        input=dedent(f"""
             > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
                 URL '${{testdrive.schema-registry-url}}'
               );
 
-            > CREATE CLUSTER storage_shared_fate REPLICAS (storage_shared_fate_replica (SIZE '{CLUSTER_SIZE}-1'));
+            > CREATE CLUSTER storage_shared_fate REPLICAS (storage_shared_fate_replica (SIZE 'scale={CLUSTER_SIZE},workers=1'));
 
             > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)
 
@@ -90,40 +87,34 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
             DEF${{kafka-ingest.iteration}}:DEF${{kafka-ingest.iteration}}
 
             {check_counts}
-            """
-        ),
+            """),
         seed=seed,
     )
 
 
 def validate(mz: MaterializeApplication, seed: int) -> None:
-    validations = "\n".join(
-        f"""
+    validations = "\n".join(f"""
             > INSERT INTO t{i} SELECT 234000 + generate_series FROM generate_series(1, 1000);
 
-            > SELECT COUNT(*) FROM source{i};
+            > SELECT COUNT(*) FROM source{i}_tbl;
             3000
 
             > SELECT * FROM v{i};
             3000
 
-            > SELECT COUNT(*) FROM sink{i}_check;
+            > SELECT COUNT(*) FROM sink{i}_check_tbl;
             2000
-    """
-        for i in range(NUM_SOURCES)
-    )
+    """ for i in range(NUM_SOURCES))
 
     mz.testdrive.run(
-        input=dedent(
-            f"""
+        input=dedent(f"""
             $ kafka-ingest key-format=bytes format=bytes key-terminator=: topic=storage-shared-fate repeat=1000
             EFG${{kafka-ingest.iteration}}:EFG${{kafka-ingest.iteration}}
 
             {validations}
 
             > DROP CLUSTER storage_shared_fate CASCADE;
-            """
-        ),
+            """),
         no_reset=True,
         seed=seed,
     )

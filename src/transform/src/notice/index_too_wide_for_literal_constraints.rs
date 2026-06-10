@@ -13,18 +13,18 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use itertools::zip_eq;
-use mz_expr::explain::{HumanizedNotice, HumanizerMode};
 use mz_expr::MirScalarExpr;
+use mz_expr::explain::{HumanizedNotice, HumanizerMode};
 use mz_ore::str::separated;
-use mz_repr::explain::ExprHumanizer;
 use mz_repr::GlobalId;
 use mz_repr::Row;
+use mz_repr::explain::ExprHumanizer;
 
 use crate::notice::{ActionKind, OptimizerNoticeApi};
 
 /// An index could be used for some literal constraints if the index included only a subset of its
 /// columns.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct IndexTooWideForLiteralConstraints {
     /// The id of the index.
     pub index_id: GlobalId,

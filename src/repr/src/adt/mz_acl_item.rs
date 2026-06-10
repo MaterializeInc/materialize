@@ -16,16 +16,19 @@ use std::ops::BitOrAssign;
 use std::str::FromStr;
 
 use crate::adt::system::Oid;
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use bitflags::bitflags;
-use columnation::{Columnation, CopyRegion};
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::*;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +54,8 @@ const CREATE_ROLE_CHAR: char = 'R';
 const CREATE_DB_CHAR: char = 'B';
 // compute Node
 const CREATE_CLUSTER_CHAR: char = 'N';
+// compute network Policy
+const CREATE_NETWORK_POLICY_CHAR: char = 'P';
 
 const INSERT_STR: &str = "INSERT";
 const SELECT_STR: &str = "SELECT";
@@ -61,6 +66,7 @@ const CREATE_STR: &str = "CREATE";
 const CREATE_ROLE_STR: &str = "CREATEROLE";
 const CREATE_DB_STR: &str = "CREATEDB";
 const CREATE_CLUSTER_STR: &str = "CREATECLUSTER";
+const CREATE_NETWORK_POLICY_STR: &str = "CREATENETWORKPOLICY";
 
 /// The OID used to represent the PUBLIC role. See:
 /// <https://github.com/postgres/postgres/blob/29a0ccbce97978e5d65b8f96c85a00611bb403c4/src/include/utils/acl.h#L46>
@@ -94,6 +100,7 @@ bitflags! {
         const CREATE_CLUSTER = 1 << 29;
         const CREATE_DB = 1 << 30;
         const CREATE_ROLE = 1 << 31;
+        const CREATE_NETWORK_POLICY = 1 << 32;
 
         // No additional privileges should be defined at a bit larger than 1 << 31. Those bits are
         // reserved for grant options.
@@ -112,6 +119,7 @@ impl AclMode {
             CREATE_ROLE_STR => Ok(AclMode::CREATE_ROLE),
             CREATE_DB_STR => Ok(AclMode::CREATE_DB),
             CREATE_CLUSTER_STR => Ok(AclMode::CREATE_CLUSTER),
+            CREATE_NETWORK_POLICY_STR => Ok(AclMode::CREATE_NETWORK_POLICY),
             _ => Err(anyhow!("{}", s.quoted())),
         }
     }
@@ -158,6 +166,9 @@ impl AclMode {
         if self.contains(AclMode::CREATE_CLUSTER) {
             privileges.push(CREATE_CLUSTER_STR);
         }
+        if self.contains(AclMode::CREATE_NETWORK_POLICY) {
+            privileges.push(CREATE_NETWORK_POLICY_STR);
+        }
         privileges
     }
 }
@@ -178,6 +189,7 @@ impl FromStr for AclMode {
                 CREATE_ROLE_CHAR => acl_mode.bitor_assign(AclMode::CREATE_ROLE),
                 CREATE_DB_CHAR => acl_mode.bitor_assign(AclMode::CREATE_DB),
                 CREATE_CLUSTER_CHAR => acl_mode.bitor_assign(AclMode::CREATE_CLUSTER),
+                CREATE_NETWORK_POLICY_CHAR => acl_mode.bitor_assign(AclMode::CREATE_NETWORK_POLICY),
                 _ => return Err(anyhow!("invalid privilege '{c}' in acl mode '{s}'")),
             }
         }
@@ -216,6 +228,9 @@ impl fmt::Display for AclMode {
         if self.contains(AclMode::CREATE_CLUSTER) {
             write!(f, "{CREATE_CLUSTER_CHAR}")?;
         }
+        if self.contains(AclMode::CREATE_NETWORK_POLICY) {
+            write!(f, "{CREATE_NETWORK_POLICY_CHAR}")?;
+        }
         Ok(())
     }
 }
@@ -234,10 +249,7 @@ impl RustType<ProtoAclMode> for AclMode {
     }
 }
 
-impl Columnation for AclMode {
-    type InnerRegion = CopyRegion<AclMode>;
-}
-
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for AclMode {
     type Parameters = ();
     type Strategy = BoxedStrategy<AclMode>;
@@ -256,8 +268,18 @@ impl Arbitrary for AclMode {
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MzAclItem {
     /// Role that this item grants privileges to.
     pub grantee: RoleId,
@@ -373,10 +395,6 @@ impl RustType<ProtoMzAclItem> for MzAclItem {
             (_, _, None) => Err(TryFromProtoError::missing_field("ProtoMzAclItem::acl_mode")),
         }
     }
-}
-
-impl Columnation for MzAclItem {
-    type InnerRegion = CopyRegion<MzAclItem>;
 }
 
 /// An encoded packed variant of [`MzAclItem`].
@@ -504,8 +522,18 @@ impl FixedSizeCodec<MzAclItem> for PackedMzAclItem {
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AclItem {
     /// Role that this item grants privileges to.
     pub grantee: Oid,
@@ -634,10 +662,6 @@ impl RustType<ProtoAclItem> for AclItem {
     }
 }
 
-impl Columnation for AclItem {
-    type InnerRegion = CopyRegion<AclItem>;
-}
-
 /// An encoded packed variant of [`AclItem`].
 ///
 /// We uphold the variant that [`PackedAclItem`] sorts the same as [`AclItem`].
@@ -695,7 +719,17 @@ impl FixedSizeCodec<AclItem> for PackedAclItem {
 }
 
 /// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize
+)]
 pub struct PrivilegeMap(
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")] BTreeMap<RoleId, Vec<MzAclItem>>,
 );
@@ -823,7 +857,7 @@ pub fn merge_mz_acl_items(
         .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
             let item = accum
                 .entry((mz_acl_item.grantee, mz_acl_item.grantor))
-                .or_insert(MzAclItem::empty(mz_acl_item.grantee, mz_acl_item.grantor));
+                .or_insert_with(|| MzAclItem::empty(mz_acl_item.grantee, mz_acl_item.grantor));
             item.acl_mode |= mz_acl_item.acl_mode;
             accum
         })
@@ -845,6 +879,7 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "=UC/u4";
@@ -860,6 +895,7 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "s7=/s12";
@@ -875,6 +911,7 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "=/u100";
@@ -890,9 +927,10 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, mz_acl.to_string());
 
-    let s = "u1=RBN/u2";
+    let s = "u1=RBNP/u2";
     let mz_acl: MzAclItem = s.parse().unwrap();
     assert_eq!(RoleId::User(1), mz_acl.grantee);
     assert_eq!(RoleId::User(2), mz_acl.grantor);
@@ -905,6 +943,7 @@ fn test_mz_acl_parsing() {
     assert!(mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(mz_acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(mz_acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, mz_acl.to_string());
 
     mz_ore::assert_err!("u42/rw=u666".parse::<MzAclItem>());
@@ -985,6 +1024,7 @@ fn test_acl_parsing() {
     assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, acl.to_string());
 
     let s = "=UC/4";
@@ -1000,6 +1040,7 @@ fn test_acl_parsing() {
     assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, acl.to_string());
 
     let s = "7=/12";
@@ -1015,6 +1056,7 @@ fn test_acl_parsing() {
     assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, acl.to_string());
 
     let s = "=/100";
@@ -1030,9 +1072,10 @@ fn test_acl_parsing() {
     assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, acl.to_string());
 
-    let s = "1=RBN/2";
+    let s = "1=RBNP/2";
     let acl: AclItem = s.parse().unwrap();
     assert_eq!(1, acl.grantee.0);
     assert_eq!(2, acl.grantor.0);
@@ -1045,6 +1088,7 @@ fn test_acl_parsing() {
     assert!(acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, acl.to_string());
 
     mz_ore::assert_err!("42/rw=666".parse::<AclItem>());
@@ -1112,6 +1156,7 @@ fn test_acl_item_binary_size() {
     assert_eq!(16, AclItem::binary_size());
 }
 
+#[cfg(test)]
 proptest! {
   #[mz_ore::test]
   #[cfg_attr(miri, ignore)] // slow
@@ -1131,6 +1176,7 @@ proptest! {
 }
 
 #[mz_ore::test]
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_acl_item_roundtrips() {
     fn roundtrip_acl_item(og: AclItem) {
         let packed = PackedAclItem::from_value(og);
@@ -1145,6 +1191,7 @@ fn proptest_packed_acl_item_roundtrips() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // slow
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_acl_item_sorts() {
     fn sort_acl_items(mut og: Vec<AclItem>) {
         let mut packed: Vec<_> = og.iter().copied().map(PackedAclItem::from_value).collect();
@@ -1162,6 +1209,7 @@ fn proptest_packed_acl_item_sorts() {
 }
 
 #[mz_ore::test]
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_mz_acl_item_roundtrips() {
     fn roundtrip_mz_acl_item(og: MzAclItem) {
         let packed = PackedMzAclItem::from_value(og);
@@ -1176,6 +1224,7 @@ fn proptest_packed_mz_acl_item_roundtrips() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // slow
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_mz_acl_item_sorts() {
     fn sort_mz_acl_items(mut og: Vec<MzAclItem>) {
         let mut packed: Vec<_> = og

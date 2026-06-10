@@ -7,10 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
+$ set-sql-timeout duration=60s
 
-# TODO(def-) Reenable when #26733 is fixed
+# TODO(def-) Reenable when database-issues#7900 is fixed
 $ skip-if
 SELECT true
 
@@ -92,9 +91,30 @@ INSERT INTO truncate_table (f1, f2) VALUES (1, 1);
 CREATE TABLE drop_table (f1 int, f2 int);
 INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> BEGIN
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE add_columns FROM SOURCE mz_source (REFERENCE public.add_columns);
+> CREATE TABLE remove_column FROM SOURCE mz_source (REFERENCE public.remove_column);
+> CREATE TABLE alter_column_type_1 FROM SOURCE mz_source (REFERENCE public.alter_column_type_1);
+> CREATE TABLE alter_column_type_2 FROM SOURCE mz_source (REFERENCE public.alter_column_type_2);
+> CREATE TABLE alter_drop_nullability FROM SOURCE mz_source (REFERENCE public.alter_drop_nullability);
+> CREATE TABLE alter_add_nullability FROM SOURCE mz_source (REFERENCE public.alter_add_nullability);
+> CREATE TABLE alter_drop_pk FROM SOURCE mz_source (REFERENCE public.alter_drop_pk);
+> CREATE TABLE alter_add_pk FROM SOURCE mz_source (REFERENCE public.alter_add_pk);
+> CREATE TABLE alter_cycle_pk FROM SOURCE mz_source (REFERENCE public.alter_cycle_pk);
+> CREATE TABLE alter_cycle_pk_off FROM SOURCE mz_source (REFERENCE public.alter_cycle_pk_off);
+> CREATE TABLE alter_drop_unique FROM SOURCE mz_source (REFERENCE public.alter_drop_unique);
+> CREATE TABLE alter_add_unique FROM SOURCE mz_source (REFERENCE public.alter_add_unique);
+> CREATE TABLE alter_extend_column FROM SOURCE mz_source (REFERENCE public.alter_extend_column);
+> CREATE TABLE alter_decimal FROM SOURCE mz_source (REFERENCE public.alter_decimal);
+> CREATE TABLE alter_table_rename FROM SOURCE mz_source (REFERENCE public.alter_table_rename);
+> CREATE TABLE alter_table_rename_column FROM SOURCE mz_source (REFERENCE public.alter_table_rename_column);
+> CREATE TABLE alter_table_change_attnum FROM SOURCE mz_source (REFERENCE public.alter_table_change_attnum);
+> CREATE TABLE alter_table_supported FROM SOURCE mz_source (REFERENCE public.alter_table_supported);
+> CREATE TABLE truncate_table FROM SOURCE mz_source (REFERENCE public.truncate_table);
+> CREATE TABLE drop_table FROM SOURCE mz_source (REFERENCE public.drop_table);
+> COMMIT
 
 #
 # Add column
@@ -122,7 +142,7 @@ ALTER TABLE remove_column DROP COLUMN f2;
 INSERT INTO remove_column VALUES (3);
 
 ! select * from remove_column;
-contains:incompatible schema change
+contains:Incompatible schema change
 
 
 #
@@ -146,9 +166,8 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_column_type_2 MODIFY f1 int;
 INSERT INTO alter_column_type_2 VALUES (2048);
 
-# TODO(def-): Reenable when #25660 is fixed
-# ! select * from alter_column_type_2;
-# contains:incompatible schema change
+! select * from alter_column_type_2;
+contains:incompatible schema change
 
 #
 # Drop NOT NULL
@@ -182,7 +201,7 @@ INSERT INTO alter_add_nullability VALUES (1);
 1
 1
 
-# TODO: #25040 (changes to columns)
+# TODO: database-issues#7475 (changes to columns)
 # ? EXPLAIN SELECT * FROM alter_add_nullability WHERE f1 IS NULL;
 # Explained Query (fast path):
 #   Constant <empty>
@@ -338,20 +357,19 @@ INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed
 contains:incompatible schema change
 
 
-# TODO: #25660 (column drop & recreate detection)
 # Change column attnum
 
-# > SELECT * from alter_table_change_attnum;
-# f1_orig f2_orig
+> SELECT * from alter_table_change_attnum;
+f1_orig f2_orig
 
 # Ensure simpl name swap doesn't fool schema detection
-# $ mysql-execute name=mysql
-# ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
-# ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
-# INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
+$ mysql-execute name=mysql
+ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
+ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
+INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
 
-# ! SELECT * FROM alter_table_change_attnum;
-# contains:incompatible schema change
+! SELECT * FROM alter_table_change_attnum;
+contains:incompatible schema change
 
 > SELECT * from alter_table_supported;
 1 1
@@ -402,7 +420,7 @@ contains: table was truncated
 $ mysql-execute name=mysql
 DROP TABLE drop_table;
 
-# TODO: redesign ceased status #25768
+# TODO: redesign ceased status database-issues#7687
 # > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'drop_table';
 # ceased
 

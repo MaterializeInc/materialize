@@ -24,4 +24,5 @@ IN CLUSTER test_analytics AS
     JOIN issue AS i ON a.issue = i.issue_id
 ;
 
+ALTER MATERIALIZED VIEW mv_ci_issues OWNER TO qa;
 GRANT SELECT ON mv_ci_issues TO "ci-failures";

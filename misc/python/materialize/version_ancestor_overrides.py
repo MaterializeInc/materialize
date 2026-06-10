@@ -14,22 +14,132 @@ from typing import Any
 
 from materialize.mz_version import MzVersion
 
-"""
-Git revisions that are based on commits listed as keys require at least the version specified in the value.
-Note that specified versions do not necessarily need to be already published.
-Commits must be ordered descending by their date.
-"""
-
 
 def get_ancestor_overrides_for_performance_regressions(
     scenario_class: type[Any], scale: str | None
 ) -> dict[str, MzVersion]:
+    """
+    Git revisions that are based on commits listed as keys require at least the version specified in the value.
+    Note that specified versions do not necessarily need to be already published.
+    Commits must be ordered descending by their date.
+    """
+
     scenario_class_name = scenario_class.__name__
 
-    # Git revisions that are based on commits listed as keys require at least the version specified in the value.
-    # Note that specified versions do not necessarily need to be already published.
-    # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
+
+    if scenario_class_name == "Retraction":
+        # PR#36386 (timely-util: switch Column::Align to Vec<u64>) increases clusterd memory
+        min_ancestor_mz_version_per_commit[
+            "2571dcdc4b9a41359b5ee70054bb06423aab7c27"
+        ] = MzVersion.parse_mz("v26.24.0")
+
+    if scenario_class_name == "CrossJoin":
+        # PR#35328 (compute: move MV sink persist I/O off Timely thread) increases clusterd memory
+        min_ancestor_mz_version_per_commit[
+            "4d8deb2de7b6a0fb8d7c9e5b0a682416bef1e5c2"
+        ] = MzVersion.parse_mz("v26.23.0")
+
+    if scenario_class_name in ("OrderBy", "FastPathFilterNoIndex"):
+        # PR#34930 (Bump differential, timely and related) increases latency
+        min_ancestor_mz_version_per_commit[
+            "c20c82119261bab23c865bdfd1841348aa0acca3"
+        ] = MzVersion.parse_mz("v26.12.0")
+
+    if scenario_class_name == "SwapSchema":
+        # PR#29673 (adapter: derive implications from catalog changes) increases latency
+        min_ancestor_mz_version_per_commit[
+            "9a4ee6174553d4f14402e90927a05aa8cba37112"
+        ] = MzVersion.parse_mz("v26.2.0")
+
+    if scenario_class_name in ("DifferentialJoin", "Retraction", "FinishOrderByLimit"):
+        # PR#33979 (Enable active dataflow cancellation) increases latency
+        min_ancestor_mz_version_per_commit[
+            "e1944c939203eb29b84a18ce5153e2d99d157c1d"
+        ] = MzVersion.parse_mz("v0.164.0")
+
+    if scenario_class_name == "CreateIndex":
+        # PR#33938 (Update columnar, timely, differential) increases latency
+        min_ancestor_mz_version_per_commit[
+            "c28d0061a6c9e63ee50a5f555c5d90373d006686"
+        ] = MzVersion.parse_mz("v0.164.0")
+
+    if scenario_class_name in ("CrossJoin", "AccumulateReductions"):
+        # PR#31501 (Remove ChunkedStack and related) increases latency for inserts
+        min_ancestor_mz_version_per_commit[
+            "e91f9d5e47f5dddf1d5d1a3afa3c27907bdbb0a7"
+        ] = MzVersion.parse_mz("v0.134.0")
+
+    if scenario_class_name == "ManySmallInserts":
+        # PR#31309 ([adapter] don't block on builtin table write in Session creation) increases latency for inserts
+        min_ancestor_mz_version_per_commit[
+            "e8c42c65afb7acd55eb7e530a92c89a9165f2e33"
+        ] = MzVersion.parse_mz("v0.133.0")
+
+    if scenario_class_name == "SwapSchema":
+        # PR#30883 (Columnar in logging dataflows) increases Mz memory usage
+        min_ancestor_mz_version_per_commit[
+            "a077232ffcb76ef7498da7637fbc9e80aa88765c"
+        ] = MzVersion.parse_mz("v0.131.0")
+
+    if scenario_class_name == "FastPathOrderByLimit":
+        # PR#30872 (rust: Upgrade to 1.83.0) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "74ebdd68dd2e9ec860837d52866ab9db61a0a49e"
+        ] = MzVersion.parse_mz("v0.129.0")
+
+    if scenario_class_name == "OptbenchTPCHQ01":
+        # PR#30806 ([optimizer] report per-transform metrics) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "a5355b2e89fedef9f7a04a96b737f7434a8e3f62"
+        ] = MzVersion.parse_mz("v0.128.0")
+
+    if scenario_class_name in ("KafkaUpsert", "KafkaUpsertUnique", "ParallelIngestion"):
+        # PR#30617 (storage/kafka: use separate consumer for metadata probing)
+        # adds 1s of delay to Kafka source startup
+        min_ancestor_mz_version_per_commit[
+            "9f7b634e6824f73d0effcdfa86c2b8b1642a4784"
+        ] = MzVersion.parse_mz("v0.127.0")
+    if scenario_class_name == "InsertMultiRow":
+        # PR#30622 (Refactor how we run FoldConstants) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "a558d6bdc4b29abf79457eaba52914a0d6c805b7"
+        ] = MzVersion.parse_mz("v0.127.0")
+    if "OptbenchTPCH" in scenario_class_name:
+        # PR#30602 (Replace ColumnKnowledge with EquivalencePropagation) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "1bd45336f8335b3487153beb7ce57f6391a7cf9c"
+        ] = MzVersion.parse_mz("v0.126.0")
+
+    if "OptbenchTPCH" in scenario_class_name:
+        # PR#30506 (Remove NonNullable transform) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "6981cb35f6a64748293867beb67e74b804f9e723"
+        ] = MzVersion.parse_mz("v0.126.0")
+
+    if scenario_class_name == "KafkaUpsertUnique":
+        # PR#29718 (storage: continual feedback upsert operator) increases CPU and memory
+        min_ancestor_mz_version_per_commit[
+            "b16b6a2c71f6e52adcbe37988cb262c15074a63f"
+        ] = MzVersion.parse_mz("v0.125.0")
+
+    if scenario_class_name in (
+        "SmallClusters",
+        "AccumulateReductions",
+        "CreateIndex",
+        "ManySmallUpdates",
+        "FastPathOrderByLimit",
+        "FastPathFilterIndex",
+        "ParallelIngestion",
+        "SubscribeParallelTableWithIndex",
+        "DeltaJoinMaintained",
+        "Update",
+        "Retraction",
+    ):
+        # PR#28307 (Render regions for object build and let bindings) increases messages
+        min_ancestor_mz_version_per_commit[
+            "ffcafa5b5c3e83845a868cf6103048c045b4f155"
+        ] = MzVersion.parse_mz("v0.113.0")
 
     if "OptbenchTPCH" in scenario_class_name:
         # PR#28664 (Introduce MirScalarExpr::reduce_safely) increases wallclock
@@ -122,32 +232,40 @@ def get_ancestor_overrides_for_performance_regressions(
     return min_ancestor_mz_version_per_commit
 
 
-"""
-Git revisions that are based on commits listed as keys require at least the version specified in the value.
-Note that specified versions do not necessarily need to be already published.
-Commits must be ordered descending by their date.
-"""
 _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS: dict[
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#31309 ([adapter] don't block on builtin table write in Session creation) increases latency for inserts
+    "e8c42c65afb7acd55eb7e530a92c89a9165f2e33": MzVersion.parse_mz("v0.133.0"),
+    # PR#30238 (adapter: Remove the global write lock) introduces regressions against v0.123.0
+    "98678454a334a470ceea46b126586c7e60a0d8a5": MzVersion.parse_mz("v0.124.0"),
+    # PR#28307 (Render regions for object build and let bindings) introduces regressions against v0.112.0
+    "ffcafa5b5c3e83845a868cf6103048c045b4f155": MzVersion.parse_mz("v0.113.0"),
     # PR#23659 (txn-wal: enable in CI with "eager uppers") introduces regressions against v0.79.0
     "c4f520a57a3046e5074939d2ea345d1c72be7079": MzVersion.parse_mz("v0.80.0"),
     # PR#23421 (coord: smorgasbord of improvements for the crdb-backed timestamp oracle) introduces regressions against 0.78.13
     "5179ebd39aea4867622357a832aaddcde951b411": MzVersion.parse_mz("v0.79.0"),
     # insert newer commits at the top
 }
+"""
+Git revisions that are based on commits listed as keys require at least the version specified in the value.
+Note that specified versions do not necessarily need to be already published.
+Commits must be ordered descending by their date.
+"""
 
-"""
-See: #_MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_REGRESSIONS
-"""
 _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_CORRECTNESS_REGRESSIONS: dict[
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#29179: Add client_address to session
+    "deb8beb77ddb69895aad899cf2eab90a0a78585d": MzVersion.parse_mz("v0.118.0"),
     # PR#24497 (Make sure variance never returns a negative number) changes DFR or CTF handling compared to v0.84.0
     "82a5130a8466525c5b3bdb3eff845c7c34585774": MzVersion.parse_mz("v0.85.0"),
 }
+"""
+See: #_MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_REGRESSIONS
+"""
 
 ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS = (
     _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS

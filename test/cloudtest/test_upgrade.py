@@ -12,6 +12,7 @@ import logging
 
 import pytest
 
+from materialize import buildkite
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.all_checks.alter_connection import (
@@ -26,12 +27,13 @@ from materialize.checks.cloudtest_actions import (
     SetupSshTunnels,
 )
 from materialize.checks.executors import CloudtestExecutor
+from materialize.checks.features import Features
 from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.wait import wait
 from materialize.mz_version import MzVersion
 from materialize.util import all_subclasses
-from materialize.version_list import get_latest_published_version
+from materialize.version_list import get_previous_published_version
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,7 +42,9 @@ class CloudtestUpgrade(Scenario):
     """A Platform Checks scenario that performs an upgrade in cloudtest/K8s"""
 
     def base_version(self) -> MzVersion:
-        return get_latest_published_version()
+        return get_previous_published_version(
+            MzVersion.parse_cargo(), previous_minor=True
+        )
 
     def actions(self) -> list[Action]:
         return [
@@ -56,7 +60,9 @@ class CloudtestUpgrade(Scenario):
 @pytest.mark.long
 def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
-    last_released_version = get_latest_published_version()
+    last_released_version = get_previous_published_version(
+        MzVersion.parse_cargo(), previous_minor=True
+    )
 
     LOGGER.info(
         f"Testing upgrade from base version {last_released_version} to current version"
@@ -87,5 +93,10 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
             AlterConnectionHost,
         }
     )
-    scenario = CloudtestUpgrade(checks=checks, executor=executor)
+    checks = buildkite.shard_list(checks, lambda ch: ch.__name__)
+    if buildkite.get_parallelism_index() != 0 or buildkite.get_parallelism_count() != 1:
+        print(
+            f"Checks in shard with index {buildkite.get_parallelism_index()}: {[c.__name__ for c in checks]}"
+        )
+    scenario = CloudtestUpgrade(checks=checks, executor=executor, features=Features([]))
     scenario.run()

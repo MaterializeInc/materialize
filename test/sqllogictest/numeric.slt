@@ -857,7 +857,7 @@ SELECT (999999999999999999999999999999999999.123 + 1::numeric)::numeric(39,3);
 
 # Successive operations
 
-## regression test for #6858
+## regression test for database-issues#2137
 query R
 SELECT -0.0 - 1::numeric  * '-0.0 '::numeric;
 ----
@@ -1023,6 +1023,33 @@ SELECT round(9e38, -40);
 
 query R
 SELECT round (-0.10212864, -900)
+----
+0
+
+# Rounding a small negative numeric to zero must canonicalize away the sign
+# bit; otherwise the result is `-0`, which renders incorrectly via the text
+# cast and survives as a distinct row encoding from `0`.
+query T
+SELECT round(-0.4::numeric)::text
+----
+0
+
+query T
+SELECT round(-0.49::numeric, 0)::text
+----
+0
+
+query T
+SELECT round(-0.000001::numeric, 2)::text
+----
+0
+
+query T
+SELECT v::text FROM (
+    SELECT round(-0.4::numeric) AS v
+    UNION
+    SELECT 0::numeric
+) t
 ----
 0
 
@@ -2178,7 +2205,7 @@ select min(a) from (select a from unnest(ARRAY[]::numeric[]) a);
 NULL
 
 # Distinct, except
-# regression tests for #6877 #6912
+# regression tests for database-issues#2145 database-issues#2152
 
 query R
 SELECT DISTINCT column1 FROM (
@@ -2203,7 +2230,7 @@ SELECT column1 FROM (
 )
 ----
 
-# regression test for https://github.com/MaterializeInc/materialize/issues/7361
+# regression test for https://github.com/MaterializeInc/database-issues/issues/2298
 statement ok
 CREATE TABLE A (f1 DECIMAL);
 

@@ -9,7 +9,7 @@
 
 
 # Validate existing data
-> SELECT * from failpoint
+> SELECT * from failpoint_tbl
 key           text
 -------------------
 fish          fish
@@ -21,7 +21,7 @@ $ kafka-ingest format=bytes topic=failpoint key-format=bytes key-terminator=:
 mammal:moose
 
 
-> SELECT * from failpoint
+> SELECT * from failpoint_tbl
 key           text
 -------------------
 fish          fish

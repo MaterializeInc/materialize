@@ -19,13 +19,17 @@ ALTER SYSTEM SET max_result_size TO '1MB';
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_response_stash TO 'false';
+----
+COMPLETE 0
+
 statement ok
-CREATE CLUSTER c1 SIZE 'mem-2';
+CREATE CLUSTER c1 SIZE 'scale=1,workers=8,mem=2GiB';
 
 query I
-SELECT workers FROM mz_catalog.mz_cluster_replica_sizes JOIN mz_cluster_replicas USING (size);
+SELECT workers FROM mz_catalog.mz_cluster_replica_sizes JOIN mz_cluster_replicas USING (size) JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name != 'quickstart';
 ----
-2
 2
 2
 2
@@ -42,5 +46,9 @@ SET cluster TO 'c1';
 
 # Note: 'total' in the error message here is important because it indicates we failed when
 # aggregating the result from multiple workers, as opposed to on any single worker.
-query error db error: ERROR: total result exceeds max size of 1048.6 KB
+query error total result exceeds max size of 1\.0 MiB
 SELECT * FROM t1;
+
+# For SUBSCRIBE, we need to add a GROUP BY to force an exchange in the dataflow.
+query error total result exceeds max size of 1\.0 MiB
+SUBSCRIBE (SELECT * FROM t1 GROUP BY a, b)

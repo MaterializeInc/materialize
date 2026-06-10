@@ -24,9 +24,9 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::instrument;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    raw, ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
+    ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
     DeleteOnDropGauge, IntCounter, MakeCollector, MetricVecExt, MetricsRegistry, UIntGauge,
-    UIntGaugeVec,
+    UIntGaugeVec, raw,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -41,7 +41,7 @@ use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
-use tracing::{debug, info, info_span, Instrument};
+use tracing::{Instrument, debug, info, info_span};
 
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
@@ -98,6 +98,8 @@ pub struct Metrics {
     pub tasks: TasksMetrics,
     /// Metrics for columnar data encoding and decoding.
     pub columnar: ColumnarMetrics,
+    /// Metrics for schemas and the schema registry.
+    pub schema: SchemaMetrics,
     /// Metrics for inline writes.
     pub inline: InlineMetrics,
     /// Semaphore to limit memory/disk use by fetches.
@@ -110,6 +112,9 @@ pub struct Metrics {
     pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresClientMetrics,
+
+    #[allow(dead_code)]
+    pub(crate) registry: MetricsRegistry,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -135,12 +140,7 @@ impl Metrics {
             move || start.elapsed().as_secs_f64(),
         );
         let s3_blob = S3BlobMetrics::new(registry);
-        let columnar = ColumnarMetrics::new(
-            registry,
-            &s3_blob.lgbytes,
-            Arc::clone(&cfg.configs),
-            cfg.is_cc_active,
-        );
+        let columnar = ColumnarMetrics::new(registry);
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -163,6 +163,7 @@ impl Metrics {
             blob_cache_mem: BlobMemCache::new(registry),
             tasks: TasksMetrics::new(registry),
             columnar,
+            schema: SchemaMetrics::new(registry),
             inline: InlineMetrics::new(registry),
             semaphore: SemaphoreMetrics::new(cfg.clone(), registry.clone()),
             sink: SinkMetrics::new(registry),
@@ -170,6 +171,7 @@ impl Metrics {
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
             _vecs: vecs,
             _uptime: uptime,
+            registry: registry.clone(),
         }
     }
 
@@ -414,11 +416,16 @@ impl MetricsVecs {
             )),
             compare_and_downgrade_since: self.cmd_metrics("compare_and_downgrade_since"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
-            heartbeat_reader: self.cmd_metrics("heartbeat_reader"),
             expire_reader: self.cmd_metrics("expire_reader"),
             expire_writer: self.cmd_metrics("expire_writer"),
             merge_res: self.cmd_metrics("merge_res"),
             become_tombstone: self.cmd_metrics("become_tombstone"),
+            compare_and_evolve_schema: self.cmd_metrics("compare_and_evolve_schema"),
+            spine_exert: self.cmd_metrics("spine_exert"),
+            fetch_upper_count: registry.register(metric!(
+                name: "mz_persist_cmd_fetch_upper_count",
+                help: "count of fetch_upper calls",
+            ))
         }
     }
 
@@ -451,6 +458,8 @@ impl MetricsVecs {
                 rollup_delete: self.retry_metrics("rollup::delete"),
                 rollup_get: self.retry_metrics("rollup::get"),
                 rollup_set: self.retry_metrics("rollup::set"),
+                hollow_run_get: self.retry_metrics("hollow_run::get"),
+                hollow_run_set: self.retry_metrics("hollow_run::set"),
                 storage_usage_shard_size: self.retry_metrics("storage_usage::shard_size"),
             },
             compare_and_append_idempotent: self.retry_metrics("compare_and_append_idempotent"),
@@ -538,6 +547,7 @@ impl MetricsVecs {
             snapshot: self.read_metrics("snapshot"),
             batch_fetcher: self.read_metrics("batch_fetcher"),
             compaction: self.read_metrics("compaction"),
+            unindexed: self.read_metrics("unindexed"),
         }
     }
 
@@ -614,11 +624,13 @@ pub struct CmdsMetrics {
     pub(crate) compare_and_append_noop: IntCounter,
     pub(crate) compare_and_downgrade_since: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
-    pub(crate) heartbeat_reader: CmdMetrics,
     pub(crate) expire_reader: CmdMetrics,
     pub(crate) expire_writer: CmdMetrics,
     pub(crate) merge_res: CmdMetrics,
     pub(crate) become_tombstone: CmdMetrics,
+    pub(crate) compare_and_evolve_schema: CmdMetrics,
+    pub(crate) spine_exert: CmdMetrics,
+    pub(crate) fetch_upper_count: IntCounter,
 }
 
 #[derive(Debug)]
@@ -655,6 +667,8 @@ pub struct RetryExternal {
     pub(crate) rollup_delete: RetryMetrics,
     pub(crate) rollup_get: RetryMetrics,
     pub(crate) rollup_set: RetryMetrics,
+    pub(crate) hollow_run_get: RetryMetrics,
+    pub(crate) hollow_run_set: RetryMetrics,
     pub(crate) storage_usage_shard_size: RetryMetrics,
 }
 
@@ -677,6 +691,7 @@ pub struct BatchPartReadMetrics {
     pub(crate) snapshot: ReadMetrics,
     pub(crate) batch_fetcher: ReadMetrics,
     pub(crate) compaction: ReadMetrics,
+    pub(crate) unindexed: ReadMetrics,
 }
 
 #[derive(Debug, Clone)]
@@ -696,6 +711,12 @@ pub struct BatchWriteMetrics {
     pub(crate) goodbytes: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) write_stalls: IntCounter,
+    pub(crate) key_lower_too_big: IntCounter,
+
+    pub(crate) unordered: IntCounter,
+    pub(crate) codec_order: IntCounter,
+    pub(crate) structured_order: IntCounter,
+    _order_counts: IntCounterVec,
 
     pub(crate) step_stats: Counter,
     pub(crate) step_part_writing: Counter,
@@ -704,6 +725,15 @@ pub struct BatchWriteMetrics {
 
 impl BatchWriteMetrics {
     fn new(registry: &MetricsRegistry, name: &str) -> Self {
+        let order_counts: IntCounterVec = registry.register(metric!(
+                name: format!("mz_persist_{}_write_batch_order", name),
+                help: "count of batches by the data ordering",
+                var_labels: ["order"],
+        ));
+        let unordered = order_counts.with_label_values(&["unordered"]);
+        let codec_order = order_counts.with_label_values(&["codec"]);
+        let structured_order = order_counts.with_label_values(&["structured"]);
+
         BatchWriteMetrics {
             bytes: registry.register(metric!(
                 name: format!("mz_persist_{}_bytes", name),
@@ -724,6 +754,17 @@ impl BatchWriteMetrics {
                     name
                 ),
             )),
+            key_lower_too_big: registry.register(metric!(
+                name: format!("mz_persist_{}_key_lower_too_big", name),
+                help: format!(
+                    "count of {} writes that were unable to write a key lower, because the size threshold was too low",
+                    name
+                ),
+            )),
+            unordered,
+            codec_order,
+            structured_order,
+            _order_counts: order_counts,
             step_stats: registry.register(metric!(
                 name: format!("mz_persist_{}_step_stats", name),
                 help: format!("time spent computing {} update stats", name),
@@ -744,6 +785,7 @@ impl BatchWriteMetrics {
 pub struct CompactionMetrics {
     pub(crate) requested: IntCounter,
     pub(crate) dropped: IntCounter,
+    pub(crate) disabled: IntCounter,
     pub(crate) skipped: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) applied: IntCounter,
@@ -760,6 +802,7 @@ pub struct CompactionMetrics {
     pub(crate) parts_prefetched: IntCounter,
     pub(crate) parts_waited: IntCounter,
     pub(crate) fast_path_eligible: IntCounter,
+    pub(crate) admin_count: IntCounter,
 
     pub(crate) applied_exact_match: IntCounter,
     pub(crate) applied_subset_match: IntCounter,
@@ -767,6 +810,7 @@ pub struct CompactionMetrics {
 
     pub(crate) batch: BatchWriteMetrics,
     pub(crate) steps: CompactionStepTimings,
+    pub(crate) schema_selection: CompactionSchemaSelection,
 
     pub(crate) _steps_vec: CounterVec,
 }
@@ -778,6 +822,11 @@ impl CompactionMetrics {
                 help: "time spent on individual steps of compaction",
                 var_labels: ["step"],
         ));
+        let schema_selection: CounterVec = registry.register(metric!(
+            name: "mz_persist_compaction_schema_selection",
+            help: "count of compactions and how we did schema selection",
+            var_labels: ["selection"],
+        ));
 
         CompactionMetrics {
             requested: registry.register(metric!(
@@ -787,6 +836,10 @@ impl CompactionMetrics {
             dropped: registry.register(metric!(
                 name: "mz_persist_compaction_dropped",
                 help: "count of total compaction requests dropped due to a full queue",
+            )),
+            disabled: registry.register(metric!(
+                name: "mz_persist_compaction_disabled",
+                help: "count of total compaction requests dropped because compaction was disabled",
             )),
             skipped: registry.register(metric!(
                 name: "mz_persist_compaction_skipped",
@@ -852,6 +905,10 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_fast_path_eligible",
                 help: "count of compaction requests that could have used the fast-path optimization",
             )),
+            admin_count: registry.register(metric!(
+                name: "mz_persist_compaction_admin_count",
+                help: "count of compaction requests that were performed by admin tooling",
+            )),
             applied_exact_match: registry.register(metric!(
                 name: "mz_persist_compaction_applied_exact_match",
                 help: "count of merge results that exactly replaced a SpineBatch",
@@ -866,6 +923,7 @@ impl CompactionMetrics {
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
             steps: CompactionStepTimings::new(step_timings.clone()),
+            schema_selection: CompactionSchemaSelection::new(schema_selection.clone()),
             _steps_vec: step_timings,
         }
     }
@@ -882,6 +940,21 @@ impl CompactionStepTimings {
         CompactionStepTimings {
             part_fetch_seconds: step_timings.with_label_values(&["part_fetch"]),
             heap_population_seconds: step_timings.with_label_values(&["heap_population"]),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CompactionSchemaSelection {
+    pub(crate) recent_schema: Counter,
+    pub(crate) no_schema: Counter,
+}
+
+impl CompactionSchemaSelection {
+    fn new(schema_selection: CounterVec) -> CompactionSchemaSelection {
+        CompactionSchemaSelection {
+            recent_schema: schema_selection.with_label_values(&["recent"]),
+            no_schema: schema_selection.with_label_values(&["none"]),
         }
     }
 }
@@ -1208,6 +1281,7 @@ pub struct ShardsMetrics {
     pubsub_push_diff_applied: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_not_applied_stale: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_not_applied_out_of_order: mz_ore::metrics::IntCounterVec,
+    stale_version: mz_ore::metrics::UIntGaugeVec,
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
     live_writers: mz_ore::metrics::UIntGaugeVec,
@@ -1380,6 +1454,11 @@ impl ShardsMetrics {
                 help: "number of diffs received via pubsub that did not apply due to out-of-order delivery",
                 var_labels: ["shard", "name"],
             )),
+            stale_version: registry.register(metric!(
+                name: "mz_persist_shard_stale_version",
+                help: "indicates whether the current version of the shard is less than the current version of the code",
+                var_labels: ["shard", "name"],
+            )),
             blob_gets: registry.register(metric!(
                 name: "mz_persist_shard_blob_gets",
                 help: "number of Blob::get calls for this shard",
@@ -1471,9 +1550,11 @@ impl ShardsMetrics {
             }
         }
         let shard = Arc::new(ShardMetrics::new(shard_id, name, self));
-        assert!(shards
-            .insert(shard_id.clone(), Arc::downgrade(&shard))
-            .is_none());
+        assert!(
+            shards
+                .insert(shard_id.clone(), Arc::downgrade(&shard))
+                .is_none()
+        );
         shard
     }
 
@@ -1500,52 +1581,50 @@ impl ShardsMetrics {
 pub struct ShardMetrics {
     pub shard_id: ShardId,
     pub name: String,
-    pub since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub latest_rollup_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub encoded_diff_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub hollow_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub spine_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub since: DeleteOnDropGauge<AtomicI64, Vec<String>>,
+    pub upper: DeleteOnDropGauge<AtomicI64, Vec<String>>,
+    pub largest_batch_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub latest_rollup_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub encoded_diff_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub hollow_batch_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub spine_batch_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub batch_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     batch_part_version_count: mz_ore::metrics::UIntGaugeVec,
     batch_part_version_bytes: mz_ore::metrics::UIntGaugeVec,
     batch_part_version_map: Mutex<BTreeMap<String, BatchPartVersionMetrics>>,
-    pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub rollup_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub seqnos_since_last_rollup: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_current_state_batches_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_current_state_rollups_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_referenced_not_current_state_bytes:
-        DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_not_leaked_not_referenced_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub usage_leaked_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_not_applied_out_of_order:
-        DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub blob_gets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub live_writers: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub unconsolidated_snapshot: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
-    pub backpressure_last_backpressured_bytes:
-        Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
-    pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
-    pub rewrite_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub inline_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub inline_part_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub compact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub compacting_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub noncompact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub schema_registry_version_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub inline_backpressure_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub update_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub rollup_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub seqnos_held: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub seqnos_since_last_rollup: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub gc_seqno_held_parts: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub gc_live_diffs: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_current_state_batches_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_current_state_rollups_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_referenced_not_current_state_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_not_leaked_not_referenced_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub usage_leaked_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub gc_finished: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub compaction_applied: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub cmd_succeeded: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_applied: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_out_of_order: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub stale_version: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub blob_gets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub blob_sets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub live_writers: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub unconsolidated_snapshot: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
+    pub backpressure_last_backpressured_bytes: Arc<DeleteOnDropGauge<AtomicU64, Vec<String>>>,
+    pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
+    pub rewrite_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub inline_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub inline_part_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub compact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub compacting_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub noncompact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub schema_registry_version_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub inline_backpressure_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1631,6 +1710,9 @@ impl ShardMetrics {
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             pubsub_push_diff_not_applied_out_of_order: shards_metrics
                 .pubsub_push_diff_not_applied_out_of_order
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
+            stale_version: shards_metrics
+                .stale_version
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             blob_gets: shards_metrics
                 .blob_gets
@@ -1746,8 +1828,8 @@ impl ShardMetrics {
 
 #[derive(Debug)]
 pub struct BatchPartVersionMetrics {
-    pub batch_part_version_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub batch_part_version_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub batch_part_version_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub batch_part_version_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 }
 
 /// Metrics recorded by audits of persist usage
@@ -1838,10 +1920,6 @@ impl UpdateDelta {
 /// abstraction boundary of the client, it's convenient to manage them together.
 #[derive(Debug, Clone)]
 pub struct SinkMetrics {
-    /// Number of small batches that were forwarded to the central append operator
-    pub forwarded_batches: Counter,
-    /// Number of updates that were forwarded to the centralized append operator
-    pub forwarded_updates: Counter,
     /// Cumulative record insertions made to the correction buffer across workers
     correction_insertions_total: IntCounter,
     /// Cumulative record deletions made to the correction buffer across workers
@@ -1859,14 +1937,6 @@ pub struct SinkMetrics {
 impl SinkMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         SinkMetrics {
-            forwarded_batches: registry.register(metric!(
-                name: "mz_persist_sink_forwarded_batches",
-                help: "number of batches forwarded to the central append operator",
-            )),
-            forwarded_updates: registry.register(metric!(
-                name: "mz_persist_sink_forwarded_updates",
-                help: "number of updates forwarded to the central append operator",
-            )),
             correction_insertions_total: registry.register(metric!(
                 name: "mz_persist_sink_correction_insertions_total",
                 help: "The cumulative insertions observed on the correction buffer across workers and persist sinks.",
@@ -2224,12 +2294,10 @@ pub struct LockMetrics {
 
 #[derive(Debug)]
 pub struct WatchMetrics {
-    pub(crate) listen_woken_via_watch: IntCounter,
-    pub(crate) listen_woken_via_sleep: IntCounter,
-    pub(crate) listen_resolved_via_watch: IntCounter,
-    pub(crate) listen_resolved_via_sleep: IntCounter,
-    pub(crate) snapshot_woken_via_watch: IntCounter,
-    pub(crate) snapshot_woken_via_sleep: IntCounter,
+    pub(crate) wait_woken_via_watch: IntCounter,
+    pub(crate) wait_woken_via_sleep: IntCounter,
+    pub(crate) wait_resolved_via_watch: IntCounter,
+    pub(crate) wait_resolved_via_sleep: IntCounter,
     pub(crate) notify_sent: IntCounter,
     pub(crate) notify_noop: IntCounter,
     pub(crate) notify_recv: IntCounter,
@@ -2241,29 +2309,21 @@ pub struct WatchMetrics {
 impl WatchMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         WatchMetrics {
-            listen_woken_via_watch: registry.register(metric!(
-                name: "mz_persist_listen_woken_via_watch",
-                help: "count of listen next batches wakes via watch notify",
+            wait_woken_via_watch: registry.register(metric!(
+                name: "mz_persist_wait_woken_via_watch",
+                help: "count of wait-for-uppers wakes via watch notify",
             )),
-            listen_woken_via_sleep: registry.register(metric!(
-                name: "mz_persist_listen_woken_via_sleep",
-                help: "count of listen next batches wakes via sleep",
+            wait_woken_via_sleep: registry.register(metric!(
+                name: "mz_persist_wait_woken_via_sleep",
+                help: "count of wait-for-uppers wakes via sleep",
             )),
-            listen_resolved_via_watch: registry.register(metric!(
-                name: "mz_persist_listen_resolved_via_watch",
-                help: "count of listen next batches resolved via watch notify",
+            wait_resolved_via_watch: registry.register(metric!(
+                name: "mz_persist_wait_resolved_via_watch",
+                help: "count of wait-for-uppers resolved via watch notify",
             )),
-            listen_resolved_via_sleep: registry.register(metric!(
-                name: "mz_persist_listen_resolved_via_sleep",
-                help: "count of listen next batches resolved via sleep",
-            )),
-            snapshot_woken_via_watch: registry.register(metric!(
-                name: "mz_persist_snapshot_woken_via_watch",
-                help: "count of snapshot wakes via watch notify",
-            )),
-            snapshot_woken_via_sleep: registry.register(metric!(
-                name: "mz_persist_snapshot_woken_via_sleep",
-                help: "count of snapshot wakes via sleep",
+            wait_resolved_via_sleep: registry.register(metric!(
+                name: "mz_persist_wait_resolved_via_sleep",
+                help: "count of wait-for-uppers resolved via sleep",
             )),
             notify_sent: registry.register(metric!(
                 name: "mz_persist_watch_notify_sent",
@@ -2307,6 +2367,7 @@ pub struct PushdownMetrics {
     pub(crate) parts_faked_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
+    pub(crate) parts_projection_trimmed_bytes: IntCounter,
     pub part_stats: PartStatsMetrics,
 }
 
@@ -2360,6 +2421,10 @@ impl PushdownMetrics {
             parts_stats_trimmed_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
                 help: "total bytes trimmed from part stats",
+            )),
+            parts_projection_trimmed_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_projection_trimmed_bytes",
+                help: "total bytes trimmed from columnar data because of projection pushdown",
             )),
             part_stats: PartStatsMetrics::new(registry),
         }
@@ -2844,7 +2909,7 @@ impl MetricsConsensus {
 
 #[async_trait]
 impl Consensus for MetricsConsensus {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         Box::pin(
             self.metrics
                 .consensus
@@ -2875,7 +2940,6 @@ impl Consensus for MetricsConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         let bytes = new.data.len();
@@ -2883,10 +2947,7 @@ impl Consensus for MetricsConsensus {
             .metrics
             .consensus
             .compare_and_set
-            .run_op(
-                || self.consensus.compare_and_set(key, expected, new),
-                Self::on_err,
-            )
+            .run_op(|| self.consensus.compare_and_set(key, new), Self::on_err)
             .await;
         match res.as_ref() {
             Ok(CaSResult::Committed) => self
@@ -2925,17 +2986,15 @@ impl Consensus for MetricsConsensus {
     }
 
     #[instrument(name = "consensus::truncate", fields(shard=key))]
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
-        let deleted = self
-            .metrics
-            .consensus
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
+        let metrics = &self.metrics.consensus;
+        let deleted = metrics
             .truncate
             .run_op(|| self.consensus.truncate(key, seqno), Self::on_err)
             .await?;
-        self.metrics
-            .consensus
-            .truncated_count
-            .inc_by(u64::cast_from(deleted));
+        if let Some(deleted) = deleted {
+            metrics.truncated_count.inc_by(u64::cast_from(deleted));
+        }
         Ok(deleted)
     }
 }
@@ -3042,6 +3101,104 @@ impl TasksMetrics {
         registry.register_collector(heartbeat_read.clone());
         TasksMetrics { heartbeat_read }
     }
+}
+
+#[derive(Debug)]
+pub struct SchemaMetrics {
+    pub(crate) cache_fetch_state_count: IntCounter,
+    pub(crate) cache_schema: SchemaCacheMetrics,
+    pub(crate) cache_migration: SchemaCacheMetrics,
+    pub(crate) migration_count_same: IntCounter,
+    pub(crate) migration_count_codec: IntCounter,
+    pub(crate) migration_count_either: IntCounter,
+    pub(crate) migration_len_legacy_codec: IntCounter,
+    pub(crate) migration_len_either_codec: IntCounter,
+    pub(crate) migration_len_either_arrow: IntCounter,
+    pub(crate) migration_new_count: IntCounter,
+    pub(crate) migration_new_seconds: Counter,
+    pub(crate) migration_migrate_seconds: Counter,
+}
+
+impl SchemaMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let cached: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_cache_cached_count",
+            help: "count of schema cache entries served from cache",
+            var_labels: ["op"],
+        ));
+        let computed: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_cache_computed_count",
+            help: "count of schema cache entries computed",
+            var_labels: ["op"],
+        ));
+        let unavailable: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_cache_unavailable_count",
+            help: "count of schema cache entries unavailable at current state",
+            var_labels: ["op"],
+        ));
+        let added: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_cache_added_count",
+            help: "count of schema cache entries added",
+            var_labels: ["op"],
+        ));
+        let dropped: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_cache_dropped_count",
+            help: "count of schema cache entries dropped",
+            var_labels: ["op"],
+        ));
+        let cache = |name| SchemaCacheMetrics {
+            cached_count: cached.with_label_values(&[name]),
+            computed_count: computed.with_label_values(&[name]),
+            unavailable_count: unavailable.with_label_values(&[name]),
+            added_count: added.with_label_values(&[name]),
+            dropped_count: dropped.with_label_values(&[name]),
+        };
+        let migration_count: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_migration_count",
+            help: "count of fetch part migrations",
+            var_labels: ["op"],
+        ));
+        let migration_len: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_migration_len",
+            help: "count of migrated update records",
+            var_labels: ["op"],
+        ));
+        SchemaMetrics {
+            cache_fetch_state_count: registry.register(metric!(
+                name: "mz_persist_schema_cache_fetch_state_count",
+                help: "count of state fetches by the schema cache",
+            )),
+            cache_schema: cache("schema"),
+            cache_migration: cache("migration"),
+            migration_count_same: migration_count.with_label_values(&["same"]),
+            migration_count_codec: migration_count.with_label_values(&["codec"]),
+            migration_count_either: migration_count.with_label_values(&["either"]),
+            migration_len_legacy_codec: migration_len.with_label_values(&["legacy_codec"]),
+            migration_len_either_codec: migration_len.with_label_values(&["either_codec"]),
+            migration_len_either_arrow: migration_len.with_label_values(&["either_arrow"]),
+            migration_new_count: registry.register(metric!(
+                name: "mz_persist_schema_migration_new_count",
+                help: "count of migrations constructed",
+            )),
+            migration_new_seconds: registry.register(metric!(
+                name: "mz_persist_schema_migration_new_seconds",
+                help: "seconds spent constructing migration logic",
+            )),
+            migration_migrate_seconds: registry.register(metric!(
+                name: "mz_persist_schema_migration_migrate_seconds",
+                help: "seconds spent applying migration logic",
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SchemaCacheMetrics {
+    pub(crate) cached_count: IntCounter,
+    pub(crate) computed_count: IntCounter,
+    pub(crate) unavailable_count: IntCounter,
+    pub(crate) added_count: IntCounter,
+    pub(crate) dropped_count: IntCounter,
 }
 
 #[derive(Debug)]

@@ -14,23 +14,31 @@ from typing import Any
 
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.ignore_filter.expression_matchers import (
-    matches_fun_by_name,
+    is_operation_tagged,
+    is_table_function,
 )
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
 )
+from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
+    TAG_JSONB_OBJECT_GENERATION,
+)
 from materialize.output_consistency.query.query_result import QueryExecution
+from materialize.output_consistency.validation.error_message_normalizer import (
+    ErrorMessageNormalizer,
+)
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 # Examples:
 # * 2038-01-19 03:14:18
 # * 2038-01-19 03:14:18.123
 # * 2038-01-19 03:14:18.123+00
+# * 2038-01-19 03:14:18.123+00 BC
 # * 2038-01-19 03:14:18+00
 # * 2038-01-19 03:14:18-03:00
 # * 2038-01-19T03:14:18+00 (when used in JSONB)
 TIMESTAMP_PATTERN = re.compile(
-    r"^\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d+(:\d+)?)?$"
+    r"^\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d+(:\d+)?)?( (BC|AC))?$"
 )
 
 # Examples:
@@ -56,8 +64,12 @@ JSON_OBJECT_PATTERN = re.compile(r"\{(.*)[:,](.*)\}")
 class PostgresResultComparator(ResultComparator):
     """Compares the outcome (result or failure) of multiple query executions"""
 
-    def __init__(self, ignore_filter: GenericInconsistencyIgnoreFilter):
-        super().__init__(ignore_filter)
+    def __init__(
+        self,
+        ignore_filter: GenericInconsistencyIgnoreFilter,
+        error_message_normalizer: ErrorMessageNormalizer,
+    ):
+        super().__init__(ignore_filter, error_message_normalizer)
         self.floating_precision = 1e-03
 
     def shall_validate_error_message(self, query_execution: QueryExecution) -> bool:
@@ -87,6 +99,15 @@ class PostgresResultComparator(ResultComparator):
         if isinstance(value1, str) and isinstance(value2, str):
             return self.is_str_equal(value1, value2, is_tolerant)
 
+        if is_tolerant:
+            type1 = type(value1)
+            type2 = type(value2)
+
+            if type1 in {int, float, Decimal} and type2 in {int, float, Decimal}:
+                # This is needed for imprecise results of floating type operations that are returned as int or float
+                # values in dicts of JSONB data.
+                return self.is_decimal_equal(Decimal(value1), Decimal(value2))
+
         return False
 
     def is_decimal_equal(self, value1: Decimal, value2: Decimal) -> bool:
@@ -113,7 +134,7 @@ class PostgresResultComparator(ResultComparator):
             or JSON_OBJECT_PATTERN.search(value2)
         ):
             # This is a rather eager pattern to also match concatenated strings.
-            # tracked with #23571
+            # tracked with database-issues#7085
             value1 = value1.replace(", ", ",").replace(": ", ":")
             value2 = value2.replace(", ", ",").replace(": ", ":")
 
@@ -136,9 +157,11 @@ class PostgresResultComparator(ResultComparator):
         return TIMESTAMP_PATTERN.match(value) is not None
 
     def is_timestamp_equal(self, value1: str, value2: str) -> bool:
+        # try to match any of these
         last_second_and_milliseconds_regex = r"(\d\.\d+)"
         last_second_before_timezone_regex = r"(?<=:\d)(\d)(?=\+)"
         last_second_at_the_end_regex = r"(?<=:\d)(\d$)"
+
         last_second_and_milliseconds_pattern = re.compile(
             f"{last_second_and_milliseconds_regex}|{last_second_before_timezone_regex}|{last_second_at_the_end_regex}"
         )
@@ -158,7 +181,7 @@ class PostgresResultComparator(ResultComparator):
         return value1 == value2
 
     def _normalize_jsonb_timestamp(self, value: str) -> str:
-        # this is due to #28137
+        # this is due to database-issues#8247
 
         pattern_for_date = r"\d+-\d+-\d+"
         pattern_for_time = r"\d+:\d+:\d+[+-]\d+"
@@ -172,14 +195,22 @@ class PostgresResultComparator(ResultComparator):
 
         return match.group(1) + " " + match.group(2)
 
-    def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
+    def ignore_row_order(self, expression: Expression) -> bool:
         if expression.matches(
-            partial(
-                matches_fun_by_name, function_name_in_lower_case="jsonb_object_agg"
-            ),
+            is_table_function,
             True,
         ):
-            # this is because of #28192
+            # inconsistent sort order
+            return True
+
+        return False
+
+    def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
+        if expression.matches(
+            partial(is_operation_tagged, tag=TAG_JSONB_OBJECT_GENERATION),
+            True,
+        ):
+            # this is because of database-issues#8266
             return True
 
         return False

@@ -1,0 +1,4 @@
+<div class="important">
+  <strong class="gutter">
+   ! Important: </strong> {{ .Inner | replaceRE "^\\s+" "" | $.Page.RenderString }}
+</div>

@@ -6,48 +6,90 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER SOURCE` changes certain characteristics of a source.
+Use `ALTER SOURCE` to:
+
+- Add a subsource to a source.
+- Rename a source.
+- Change owner of a source.
+- Change retain history configuration for the source.
+- Change timestamp interval for the source.
 
 ## Syntax
 
-{{< diagram "alter-source.svg" >}}
+{{< tabs >}}
+{{< tab "Add subsource" >}}
 
-#### alter_source_add_clause
+### Add subsource
 
-{{< diagram "alter-source-add-clause.svg" >}}
+To add the specified upstream table(s) to the specified PostgreSQL/MySQL/SQL Server source:
 
-#### alter_source_set_retain_history_clause
+{{% include-syntax file="examples/alter_source" example="syntax-add-subsource" %}}
 
-{{< diagram "alter-source-set-retain-history-clause.svg" >}}
+{{< note >}}
+{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
+{{< /note >}}
 
-#### alter_source_reset_retain_history_clause
+{{< /tab >}}
 
-{{< diagram "alter-source-reset-retain-history-clause.svg" >}}
+{{< tab "Rename" >}}
 
-#### with_options
+### Rename
 
-{{< diagram "with-options.svg" >}}
+To rename a source:
 
-Field   | Use
---------|-----
-_name_  | The identifier of the source you want to alter.
-**ADD SUBSOURCE** ... | Add the identified tables from the upstream database (`table_name`) to the named PostgreSQL or MySQL source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options).
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{% include-syntax file="examples/alter_source" example="syntax-rename" %}}
 
-### **ADD SUBSOURCE** `with_options`
+{{< /tab >}}
+{{< tab "Change owner" >}}
 
-Field                                | Value           | Description
--------------------------------------|-----------------|-------------------------------------
-`TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
+### Change owner
+
+To change the owner of a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-change-owner" %}}
+
+{{< /tab >}}
+{{< tab "(Re)Set retain history config" >}}
+
+### (Re)Set retain history config
+
+To set the retention history for a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-set-retain-history" %}}
+
+To reset the retention history to the default for a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-reset-retain-history" %}}
+
+{{< /tab >}}
+{{< tab "(Re)Set timestamp interval" >}}
+
+### (Re)Set timestamp interval
+
+To set the timestamp interval for a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-set-timestamp-interval" %}}
+
+To reset the timestamp interval to the system default for a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-reset-timestamp-interval" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
+
 
 ## Context
 
-### Adding subsources to a PostgreSQL or MySQL source
+### Adding subsources to a PostgreSQL/MySQL/SQL Server source
 
 Note that using a combination of dropping and adding subsources lets you change
-the schema of the PostgreSQL or MySQL tables that are ingested.
+the schema of the PostgreSQL/MySQL/SQL Server tables that are ingested.
 
-### Dropping subsources from a PostgreSQL or MySQL source
+{{< important >}}
+{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
+{{< /important >}}
+
+### Dropping subsources from a PostgreSQL/MySQL/SQL Server source
 
 Dropping a subsource prevents Materialize from ingesting any data from it, in
 addition to dropping any state that Materialize previously had for the table
@@ -67,6 +109,10 @@ You cannot drop the "progress subsource".
 ALTER SOURCE pg_src ADD SUBSOURCE tbl_a, tbl_b AS b WITH (TEXT COLUMNS [tbl_a.col]);
 ```
 
+{{< important >}}
+{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
+{{< /important >}}
+
 ### Dropping subsources
 
 To drop a subsource, use the [`DROP SOURCE`](/sql/drop-source/) command:
@@ -75,11 +121,25 @@ To drop a subsource, use the [`DROP SOURCE`](/sql/drop-source/) command:
 DROP SOURCE tbl_a, b CASCADE;
 ```
 
+### Changing the timestamp interval
+
+To set a custom timestamp interval for a source:
+
+```mzsql
+ALTER SOURCE kafka_src SET (TIMESTAMP INTERVAL = '500ms');
+```
+
+To reset the timestamp interval to the system default:
+
+```mzsql
+ALTER SOURCE kafka_src RESET (TIMESTAMP INTERVAL);
+```
+
 ## Privileges
 
 The privileges required to execute this statement are:
 
-- Ownership of the source being altered.
+{{% include-headless "/headless/sql-command-privileges/alter-source" %}}
 
 ## See also
 

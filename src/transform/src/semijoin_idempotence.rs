@@ -26,9 +26,12 @@
 //! which we will transfer to the columns of `D` thereby forming `C`.
 
 use itertools::Itertools;
+use mz_repr::ReprRelationType;
 use std::collections::BTreeMap;
 
-use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{
+    Columns, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
@@ -55,12 +58,16 @@ impl CheckedRecursion for SemijoinIdempotence {
 }
 
 impl crate::Transform for SemijoinIdempotence {
+    fn name(&self) -> &'static str {
+        "SemijoinIdempotence"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "semijoin_idempotence")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -137,7 +144,7 @@ impl SemijoinIdempotence {
                                 .iter()
                                 .filter_map(|(id, _filter)| match id {
                                     Id::Local(lid) => Some(lid),
-                                    _ => None,
+                                    Id::Global(_) => None,
                                 })
                         {
                             if referenced_id >= id {
@@ -194,6 +201,9 @@ fn attempt_join_simplification(
     let input_mapper = JoinInputMapper::new(inputs);
 
     if let Some((ltr, rtl)) = semijoin_bijection(inputs, equivalences) {
+        // If semijoin_bijection returns `Some(...)`, then `inputs.len() == 2`.
+        assert_eq!(inputs.len(), 2);
+
         // Collect the `Get` identifiers each input might present as.
         let ids0 = as_filtered_get(&inputs[0], gets_behind_gets)
             .iter()
@@ -204,10 +214,12 @@ fn attempt_join_simplification(
             .map(|(id, _)| *id)
             .collect::<Vec<_>>();
 
+        // Record the types of the inputs, for use in both loops below.
+        let typ0 = inputs[0].typ();
+        let typ1 = inputs[1].typ();
+
         // Consider replacing the second input for the benefit of the first.
-        if distinct_on_keys_of(&inputs[1], &rtl)
-            && input_mapper.input_arity(1) == equivalences.len()
-        {
+        if distinct_on_keys_of(&typ1, &rtl) && input_mapper.input_arity(1) == equivalences.len() {
             for mut candidate in list_replacements(&inputs[1], let_replacements, gets_behind_gets) {
                 if ids0.contains(&candidate.id) {
                     if let Some(permutation) = validate_replacement(&ltr, &mut candidate) {
@@ -218,12 +230,16 @@ fn attempt_join_simplification(
                         // The pushdown is for the benefit of CSE on the `A` expressions,
                         // in the not uncommon case of nullable foreign keys in outer joins.
                         // TODO: Discover the transform that would not require this code.
-                        let typ0 = inputs[0].typ().column_types;
-                        let typ1 = inputs[1].typ().column_types;
                         let mut is_not_nulls = Vec::new();
                         for (col0, col1) in ltr.iter() {
-                            if !typ1[*col1].nullable && typ0[*col0].nullable {
-                                is_not_nulls.push(MirScalarExpr::Column(*col0).call_is_null().not())
+                            // We are using the pre-computed types; recomputing the types here
+                            // might alter nullability. As of 2025-01-09, Gábor has not found that
+                            // happening. But for the future, notice that this could be a source of
+                            // inaccurate or inconsistent nullability information.
+                            if !typ1.column_types[*col1].nullable
+                                && typ0.column_types[*col0].nullable
+                            {
+                                is_not_nulls.push(MirScalarExpr::column(*col0).call_is_null().not())
                             }
                         }
                         if !is_not_nulls.is_empty() {
@@ -239,9 +255,7 @@ fn attempt_join_simplification(
             }
         }
         // Consider replacing the first input for the benefit of the second.
-        if distinct_on_keys_of(&inputs[0], &ltr)
-            && input_mapper.input_arity(0) == equivalences.len()
-        {
+        if distinct_on_keys_of(&typ0, &ltr) && input_mapper.input_arity(0) == equivalences.len() {
             for mut candidate in list_replacements(&inputs[0], let_replacements, gets_behind_gets) {
                 if ids1.contains(&candidate.id) {
                     if let Some(permutation) = validate_replacement(&rtl, &mut candidate) {
@@ -252,12 +266,12 @@ fn attempt_join_simplification(
                         // The pushdown is for the benefit of CSE on the `A` expressions,
                         // in the not uncommon case of nullable foreign keys in outer joins.
                         // TODO: Discover the transform that would not require this code.
-                        let typ0 = inputs[0].typ().column_types;
-                        let typ1 = inputs[1].typ().column_types;
                         let mut is_not_nulls = Vec::new();
                         for (col1, col0) in rtl.iter() {
-                            if !typ0[*col0].nullable && typ1[*col1].nullable {
-                                is_not_nulls.push(MirScalarExpr::Column(*col1).call_is_null().not())
+                            if !typ0.column_types[*col0].nullable
+                                && typ1.column_types[*col1].nullable
+                            {
+                                is_not_nulls.push(MirScalarExpr::column(*col1).call_is_null().not())
                             }
                         }
                         if !is_not_nulls.is_empty() {
@@ -304,7 +318,7 @@ fn validate_replacement(
 /// A `Replacement` may be offered up by any `MirRelationExpr`, meant to be `B` from above or similar,
 /// and indicates that the offered expression can be projected onto columns such that it then exactly equals
 /// a column projection of `Get{id} semijoin replacement`.
-
+///
 /// Specifically,
 /// the `columns` member lists indexes `(a, b, c)` where column `b` of the offering expression corresponds to
 /// columns `a` in `Get{id}` and `c` in `replacement`, and for which the semijoin requires `a = c`. The values
@@ -383,7 +397,7 @@ fn list_replacements(
                             .filter_map(|(c0, c1, c2)| {
                                 group_key
                                     .iter()
-                                    .position(|o| o == &MirScalarExpr::Column(*c1))
+                                    .position(|o| o.as_column() == Some(*c1))
                                     .map(|c| (*c0, c, *c2))
                             })
                             .collect::<Vec<_>>();
@@ -418,7 +432,7 @@ fn list_replacements_join(
         // Each unique key could be a semijoin candidate.
         // We want to check that the join equivalences exactly match the key,
         // and then transcribe the corresponding columns in the other input.
-        if distinct_on_keys_of(&inputs[1], &rtl) {
+        if distinct_on_keys_of(&inputs[1].typ(), &rtl) {
             let columns = ltr
                 .iter()
                 .map(|(k0, k1)| (*k0, *k0, *k1))
@@ -448,7 +462,7 @@ fn list_replacements_join(
         // Each unique key could be a semijoin candidate.
         // We want to check that the join equivalences exactly match the key,
         // and then transcribe the corresponding columns in the other input.
-        if distinct_on_keys_of(&inputs[0], &ltr) {
+        if distinct_on_keys_of(&inputs[0].typ(), &ltr) {
             let columns = ltr
                 .iter()
                 .map(|(k0, k1)| (*k1, *k0, *k0))
@@ -480,10 +494,9 @@ fn list_replacements_join(
     results
 }
 
-/// True iff some unique key of `input` is contained in the keys of `map`.
-fn distinct_on_keys_of(expr: &MirRelationExpr, map: &BTreeMap<usize, usize>) -> bool {
-    expr.typ()
-        .keys
+/// True iff some unique key of `typ` is contained in the keys of `map`.
+fn distinct_on_keys_of(typ: &ReprRelationType, map: &BTreeMap<usize, usize>) -> bool {
+    typ.keys
         .iter()
         .any(|key| key.iter().all(|k| map.contains_key(k)))
 }
@@ -533,6 +546,7 @@ fn semijoin_bijection(
     let mut equiv_pairs = Vec::with_capacity(equivalences.len());
 
     // Populate `equiv_pairs`, ideally finding exactly one pair for each equivalence class.
+    // TODO(mgree) !!! store the column names
     for eq in equivalences.iter() {
         if eq.len() == 2 {
             // The equivalence class could reference the inputs in either order, or be some
@@ -544,8 +558,10 @@ fn semijoin_bijection(
                 (Some(0), Some(1)) => {
                     let expr0 = input_mapper.map_expr_to_local(eq[0].clone());
                     let expr1 = input_mapper.map_expr_to_local(eq[1].clone());
-                    if let (MirScalarExpr::Column(col0), MirScalarExpr::Column(col1)) =
-                        (expr0, expr1)
+                    if let (
+                        MirScalarExpr::Column(col0, _name0),
+                        MirScalarExpr::Column(col1, _name1),
+                    ) = (expr0, expr1)
                     {
                         equiv_pairs.push((col0, col1));
                     }
@@ -553,8 +569,10 @@ fn semijoin_bijection(
                 (Some(1), Some(0)) => {
                     let expr0 = input_mapper.map_expr_to_local(eq[1].clone());
                     let expr1 = input_mapper.map_expr_to_local(eq[0].clone());
-                    if let (MirScalarExpr::Column(col0), MirScalarExpr::Column(col1)) =
-                        (expr0, expr1)
+                    if let (
+                        MirScalarExpr::Column(col0, _name0),
+                        MirScalarExpr::Column(col1, _name1),
+                    ) = (expr0, expr1)
                     {
                         equiv_pairs.push((col0, col1));
                     }

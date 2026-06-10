@@ -19,7 +19,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.selection.column_selection import (
     ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
 )
 
@@ -47,6 +47,14 @@ class QueryExecution:
 
     def get_outcome_by_strategy_key(self) -> dict[EvaluationStrategyKey, QueryOutcome]:
         return {outcome.strategy.identifier: outcome for outcome in self.outcomes}
+
+    def get_first_failing_outcome(self) -> QueryFailure:
+        for outcome in self.outcomes:
+            if not outcome.successful:
+                assert isinstance(outcome, QueryFailure)
+                return outcome
+
+        raise RuntimeError("No failing outcome found")
 
     def __str__(self) -> str:
         return f"QueryExecution with {len(self.outcomes)} outcomes for template query: {self.generic_sql})"

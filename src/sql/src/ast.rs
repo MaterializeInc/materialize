@@ -44,5 +44,8 @@ impl<'ast, T: AstInfo> Visit<'ast, T> for ConstantVisitor {
         if matches!(node, TableFactor::Table { .. }) {
             self.constant = false;
         }
+        // Recurse so that non-`Table` table factors (e.g. `Derived`, `Function`,
+        // `NestedJoin`) still have their inner table references inspected.
+        visit::visit_table_factor(self, node);
     }
 }

@@ -9,20 +9,21 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastInto;
-use mz_ore::{assert_none, halt};
-use mz_persist::indexed::columnar::ColumnarRecords;
+use mz_ore::{assert_none, halt, soft_panic_or_log};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{PartStats, ProtoStructStats};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -31,24 +32,25 @@ use proptest::strategy::Strategy;
 use prost::Message;
 use semver::Version;
 use serde::ser::SerializeStruct;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
-use crate::critical::CriticalReaderId;
+use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    proto_hollow_batch_part, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
-    HollowBatch, HollowBatchPart, HollowRollup, IdempotencyToken, LeasedReaderState, OpaqueState,
-    ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState,
-    ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdHollowBatch, ProtoIdMerge,
+    ActiveGc, ActiveRollup, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
+    HollowBatch, HollowBatchPart, HollowRollup, HollowRun, HollowRunRef, IdempotencyToken,
+    LeasedReaderState, ProtoActiveGc, ProtoActiveRollup, ProtoCompaction, ProtoCriticalReaderState,
+    ProtoEncodedSchemas, ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart,
+    ProtoHollowRollup, ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch, ProtoIdMerge,
     ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge,
-    ProtoRollup, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
-    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, State, StateCollections, TypedState,
-    WriterState,
+    ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff,
+    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunId, RunMeta, RunOrder, RunPart,
+    State, StateCollections, TypedState, WriterState, proto_hollow_batch_part,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -57,15 +59,17 @@ use crate::internal::trace::{
     ActiveCompaction, FlatTrace, SpineId, ThinMerge, ThinSpineBatch, Trace,
 };
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
-use crate::schema::SchemaId;
-use crate::{cfg, PersistConfig, ShardId, WriterId};
+use crate::{PersistConfig, ShardId, WriterId, cfg};
 
+/// A key and value `Schema` of data written to a batch or shard.
 #[derive(Debug)]
 pub struct Schemas<K: Codec, V: Codec> {
-    // TODO: Remove the Option once this finishes rolling out and all shards
-    // have a registered schema.
+    /// Id under which this schema is registered in the shard's schema registry,
+    /// if any.
     pub id: Option<SchemaId>,
+    /// Key `Schema`.
     pub key: Arc<K::Schema>,
+    /// Value `Schema`.
     pub val: Arc<V::Schema>,
 }
 
@@ -107,7 +111,7 @@ pub struct LazyProto<T> {
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<T: Message + Default> Debug for LazyProto<T> {
+impl<T: Message + Default + Debug> Debug for LazyProto<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.decode() {
             Ok(proto) => Debug::fmt(&proto, f),
@@ -168,6 +172,10 @@ impl<T: Message + Default> LazyProto<T> {
     pub fn decode(&self) -> Result<T, prost::DecodeError> {
         T::decode(&*self.buf)
     }
+
+    pub fn decode_to<R: RustType<T>>(&self) -> anyhow::Result<R> {
+        Ok(T::decode(&*self.buf)?.into_rust()?)
+    }
 }
 
 impl<T: Message + Default> RustType<Bytes> for LazyProto<T> {
@@ -183,7 +191,106 @@ impl<T: Message + Default> RustType<Bytes> for LazyProto<T> {
     }
 }
 
-pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
+/// Our Proto implementation, Prost, cannot handle unrecognized fields. This means that unexpected
+/// data will be dropped at deserialization time, which means that we can't reliably roundtrip data
+/// from future versions of the code, which causes trouble during upgrades and at other times.
+///
+/// This type works around the issue by defining an unstructured metadata map. Keys are expected to
+/// be well-known strings defined in the code; values are bytes, expected to be encoded protobuf.
+/// (The association between the two is lightly enforced with the affiliated [MetadataKey] type.)
+/// It's safe to add new metadata keys in new versions, since even unrecognized keys can be losslessly
+/// roundtripped. However, if the metadata is not safe for the old version to ignore -- perhaps it
+/// needs to be kept in sync with some other part of the struct -- you will need to use a more
+/// heavyweight migration for it.
+#[derive(Debug, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub(crate) struct MetadataMap(BTreeMap<String, Bytes>);
+
+/// Associating a field name and an associated Proto message type, for lookup in a metadata map.
+///
+/// It is an error to reuse key names, or to change the type associated with a particular name.
+/// It is polite to choose short names, since they get serialized alongside every struct.
+#[allow(unused)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub(crate) struct MetadataKey<V, P = V> {
+    name: &'static str,
+    type_: PhantomData<(V, P)>,
+}
+
+impl<V, P> MetadataKey<V, P> {
+    #[allow(unused)]
+    pub(crate) const fn new(name: &'static str) -> Self {
+        MetadataKey {
+            name,
+            type_: PhantomData,
+        }
+    }
+}
+
+impl serde::Serialize for MetadataMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_map(self.0.iter())
+    }
+}
+
+impl MetadataMap {
+    /// Returns true iff no metadata keys have been set.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Serialize and insert a new key into the map, replacing any existing value for the key.
+    #[allow(unused)]
+    pub fn set<V: RustType<P>, P: prost::Message>(&mut self, key: MetadataKey<V, P>, value: V) {
+        self.0.insert(
+            String::from(key.name),
+            Bytes::from(value.into_proto_owned().encode_to_vec()),
+        );
+    }
+
+    /// Deserialize a key from the map, if it is present.
+    #[allow(unused)]
+    pub fn get<V: RustType<P>, P: prost::Message + Default>(
+        &self,
+        key: MetadataKey<V, P>,
+    ) -> Option<V> {
+        let proto = match P::decode(self.0.get(key.name)?.as_ref()) {
+            Ok(decoded) => decoded,
+            Err(err) => {
+                // This should be impossible unless one of the MetadataKey invariants are broken.
+                soft_panic_or_log!(
+                    "error when decoding {key}; was it redefined? {err}",
+                    key = key.name
+                );
+                return None;
+            }
+        };
+
+        match proto.into_rust() {
+            Ok(proto) => Some(proto),
+            Err(err) => {
+                // This should be impossible unless one of the MetadataKey invariants are broken.
+                soft_panic_or_log!(
+                    "error when decoding {key}; was it redefined? {err}",
+                    key = key.name
+                );
+                None
+            }
+        }
+    }
+}
+impl RustType<BTreeMap<String, Bytes>> for MetadataMap {
+    fn into_proto(&self) -> BTreeMap<String, Bytes> {
+        self.0.clone()
+    }
+    fn from_proto(proto: BTreeMap<String, Bytes>) -> Result<Self, TryFromProtoError> {
+        Ok(MetadataMap(proto))
+    }
+}
+
+pub(crate) fn parse_id(id_prefix: &str, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
     let uuid_encoded = match encoded.strip_prefix(id_prefix) {
         Some(x) => x,
         None => return Err(format!("invalid {} {}: incorrect prefix", id_type, encoded)),
@@ -193,14 +300,14 @@ pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<
     Ok(*uuid.as_bytes())
 }
 
-pub(crate) fn check_data_version(code_version: &Version, data_version: &Version) {
-    if let Err(msg) = cfg::check_data_version(code_version, data_version) {
+pub(crate) fn assert_code_can_read_data(code_version: &Version, data_version: &Version) {
+    if !cfg::code_can_read_data(code_version, data_version) {
         // We can't catch halts, so panic in test, so we can get unit test
         // coverage.
         if cfg!(test) {
-            panic!("{msg}");
+            panic!("code at version {code_version} cannot read data with version {data_version}");
         } else {
-            halt!("{msg}");
+            halt!("code at version {code_version} cannot read data with version {data_version}");
         }
     }
 }
@@ -241,16 +348,6 @@ impl RustType<String> for WriterId {
             Ok(x) => Ok(x),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
-    }
-}
-
-impl RustType<u64> for SchemaId {
-    fn into_proto(&self) -> u64 {
-        self.0.into_proto()
-    }
-
-    fn from_proto(proto: u64) -> Result<Self, TryFromProtoError> {
-        Ok(SchemaId(proto.into_rust()?))
     }
 }
 
@@ -325,7 +422,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
         let diff = Self::from_proto(proto).expect("internal error: invalid encoded state");
-        check_data_version(build_version, &diff.applier_version);
+        assert_code_can_read_data(build_version, &diff.applier_version);
         diff
     }
 }
@@ -340,6 +437,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             walltime_ms,
             latest_rollup_key,
             rollups,
+            active_rollup,
+            active_gc,
             hostname,
             last_gc_req,
             leased_readers,
@@ -361,6 +460,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
         field_diffs_into_proto(ProtoStateField::Hostname, hostname, &mut writer);
         field_diffs_into_proto(ProtoStateField::LastGcReq, last_gc_req, &mut writer);
         field_diffs_into_proto(ProtoStateField::Rollups, rollups, &mut writer);
+        field_diffs_into_proto(ProtoStateField::ActiveRollup, active_rollup, &mut writer);
+        field_diffs_into_proto(ProtoStateField::ActiveGc, active_gc, &mut writer);
         field_diffs_into_proto(ProtoStateField::LeasedReaders, leased_readers, &mut writer);
         field_diffs_into_proto(
             ProtoStateField::CriticalReaders,
@@ -427,6 +528,22 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         |()| Ok(()),
                         |v| v.into_rust(),
                     )?,
+                    ProtoStateField::ActiveGc => {
+                        field_diff_into_rust::<(), ProtoActiveGc, _, _, _, _>(
+                            diff,
+                            &mut state_diff.active_gc,
+                            |()| Ok(()),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    ProtoStateField::ActiveRollup => {
+                        field_diff_into_rust::<(), ProtoActiveRollup, _, _, _, _>(
+                            diff,
+                            &mut state_diff.active_rollup,
+                            |()| Ok(()),
+                            |v| v.into_rust(),
+                        )?
+                    }
                     ProtoStateField::Rollups => {
                         field_diff_into_rust::<u64, ProtoHollowRollup, _, _, _, _>(
                             diff,
@@ -717,7 +834,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         let state = Rollup::from_proto(proto)
             .expect("internal error: invalid encoded state")
             .state;
-        check_data_version(build_version, &state.state.applier_version);
+        assert_code_can_read_data(build_version, &state.state.collections.version);
         state
     }
 }
@@ -845,7 +962,7 @@ impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
 impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
     fn into_proto(&self) -> ProtoRollup {
         ProtoRollup {
-            applier_version: self.state.state.applier_version.to_string(),
+            applier_version: self.state.state.collections.version.to_string(),
             shard_id: self.state.state.shard_id.into_proto(),
             seqno: self.state.state.seqno.into_proto(),
             walltime_ms: self.state.state.walltime_ms.into_proto(),
@@ -855,6 +972,8 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             ts_codec: T::codec_name(),
             diff_codec: self.state.diff_codec.into_proto(),
             last_gc_req: self.state.state.collections.last_gc_req.into_proto(),
+            active_rollup: self.state.state.collections.active_rollup.into_proto(),
+            active_gc: self.state.state.collections.active_gc.into_proto(),
             rollups: self
                 .state
                 .state
@@ -945,8 +1064,16 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
         for (id, x) in x.schemas {
             schemas.insert(id.into_rust()?, x.into_rust()?);
         }
+        let active_rollup = x
+            .active_rollup
+            .map(|rollup| rollup.into_rust())
+            .transpose()?;
+        let active_gc = x.active_gc.map(|gc| gc.into_rust()).transpose()?;
         let collections = StateCollections {
+            version: applier_version.clone(),
             rollups,
+            active_rollup,
+            active_gc,
             last_gc_req: x.last_gc_req.into_rust()?,
             leased_readers,
             critical_readers,
@@ -955,7 +1082,6 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             trace: x.trace.into_rust_if_some("trace")?,
         };
         let state = State {
-            applier_version,
             shard_id: x.shard_id.into_rust()?,
             seqno: x.seqno.into_rust()?,
             walltime_ms: x.walltime_ms,
@@ -1219,8 +1345,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
     fn into_proto(&self) -> ProtoCriticalReaderState {
         ProtoCriticalReaderState {
             since: Some(self.since.into_proto()),
-            opaque: i64::from_le_bytes(self.opaque.0),
-            opaque_codec: self.opaque_codec.clone(),
+            opaque: i64::from_le_bytes(self.opaque.1),
+            opaque_codec: self.opaque.0.clone(),
             debug: Some(self.debug.into_proto()),
         }
     }
@@ -1233,8 +1359,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
             since: proto
                 .since
                 .into_rust_if_some("ProtoCriticalReaderState::since")?,
-            opaque: OpaqueState(i64::to_le_bytes(proto.opaque)),
-            opaque_codec: proto.opaque_codec,
+            opaque: Opaque(proto.opaque_codec, i64::to_le_bytes(proto.opaque)),
             debug,
         })
     }
@@ -1295,38 +1420,178 @@ impl RustType<ProtoHandleDebugState> for HandleDebugState {
     }
 }
 
+impl<T: Timestamp + Codec64> RustType<ProtoHollowRun> for HollowRun<T> {
+    fn into_proto(&self) -> ProtoHollowRun {
+        ProtoHollowRun {
+            parts: self.parts.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowRun) -> Result<Self, TryFromProtoError> {
+        Ok(HollowRun {
+            parts: proto.parts.into_rust()?,
+        })
+    }
+}
+
 impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     fn into_proto(&self) -> ProtoHollowBatch {
+        let mut run_meta = self.run_meta.into_proto();
+        // For backwards compatibility reasons, don't keep default metadata in the proto.
+        let run_meta_default = RunMeta::default().into_proto();
+        while run_meta.last() == Some(&run_meta_default) {
+            run_meta.pop();
+        }
         ProtoHollowBatch {
             desc: Some(self.desc.into_proto()),
             parts: self.parts.into_proto(),
             len: self.len.into_proto(),
-            runs: self.runs.into_proto(),
+            runs: self.run_splits.into_proto(),
+            run_meta,
             deprecated_keys: vec![],
         }
     }
 
     fn from_proto(proto: ProtoHollowBatch) -> Result<Self, TryFromProtoError> {
-        let mut parts: Vec<BatchPart<T>> = proto.parts.into_rust()?;
+        let mut parts: Vec<RunPart<T>> = proto.parts.into_rust()?;
         // MIGRATION: We used to just have the keys instead of a more structured
         // part.
         parts.extend(proto.deprecated_keys.into_iter().map(|key| {
-            BatchPart::Hollow(HollowBatchPart {
+            RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey(key),
+                meta: Default::default(),
                 encoded_size_bytes: 0,
                 key_lower: vec![],
+                structured_key_lower: None,
                 stats: None,
                 ts_rewrite: None,
                 diffs_sum: None,
                 format: None,
                 schema_id: None,
-            })
+                deprecated_schema_id: None,
+            }))
         }));
+        // We discard default metadatas from the proto above; re-add them here.
+        let run_splits: Vec<usize> = proto.runs.into_rust()?;
+        let num_runs = if parts.is_empty() {
+            0
+        } else {
+            run_splits.len() + 1
+        };
+        let mut run_meta: Vec<RunMeta> = proto.run_meta.into_rust()?;
+        run_meta.resize(num_runs, RunMeta::default());
         Ok(HollowBatch {
             desc: proto.desc.into_rust_if_some("desc")?,
             parts,
             len: proto.len.into_rust()?,
-            runs: proto.runs.into_rust()?,
+            run_splits,
+            run_meta,
+        })
+    }
+}
+
+impl RustType<String> for RunId {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        RunId::from_str(&proto).map_err(|_| {
+            TryFromProtoError::InvalidPersistState(format!("invalid RunId: {}", proto))
+        })
+    }
+}
+
+impl RustType<ProtoRunMeta> for RunMeta {
+    fn into_proto(&self) -> ProtoRunMeta {
+        let order = match self.order {
+            None => ProtoRunOrder::Unknown,
+            Some(RunOrder::Unordered) => ProtoRunOrder::Unordered,
+            Some(RunOrder::Codec) => ProtoRunOrder::Codec,
+            Some(RunOrder::Structured) => ProtoRunOrder::Structured,
+        };
+        ProtoRunMeta {
+            order: order.into(),
+            schema_id: self.schema.into_proto(),
+            deprecated_schema_id: self.deprecated_schema.into_proto(),
+            id: self.id.into_proto(),
+            len: self.len.into_proto(),
+            meta: self.meta.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoRunMeta) -> Result<Self, TryFromProtoError> {
+        let order = match ProtoRunOrder::try_from(proto.order)? {
+            ProtoRunOrder::Unknown => None,
+            ProtoRunOrder::Unordered => Some(RunOrder::Unordered),
+            ProtoRunOrder::Codec => Some(RunOrder::Codec),
+            ProtoRunOrder::Structured => Some(RunOrder::Structured),
+        };
+        Ok(Self {
+            order,
+            schema: proto.schema_id.into_rust()?,
+            deprecated_schema: proto.deprecated_schema_id.into_rust()?,
+            id: proto.id.into_rust()?,
+            len: proto.len.into_rust()?,
+            meta: proto.meta.into_rust()?,
+        })
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for RunPart<T> {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        match self {
+            RunPart::Single(part) => part.into_proto(),
+            RunPart::Many(runs) => runs.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        let run_part = if let Some(proto_hollow_batch_part::Kind::RunRef(_)) = proto.kind {
+            RunPart::Many(proto.into_rust()?)
+        } else {
+            RunPart::Single(proto.into_rust()?)
+        };
+        Ok(run_part)
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        let part = ProtoHollowBatchPart {
+            kind: Some(proto_hollow_batch_part::Kind::RunRef(ProtoHollowRunRef {
+                key: self.key.into_proto(),
+                max_part_bytes: self.max_part_bytes.into_proto(),
+            })),
+            encoded_size_bytes: self.hollow_bytes.into_proto(),
+            key_lower: Bytes::copy_from_slice(&self.key_lower),
+            diffs_sum: self.diffs_sum.map(i64::from_le_bytes),
+            key_stats: None,
+            ts_rewrite: None,
+            format: None,
+            schema_id: None,
+            structured_key_lower: self.structured_key_lower.into_proto(),
+            deprecated_schema_id: None,
+            metadata: BTreeMap::default(),
+        };
+        part
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        let run_proto = match proto.kind {
+            Some(proto_hollow_batch_part::Kind::RunRef(proto_ref)) => proto_ref,
+            _ => Err(TryFromProtoError::UnknownEnumVariant(
+                "ProtoHollowBatchPart::kind".to_string(),
+            ))?,
+        };
+        Ok(Self {
+            key: run_proto.key.into_rust()?,
+            hollow_bytes: proto.encoded_size_bytes.into_rust()?,
+            max_part_bytes: run_proto.max_part_bytes.into_rust()?,
+            key_lower: proto.key_lower.to_vec(),
+            structured_key_lower: proto.structured_key_lower.into_rust()?,
+            diffs_sum: proto.diffs_sum.as_ref().map(|x| i64::to_le_bytes(*x)),
+            _phantom_data: Default::default(),
         })
     }
 }
@@ -1338,25 +1603,32 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 kind: Some(proto_hollow_batch_part::Kind::Key(x.key.into_proto())),
                 encoded_size_bytes: x.encoded_size_bytes.into_proto(),
                 key_lower: Bytes::copy_from_slice(&x.key_lower),
+                structured_key_lower: x.structured_key_lower.as_ref().map(|lazy| lazy.buf.clone()),
                 key_stats: x.stats.into_proto(),
                 ts_rewrite: x.ts_rewrite.as_ref().map(|x| x.into_proto()),
                 diffs_sum: x.diffs_sum.as_ref().map(|x| i64::from_le_bytes(*x)),
                 format: x.format.map(|f| f.into_proto()),
                 schema_id: x.schema_id.into_proto(),
+                deprecated_schema_id: x.deprecated_schema_id.into_proto(),
+                metadata: BTreeMap::default(),
             },
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
                 schema_id,
+                deprecated_schema_id,
             } => ProtoHollowBatchPart {
                 kind: Some(proto_hollow_batch_part::Kind::Inline(updates.into_proto())),
                 encoded_size_bytes: 0,
                 key_lower: Bytes::new(),
+                structured_key_lower: None,
                 key_stats: None,
                 ts_rewrite: ts_rewrite.as_ref().map(|x| x.into_proto()),
                 diffs_sum: None,
                 format: None,
                 schema_id: schema_id.into_proto(),
+                deprecated_schema_id: deprecated_schema_id.into_proto(),
+                metadata: BTreeMap::default(),
             },
         }
     }
@@ -1367,17 +1639,21 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
             None => None,
         };
         let schema_id = proto.schema_id.into_rust()?;
+        let deprecated_schema_id = proto.deprecated_schema_id.into_rust()?;
         match proto.kind {
             Some(proto_hollow_batch_part::Kind::Key(key)) => {
                 Ok(BatchPart::Hollow(HollowBatchPart {
                     key: key.into_rust()?,
+                    meta: proto.metadata.into_rust()?,
                     encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
                     key_lower: proto.key_lower.into(),
+                    structured_key_lower: proto.structured_key_lower.into_rust()?,
                     stats: proto.key_stats.into_rust()?,
                     ts_rewrite,
                     diffs_sum: proto.diffs_sum.map(i64::to_le_bytes),
                     format: proto.format.map(|f| f.into_rust()).transpose()?,
                     schema_id,
+                    deprecated_schema_id,
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
@@ -1390,9 +1666,10 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     updates,
                     ts_rewrite,
                     schema_id,
+                    deprecated_schema_id,
                 })
             }
-            None => Err(TryFromProtoError::unknown_enum_variant(
+            _ => Err(TryFromProtoError::unknown_enum_variant(
                 "ProtoHollowBatchPart::kind",
             )),
         }
@@ -1406,6 +1683,7 @@ impl RustType<proto_hollow_batch_part::Format> for BatchColumnarFormat {
             BatchColumnarFormat::Both(version) => {
                 proto_hollow_batch_part::Format::RowAndColumnar((*version).cast_into())
             }
+            BatchColumnarFormat::Structured => proto_hollow_batch_part::Format::Structured(()),
         }
     }
 
@@ -1415,6 +1693,7 @@ impl RustType<proto_hollow_batch_part::Format> for BatchColumnarFormat {
             proto_hollow_batch_part::Format::RowAndColumnar(version) => {
                 BatchColumnarFormat::Both(version.cast_into())
             }
+            proto_hollow_batch_part::Format::Structured(_) => BatchColumnarFormat::Structured,
         };
         Ok(format)
     }
@@ -1424,9 +1703,17 @@ impl RustType<proto_hollow_batch_part::Format> for BatchColumnarFormat {
 ///
 /// These are "lazy" in the sense that we don't decode them (or even validate
 /// the encoded version) until they're used.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct LazyPartStats {
     key: LazyProto<ProtoStructStats>,
+}
+
+impl Debug for LazyPartStats {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("LazyPartStats")
+            .field(&self.decode())
+            .finish()
+    }
 }
 
 impl LazyPartStats {
@@ -1489,11 +1776,7 @@ impl ProtoInlineBatchPart {
         let updates = proto
             .updates
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoInlineBatchPart::updates"))?;
-        let (updates, ext) = ColumnarRecords::from_proto(lgbytes, updates)?;
-        let updates = match ext {
-            None => BlobTraceUpdates::Row(updates),
-            Some(ext) => BlobTraceUpdates::Both(updates, ext),
-        };
+        let updates = BlobTraceUpdates::from_proto(lgbytes, updates)?;
 
         Ok(BlobTraceBatchPart {
             desc: proto.desc.into_rust_if_some("ProtoInlineBatchPart::desc")?,
@@ -1571,6 +1854,38 @@ impl RustType<ProtoHollowRollup> for HollowRollup {
     }
 }
 
+impl RustType<ProtoActiveRollup> for ActiveRollup {
+    fn into_proto(&self) -> ProtoActiveRollup {
+        ProtoActiveRollup {
+            start_ms: self.start_ms,
+            seqno: self.seqno.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoActiveRollup) -> Result<Self, TryFromProtoError> {
+        Ok(ActiveRollup {
+            start_ms: proto.start_ms,
+            seqno: proto.seqno.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoActiveGc> for ActiveGc {
+    fn into_proto(&self) -> ProtoActiveGc {
+        ProtoActiveGc {
+            start_ms: self.start_ms,
+            seqno: self.seqno.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoActiveGc) -> Result<Self, TryFromProtoError> {
+        Ok(ActiveGc {
+            start_ms: proto.start_ms,
+            seqno: proto.seqno.into_rust()?,
+        })
+    }
+}
+
 impl<T: Timestamp + Codec64> RustType<ProtoU64Description> for Description<T> {
     fn into_proto(&self) -> ProtoU64Description {
         ProtoU64Description {
@@ -1619,14 +1934,33 @@ mod tests {
     use mz_persist::location::SeqNo;
     use proptest::prelude::*;
 
+    use crate::ShardId;
     use crate::internal::paths::PartialRollupKey;
     use crate::internal::state::tests::any_state;
     use crate::internal::state::{BatchPart, HandleDebugState};
     use crate::internal::state_diff::StateDiff;
     use crate::tests::new_test_client_cache;
-    use crate::ShardId;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn metadata_map() {
+        const COUNT: MetadataKey<u64> = MetadataKey::new("count");
+
+        let mut map = MetadataMap::default();
+        map.set(COUNT, 100);
+        let mut map = MetadataMap::from_proto(map.into_proto()).unwrap();
+        assert_eq!(map.get(COUNT), Some(100));
+
+        const ANTICHAIN: MetadataKey<Antichain<u64>, ProtoU64Antichain> =
+            MetadataKey::new("antichain");
+        assert_none!(map.get(ANTICHAIN));
+
+        map.set(ANTICHAIN, Antichain::from_elem(30));
+        let map = MetadataMap::from_proto(map.into_proto()).unwrap();
+        assert_eq!(map.get(COUNT), Some(100));
+        assert_eq!(map.get(ANTICHAIN), Some(Antichain::from_elem(30)));
+    }
 
     #[mz_ore::test]
     fn applier_version_state() {
@@ -1660,8 +1994,8 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
-        let v1_res =
-            mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let v1_res = std::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
         assert_err!(v1_res);
     }
 
@@ -1690,30 +2024,33 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
-        let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let v1_res = std::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
         assert_err!(v1_res);
     }
 
     #[mz_ore::test]
     fn hollow_batch_migration_keys() {
-        let x = HollowBatch::new(
+        let x = HollowBatch::new_run(
             Description::new(
                 Antichain::from_elem(1u64),
                 Antichain::from_elem(2u64),
                 Antichain::from_elem(3u64),
             ),
-            vec![BatchPart::Hollow(HollowBatchPart {
+            vec![RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey("a".into()),
+                meta: Default::default(),
                 encoded_size_bytes: 5,
                 key_lower: vec![],
+                structured_key_lower: None,
                 stats: None,
                 ts_rewrite: None,
                 diffs_sum: None,
                 format: None,
                 schema_id: None,
-            })],
+                deprecated_schema_id: None,
+            }))],
             4,
-            vec![],
         );
         let mut old = x.into_proto();
         // Old ProtoHollowBatch had keys instead of parts.
@@ -1726,16 +2063,21 @@ mod tests {
         // will violate bounded memory usage compaction during the transition
         // (short-term issue), but that's better than creating unnecessary runs
         // (longer-term issue).
-        expected.parts.push(BatchPart::Hollow(HollowBatchPart {
-            key: PartialBatchKey("b".into()),
-            encoded_size_bytes: 0,
-            key_lower: vec![],
-            stats: None,
-            ts_rewrite: None,
-            diffs_sum: None,
-            format: None,
-            schema_id: None,
-        }));
+        expected
+            .parts
+            .push(RunPart::Single(BatchPart::Hollow(HollowBatchPart {
+                key: PartialBatchKey("b".into()),
+                meta: Default::default(),
+                encoded_size_bytes: 0,
+                key_lower: vec![],
+                structured_key_lower: None,
+                stats: None,
+                ts_rewrite: None,
+                diffs_sum: None,
+                format: None,
+                schema_id: None,
+                deprecated_schema_id: None,
+            })));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
 
@@ -1947,48 +2289,55 @@ mod tests {
             let code = Version::parse(code).unwrap();
             let data = Version::parse(data).unwrap();
             #[allow(clippy::disallowed_methods)]
-            let actual =
-                std::panic::catch_unwind(|| check_data_version(&code, &data)).map_err(|_| ());
-            assert_eq!(actual, expected);
+            let actual = cfg::code_can_write_data(&code, &data)
+                .then_some(())
+                .ok_or(());
+            assert_eq!(actual, expected, "data at {data} read by code {code}");
         }
 
-        testcase("0.10.0-dev", "0.10.0-dev", Ok(()));
-        testcase("0.10.0-dev", "0.10.0", Ok(()));
+        testcase("0.160.0-dev", "0.160.0-dev", Ok(()));
+        testcase("0.160.0-dev", "0.160.0", Err(()));
         // Note: Probably useful to let tests use two arbitrary shas on main, at
         // the very least for things like git bisect.
-        testcase("0.10.0-dev", "0.11.0-dev", Ok(()));
-        testcase("0.10.0-dev", "0.11.0", Ok(()));
-        testcase("0.10.0-dev", "0.12.0-dev", Err(()));
-        testcase("0.10.0-dev", "0.12.0", Err(()));
-        testcase("0.10.0-dev", "0.13.0-dev", Err(()));
+        testcase("0.160.0-dev", "0.161.0-dev", Err(()));
+        testcase("0.160.0-dev", "0.161.0", Err(()));
+        testcase("0.160.0-dev", "0.162.0-dev", Err(()));
+        testcase("0.160.0-dev", "0.162.0", Err(()));
+        testcase("0.160.0-dev", "0.163.0-dev", Err(()));
 
-        testcase("0.10.0", "0.8.0-dev", Ok(()));
-        testcase("0.10.0", "0.8.0", Ok(()));
-        testcase("0.10.0", "0.9.0-dev", Ok(()));
-        testcase("0.10.0", "0.9.0", Ok(()));
-        testcase("0.10.0", "0.10.0-dev", Ok(()));
-        testcase("0.10.0", "0.10.0", Ok(()));
-        // Note: This is what it would look like to run a version of the catalog
-        // upgrade checker built from main.
-        testcase("0.10.0", "0.11.0-dev", Ok(()));
-        testcase("0.10.0", "0.11.0", Ok(()));
-        testcase("0.10.0", "0.11.1", Ok(()));
-        testcase("0.10.0", "0.11.1000000", Ok(()));
-        testcase("0.10.0", "0.12.0-dev", Err(()));
-        testcase("0.10.0", "0.12.0", Err(()));
-        testcase("0.10.0", "0.13.0-dev", Err(()));
+        testcase("0.160.0", "0.158.0-dev", Ok(()));
+        testcase("0.160.0", "0.158.0", Ok(()));
+        testcase("0.160.0", "0.159.0-dev", Ok(()));
+        testcase("0.160.0", "0.159.0", Ok(()));
+        testcase("0.160.0", "0.160.0-dev", Ok(()));
+        testcase("0.160.0", "0.160.0", Ok(()));
 
-        testcase("0.10.1", "0.9.0", Ok(()));
-        testcase("0.10.1", "0.10.0", Ok(()));
-        testcase("0.10.1", "0.11.0", Ok(()));
-        testcase("0.10.1", "0.11.1", Ok(()));
-        testcase("0.10.1", "0.11.100", Ok(()));
+        testcase("0.160.0", "0.161.0-dev", Err(()));
+        testcase("0.160.0", "0.161.0", Err(()));
+        testcase("0.160.0", "0.161.1", Err(()));
+        testcase("0.160.0", "0.161.1000000", Err(()));
+        testcase("0.160.0", "0.162.0-dev", Err(()));
+        testcase("0.160.0", "0.162.0", Err(()));
+        testcase("0.160.0", "0.163.0-dev", Err(()));
 
-        // This is probably a bad idea (seems as if we've downgraded from
-        // running v0.10.1 to v0.10.0, an earlier patch version of the same
-        // minor version), but not much we can do, given the `state_version =
-        // max(code_version, prev_state_version)` logic we need to prevent
-        // rolling back an arbitrary number of versions.
-        testcase("0.10.0", "0.10.1", Ok(()));
+        testcase("0.160.1", "0.159.0", Ok(()));
+        testcase("0.160.1", "0.160.0", Ok(()));
+        testcase("0.160.1", "0.161.0", Err(()));
+        testcase("0.160.1", "0.161.1", Err(()));
+        testcase("0.160.1", "0.161.100", Err(()));
+        testcase("0.160.0", "0.160.1", Err(()));
+
+        testcase("0.160.1", "26.0.0", Err(()));
+        testcase("26.0.0", "0.160.1", Ok(()));
+        testcase("26.2.0", "0.160.1", Ok(()));
+        testcase("26.200.200", "0.160.1", Ok(()));
+
+        testcase("27.0.0", "0.160.1", Err(()));
+        testcase("27.0.0", "0.16000.1", Err(()));
+        testcase("27.0.0", "26.0.1", Ok(()));
+        testcase("27.1000.100", "26.0.1", Ok(()));
+        testcase("28.0.0", "26.0.1", Err(()));
+        testcase("28.0.0", "26.1000.1", Err(()));
+        testcase("28.0.0", "27.0.0", Ok(()));
     }
 }

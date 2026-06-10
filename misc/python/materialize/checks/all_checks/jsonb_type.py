@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class JsonbType(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE jsonb_type_table (jsonb_col JSONB);
             > INSERT INTO jsonb_type_table VALUES ('{"object_element":{"a":"b"},"array_element": [1,2], "string_element":"abc", "number_element":123.456, "boolean_element": true, "null_element":null}');
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -69,9 +65,7 @@ class JsonbType(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM jsonb_type_view1;
                 "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" 123.456 123.456 123.456 2  2  "{\\"another_null\\":null,\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"string_element\\":\\"abc\\"}" true false true
                 "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" 123.456 123.456 123.456 2  2  "{\\"another_null\\":null,\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"string_element\\":\\"abc\\"}" true false true
@@ -81,6 +75,4 @@ class JsonbType(Check):
                 "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" 123.456 123.456 123.456 2  2  "{\\"another_null\\":null,\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"string_element\\":\\"abc\\"}" true false true
                 "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" 123.456 123.456 123.456 2  2  "{\\"another_null\\":null,\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"string_element\\":\\"abc\\"}" true false true
                 "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" 123.456 123.456 123.456 2  2  "{\\"another_null\\":null,\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"object_element\\":{\\"a\\":\\"b\\"},\\"string_element\\":\\"abc\\"}" "{\\"array_element\\":[1,2],\\"boolean_element\\":true,\\"null_element\\":null,\\"number_element\\":123.456,\\"string_element\\":\\"abc\\"}" true false true
-            """
-            )
-        )
+            """))

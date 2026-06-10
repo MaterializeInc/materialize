@@ -21,8 +21,8 @@
 pub mod error;
 pub mod metrics;
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use deadpool_postgres::tokio_postgres::Config;
@@ -32,6 +32,7 @@ use deadpool_postgres::{
 };
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::url::SensitiveUrl;
 use tracing::debug;
 
 use crate::error::PostgresError;
@@ -49,16 +50,22 @@ pub trait PostgresClientKnobs: std::fmt::Debug + Send + Sync {
     /// Minimum time between TTLing connections. Helps stagger reconnections
     /// to avoid stampeding the backing store.
     fn connection_pool_ttl_stagger(&self) -> Duration;
-    /// Time to wait for a connection to be made before trying.
+    /// Time to wait for a connection to be made before retrying.
     fn connect_timeout(&self) -> Duration;
-    /// TCP user timeout for connection attempts.
+    /// TCP user timeout for connections.
     fn tcp_user_timeout(&self) -> Duration;
+    /// Amount of idle time before a TCP keepalive packet is sent on a connection.
+    fn keepalives_idle(&self) -> Duration;
+    /// Time interval between TCP keepalive probes.
+    fn keepalives_interval(&self) -> Duration;
+    /// Maximum number of TCP keepalive probes that will be sent before dropping a connection.
+    fn keepalives_retries(&self) -> u32;
 }
 
 /// Configuration for creating a [PostgresClient].
 #[derive(Clone, Debug)]
 pub struct PostgresClientConfig {
-    url: String,
+    url: SensitiveUrl,
     knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
 }
@@ -66,7 +73,7 @@ pub struct PostgresClientConfig {
 impl PostgresClientConfig {
     /// Returns a new [PostgresClientConfig] for use in production.
     pub fn new(
-        url: String,
+        url: SensitiveUrl,
         knobs: Arc<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
     ) -> Self {
@@ -93,9 +100,17 @@ impl std::fmt::Debug for PostgresClient {
 impl PostgresClient {
     /// Open a [PostgresClient] using the given `config`.
     pub fn open(config: PostgresClientConfig) -> Result<Self, PostgresError> {
-        let mut pg_config: Config = config.url.parse()?;
+        let mut pg_config: Config = config.url.to_string_unredacted().parse()?;
         pg_config.connect_timeout(config.knobs.connect_timeout());
         pg_config.tcp_user_timeout(config.knobs.tcp_user_timeout());
+
+        // Configuring keepalives is important to ensure we can detect broken connections quickly.
+        // TCP_USER_TIMEOUT is not sufficient as it only enforces a timeout on ACKs for transmitted
+        // data, which only helps if we... transmit data.
+        pg_config.keepalives(true);
+        pg_config.keepalives_idle(config.knobs.keepalives_idle());
+        pg_config.keepalives_interval(config.knobs.keepalives_interval());
+        pg_config.keepalives_retries(config.knobs.keepalives_retries());
 
         let tls = mz_tls_util::make_tls(&pg_config).map_err(|tls_err| match tls_err {
             mz_tls_util::TlsError::Generic(e) => PostgresError::Indeterminate(e),

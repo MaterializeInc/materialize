@@ -1,3 +1,3 @@
 # Parallel Workload
 
-Runs a parallel workload using pg8000, includes DDL and transactions
+Runs a parallel workload using psycopg, includes DDL and transactions

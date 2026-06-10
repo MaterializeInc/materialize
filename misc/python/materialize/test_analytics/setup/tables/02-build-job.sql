@@ -21,8 +21,9 @@ CREATE TABLE build_job (
     insert_date TIMESTAMPTZ, -- no longer relevant since introduction of end_time, might eventually be removed
     is_latest_retry BOOL NOT NULL,
     success BOOL NOT NULL,
-    aws_instance_type TEXT NOT NULL,
-    remarks TEXT -- not in use, will eventually be removed
+    aws_instance_type TEXT, -- deprecated, will eventually be replaced by agent_type
+    agent_type TEXT -- will eventually be changed to not null
 );
 
+ALTER TABLE build_job OWNER TO qa;
 GRANT SELECT, INSERT, UPDATE ON TABLE build_job TO "hetzner-ci";

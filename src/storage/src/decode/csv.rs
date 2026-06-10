@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
 use mz_repr::{Datum, Row};
 use mz_storage_types::errors::DecodeErrorKind;
 use mz_storage_types::sources::encoding::CsvEncoding;
@@ -87,12 +88,15 @@ impl CsvDecoderState {
                         }
                         if ends_valid != self.n_cols {
                             self.events_error += 1;
-                            Err(DecodeErrorKind::Text(format!(
-                                "CSV error at record number {}: expected {} columns, got {}.",
-                                self.total_events(),
-                                self.n_cols,
-                                ends_valid
-                            )))
+                            Err(DecodeErrorKind::Text(
+                                format!(
+                                    "CSV error at record number {}: expected {} columns, got {}.",
+                                    self.total_events(),
+                                    self.n_cols,
+                                    ends_valid
+                                )
+                                .into(),
+                            ))
                         } else {
                             match std::str::from_utf8(&self.output[0..self.output_cursor]) {
                                 Ok(output) => {
@@ -107,44 +111,59 @@ impl CsvDecoderState {
                                 }
                                 Err(e) => {
                                     self.events_error += 1;
-                                    Err(DecodeErrorKind::Text(format!(
-                                        "CSV error at record number {}: invalid UTF-8 ({})",
-                                        self.total_events(),
-                                        e
-                                    )))
+                                    Err(DecodeErrorKind::Text(
+                                        format!(
+                                            "CSV error at record number {}: invalid UTF-8 ({})",
+                                            self.total_events(),
+                                            e
+                                        )
+                                        .into(),
+                                    ))
                                 }
                             }
                         }
                     };
 
-                    // skip header rows, do not send them into dataflow
-                    if self.next_row_is_header {
-                        self.next_row_is_header = false;
-
-                        if let Ok(Some(row)) = &result {
-                            let mismatched = row
-                                .iter()
-                                .zip(self.header_names.iter().flatten())
-                                .enumerate()
-                                .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
-                            if let Some((i, (actual, expected))) = mismatched {
-                                break Err(DecodeErrorKind::Text(format!(
-                                    "source file contains incorrect columns '{:?}', \
-                                     first mismatched column at index {} expected={} actual={}",
-                                    row,
-                                    i + 1,
-                                    expected,
-                                    actual
-                                )));
-                            }
-                        }
-                        if chunk.is_empty() {
-                            break Ok(None);
-                        } else if result.is_err() {
-                            break result;
-                        }
-                    } else {
+                    // Header rows are validated but never sent into the dataflow;
+                    // every other record is handed straight back to the caller.
+                    if !self.next_row_is_header {
                         break result;
+                    }
+                    self.next_row_is_header = false;
+
+                    let row = match result {
+                        // Don't swallow a parse error just because it occurred on
+                        // the header row.
+                        Err(e) => break Err(e),
+                        Ok(Some(row)) => row,
+                        // An empty record (`ends_valid == 0`) already breaks out of
+                        // the loop above, so a decoded record always carries a row.
+                        Ok(None) => unreachable!("decoded record without a row"),
+                    };
+
+                    let mismatched = row
+                        .iter()
+                        .zip_eq(self.header_names.iter().flatten())
+                        .enumerate()
+                        .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
+                    if let Some((i, (actual, expected))) = mismatched {
+                        break Err(DecodeErrorKind::Text(
+                            format!(
+                                "source file contains incorrect columns '{:?}', \
+                             first mismatched column at index {} expected={} actual={}",
+                                row,
+                                i + 1,
+                                expected,
+                                actual
+                            )
+                            .into(),
+                        ));
+                    }
+
+                    // Header looks good. If the chunk is exhausted we're done for
+                    // now; otherwise loop around to decode the first data row.
+                    if chunk.is_empty() {
+                        break Ok(None);
                     }
                 }
             }

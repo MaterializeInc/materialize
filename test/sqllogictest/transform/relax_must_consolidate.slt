@@ -33,7 +33,7 @@ FROM (
 9
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(b), MAX(a)
 FROM (
     SELECT a, b
@@ -41,36 +41,38 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        monotonic
+        must_consolidate
+        key_plan
+          project=()
+        val_plan
+          project=(#1, #0)
+        Get::PassArrangements materialize.public.t
+          raw=true
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Negate
-        Get::Arrangement l0
-          project=(#2, #3)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Constant
-        - (null, null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[min, max]
-        skips=[0, 0]
-        monotonic
-        must_consolidate
-        val_plan
-          project=(#1, #0)
-        key_plan
-          project=()
-        Get::PassArrangements materialize.public.t
-          raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
 
 Source materialize.public.t
 
@@ -91,7 +93,7 @@ FROM (
 5
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(a), MAX(b)
 FROM (
     SELECT b, a
@@ -100,38 +102,40 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        monotonic
+        must_consolidate
+        key_plan
+          project=()
+        val_plan=id
+        Get::Collection materialize.public.t
+          raw=true
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Negate
-        Get::Arrangement l0
-          project=(#2, #3)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Constant
-        - (null, null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[min, max]
-        skips=[0, 0]
-        monotonic
-        must_consolidate
-        val_plan=id
-        key_plan
-          project=()
-        Get::Collection materialize.public.t
-          raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
 
 Source materialize.public.t
-  filter=((1 = (#0 % 2)))
+  filter=((1 = (#0{a} % 2)))
 
 Target cluster: quickstart
 
@@ -149,7 +153,7 @@ FROM (
 5
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(a), MAX(b)
 FROM (
     SELECT b, generate_series(1, a) AS a
@@ -157,39 +161,41 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        monotonic
+        must_consolidate
+        key_plan
+          project=()
+        val_plan
+          project=(#1, #0)
+        FlatMap generate_series(1, #0{a}, 1)
+          mfp_after
+            project=(#1, #2)
+          Get::PassArrangements materialize.public.t
+            raw=true
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Negate
-        Get::Arrangement l0
-          project=(#2, #3)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Constant
-        - (null, null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[min, max]
-        skips=[0, 0]
-        monotonic
-        must_consolidate
-        val_plan
-          project=(#1, #0)
-        key_plan
-          project=()
-        FlatMap generate_series(1, #0, 1)
-          mfp_after
-            project=(#1, #2)
-          Get::PassArrangements materialize.public.t
-            raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
 
 Source materialize.public.t
 
@@ -214,7 +220,7 @@ FROM (
 9
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(b), MAX(a)
 FROM (
     SELECT a, b
@@ -227,41 +233,49 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        monotonic
+        must_consolidate
+        key_plan
+          project=()
+        val_plan
+          project=(#1, #0)
+        Union
+          Get::Collection materialize.public.t
+            project=(#0, #1)
+            filter=((1 = #2))
+            raw=true
+          Get::Collection materialize.public.t
+            project=(#0, #1)
+            filter=((0 = #2))
+            raw=true
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Negate
-        Get::Arrangement l0
-          project=(#2, #3)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Constant
-        - (null, null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[min, max]
-        skips=[0, 0]
-        monotonic
-        must_consolidate
-        val_plan
-          project=(#1, #0)
-        key_plan
-          project=()
-        Union
-          Get::Collection materialize.public.t
-            filter=((1 = (#0 % 2)))
-            raw=true
-          Get::Collection materialize.public.t
-            filter=((0 = (#0 % 2)))
-            raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
+
+Source materialize.public.t
+  project=(#0..=#2)
+  map=((#0{a} % 2))
 
 Target cluster: quickstart
 
@@ -284,7 +298,7 @@ FROM (
 9
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(b), MAX(a)
 FROM (
     SELECT a, b
@@ -297,47 +311,54 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        monotonic
+        input_key=#0, #1
+        key_plan
+          project=()
+        val_plan
+          project=(#1, #0)
+        Threshold::Basic ensure_arrangement={ key=[#0, #1], permutation=id, thinning=() }
+          ArrangeBy
+            raw=false
+            arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+            Union consolidate_output=true
+              Get::Collection materialize.public.t
+                project=(#0, #1)
+                filter=((1 = #2))
+                raw=true
+              Negate
+                Get::Collection materialize.public.t
+                  project=(#0, #1)
+                  filter=((0 = #2))
+                  raw=true
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Negate
-        Get::Arrangement l0
-          project=(#2, #3)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Constant
-        - (null, null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[min, max]
-        skips=[0, 0]
-        monotonic
-        val_plan
-          project=(#1, #0)
-        key_plan
-          project=()
-        input_key=#0, #1
-        Threshold::Basic ensure_arrangement={ key=[#0, #1], permutation=id, thinning=() }
-          ArrangeBy
-            raw=false
-            arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
-            types=[integer, integer?]
-            Union consolidate_output=true
-              Get::Collection materialize.public.t
-                filter=((1 = (#0 % 2)))
-                raw=true
-              Negate
-                Get::Collection materialize.public.t
-                  filter=((0 = (#0 % 2)))
-                  raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
+
+Source materialize.public.t
+  project=(#0..=#2)
+  map=((#0{a} % 2))
 
 Target cluster: quickstart
 
@@ -366,7 +387,7 @@ FROM (
 5
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(a), MAX(b)
 FROM (
     SELECT *
@@ -382,54 +403,53 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Get::PassArrangements materialize.public.t
+        raw=false
+        arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
+    cte l1 =
+      Reduce::Hierarchical
+        aggr_funcs=[max]
+        monotonic
+        must_consolidate
+        key_plan
+          project=()
+        val_plan=id
+        Join::Linear
+          linear_stage[0]
+            closure
+              project=(#0)
+              filter=((#0{b}) IS NOT NULL AND (#1{a} = 5) AND (1 = (#1{a} % 2)) AND (#2{a} = 5))
+            lookup={ relation=1, key=[#1{b}] }
+            stream={ key=[#1{b}], thinning=(#0) }
+          source={ relation=0, key=[#1{b}] }
+          Get::PassArrangements l0
+            raw=false
+            arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
+          Get::PassArrangements l0
+            raw=false
+            arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
   Return
-    Union consolidate_output=true
+    Union
       Get::Arrangement l1
         project=(#1, #0)
         map=(5)
         key=
         raw=false
         arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Negate
-        Get::Arrangement l1
-          project=(#1, #2)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Constant
-        - (null, null)
-  With
-    cte l1 =
-      Reduce::Hierarchical
-        aggr_funcs=[max]
-        skips=[0]
-        monotonic
-        must_consolidate
-        val_plan=id
-        key_plan
-          project=()
-        Join::Linear
-          linear_stage[0]
-            closure
-              project=(#0)
-              filter=((#0) IS NOT NULL AND (#1 = 5) AND (1 = (#1 % 2)) AND (#2 = 5))
-            lookup={ relation=1, key=[#1] }
-            stream={ key=[#1], thinning=(#0) }
-          source={ relation=0, key=[#1] }
-          Get::PassArrangements l0
-            raw=false
-            arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
-            types=[integer?, integer?]
-          Get::PassArrangements l0
-            raw=false
-            arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
-            types=[integer?, integer?]
-    cte l0 =
-      Get::PassArrangements materialize.public.t
-        raw=false
-        arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
-        types=[integer?, integer?]
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l1
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Constant
+            - ()
 
 Used Indexes:
   - materialize.public.t_idx (differential join)
@@ -468,7 +488,7 @@ FROM (
 5
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(a), MAX(b)
 FROM (
     SELECT *
@@ -484,57 +504,56 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[max]
+        monotonic
+        must_consolidate
+        key_plan
+          project=()
+        val_plan=id
+        Join::Linear
+          linear_stage[0]
+            lookup={ relation=1, key=[#0{b}] }
+            stream={ key=[#0{b}], thinning=() }
+          source={ relation=0, key=[#0{b}] }
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
+            Get::Collection materialize.public.t
+              project=(#1)
+              filter=((1 = (#0{a} % 2)))
+              raw=true
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
+            Get::Collection materialize.public.t
+              project=(#1)
+              raw=true
   Return
-    Union consolidate_output=true
+    Union
       Get::Arrangement l0
         project=(#1, #0)
         map=(5)
         key=
         raw=false
         arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Negate
-        Get::Arrangement l0
-          project=(#1, #2)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Constant
-        - (null, null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[max]
-        skips=[0]
-        monotonic
-        must_consolidate
-        val_plan=id
-        key_plan
-          project=()
-        Join::Linear
-          linear_stage[0]
-            lookup={ relation=1, key=[#0] }
-            stream={ key=[#0], thinning=() }
-          source={ relation=0, key=[#0] }
-          ArrangeBy
-            raw=true
-            arrangements[0]={ key=[#0], permutation=id, thinning=() }
-            types=[integer]
-            Get::Collection materialize.public.t
-              project=(#1)
-              filter=((#0 = 5) AND (1 = (#0 % 2)) AND (#1) IS NOT NULL)
-              raw=true
-          ArrangeBy
-            raw=true
-            arrangements[0]={ key=[#0], permutation=id, thinning=() }
-            types=[integer]
-            Get::Collection materialize.public.t
-              project=(#1)
-              filter=((#0 = 5) AND (#1) IS NOT NULL)
-              raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Constant
+            - ()
 
 Source materialize.public.t
-  filter=((#0 = 5) AND (#1) IS NOT NULL)
+  filter=((#0{a} = 5) AND (#1{b}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -553,7 +572,7 @@ FROM (
 9
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(b), MAX(sum_a)
 FROM (
     SELECT b, SUM(a) AS sum_a
@@ -562,41 +581,43 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        monotonic
+        input_key=#0
+        key_plan
+          project=()
+        val_plan=id
+        Reduce::Accumulable
+          simple_aggrs[0]=(0, sum(#0{a}))
+          key_plan
+            project=(#1)
+          val_plan
+            project=(#0)
+          Get::PassArrangements materialize.public.t
+            raw=true
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Negate
-        Get::Arrangement l0
-          project=(#2, #3)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Constant
-        - (null, null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[min, max]
-        skips=[0, 0]
-        monotonic
-        val_plan=id
-        key_plan
-          project=()
-        input_key=#0
-        Reduce::Accumulable
-          simple_aggrs[0]=(0, 0, sum(#0))
-          val_plan
-            project=(#0)
-          key_plan
-            project=(#1)
-          Get::PassArrangements materialize.public.t
-            raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
 
 Source materialize.public.t
 
@@ -615,48 +636,50 @@ FROM (
 5
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(a), MAX(b)
 FROM (
     SELECT DISTINCT b, a FROM t
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        monotonic
+        input_key=#0, #1
+        key_plan
+          project=()
+        val_plan
+          project=(#1, #0)
+        Reduce::Distinct
+          key_plan
+            project=(#1, #0)
+          val_plan
+            project=()
+          Get::PassArrangements materialize.public.t
+            raw=true
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Negate
-        Get::Arrangement l0
-          project=(#2, #3)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Constant
-        - (null, null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[min, max]
-        skips=[0, 0]
-        monotonic
-        val_plan
-          project=(#1, #0)
-        key_plan
-          project=()
-        input_key=#0, #1
-        Reduce::Distinct
-          val_plan
-            project=()
-          key_plan
-            project=(#1, #0)
-          Get::PassArrangements materialize.public.t
-            raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
 
 Source materialize.public.t
 
@@ -703,7 +726,7 @@ FROM (
 5
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 WITH input AS (
     SELECT a, b, c
     FROM single_time_monotonic_t
@@ -721,61 +744,63 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Accumulable
+        simple_aggrs[0]=(0, count(*))
+        key_plan
+          project=(#1, #0)
+        val_plan
+          project=(#2)
+          map=(true)
+        mfp_after
+          filter=((2 = (#2{c} + 1)))
+        Get::Collection materialize.public.t
+          raw=true
+    cte l1 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        monotonic
+        key_plan
+          project=()
+        val_plan
+          project=(#1, #0)
+        FlatMap generate_series(1, #1{a}, 1)
+          mfp_after
+            project=(#0, #2)
+          Union
+            Get::Arrangement l0
+              project=(#0, #1)
+              filter=((1 = (#1{a} % 2)))
+              key=#0, #1
+              raw=false
+              arrangements[0]={ key=[#0, #1], permutation=id, thinning=(#2) }
+            Get::Arrangement l0
+              project=(#0, #1)
+              filter=((1 = (#2{c} % 2)))
+              key=#0, #1
+              raw=false
+              arrangements[0]={ key=[#0, #1], permutation=id, thinning=(#2) }
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l1
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Negate
-        Get::Arrangement l1
-          project=(#2, #3)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Constant
-        - (null, null)
-  With
-    cte l1 =
-      Reduce::Hierarchical
-        aggr_funcs=[min, max]
-        skips=[0, 0]
-        monotonic
-        val_plan
-          project=(#1, #0)
-        key_plan
-          project=()
-        FlatMap generate_series(1, #1, 1)
-          mfp_after
-            project=(#0, #2)
-          Union
-            Get::Arrangement l0
-              project=(#0, #1)
-              filter=((1 = (#1 % 2)))
-              key=#0, #1
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l1
+              project=()
+              key=
               raw=false
-              arrangements[0]={ key=[#0, #1], permutation=id, thinning=(#2) }
-            Get::Arrangement l0
-              project=(#0, #1)
-              filter=((1 = (#2 % 2)))
-              key=#0, #1
-              raw=false
-              arrangements[0]={ key=[#0, #1], permutation=id, thinning=(#2) }
-    cte l0 =
-      Reduce::Accumulable
-        simple_aggrs[0]=(0, 0, count(*))
-        val_plan
-          project=(#2)
-          map=(true)
-        key_plan
-          project=(#1, #0)
-        mfp_after
-          filter=((2 = (#2 + 1)))
-        Get::Collection materialize.public.t
-          raw=true
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
 
 Source materialize.public.t
   filter=((6 = (#0 + 1)))
@@ -797,7 +822,7 @@ FROM (
 9
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(b), MAX(a)
 FROM (
     SELECT DISTINCT ON(a) a, b
@@ -806,36 +831,38 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        monotonic
+        key_plan
+          project=()
+        val_plan
+          project=(#1, #0)
+        TopK::MonotonicTop1 group_by=[#0] order_by=[#1 desc nulls_first] must_consolidate
+          Get::PassArrangements materialize.public.t
+            raw=true
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Negate
-        Get::Arrangement l0
-          project=(#2, #3)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Constant
-        - (null, null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[min, max]
-        skips=[0, 0]
-        monotonic
-        val_plan
-          project=(#1, #0)
-        key_plan
-          project=()
-        TopK::MonotonicTop1 group_by=[#0] order_by=[#1 desc nulls_first] must_consolidate
-          Get::PassArrangements materialize.public.t
-            raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
 
 Source materialize.public.t
 
@@ -857,7 +884,7 @@ FROM (
 7
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MIN(b), MAX(a)
 FROM (
     SELECT a, b
@@ -867,36 +894,38 @@ FROM (
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        monotonic
+        key_plan
+          project=()
+        val_plan
+          project=(#1, #0)
+        TopK::MonotonicTopK order_by=[#1 desc nulls_first] limit=2 must_consolidate
+          Get::PassArrangements materialize.public.t
+            raw=true
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Negate
-        Get::Arrangement l0
-          project=(#2, #3)
-          map=(null, null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Constant
-        - (null, null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[min, max]
-        skips=[0, 0]
-        monotonic
-        val_plan
-          project=(#1, #0)
-        key_plan
-          project=()
-        TopK::MonotonicTopK order_by=[#1 desc nulls_first] limit=2 must_consolidate
-          Get::PassArrangements materialize.public.t
-            raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
 
 Source materialize.public.t
 
@@ -922,7 +951,7 @@ ORDER BY max_a, b DESC;
 1
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT DISTINCT ON(max_a) max_a, b
 FROM (
     SELECT b, MAX(a) AS max_a
@@ -939,13 +968,12 @@ Explained Query:
         input_key=#0
         Reduce::Hierarchical
           aggr_funcs=[max]
-          skips=[0]
           monotonic
           must_consolidate
-          val_plan
-            project=(#0)
           key_plan
             project=(#1)
+          val_plan
+            project=(#0)
           Get::PassArrangements materialize.public.t
             raw=true
 
@@ -974,7 +1002,7 @@ FROM (
 7
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MAX(max_a)
 FROM (
     SELECT max_a, b
@@ -988,32 +1016,14 @@ FROM (
 );
 ----
 Explained Query:
-  Return
-    Union consolidate_output=true
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Negate
-        Get::Arrangement l0
-          project=(#1)
-          map=(null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Constant
-        - (null)
   With
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[max]
-        skips=[0]
         monotonic
-        val_plan=id
         key_plan
           project=()
+        val_plan=id
         Mfp
           project=(#1)
           TopK::MonotonicTopK order_by=[#0 desc nulls_first] limit=2
@@ -1022,15 +1032,34 @@ Explained Query:
               raw=true
               Reduce::Hierarchical
                 aggr_funcs=[max]
-                skips=[0]
                 monotonic
                 must_consolidate
-                val_plan
-                  project=(#0)
                 key_plan
                   project=(#1)
+                val_plan
+                  project=(#0)
                 Get::PassArrangements materialize.public.t
                   raw=true
+  Return
+    Union
+      ArrangeBy
+        input_key=[]
+        raw=true
+        Get::PassArrangements l0
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Mfp
+        project=(#0)
+        map=(null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Constant
+            - ()
 
 Source materialize.public.t
 
@@ -1048,40 +1077,42 @@ FROM (
 20000
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 SELECT MAX(a)
 FROM (
     SELECT generate_series(1, 20000) AS a
 );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[max]
+        monotonic
+        key_plan
+          project=()
+        val_plan=id
+        FlatMap generate_series(1, 20000, 1)
+          Constant
+            - ()
   Return
-    Union consolidate_output=true
+    Union
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Negate
-        Get::Arrangement l0
-          project=(#1)
-          map=(null)
-          key=
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Constant
-        - (null)
-  With
-    cte l0 =
-      Reduce::Hierarchical
-        aggr_funcs=[max]
-        skips=[0]
-        monotonic
-        val_plan=id
-        key_plan
-          project=()
-        FlatMap generate_series(1, 20000, 1)
+      Mfp
+        project=(#0)
+        map=(null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
           Constant
             - ()
 
@@ -1107,7 +1138,7 @@ FROM input;
 40000
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE input(a int) AS (
     SELECT generate_series(1, 40000) AS a
     UNION
@@ -1119,53 +1150,55 @@ SELECT MAX(a)
 FROM input;
 ----
 Explained Query:
-  Return
-    Return
-      Union consolidate_output=true
-        ArrangeBy
-          input_key=[]
-          raw=true
-          Get::PassArrangements l1
-            raw=false
-            arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-        Negate
-          Get::Arrangement l1
-            project=(#1)
-            map=(null)
-            key=
-            raw=false
-            arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-        Constant
-          - (null)
-    With
-      cte l1 =
-        Reduce::Hierarchical
-          aggr_funcs=[max]
-          skips=[0]
-          monotonic
-          must_consolidate
-          val_plan=id
-          key_plan
-            project=()
-          Get::PassArrangements l0
-            raw=true
   With Mutually Recursive
     cte l0 =
       ArrangeBy
         input_key=[#0]
         raw=true
         Reduce::Distinct
+          key_plan=id
           val_plan
             project=()
-          key_plan=id
           Union
             FlatMap generate_series(1, 40000, 1)
               Constant
                 - ()
             TopK::Basic group_by=[#0] limit=1
               Get::Collection l0
-                filter=((#0 > 20000))
+                filter=((#0{a} > 20000))
                 raw=true
+  Return
+    With
+      cte l1 =
+        Reduce::Hierarchical
+          aggr_funcs=[max]
+          monotonic
+          must_consolidate
+          key_plan
+            project=()
+          val_plan=id
+          Get::PassArrangements l0
+            raw=true
+    Return
+      Union
+        ArrangeBy
+          input_key=[]
+          raw=true
+          Get::PassArrangements l1
+            raw=false
+            arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+        Mfp
+          project=(#0)
+          map=(null)
+          Union consolidate_output=true
+            Negate
+              Get::Arrangement l1
+                project=()
+                key=
+                raw=false
+                arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+            Constant
+              - ()
 
 Target cluster: quickstart
 

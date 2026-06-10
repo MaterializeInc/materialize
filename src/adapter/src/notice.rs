@@ -12,8 +12,8 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_controller::clusters::ClusterStatus;
-use mz_orchestrator::{NotReadyReason, ServiceStatus};
-use mz_ore::str::{separated, StrExt};
+use mz_orchestrator::{OfflineReason, ServiceStatus};
+use mz_ore::str::{StrExt, separated};
 use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
@@ -52,7 +52,7 @@ pub enum AdapterNotice {
     },
     DefaultClusterDoesNotExist {
         name: String,
-        kind: Option<&'static str>,
+        kind: &'static str,
         suggested_action: String,
     },
     NoResolvableSearchPathSchema {
@@ -79,7 +79,7 @@ pub enum AdapterNotice {
         name: String,
     },
     QueryTimestamp {
-        explanation: TimestampExplanation<mz_repr::Timestamp>,
+        explanation: TimestampExplanation,
     },
     EqualSubscribeBounds {
         bound: mz_repr::Timestamp,
@@ -136,6 +136,18 @@ pub enum AdapterNotice {
     PlanInsights(String),
     IntrospectionClusterUsage,
     AutoRouteIntrospectionQueriesUsage,
+    /// An OIDC group has no matching Materialize role.
+    OidcGroupSyncUnmatchedGroup {
+        group: String,
+    },
+    /// An OIDC group maps to a reserved role name (mz_/pg_ prefix).
+    OidcGroupSyncReservedRole {
+        group: String,
+    },
+    /// OIDC group sync encountered an error (fail-open mode).
+    OidcGroupSyncError {
+        message: String,
+    },
 }
 
 impl AdapterNotice {
@@ -191,6 +203,7 @@ impl AdapterNotice {
                 PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
                 PlanNotice::ColumnAlreadyExists { .. } => Severity::Notice,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
+                PlanNotice::ReplicaDiskOptionDeprecated { .. } => Severity::Notice,
             },
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
             AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
@@ -202,6 +215,9 @@ impl AdapterNotice {
             AdapterNotice::PlanInsights(_) => Severity::Notice,
             AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Severity::Warning,
+            AdapterNotice::OidcGroupSyncUnmatchedGroup { .. } => Severity::Notice,
+            AdapterNotice::OidcGroupSyncReservedRole { .. } => Severity::Warning,
+            AdapterNotice::OidcGroupSyncError { .. } => Severity::Warning,
         }
     }
 
@@ -225,15 +241,20 @@ impl AdapterNotice {
         match self {
             AdapterNotice::DatabaseDoesNotExist { name: _ } => Some("Create the database with CREATE DATABASE or pick an extant database with SET DATABASE = name. List available databases with SHOW DATABASES.".into()),
             AdapterNotice::ClusterDoesNotExist { name: _ } => Some("Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS.".into()),
-            AdapterNotice::DefaultClusterDoesNotExist { name: _, kind: _, suggested_action } => Some(suggested_action.clone()),
+            AdapterNotice::DefaultClusterDoesNotExist {
+                name: _,
+                kind: _,
+                suggested_action,
+            } => Some(suggested_action.clone()),
             AdapterNotice::NoResolvableSearchPathSchema { search_path: _ } => Some("Create a schema with CREATE SCHEMA or pick an extant schema with SET SCHEMA = name. List available schemas with SHOW SCHEMAS.".into()),
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
             AdapterNotice::ClusterReplicaStatusChanged { status, .. } => {
                 match status {
-                    ServiceStatus::NotReady(None) => Some("The cluster replica may be restarting or going offline.".into()),
-                    ServiceStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("The cluster replica may have run out of memory and been killed.".into()),
-                    ServiceStatus::Ready => None,
+                    ServiceStatus::Offline(None)
+                    | ServiceStatus::Offline(Some(OfflineReason::Initializing)) => Some("The cluster replica may be restarting or going offline.".into()),
+                    ServiceStatus::Offline(Some(OfflineReason::OomKilled)) => Some("The cluster replica may have run out of memory and been killed.".into()),
+                    ServiceStatus::Online => None,
                 }
             },
             AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
@@ -291,6 +312,9 @@ impl AdapterNotice {
                 PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
                 PlanNotice::ColumnAlreadyExists { .. } => SqlState::DUPLICATE_COLUMN,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => SqlState::WARNING,
+                PlanNotice::ReplicaDiskOptionDeprecated { .. } => {
+                    SqlState::WARNING_DEPRECATED_FEATURE
+                }
             },
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::from_code("MZ004"),
             AdapterNotice::DefaultClusterDoesNotExist { .. } => SqlState::from_code("MZ005"),
@@ -303,6 +327,9 @@ impl AdapterNotice {
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
             AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => SqlState::WARNING,
+            AdapterNotice::OidcGroupSyncUnmatchedGroup { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::OidcGroupSyncReservedRole { .. } => SqlState::WARNING,
+            AdapterNotice::OidcGroupSyncError { .. } => SqlState::WARNING,
         }
     }
 }
@@ -332,8 +359,7 @@ impl fmt::Display for AdapterNotice {
                 write!(f, "cluster {} does not exist", name.quoted())
             }
             AdapterNotice::DefaultClusterDoesNotExist { kind, name, .. } => {
-                let kind = kind.map(|k| format!("{k} ")).unwrap_or(String::new());
-                write!(f, "{kind}default cluster {} does not exist", name.quoted())
+                write!(f, "{kind} default cluster {} does not exist", name.quoted())
             }
             AdapterNotice::NoResolvableSearchPathSchema { search_path } => {
                 write!(
@@ -377,7 +403,10 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::QueryTimestamp { .. } => write!(f, "EXPLAIN TIMESTAMP for query"),
             AdapterNotice::EqualSubscribeBounds { bound } => {
-                write!(f, "subscribe as of {bound} (inclusive) up to the same bound {bound} (exclusive) is guaranteed to be empty")
+                write!(
+                    f,
+                    "subscribe as of {bound} (inclusive) up to the same bound {bound} (exclusive) is guaranteed to be empty"
+                )
             }
             AdapterNotice::QueryTrace { trace_id } => {
                 write!(f, "trace id: {}", trace_id)
@@ -386,7 +415,7 @@ impl fmt::Display for AdapterNotice {
                 write!(
                     f,
                     "transaction isolation level {isolation_level} is unimplemented, the session will be upgraded to {}",
-                    IsolationLevel::Serializable.as_str()
+                    IsolationLevel::Serializable
                 )
             }
             AdapterNotice::StrongSessionSerializable => {
@@ -452,10 +481,18 @@ impl fmt::Display for AdapterNotice {
                 index_name,
                 dependant_objects,
             }) => {
-                write!(f, "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!", separated(", ", dependant_objects))
+                write!(
+                    f,
+                    "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!",
+                    separated(", ", dependant_objects)
+                )
             }
             AdapterNotice::PerReplicaLogRead { log_names } => {
-                write!(f, "Queried introspection relations: {}. Unlike other objects in Materialize, results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables.", log_names.join(", "))
+                write!(
+                    f,
+                    "Queried introspection relations: {}. Unlike other objects in Materialize, results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables.",
+                    log_names.join(", ")
+                )
             }
             AdapterNotice::VarDefaultUpdated { role, var_name } => {
                 let vars = match var_name {
@@ -481,6 +518,23 @@ impl fmt::Display for AdapterNotice {
                 f,
                 "The auto_route_introspection_queries variable has been renamed to auto_route_catalog_queries."
             ),
+            AdapterNotice::OidcGroupSyncUnmatchedGroup { group } => {
+                write!(
+                    f,
+                    "OIDC group \"{}\" has no matching Materialize role, skipping",
+                    group
+                )
+            }
+            AdapterNotice::OidcGroupSyncReservedRole { group } => {
+                write!(
+                    f,
+                    "OIDC group \"{}\" maps to a reserved role name, skipping",
+                    group
+                )
+            }
+            AdapterNotice::OidcGroupSyncError { message } => {
+                write!(f, "OIDC group-to-role sync failed: {}", message)
+            }
         }
     }
 }

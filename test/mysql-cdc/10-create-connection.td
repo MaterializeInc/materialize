@@ -36,15 +36,20 @@ ALTER SYSTEM SET max_mysql_connections = 1000
     PASSWORD SECRET mysqlpass
   )
 
-> SELECT name, type from mz_connections
+> SELECT name, type from mz_connections WHERE id LIKE 'u%'
 name       type
 ------------------------------
 mysq   mysql
 
-> SHOW CREATE CONNECTION mysq
+>[version>=2600700] SHOW CREATE CONNECTION mysq
 name   create_sql
 ---------------------------------
-materialize.public.mysq   "CREATE CONNECTION \"materialize\".\"public\".\"mysq\" TO MYSQL (HOST = \"mysql\", PASSWORD = SECRET \"materialize\".\"public\".\"mysqlpass\", USER = \"root\")"
+materialize.public.mysq "CREATE CONNECTION materialize.public.mysq\nTO MYSQL (HOST = mysql, PASSWORD = SECRET materialize.public.mysqlpass, USER = root);"
+
+>[version<2600700] SHOW CREATE CONNECTION mysq
+name   create_sql
+---------------------------------
+materialize.public.mysq "CREATE CONNECTION materialize.public.mysq TO MYSQL (HOST = mysql, PASSWORD = SECRET materialize.public.mysqlpass, USER = root);"
 
 #
 # Error checking

@@ -12,8 +12,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use mz_repr::explain::ExprHumanizer;
 use mz_repr::GlobalId;
+use mz_repr::explain::ExprHumanizer;
 
 use crate::notice::{ActionKind, OptimizerNoticeApi};
 
@@ -27,7 +27,7 @@ use crate::notice::{ActionKind, OptimizerNoticeApi};
 ///    the orders of magnitude performance improvements that can happen with other joins when an
 ///    input arrangement exists can't happen with a cross join.
 /// Also note that skew is hard to debug, so it's good to avoid this problem in the first place.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct IndexKeyEmpty;
 
 impl OptimizerNoticeApi for IndexKeyEmpty {

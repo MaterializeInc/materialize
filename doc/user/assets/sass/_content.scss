@@ -8,8 +8,6 @@ h3,
 h4,
 h5,
 h6 {
-    color: var(--important);
-    font-weight: 500;
     line-height: 1.2;
 
     code {
@@ -24,6 +22,11 @@ h6 {
     }
 }
 
+h1, h2, h3 {
+    font-weight: 500;
+    color: var(--important);
+}
+
 h1 {
     font-size: var(--h1);
     margin-bottom: var(--xx-small);
@@ -36,12 +39,26 @@ h2 {
 
 h3 {
     font-size: var(--h3);
+    font-weight: 600;
     margin: var(--small) 0 var(--nano);
+}
+
+div.tab-pane > h3 {
+    margin: var(--nano) 0;
+}
+
+h4, h5, h6 {
+    font-weight: 600;
+    color: var(--font-h4);
 }
 
 h4 {
     font-size: var(--h4);
     margin: var(--small) 0 var(--nano);
+}
+
+div.tab-pane > h4 {
+    margin: var(--nano) 0;
 }
 
 h5 {
@@ -86,6 +103,7 @@ p+p {
 
     &>*:first-child {
         margin-top: var(--small);
+        min-width:fit-content;
     }
 
     ul {
@@ -143,7 +161,9 @@ p+p {
     pre,
     .warning,
     .note,
-    .tip {
+    .annotation,
+    .tip,
+    .important {
         font-size: rem(1.5);
         font-weight: 300;
     }
@@ -213,6 +233,10 @@ p+p {
             background: var(--card-light);
             padding: var(--x-small);
             border-radius: inherit;
+
+            @media(max-width: 400px) {
+                padding: var(--milli);
+            }
         }
 
         div> :first-child {
@@ -223,7 +247,6 @@ p+p {
     .multilinkbox {
         margin: var(--small) 0;
         display: flex;
-        justify-content: space-between;
         gap: var(--milli);
 
         @media(max-width: 1325px) {
@@ -241,8 +264,8 @@ p+p {
 
         &::before {
             content: "";
-            width: 48px;
-            height: 48px;
+            width: 32px;
+            height: 32px;
             position: absolute;
             top: rem(2);
             background-size: contain;
@@ -251,8 +274,14 @@ p+p {
         &.book,
         &.bulb,
         &.doc,
+        &.materialize,
         &.touch {
             padding-top: rem(8);
+        }
+
+        &.materialize::before {
+            background-image: url("../images/materialize_favicon_32.png");
+            margin-left: -10px;
         }
 
         &.book::before {
@@ -273,6 +302,7 @@ p+p {
 
         .title {
             text-transform: uppercase;
+            font-size: 12px;
             font-weight: 500;
             color: var(--important);
             margin-bottom: var(--nano);
@@ -367,12 +397,13 @@ p+p {
         background: var(--code-simple-bg);
     }
 
+    // TODO: This common pattern will be removed.
     // Merge a highlighted code block followed by a non-highlighted code block,
     // since this is a common pattern in our docs to indicate a (highlighted)
     // shell or SQL snippet followed by its (unhighlighted) output.
     .highlight+pre {
         border-top: 0;
-        margin-top: -16px;
+        margin-top: -8px;
         padding-top: 0;
     }
 
@@ -391,7 +422,7 @@ p+p {
         }
     }
 
-    ol.has-p:not(ol.has-p ol.has-p) {
+    :not(div.footnotes) > ol.has-p:not(ol.has-p ol.has-p) {
         list-style-type: none;
         counter-reset: list-counter;
         margin: 0;
@@ -478,7 +509,8 @@ p+p {
         }
     }
 
-    .note {
+    .note,
+    .important {
         background: var(--note);
         border: 1px solid var(--note-border);
 
@@ -534,10 +566,29 @@ p+p {
         }
     }
 
+    .annotation {
+        border: 1px solid var(--annotation-border);
+
+        a {
+            &:hover,
+            &:focus {
+                color: var(--sub) !important;
+            }
+
+            code {
+                &:hover,
+                &:focus {
+                    color: var(--sub) !important;
+                }
+            }
+        }
+
+    }
+
     .public-preview {
         background: var(--public-preview);
         border: 1px solid var(--public-preview-border);
-        color: var(--black);
+        color: var(--public-preview-text);
 
         &::after {
             border-color: var(--bg) var(--bg) var(--public-preview-after) var(--public-preview-after);
@@ -549,9 +600,25 @@ p+p {
         }
     }
 
+    .annotation {
+        box-sizing: border-box;
+        margin: rem(1.6) 0;
+        padding: rem(1) rem(1) rem(1) rem(2);
+        position: relative;
+
+        @media(max-width: 510px) {
+            padding: rem(.8) rem(.8) rem(.8) rem(1);
+        }
+
+        p:first-of-type {
+            margin-top: 0;
+        }
+
+    }
     .warning,
     .note,
     .tip,
+    .important,
     .private-preview,
     .public-preview {
         box-sizing: border-box;
@@ -666,6 +733,21 @@ p+p {
             }
         }
     }
+
+    .title-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+
+        h1 {
+            margin-bottom: 0;
+        }
+
+        .btn-ghost {
+            flex-shrink: 0;
+            margin-left: var(--milli);
+        }
+    }
 }
 
 #helpful {
@@ -700,18 +782,15 @@ p+p {
 
 // Navigation tabs (tab+tabs.html)
 .code-tabs {
-    margin: rem(1) 0;
+    position: relative;
 
     .nav-tabs {
         list-style: none;
         padding: 0;
-        border-bottom: 1px solid #9c86e0;
+
         display: flex;
-        overflow-x: scroll;
-
-        padding-bottom: var(--xx-small);
-
-        @media(max-width: 850px) {}
+        overflow-x: auto;
+        // white-space: nowrap;
 
         li {
             display: inline-block;
@@ -719,22 +798,27 @@ p+p {
             padding: 0;
             position: relative;
             bottom: -1px;
-            background: var(--gray-lightest);
+            background: var(--bg);
+            border-top: 1px solid var(--highlight);
+            border-left: 1px solid var(--highlight);
+            border-right: 1px solid var(--highlight);
+            border-radius: 2px 2px 2px 2px;
+            background: var(--tab-bg);
 
             a {
                 color: var(--body);
                 display: block;
-                padding: rem(0.8) rem(3.2);
-                font-size: rem(1.6);
+                padding: rem(0.8) rem(1.6);
+                font-size: rem(1.4);
                 text-decoration: none;
                 font-weight: 500;
 
                 @media(max-width: 850px) {
-                    padding: rem(0.8) rem(2.5);
+                    padding: rem(0.8) rem(1.6);
                 }
 
                 @media(max-width: 380px) {
-                    padding: rem(0.8) rem(1.5);
+                    padding: rem(0.8) rem(0.8);
                 }
 
                 &:hover {
@@ -744,16 +828,18 @@ p+p {
             }
 
             &.active {
-                background: var(--bg);
+
                 border-radius: 2px 2px 0 0;
                 border: 1px solid #9c86e0;
                 border-bottom-color: var(--bg);
 
                 a {
                     color: var(--highlight);
+                    background: var(--tab-selected-bg);
                 }
             }
         }
+
     }
 
     .tab-pane {
@@ -762,83 +848,21 @@ p+p {
 
         &.active {
             display: block;
+            border-radius: 0 0 rem(1) rem(1);
+            border: 1px solid #9c86e0;
+            padding: rem(0.8) rem(0.5) rem(0.6) rem(0.6);
         }
     }
 
-    #subscribe_dialog {
-        display: none;
-        z-index: 10;
-        position: absolute;
-        top: 4px;
-        right: 4px;
-        background-color: $purple-v2;
-        padding: 6px;
-        border-radius: $border-radius;
-        box-shadow: 0 1px 1px #00000011, 0 2px 2px #00000011,
-            0 4px 4px #00000011, 0 8px 8px #00000011, 0 16px 16px #00000011;
-
-        form {
-            display: flex;
-
-            input[type="email"] {
-                font-size: rem(0.8);
-                padding: 7px 5px 6px 5px;
-                border-radius: $border-radius;
-                border: none;
-                margin-right: 4px;
-            }
-
-            input[type="submit"] {
-                line-height: 0.5;
-                background-color: $white-v2;
-                padding: 7px 18px 6px 18px;
-                margin-top: 1px;
-            }
-        }
-
-        .disclaimer {
-            width: 100%;
-            color: #fff;
-            padding: 4px 8px;
-            font-size: 12px;
-            border-bottom-left-radius: $border-radius;
-            border-bottom-right-radius: $border-radius;
-        }
+    &.has-left-overflow .nav-tabs::before {
+        opacity: 1;
     }
 
-    .subscribe_dialog_active {
-        position: relative;
-
-        #subscribe_dialog {
-            display: block;
-        }
+    &.has-right-overflow .nav-tabs::after {
+        opacity: 1;
     }
 
-    .level-of-support {
-        display: inline-block;
-        width: 17px;
-        height: 17px;
-        position: relative;
-        top: 5px;
 
-        &.level-production {
-            color: $success;
-        }
-
-        &.level-alpha,
-        &.level-beta {
-            color: $progress;
-        }
-
-        &.level-in-progress {
-            color: $warning;
-        }
-
-        &.level-researching,
-        &.level-not-supported {
-            color: $danger;
-        }
-    }
 }
 
 .table-scrollable {
@@ -855,7 +879,7 @@ p+p {
     }
 
     thead th {
-        background: #fff;
+        background: var(--bg);
         position: sticky;
         top: 0;
 
@@ -873,7 +897,6 @@ p+p {
         margin-top: rem(3) !important;
     }
 }
-
 
 .level-of-support {
     display: inline-block;
@@ -901,9 +924,17 @@ p+p {
     }
 }
 
+.highlight {
+    position: relative;
+
+}
+
 .copy_button {
     display: none;
     position: absolute;
+    right: 10px;
+    top: 10px;
+
     font-size: rem(1.2);
     font-weight: 300;
     border: none;
@@ -914,8 +945,6 @@ p+p {
     cursor: pointer;
     border-radius: $border-radius;
     white-space: nowrap;
-    top: 10px;
-    right: 10px;
     line-height: 2;
     font-family: 'Inter', sans-serif;
 
@@ -1130,12 +1159,19 @@ div.json_widget {
     }
 }
 
+/* Unclear why we are suppressing the copy button in tables
+   but ... at least, allow for cases where we want to enable copy button in tables.
+*/
 
-tr .copy_button {
+td:not(.copyableCode) .copy_button {
     display: none !important;
 }
 
-pre {
+td span.copyableCode pre:hover .copy_button {
+    display: inline-block !important;
+}
+
+.highlight {
     position: relative;
 
     &:hover {
@@ -1147,7 +1183,8 @@ pre {
 
 body.dark .content {
 
-    .note {
+    .note,
+    .important {
         a {
             color: var(--link);
         }
@@ -1167,6 +1204,13 @@ body.dark .content {
             border-color: --var(--tip-border);
             background: var(--tip);
         }
+    }
+
+    .annotation {
+        a {
+            color: var(--link);
+        }
+
     }
 
     .warning,
@@ -1196,5 +1240,46 @@ body.dark {
                 background: var(--bg);
             }
         }
+    }
+}
+
+.caption {
+    font-size: rem(1.2);
+    font-weight: 300;
+    padding: var(--nano);
+    font-style: italic;
+}
+
+td.copyableCode{
+    .chroma {
+        background-color: var(--code-block);
+    }
+
+}
+span.copyableCode{
+    .chroma {
+        background-color: var(--code-block);
+    }
+
+}
+
+div.footnotes  {
+
+    font-size: var(--sm);
+
+    hr {
+        width: 100%;
+    }
+
+    li::marker {
+        font-variant-numeric: normal;
+        content: "[" counter(list-item) "] ";
+    }
+
+}
+
+sup {
+    a {
+        color: var(--link);
     }
 }

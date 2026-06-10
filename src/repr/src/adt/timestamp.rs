@@ -21,6 +21,7 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::ops::Sub;
+use std::sync::LazyLock;
 
 use ::chrono::{
     DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
@@ -31,18 +32,21 @@ use mz_ore::cast::{self, CastFrom};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveDateTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use once_cell::sync::Lazy;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
+use crate::Datum;
 use crate::adt::datetime::DateTimePart;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::DecimalLike;
+#[cfg(any(test, feature = "proptest"))]
 use crate::scalar::{arb_naive_date_time, arb_utc_date_time};
-use crate::Datum;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.timestamp.rs"));
 
@@ -57,15 +61,14 @@ const NANOSECONDS_PER_SECOND: i64 = 10i64.pow(9);
 
 pub const MAX_PRECISION: u8 = 6;
 
-/// The `max_precision` of a [`ScalarType::Timestamp`] or
-/// [`ScalarType::TimestampTz`].
+/// The `max_precision` of a [`SqlScalarType::Timestamp`] or
+/// [`SqlScalarType::TimestampTz`].
 ///
 /// This newtype wrapper ensures that the length is within the valid range.
 ///
-/// [`ScalarType::Timestamp`]: crate::ScalarType::Timestamp
-/// [`ScalarType::TimestampTz`]: crate::ScalarType::TimestampTz
+/// [`SqlScalarType::Timestamp`]: crate::SqlScalarType::Timestamp
+/// [`SqlScalarType::TimestampTz`]: crate::SqlScalarType::TimestampTz
 #[derive(
-    Arbitrary,
     Debug,
     Clone,
     Copy,
@@ -76,8 +79,9 @@ pub const MAX_PRECISION: u8 = 6;
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct TimestampPrecision(pub(crate) u8);
 
 impl TimestampPrecision {
@@ -109,18 +113,6 @@ impl RustType<ProtoTimestampPrecision> for TimestampPrecision {
 
     fn from_proto(proto: ProtoTimestampPrecision) -> Result<Self, TryFromProtoError> {
         Ok(TimestampPrecision(proto.value.into_rust()?))
-    }
-}
-
-impl RustType<ProtoOptionalTimestampPrecision> for Option<TimestampPrecision> {
-    fn into_proto(&self) -> ProtoOptionalTimestampPrecision {
-        ProtoOptionalTimestampPrecision {
-            value: self.into_proto(),
-        }
-    }
-
-    fn from_proto(precision: ProtoOptionalTimestampPrecision) -> Result<Self, TryFromProtoError> {
-        precision.value.into_rust()
     }
 }
 
@@ -202,10 +194,6 @@ pub trait DateLike: chrono::Datelike {
 
     fn decade(&self) -> i32 {
         self.year().div_euclid(10)
-    }
-
-    fn quarter(&self) -> f64 {
-        (f64::from(self.month()) / 3.0).ceil()
     }
 
     /// Extract the iso week of the year
@@ -544,11 +532,7 @@ impl TimestampLike for chrono::DateTime<chrono::Utc> {
     }
 
     fn timezone_name(&self, caps: bool) -> &'static str {
-        if caps {
-            "UTC"
-        } else {
-            "utc"
-        }
+        if caps { "UTC" } else { "utc" }
     }
 
     fn checked_add_signed(self, rhs: Duration) -> Option<Self> {
@@ -594,10 +578,10 @@ impl<T: Serialize> Serialize for CheckedTimestamp<T> {
 // Thus on the low end we have 4713-12-31 BC from Postgres, and on the high end
 // 262142-12-31 from chrono.
 
-pub static LOW_DATE: Lazy<NaiveDate> =
-    Lazy::new(|| NaiveDate::from_ymd_opt(-4713, 12, 31).unwrap());
-pub static HIGH_DATE: Lazy<NaiveDate> =
-    Lazy::new(|| NaiveDate::from_ymd_opt(262142, 12, 31).unwrap());
+pub static LOW_DATE: LazyLock<NaiveDate> =
+    LazyLock::new(|| NaiveDate::from_ymd_opt(-4713, 12, 31).unwrap());
+pub static HIGH_DATE: LazyLock<NaiveDate> =
+    LazyLock::new(|| NaiveDate::from_ymd_opt(262142, 12, 31).unwrap());
 
 impl<T: TimestampLike> CheckedTimestamp<T> {
     pub fn from_timestamplike(t: T) -> Result<Self, TimestampError> {
@@ -652,8 +636,7 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
                 DateTimePart::Quarter => {
                     let years = i64::cast_from(a.year()).checked_sub(i64::cast_from(b.year()))?;
                     let quarters = years.checked_mul(QUARTERS_PER_YEAR)?;
-                    #[allow(clippy::as_conversions)]
-                    let diff = (a.quarter() - b.quarter()) as i64;
+                    let diff = i64::cast_from(a.quarter()) - i64::cast_from(b.quarter());
                     quarters.checked_add(diff)
                 }
                 DateTimePart::Month => {
@@ -813,7 +796,7 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
         let round_to_micros = 10_i64.pow(power.into());
 
         let mut original = self.date_time();
-        let nanoseconds = original.timestamp_subsec_nanos();
+        let nanoseconds = original.and_utc().timestamp_subsec_nanos();
         // truncating to microseconds does not round it up
         // i.e. 123456789 will be truncated to 123456
         original = original.truncate_microseconds();
@@ -954,6 +937,7 @@ impl<T: Sub<Duration, Output = T>> Sub<Duration> for CheckedTimestamp<T> {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for CheckedTimestamp<NaiveDateTime> {
     type Parameters = ();
     type Strategy = BoxedStrategy<CheckedTimestamp<NaiveDateTime>>;
@@ -965,6 +949,7 @@ impl Arbitrary for CheckedTimestamp<NaiveDateTime> {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for CheckedTimestamp<DateTime<Utc>> {
     type Parameters = ();
     type Strategy = BoxedStrategy<CheckedTimestamp<DateTime<Utc>>>;
@@ -1054,6 +1039,7 @@ impl FixedSizeCodec<NaiveDateTime> for PackedNaiveDateTime {
 #[cfg(test)]
 mod test {
     use super::*;
+    use itertools::Itertools;
     use mz_ore::assert_err;
     use proptest::prelude::*;
 
@@ -1133,7 +1119,8 @@ mod test {
 
     #[mz_ore::test]
     fn test_precision_edge_cases() {
-        let result = mz_ore::panic::catch_unwind(|| {
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let result = std::panic::catch_unwind(|| {
             let date = CheckedTimestamp::try_from(
                 DateTime::from_timestamp_micros(123456).unwrap().naive_utc(),
             )
@@ -1220,7 +1207,7 @@ mod test {
             times.sort();
             packed.sort();
 
-            for (time, packed) in times.into_iter().zip(packed.into_iter()) {
+            for (time, packed) in times.into_iter().zip_eq(packed.into_iter()) {
                 let rnd = packed.into_value();
                 prop_assert_eq!(time, rnd);
             }

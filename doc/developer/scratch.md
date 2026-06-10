@@ -23,7 +23,7 @@ To access scratch resources from the command line, follow the instructions [here
 ## Management with the `bin/scratch` script
 
 The `bin/scratch` script is intended to make it easy to launch EC2 instances from the command line. It has three
-subcommands: `create`, `mine`, and `destroy`.
+subcommands: `create`, `list`, and `destroy`.
 
 ### `bin/scratch create`
 
@@ -108,12 +108,12 @@ See the [guide](https://code.visualstudio.com/docs/remote/ssh) for more details.
 Because this is in scratch, it may be deleted after 36 hours.
 If you need a longer term enviroment, use `--max-age-days` when creating the scratch instance.
 
-### `bin/scratch mine`
+### `bin/scratch list`
 
 This subcommand lists all the machines that a given user has created with `bin/scratch create`, along with metadata about them. For example:
 
 ```
-brennan@New-Orleans ~ ❯❯❯ ~/code/materialize/bin/scratch mine
+brennan@New-Orleans ~ ❯❯❯ ~/code/materialize/bin/scratch list
 +-------------------+---------------------+-------------------+--------------------+-------------------------+---------------------+---------+
 |        Name       |     Instance ID     | Public IP Address | Private IP Address |       Launched By       |     Delete After    |  State  |
 +-------------------+---------------------+-------------------+--------------------+-------------------------+---------------------+---------+
@@ -122,7 +122,7 @@ brennan@New-Orleans ~ ❯❯❯ ~/code/materialize/bin/scratch mine
 ```
 
 Important options include `--all`, which lists machines for all users, and `--output-format csv`, which does what it looks like. To look up
-machines for someone other than yourself, list their email addresses at the end of the command, like so: `scratch mine eli@materialize.com`.
+machines for someone other than yourself, list their email addresses at the end of the command, like so: `scratch list eli@materialize.com`.
 
 ### `bin/scratch push`
 

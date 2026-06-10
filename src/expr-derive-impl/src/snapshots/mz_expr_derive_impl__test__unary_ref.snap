@@ -1,0 +1,43 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: &i16) -> bool {\n    unimplemented!()\n}\n"
+---
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect,
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
+pub struct UnaryFn;
+impl crate::func::EagerUnaryFunc for UnaryFn {
+    type Input<'a> = &'a i16;
+    type Output<'a> = bool;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+        unary_fn(a)
+    }
+    fn output_sql_type(
+        &self,
+        input_type: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl std::fmt::Display for UnaryFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(stringify!(unary_fn))
+    }
+}
+fn unary_fn<'a>(a: &i16) -> bool {
+    unimplemented!()
+}

@@ -13,14 +13,14 @@ use std::io::Write as _;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use crate::action;
+use crate::action::{ControlFlow, Run, State};
+use crate::parser::{BuiltinCommand, LineReader, parse};
+use anyhow::{Context, anyhow, bail};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_persist_client::{PersistLocation, ShardId};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-
-use crate::action::{ControlFlow, State};
-use crate::parser::BuiltinCommand;
 
 /// Level of consistency checks we should enable on a testdrive run.
 #[derive(clap::ValueEnum, Default, Debug, Copy, Clone, PartialEq, Eq)]
@@ -72,6 +72,13 @@ pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow
 
     let coordinator = check_coordinator(state).await.context("coordinator");
     let catalog_state = check_catalog_state(state).await.context("catalog state");
+    let statement_logging_state = if state.check_statement_logging {
+        check_statement_logging(state)
+            .await
+            .context("statement logging state")
+    } else {
+        Ok(())
+    };
     // TODO(parkmycar): Fix subsources so they don't leak their shards and then add a leaked shards
     // consistency check.
 
@@ -82,6 +89,9 @@ pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow
     }
     if let Err(e) = catalog_state {
         writeln!(&mut msg, "catalog inconsistency: {e:?}")?;
+    }
+    if let Err(e) = statement_logging_state {
+        writeln!(&mut msg, "statement logging inconsistency: {e:?}")?;
     }
 
     if msg.is_empty() {
@@ -94,12 +104,12 @@ pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow
 /// Checks if a shard in Persist has been tombstoned.
 ///
 /// TODO(parkmycar): Run this as part of the consistency checks, instead of as a specific command.
-pub async fn run_check_shard_tombstoned(
+pub async fn run_check_shard_tombstone(
     mut cmd: BuiltinCommand,
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let shard_id = cmd.args.string("shard-id")?;
-    check_shard_tombstoned(state, &shard_id).await?;
+    check_shard_tombstone(state, &shard_id).await?;
     Ok(ControlFlow::Continue)
 }
 
@@ -185,8 +195,19 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
         .and_then(|storage_metadata| storage_metadata.unfinalized_shards);
 
     // Load the on-disk catalog and dump its state.
+
+    // Make sure the version is parseable.
+    let _: semver::Version = state.build_info.version.parse().expect("invalid version");
+
     let maybe_disk_catalog = state
-        .with_catalog_copy(system_parameter_defaults, |catalog| catalog.state().clone())
+        .with_catalog_copy(
+            system_parameter_defaults,
+            state.build_info,
+            &state.materialize.bootstrap_args,
+            // The expression cache can be taxing on the CPU and is unnecessary for consistency checks.
+            Some(false),
+            |catalog| catalog.state().clone(),
+        )
         .await
         .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?
         .map(|catalog| {
@@ -225,9 +246,83 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+/// This currently checks only whether the statement log reports all statements to be in a finished
+/// state. (We used to have an assertion for roughly this in `ExecuteContextExtra`'s Drop, but that
+/// had to be removed due to <https://github.com/MaterializeInc/database-issues/issues/7304>)
+///
+/// Note that this check should succeed regardless of the statement logging sampling rate.
+///
+/// Ideally, we could run this at any moment successfully, but currently system restarts can mess
+/// this up: there is a buffering of statement log writes, with the buffers flushed every 5 seconds.
+/// So, if a system kill/restart comes at a bad moment, then some statements might get permanently
+/// stuck in an unfinished state in the statement log. Therefore, we currently run this only after
+/// normal `.td`s, but not after cluster tests and whatnot that kill/restart the system.
+/// (Also, this can take several seconds due to the 5 sec buffering, so we run this only in Nightly
+/// by default.)
+async fn check_statement_logging(orig_state: &State) -> Result<(), anyhow::Error> {
+    use crate::util::postgres::postgres_client;
+
+    // Create new Testdrive state, so that we create a new session to Materialize, and we forget any
+    // weird Testdrive setting that the `.td` file before us might have set.
+    let (mut state, state_cleanup) = action::create_state(&orig_state.config).await?;
+
+    // First, query the current value of enable_rbac_checks so we can restore it later
+    let mz_system_url = format!(
+        "postgres://mz_system:materialize@{}",
+        state.materialize.internal_sql_addr
+    );
+
+    let (client, _handle) = postgres_client(&mz_system_url, state.default_timeout)
+        .await
+        .context("connecting as mz_system to query enable_rbac_checks")?;
+
+    let row = client
+        .query_one("SHOW enable_rbac_checks", &[])
+        .await
+        .context("querying enable_rbac_checks")?;
+
+    let original_value: String = row.get(0);
+
+    // Create a testdrive script to check that all statements have finished executing.
+    // We disable RBAC checks so we can query mz_internal tables, similar to statement-logging.td.
+    // We restore the setting to its original value at the end.
+    let check_script = format!(
+        r#"
+$ postgres-execute connection=postgres://mz_system:materialize@{0}
+ALTER SYSTEM SET enable_rbac_checks = false
+
+> SELECT count(*)
+  FROM mz_internal.mz_recent_activity_log
+  WHERE
+    (finished_at IS NULL OR finished_status IS NULL)
+    AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'
+    AND finished_status != 'aborted';
+0
+
+$ postgres-execute connection=postgres://mz_system:materialize@{0}
+ALTER SYSTEM SET enable_rbac_checks = {1}
+"#,
+        state.materialize.internal_sql_addr, original_value
+    );
+
+    let mut line_reader = LineReader::new(&check_script);
+    let cmds = parse(&mut line_reader).map_err(|e| anyhow!("{}", e.source))?;
+
+    for cmd in cmds {
+        cmd.run(&mut state)
+            .await
+            .map_err(|e| anyhow!("{}", e.source))?;
+    }
+
+    drop(state);
+    state_cleanup.await?;
+
+    Ok(())
+}
+
 /// Checks if the provided `shard_id` is a tombstone, returning an error if it's not.
-async fn check_shard_tombstoned(state: &State, shard_id: &str) -> Result<(), anyhow::Error> {
-    println!("$ check-shard-tombstoned {shard_id}");
+async fn check_shard_tombstone(state: &State, shard_id: &str) -> Result<(), anyhow::Error> {
+    println!("$ check-shard-tombstone {shard_id}");
 
     let (Some(consensus_uri), Some(blob_uri)) =
         (&state.persist_consensus_url, &state.persist_blob_url)

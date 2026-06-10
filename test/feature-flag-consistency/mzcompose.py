@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Verify that Materialize has the same results with different sets of feature flags.
+"""
+
 from materialize.feature_flag_consistency.feature_flag_consistency_test import (
     FeatureFlagConsistencyTest,
 )
@@ -32,7 +36,7 @@ from materialize.output_consistency.output_consistency_test import (
 )
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(setup_materialize=True, in_memory=True),
     Postgres(),
     Materialized(name="mz_this"),  # Overridden below
     Materialized(name="mz_other"),  # Overridden below

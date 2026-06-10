@@ -30,6 +30,7 @@ from materialize.output_consistency.operation.operation import (
     OperationRelevance,
 )
 
+TAG_BASIC_ARITHMETIC_OP = "basic_arithmetic"
 TAG_BITWISE_OP = "bitwise"
 
 NUMERIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
@@ -40,6 +41,7 @@ NUMERIC_OPERATION_TYPES.append(
         [NumericOperationParam(), NumericOperationParam()],
         NumericReturnTypeSpec(),
         {MultiParamValueGrowsArgsValidator()},
+        tags={TAG_BASIC_ARITHMETIC_OP},
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -48,6 +50,7 @@ NUMERIC_OPERATION_TYPES.append(
         [NumericOperationParam(), NumericOperationParam()],
         NumericReturnTypeSpec(),
         {MaxMinusNegMaxArgsValidator()},
+        tags={TAG_BASIC_ARITHMETIC_OP},
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -56,6 +59,7 @@ NUMERIC_OPERATION_TYPES.append(
         [NumericOperationParam(), NumericOperationParam()],
         NumericReturnTypeSpec(),
         {MultiParamValueGrowsArgsValidator()},
+        tags={TAG_BASIC_ARITHMETIC_OP},
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -67,6 +71,7 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         NumericReturnTypeSpec(),
         relevance=OperationRelevance.HIGH,
+        tags={TAG_BASIC_ARITHMETIC_OP},
     )
 )
 NUMERIC_OPERATION_TYPES.append(

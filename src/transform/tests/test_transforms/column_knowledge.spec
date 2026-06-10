@@ -46,7 +46,7 @@ Source defined as t3
 
 # Infer and apply constant value knowledge.
 # Cases: Map, FlatMap, Filter, Project, Reduce, Let/Get.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   FlatMap generate_series(#1, #0 + 3, 1)
     Project (#2, #0)
@@ -60,25 +60,23 @@ With
             Filter #0 = 1 AND #1 = 2
               Get t0
 ----
-Return
-  FlatMap generate_series(2, 7, 1)
-    Project (#2, #0)
-      Get l0
 With
   cte l0 =
     Filter false
       Reduce group_by=[2] aggregates=[sum(3), max(4)]
         Filter true AND false
-          Map (3)
-            Filter (#0 = 1) AND (#1 = 2)
-              Get t0
+          Constant <empty>
+Return
+  FlatMap generate_series(2, 7, 1)
+    Project (#2, #0)
+      Get l0
 
 
 # Infer and apply nullability knowledge.
 # Cases: Map, Filter, Project, Reduce, Let/Get.
 # TODO: The type of `(#1) IS NULL` in the map is `BOOLEAN NOT NULL`,
 #       so the first group_by key component should be reduced to `false`.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Filter (#0) IS NULL
     Project (#2)
@@ -90,21 +88,21 @@ With
         Filter (#0) IS NULL AND (#1) IS NULL
           Get t0
 ----
+With
+  cte l0 =
+    Reduce group_by=[false, false] aggregates=[count(false)]
+      Map (false, false)
+        Filter false AND (#1) IS NULL
+          Constant <empty>
 Return
   Filter false
     Project (#2)
       Get l0
-With
-  cte l0 =
-    Reduce group_by=[(#2) IS NULL, false] aggregates=[count(false)]
-      Map ((#1) IS NULL, false)
-        Filter false AND (#1) IS NULL
-          Get t0
 
 
 # Infer and apply constant value knowledge.
 # Cases: Union.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Filter #1 > 1 AND #2 IS NULL
     Union
@@ -120,25 +118,23 @@ With
       Filter (#0 = 1) AND (#1 = 2)
         Get t0
 ----
-Return
-  Filter true AND false
-    Union
-      Get l0
-      Get l1
 With
-  cte l1 =
-    Project (#0, #0, #1)
-      Filter (#0 = 2) AND (#1 = 3)
-        Get t0
   cte l0 =
     Project (#0, #1, #1)
       Filter (#0 = 1) AND (#1 = 2)
         Get t0
+  cte l1 =
+    Project (#0, #0, #1)
+      Filter (#0 = 2) AND (#1 = 3)
+        Get t0
+Return
+  Filter true AND false
+    Constant <empty>
 
 
 # Infer and apply constant value knowledge.
 # Cases: Join.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Map (#0 + #1 + #2, #2 * #3)
     Join on=((#0 + #1) = #2)
@@ -149,20 +145,20 @@ With
     Filter ((#0 = 1) AND (#1 = 2))
       Get t0
 ----
-Return
-  Map (6, (3 * #3))
-    Join on=(3 = #2)
-      Get l0
-      Get t0
 With
   cte l0 =
     Filter (#0 = 1) AND (#1 = 2)
+      Get t0
+Return
+  Map (6, (3 * #3))
+    Join on=(#2 = 3)
+      Get l0
       Get t0
 
 
 # Apply knowledge to TopK limit
 # Cases: TopK.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=(#1 + 2) offset=1
   Filter (#1 = 5)
     Get t0
@@ -172,12 +168,32 @@ TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=7 offset=1
     Get t0
 
 
+# TopK must not push non-group-key column equivalences into its input.
+# Here #0 = 5 from the outer Filter must NOT propagate into the Constant below the TopK
+# (group_key is [#1], so only #1 equivalences should pass through).
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/11282
+apply pipeline=equivalence_propagation
+Filter (#0 = 5)
+  TopK group_by=[#1] order_by=[#2 asc nulls_last] limit=1 offset=0
+    Constant // { types: "(bigint, bigint, bigint)" }
+      - (5, 1, 10)
+      - (5, 1, 20)
+      - (3, 1, 5)
+----
+Filter (#0 = 5)
+  TopK group_by=[#1] order_by=[#2 asc nulls_last] limit=1
+    Constant
+      - (5, 1, 10)
+      - (5, 1, 20)
+      - (3, 1, 5)
+
+
 ## Outer join patterns
 ## -------------------
 
 
 # Single binding, value knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Project (#0, #1, #3, #4, #5, #6)
     Map ((#0) IS NULL, (#0) IS NULL, (#2) IS NULL)
@@ -200,6 +216,13 @@ With
       Filter (#0) IS NOT NULL
         Get t3
 ----
+With
+  cte l0 =
+    Join on=(#0 = #2)
+      Filter (#0) IS NOT NULL
+        Get t2
+      Filter (#0) IS NOT NULL
+        Get t3
 Return
   Project (#0, #1, #3..=#6)
     Map ((#0) IS NULL, (#0) IS NULL, (#2) IS NULL)
@@ -214,21 +237,38 @@ Return
                     Get l0
             Get t2
         Get l0
-With
-  cte l0 =
-    Join on=(#0 = #2)
-      Filter (#0) IS NOT NULL
-        Get t2
-      Filter (#0) IS NOT NULL
-        Get t3
 
 
 ## LetRec cases
 ## ------------
 
+# Single binding, value knowledge
+apply pipeline=equivalence_propagation
+Return
+  Get l0
+With Mutually Recursive
+  cte l0 = // { types: "(bigint)" }
+    Distinct project=[#0]
+      Union
+        Constant // { types: "(bigint)" }
+          - (1)
+        Filter (#0 = 1)
+          Get l0
+----
+With Mutually Recursive
+  cte l0 =
+    Distinct project=[1]
+      Union
+        Constant
+          - (1)
+        Filter true
+          Get l0
+Return
+  Get l0
+
 
 # Single binding, value knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Map (#0 + #1)
     Get l0
@@ -240,9 +280,6 @@ With Mutually Recursive
           Get t0
           Get l0
 ----
-Return
-  Map (8)
-    Get l0
 With Mutually Recursive
   cte l0 =
     Filter (#0 = 3) AND (#1 = 5)
@@ -250,10 +287,13 @@ With Mutually Recursive
         Union
           Get t0
           Get l0
+Return
+  Map (8)
+    Get l0
 
 
 # Single binding, NOT NULL knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Map (#1 IS NOT NULL)
     Get l0
@@ -265,9 +305,6 @@ With Mutually Recursive
           Get t0
           Get l0
 ----
-Return
-  Map (true)
-    Get l0
 With Mutually Recursive
   cte l0 =
     Filter (#1) IS NOT NULL
@@ -275,10 +312,13 @@ With Mutually Recursive
         Union
           Get t0
           Get l0
+Return
+  Map (true)
+    Get l0
 
 
 # Multiple bindings, value knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Get l1
 With Mutually Recursive
@@ -299,9 +339,14 @@ With Mutually Recursive
         Filter (#0 = 1)
           Get l0
 ----
-Return
-  Get l1
 With Mutually Recursive
+  cte l0 =
+    Distinct project=[1]
+      Union
+        Constant
+          - (1)
+        Filter true
+          Get l0
   cte l1 =
     Distinct project=[2, #1, #2]
       Union
@@ -311,13 +356,8 @@ With Mutually Recursive
               Get l0
               Get t0
         Get l1
-  cte l0 =
-    Distinct project=[1]
-      Union
-        Constant
-          - (1)
-        Filter true
-          Get l0
+Return
+  Get l1
 
 
 
@@ -325,7 +365,7 @@ With Mutually Recursive
 #
 # This also illustrates a missed opportunity here, because if we are a bit
 # smarter we will know that l1 can only have 'false' in its first component.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Get l1
 With Mutually Recursive
@@ -346,9 +386,14 @@ With Mutually Recursive
         Filter (#0 IS NOT NULL)
           Get l0
 ----
-Return
-  Get l1
 With Mutually Recursive
+  cte l0 =
+    Distinct project=[1]
+      Union
+        Constant
+          - (1)
+        Filter true
+          Get l0
   cte l1 =
     Distinct project=[false, #1, #2]
       Union
@@ -358,18 +403,13 @@ With Mutually Recursive
               Get l0
               Get t0
         Get l1
-  cte l0 =
-    Distinct project=[1]
-      Union
-        Constant
-          - (1)
-        Filter true
-          Get l0
+Return
+  Get l1
 
 
 
 # # TODO
-# apply pipeline=column_knowledge
+# apply pipeline=equivalence_propagation
 # Return
 #   Map (#0 + #1)
 #     Get l1

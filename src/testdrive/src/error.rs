@@ -17,17 +17,16 @@
 //! they are returned externally.
 
 use std::fmt::{self, Write as _};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use atty::Stream;
 use mz_ore::error::ErrorExt;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 /// An error produced when parsing or executing a testdrive script.
 ///
 /// Errors are optionally associated with a location in a testdrive script. When
-/// printed with the [`Error::print_stderr`] method, the location of the error
+/// printed with the [`Error::print_error`] method, the location of the error
 /// along with a snippet of the source code at that location will be printed
 /// alongside the error message.
 pub struct Error {
@@ -40,51 +39,71 @@ impl Error {
         Error { source, location }
     }
 
-    /// Prints the error to `stderr`, with coloring if the terminal supports it.
-    pub fn print_stderr(&self) -> io::Result<()> {
-        let color_choice = if atty::is(Stream::Stderr) {
+    /// Prints the error to `stdout`, with coloring if the terminal supports it.
+    pub fn print_error(&self) -> io::Result<()> {
+        let color_choice = if std::io::stdout().is_terminal() {
             ColorChoice::Auto
         } else {
             ColorChoice::Never
         };
-        let mut stderr = StandardStream::stderr(color_choice);
+        let mut stdout = StandardStream::stdout(color_choice);
         eprintln!("^^^ +++");
         match &self.location {
             Some(location) => {
                 let mut color_spec = ColorSpec::new();
                 color_spec.set_bold(true);
-                stderr.set_color(&color_spec)?;
+                stdout.set_color(&color_spec)?;
                 if let Some(filename) = &location.filename {
                     write!(
-                        &mut stderr,
+                        &mut stdout,
                         "{}:{}:{}: ",
                         filename.display(),
                         location.line,
                         location.col
                     )?;
                 } else {
-                    write!(&mut stderr, "{}:{}: ", location.line, location.col)?;
+                    write!(&mut stdout, "{}:{}: ", location.line, location.col)?;
                 }
-                write_error_heading(&mut stderr, &color_spec)?;
-                writeln!(&mut stderr, "{}", self.source.display_with_causes())?;
+                write_error_heading(&mut stdout, &color_spec)?;
+                writeln!(&mut stdout, "{}", self.source.display_with_causes())?;
                 color_spec.set_bold(false);
-                stderr.set_color(&color_spec)?;
-                write!(&mut stderr, "{}", location.snippet)?;
-                writeln!(&mut stderr, "{}^", " ".repeat(location.col - 1))?;
+                stdout.set_color(&color_spec)?;
+                write!(&mut stdout, "{}", location.snippet)?;
+                writeln!(&mut stdout, "{}^", " ".repeat(location.col - 1))?;
             }
             None => {
                 let color_spec = ColorSpec::new();
-                write_error_heading(&mut stderr, &color_spec)?;
-                writeln!(&mut stderr, "{}", self.source.display_with_causes())?;
+                write_error_heading(&mut stdout, &color_spec)?;
+                writeln!(&mut stdout, "{}", self.source.display_with_causes())?;
             }
         }
-        std::io::stderr().flush()
+        std::io::stdout().flush()
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.source.display_with_causes())
+        match &self.location {
+            Some(location) => {
+                if let Some(filename) = &location.filename {
+                    write!(
+                        f,
+                        "{}:{}:{}: ",
+                        filename.display(),
+                        location.line,
+                        location.col
+                    )?;
+                } else {
+                    write!(f, "{}:{}: ", location.line, location.col)?;
+                }
+                writeln!(f, "{}", self.source.display_with_causes())?;
+                write!(f, "{}", location.snippet)?;
+                writeln!(f, "{}^", " ".repeat(location.col - 1))
+            }
+            None => {
+                write!(f, "{}", self.source.display_with_causes())
+            }
+        }
     }
 }
 

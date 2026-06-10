@@ -9,6 +9,7 @@
 
 import random
 
+from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -19,6 +20,14 @@ from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
     OperationRelevance,
+)
+from materialize.output_consistency.query.data_source import (
+    DataSource,
+)
+from materialize.output_consistency.query.join import (
+    JOIN_TARGET_WEIGHTS,
+    JoinOperator,
+    JoinTarget,
 )
 
 
@@ -59,6 +68,17 @@ class RandomizedPicker:
     def random_value(self, values: list[DataValue]) -> DataValue:
         return random.choice(values)
 
+    def random_data_source(self, sources: list[DataSource]) -> DataSource:
+        assert len(sources) > 0, "No data sources available"
+
+        if self.random_boolean(
+            probability.COLUMN_SELECTION_ADDITIONAL_CHANCE_FOR_FIRST_TABLE
+        ):
+            # give the first data source a higher chance so that not all queries need a join
+            return sources[0]
+
+        return random.choice(sources)
+
     def convert_operation_relevance_to_number(
         self, relevance: OperationRelevance
     ) -> float:
@@ -75,3 +95,9 @@ class RandomizedPicker:
 
     def _random_bool(self, probability: float) -> bool:
         return random.random() < probability
+
+    def random_join_operator(self) -> JoinOperator:
+        return random.choice(list(JoinOperator))
+
+    def random_join_target(self) -> JoinTarget:
+        return random.choices(list(JoinTarget), k=1, weights=JOIN_TARGET_WEIGHTS)[0]

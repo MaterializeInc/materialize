@@ -47,6 +47,49 @@ contains:column "i" is of type integer but expression is of type text
 ! INSERT INTO t SELECT * FROM t;
 contains:cannot be run inside a transaction block
 
+# Regression tests for ConstantVisitor (SQL-298)
+
+# Each of the following cases needs its own transaction because a failed
+# statement aborts the surrounding block ("current transaction is aborted,
+# commands ignored until end of transaction block").
+
+> ROLLBACK
+> BEGIN
+> INSERT INTO t VALUES (11, 12, 'f')
+
+# TableFactor::Derived — table reference hidden inside a parenthesized subquery.
+! INSERT INTO t SELECT * FROM (SELECT * FROM t) AS s;
+contains:cannot be run inside a transaction block
+
+> ROLLBACK
+> BEGIN
+> INSERT INTO t VALUES (11, 12, 'f')
+
+# TableFactor::Derived — table reference inside a nested subquery via UNION.
+! INSERT INTO t SELECT * FROM (SELECT * FROM t UNION ALL SELECT 99, 99, 'z') AS s;
+contains:cannot be run inside a transaction block
+
+> ROLLBACK
+> BEGIN
+> INSERT INTO t VALUES (11, 12, 'f')
+
+# TableFactor::Function — table reference hidden in a function argument
+# subquery. generate_series is a table function; the (SELECT ...) is an arg.
+! INSERT INTO t SELECT g::int, g::real, g::text
+    FROM generate_series(1, (SELECT max(i) FROM t)::bigint) AS g;
+contains:cannot be run inside a transaction block
+
+> ROLLBACK
+> BEGIN
+> INSERT INTO t VALUES (11, 12, 'f')
+
+# TableFactor::NestedJoin — parenthesized join hides the inner Table factors.
+! INSERT INTO t SELECT a.i, a.f, a.t FROM (t AS a CROSS JOIN t AS b);
+contains:cannot be run inside a transaction block
+
+> ROLLBACK
+> BEGIN
+
 > COMMIT
 
 > SELECT * FROM t ORDER BY i
@@ -97,10 +140,16 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE SOURCE source_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE source_data_tbl
+  FROM SOURCE source_data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
+! INSERT INTO source_data_tbl VALUES (100, 200, 'x');
+contains:cannot insert into non-writeable table 'materialize.public.source_data_tbl'
+
 > CREATE MATERIALIZED VIEW source_data_mat_view AS
-  SELECT * FROM source_data;
+  SELECT * FROM source_data_tbl;
 
 ! INSERT INTO t SELECT * FROM source_data_mat_view;
 contains:invalid selection

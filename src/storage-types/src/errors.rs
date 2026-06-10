@@ -15,21 +15,32 @@ use bytes::BufMut;
 use mz_expr::EvalError;
 use mz_kafka_util::client::TunnelingClientContext;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::Row;
+use mz_repr::{GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use prost::Message;
 use rdkafka::error::KafkaError;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tracing::warn;
-
-use crate::shim::ProtoUpsertValueErrorShim;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.errors.rs"));
 
 /// The underlying data was not decodable in the format we expected: eg.
 /// invalid JSON or Avro data that doesn't match a schema.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
     pub raw: Vec<u8>,
@@ -71,14 +82,38 @@ impl DecodeError {
 
 impl Display for DecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} (original bytes: {:x?})", self.kind, self.raw)
+        // See if we can output the bytes that failed to decode as a string.
+        let str_repr = std::str::from_utf8(&self.raw).ok();
+        // strip any NUL characters from the str_repr to prevent an error
+        // in the postgres protocol decoding
+        let str_repr = str_repr.map(|s| s.replace('\0', "NULL"));
+        let bytes_repr = hex::encode(&self.raw);
+        match str_repr {
+            Some(s) => write!(
+                f,
+                "{} (original text: {}, original bytes: {:x?})",
+                self.kind, s, bytes_repr
+            ),
+            None => write!(f, "{} (original bytes: {:x?})", self.kind, bytes_repr),
+        }
     }
 }
 
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DecodeErrorKind {
-    Text(String),
-    Bytes(String),
+    Text(Box<str>),
+    Bytes(Box<str>),
 }
 
 impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
@@ -86,8 +121,8 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
         use proto_decode_error_kind::Kind::*;
         ProtoDecodeErrorKind {
             kind: Some(match self {
-                DecodeErrorKind::Text(v) => Text(v.clone()),
-                DecodeErrorKind::Bytes(v) => Bytes(v.clone()),
+                DecodeErrorKind::Text(v) => Text(v.into_proto()),
+                DecodeErrorKind::Bytes(v) => Bytes(v.into_proto()),
             }),
         }
     }
@@ -95,8 +130,8 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
     fn from_proto(proto: ProtoDecodeErrorKind) -> Result<Self, TryFromProtoError> {
         use proto_decode_error_kind::Kind::*;
         match proto.kind {
-            Some(Text(v)) => Ok(DecodeErrorKind::Text(v)),
-            Some(Bytes(v)) => Ok(DecodeErrorKind::Bytes(v)),
+            Some(Text(v)) => Ok(DecodeErrorKind::Text(v.into())),
+            Some(Bytes(v)) => Ok(DecodeErrorKind::Bytes(v.into())),
             None => Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
         }
     }
@@ -105,20 +140,31 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
 impl Display for DecodeErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DecodeErrorKind::Text(e) => write!(f, "Text: {}", e),
-            DecodeErrorKind::Bytes(e) => write!(f, "Bytes: {}", e),
+            DecodeErrorKind::Text(e) => f.write_str(e),
+            DecodeErrorKind::Bytes(e) => f.write_str(e),
         }
     }
 }
 
 /// Errors arising during envelope processing.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    Hash
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum EnvelopeError {
     /// An error that can be retracted by a future message using upsert logic.
     Upsert(UpsertError),
     /// Errors corresponding to `ENVELOPE NONE`. Naming this
     /// `None`, though, would have been too confusing.
-    Flat(String),
+    Flat(Box<str>),
 }
 
 impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
@@ -127,7 +173,7 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
         ProtoEnvelopeErrorV1 {
             kind: Some(match self {
                 EnvelopeError::Upsert(rust) => Kind::Upsert(rust.into_proto()),
-                EnvelopeError::Flat(text) => Kind::Flat(text.clone()),
+                EnvelopeError::Flat(text) => Kind::Flat(text.into_proto()),
             }),
         }
     }
@@ -139,7 +185,7 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
                 let rust = RustType::from_proto(proto)?;
                 Ok(Self::Upsert(rust))
             }
-            Some(Kind::Flat(text)) => Ok(Self::Flat(text)),
+            Some(Kind::Flat(text)) => Ok(Self::Flat(text.into())),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoEnvelopeErrorV1::kind",
             )),
@@ -158,96 +204,67 @@ impl Display for EnvelopeError {
 
 /// An error from a value in an upsert source. The corresponding key is included, allowing
 /// us to reconstruct their entry in the upsert map upon restart.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct UpsertValueError {
     /// The underlying error.
     pub inner: DecodeError,
     /// The (good) key associated with the errored value.
     pub for_key: Row,
-    /// Whether this upsert error got decoded from a legacy format
-    /// Do not touch this field unless your name is Petros
-    pub is_legacy_dont_touch_it: bool,
 }
 
-impl RustType<ProtoUpsertValueErrorShim> for UpsertValueError {
-    fn into_proto(&self) -> ProtoUpsertValueErrorShim {
-        if self.is_legacy_dont_touch_it {
-            let inner = ProtoDataflowError {
-                kind: Some(proto_dataflow_error::Kind::DecodeError(
-                    self.inner.into_proto(),
-                )),
-            };
-            let proto = ProtoUpsertValueErrorLegacy {
-                inner: Some(inner),
-                for_key: Some(self.for_key.into_proto()),
-            };
-            ProtoUpsertValueErrorShim::Legacy(Box::new(proto))
-        } else {
-            let proto = ProtoUpsertValueError {
-                inner: Some(self.inner.into_proto()),
-                for_key: Some(self.for_key.into_proto()),
-            };
-            ProtoUpsertValueErrorShim::New(proto)
+impl RustType<ProtoUpsertValueError> for UpsertValueError {
+    fn into_proto(&self) -> ProtoUpsertValueError {
+        ProtoUpsertValueError {
+            inner: Some(self.inner.into_proto()),
+            for_key: Some(self.for_key.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoUpsertValueErrorShim) -> Result<Self, TryFromProtoError> {
-        Ok(match proto {
-            ProtoUpsertValueErrorShim::New(new) => UpsertValueError {
-                inner: new
-                    .inner
-                    .into_rust_if_some("ProtoUpsertValueError::inner")?,
-                for_key: new
-                    .for_key
-                    .into_rust_if_some("ProtoUpsertValueError::for_key")?,
-                is_legacy_dont_touch_it: false,
-            },
-            ProtoUpsertValueErrorShim::Legacy(legacy) => {
-                let legacy_inner = match legacy.inner {
-                    Some(inner) => inner,
-                    None => {
-                        return Err(TryFromProtoError::missing_field(
-                            "ProtoUpsertValueError::inner",
-                        ))
-                    }
-                };
-                let inner = DataflowError::from_proto(legacy_inner)?;
-                let inner = match inner {
-                    DataflowError::DecodeError(inner) => *inner,
-                    _ => panic!("invalid legacy upsert error"),
-                };
-                UpsertValueError {
-                    inner,
-                    for_key: legacy
-                        .for_key
-                        .into_rust_if_some("ProtoUpsertValueError::for_key")?,
-                    is_legacy_dont_touch_it: true,
-                }
-            }
+    fn from_proto(proto: ProtoUpsertValueError) -> Result<Self, TryFromProtoError> {
+        Ok(UpsertValueError {
+            inner: proto
+                .inner
+                .into_rust_if_some("ProtoUpsertValueError::inner")?,
+            for_key: proto
+                .for_key
+                .into_rust_if_some("ProtoUpsertValueError::for_key")?,
         })
     }
 }
 
 impl Display for UpsertValueError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let UpsertValueError {
-            inner,
-            for_key,
-            is_legacy_dont_touch_it,
-        } = self;
+        let UpsertValueError { inner, for_key } = self;
         write!(f, "{inner}, decoded key: {for_key:?}")?;
-        if *is_legacy_dont_touch_it {
-            f.write_str(", legacy: true")
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }
 
 /// A source contained a record with a NULL key, which we don't support.
 #[derive(
-    Arbitrary, Ord, PartialOrd, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash,
+    Ord,
+    PartialOrd,
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct UpsertNullKeyError;
 
 impl RustType<ProtoUpsertNullKeyError> for UpsertNullKeyError {
@@ -274,7 +291,18 @@ impl Display for UpsertNullKeyError {
 }
 
 /// An error that can be retracted by a future message using upsert logic.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum UpsertError {
     /// Wrapper around a key decoding error.
     /// We use this instead of emitting the underlying `DataflowError::DecodeError` because with only
@@ -334,7 +362,18 @@ impl Display for UpsertError {
 
 /// Source-wide durable errors; for example, a replication log being meaningless or corrupted.
 /// This should _not_ include transient source errors, like connection issues or misconfigurations.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SourceError {
     pub error: SourceErrorDetails,
 }
@@ -359,10 +398,21 @@ impl Display for SourceError {
     }
 }
 
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum SourceErrorDetails {
-    Initialization(String),
-    Other(String),
+    Initialization(Box<str>),
+    Other(Box<str>),
 }
 
 impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
@@ -370,8 +420,8 @@ impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
         use proto_source_error_details::Kind;
         ProtoSourceErrorDetails {
             kind: Some(match self {
-                SourceErrorDetails::Initialization(s) => Kind::Initialization(s.clone()),
-                SourceErrorDetails::Other(s) => Kind::Other(s.clone()),
+                SourceErrorDetails::Initialization(s) => Kind::Initialization(s.into_proto()),
+                SourceErrorDetails::Other(s) => Kind::Other(s.into_proto()),
             }),
         }
     }
@@ -380,12 +430,12 @@ impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
         use proto_source_error_details::Kind;
         match proto.kind {
             Some(kind) => match kind {
-                Kind::Initialization(s) => Ok(SourceErrorDetails::Initialization(s)),
+                Kind::Initialization(s) => Ok(SourceErrorDetails::Initialization(s.into())),
                 Kind::DeprecatedFileIo(s) | Kind::DeprecatedPersistence(s) => {
                     warn!("Deprecated source error kind: {s}");
-                    Ok(SourceErrorDetails::Other(s))
+                    Ok(SourceErrorDetails::Other(s.into()))
                 }
-                Kind::Other(s) => Ok(SourceErrorDetails::Other(s)),
+                Kind::Other(s) => Ok(SourceErrorDetails::Other(s.into())),
             },
             None => Err(TryFromProtoError::missing_field(
                 "ProtoSourceErrorDetails::kind",
@@ -421,7 +471,18 @@ impl Display for SourceErrorDetails {
 /// All of the variants are boxed to minimize the memory size of `DataflowError`. This type is
 /// likely to appear in `Result<Row, DataflowError>`s on high-throughput code paths, so keeping its
 /// size less than or equal to that of `Row` is important to ensure we are not wasting memory.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    Hash
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DataflowError {
     DecodeError(Box<DecodeError>),
     EvalError(Box<EvalError>),
@@ -431,15 +492,70 @@ pub enum DataflowError {
 
 impl Error for DataflowError {}
 
+#[cfg(any(test, feature = "proptest"))]
+mod boxed_str {
+
+    use columnation::Region;
+    use columnation::StableRegion;
+
+    /// Region allocation for `String` data.
+    ///
+    /// Content bytes are stored in stable contiguous memory locations,
+    /// and then a `String` referencing them is falsified.
+    #[derive(Default)]
+    pub struct BoxStrStack {
+        region: StableRegion<u8>,
+    }
+
+    impl Region for BoxStrStack {
+        type Item = Box<str>;
+        #[inline]
+        fn clear(&mut self) {
+            self.region.clear();
+        }
+        // Removing `(always)` is a 20% performance regression in
+        // the `string10_copy` benchmark.
+        #[inline(always)]
+        unsafe fn copy(&mut self, item: &Box<str>) -> Box<str> {
+            let bytes = self.region.copy_slice(item.as_bytes());
+            // SAFETY: The bytes are copied from the region, and the region is stable.
+            // We never drop the box.
+            std::str::from_boxed_utf8_unchecked(Box::from_raw(bytes))
+        }
+        #[inline(always)]
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.region.reserve(items.map(|x| x.len()).sum());
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.region.reserve(regions.map(|r| r.region.len()).sum());
+        }
+        #[inline]
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.region.heap_size(callback)
+        }
+    }
+}
+
+#[cfg(any(test, feature = "proptest"))]
 mod columnation {
     use std::iter::once;
 
+    use columnation::{Columnation, Region, StableRegion};
     use mz_expr::EvalError;
+    use mz_repr::Row;
     use mz_repr::adt::range::InvalidRangeError;
     use mz_repr::strconv::ParseError;
-    use mz_repr::Row;
-    use timely::container::columnation::{Columnation, Region, StableRegion};
 
+    use crate::errors::boxed_str::BoxStrStack;
     use crate::errors::{
         DataflowError, DecodeError, DecodeErrorKind, EnvelopeError, SourceError,
         SourceErrorDetails, UpsertError, UpsertValueError,
@@ -463,7 +579,7 @@ mod columnation {
         /// Stable location for [`SourceError`] for inserting into a box.
         source_error_region: StableRegion<SourceError>,
         /// Region for storing strings.
-        string_region: <String as Columnation>::InnerRegion,
+        string_region: BoxStrStack,
         /// Region for storing u8 vectors.
         u8_region: <Vec<u8> as Columnation>::InnerRegion,
     }
@@ -539,6 +655,7 @@ mod columnation {
                         | e @ EvalError::KeyCannotBeNull
                         | e @ EvalError::UnterminatedLikeEscapeSequence
                         | e @ EvalError::MultipleRowsFromSubquery
+                        | e @ EvalError::NegativeRowsFromSubquery
                         | e @ EvalError::LikePatternTooLong
                         | e @ EvalError::LikeEscapeTooLong
                         | e @ EvalError::MultidimensionalArrayRemovalNotSupported
@@ -553,9 +670,12 @@ mod columnation {
                         | e @ EvalError::LengthTooLarge
                         | e @ EvalError::AclArrayNullElement
                         | e @ EvalError::MzAclArrayNullElement => e.clone(),
-                        EvalError::Unsupported { feature, issue_no } => EvalError::Unsupported {
+                        EvalError::Unsupported {
+                            feature,
+                            discussion_no,
+                        } => EvalError::Unsupported {
                             feature: self.string_region.copy(feature),
-                            issue_no: *issue_no,
+                            discussion_no: *discussion_no,
                         },
                         EvalError::Float32OutOfRange(string) => {
                             EvalError::Float32OutOfRange(self.string_region.copy(string))
@@ -719,6 +839,9 @@ mod columnation {
                         EvalError::InvalidPrivileges(x) => {
                             EvalError::InvalidPrivileges(self.string_region.copy(x))
                         }
+                        EvalError::InvalidCatalogJson(x) => {
+                            EvalError::InvalidCatalogJson(self.string_region.copy(x))
+                        }
                         EvalError::LetRecLimitExceeded(x) => {
                             EvalError::LetRecLimitExceeded(self.string_region.copy(x))
                         }
@@ -750,6 +873,9 @@ mod columnation {
                         }
                         EvalError::PrettyError(x) => {
                             EvalError::PrettyError(self.string_region.copy(x))
+                        }
+                        EvalError::RedactError(x) => {
+                            EvalError::RedactError(self.string_region.copy(x))
                         }
                     };
                     let reference = self.eval_error_region.copy_iter(once(err));
@@ -783,7 +909,6 @@ mod columnation {
                                 UpsertError::Value(err) => UpsertError::Value(UpsertValueError {
                                     inner: self.copy_decode_error(&err.inner),
                                     for_key: self.row_region.copy(&err.for_key),
-                                    is_legacy_dont_touch_it: err.is_legacy_dont_touch_it,
                                 }),
                                 UpsertError::NullKey(err) => UpsertError::NullKey(*err),
                             };
@@ -891,13 +1016,13 @@ mod columnation {
 
     #[cfg(test)]
     mod tests {
+        use mz_timely_util::columnation::ColumnationStack;
         use proptest::prelude::*;
-        use timely::container::columnation::TimelyStack;
 
         use super::*;
 
-        fn columnation_roundtrip<T: Columnation>(item: &T) -> TimelyStack<T> {
-            let mut container = TimelyStack::with_capacity(1);
+        fn columnation_roundtrip<T: Columnation>(item: &T) -> ColumnationStack<T> {
+            let mut container = ColumnationStack::with_capacity(1);
             container.copy(item);
             container
         }
@@ -995,6 +1120,8 @@ pub enum ContextCreationError {
     #[error(transparent)]
     KafkaError(#[from] KafkaError),
     #[error(transparent)]
+    Dns(#[from] mz_ore::netio::DnsResolutionError),
+    #[error(transparent)]
     Other(#[from] anyhow::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -1004,7 +1131,7 @@ pub enum ContextCreationError {
 pub trait ContextCreationErrorExt<T> {
     /// Override the error case with an ssh error from `cx`, if there is one.
     fn check_ssh_status<C>(self, cx: &TunnelingClientContext<C>)
-        -> Result<T, ContextCreationError>;
+    -> Result<T, ContextCreationError>;
     /// Add context to the errors within the variants of `ContextCreationError`, without
     /// altering the `Ssh` variant.
     fn add_context(self, msg: &'static str) -> Result<T, ContextCreationError>;
@@ -1042,6 +1169,9 @@ where
                 ContextCreationError::Io(e) => {
                     ContextCreationError::Other(anyhow!(anyhow!(e).context(msg)))
                 }
+                ContextCreationError::Dns(e) => {
+                    ContextCreationError::Other(anyhow!(e).context(msg))
+                }
             }
         })
     }
@@ -1070,10 +1200,17 @@ pub enum CsrConnectError {
     #[error(transparent)]
     Openssl(#[from] openssl::error::ErrorStack),
     #[error(transparent)]
+    Dns(#[from] mz_ore::netio::DnsResolutionError),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+/// Error returned in response to a reference to an unknown collection.
+#[derive(Error, Debug)]
+#[error("collection does not exist: {0}")]
+pub struct CollectionMissing(pub GlobalId);
 
 #[cfg(test)]
 mod tests {
@@ -1084,7 +1221,7 @@ mod tests {
     #[mz_ore::test]
     fn test_decode_error_codec_roundtrip() -> Result<(), String> {
         let original = DecodeError {
-            kind: DecodeErrorKind::Text("ciao".to_string()),
+            kind: DecodeErrorKind::Text("ciao".into()),
             raw: b"oaic".to_vec(),
         };
         let mut encoded = Vec::new();

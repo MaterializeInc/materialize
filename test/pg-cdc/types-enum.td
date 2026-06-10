@@ -33,11 +33,15 @@ CREATE TABLE enum_type ( f1 enum1);
 INSERT INTO enum_type VALUES ('val1'), ('val2');
 ALTER TABLE enum_type REPLICA IDENTITY FULL;
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', TEXT COLUMNS (enum_type.f1))
-  FOR ALL TABLES;
+> BEGIN
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE enum_type) WITH (TEXT COLUMNS (f1));
+> COMMIT
 
 > SELECT COUNT(*) > 0 FROM enum_type;
 true

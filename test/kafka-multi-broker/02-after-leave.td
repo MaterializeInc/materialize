@@ -13,6 +13,8 @@
 
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": "string" } ] }
 
+$ set-sql-timeout duration=60s
+
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=11
 {"f1": "03-01" }
 
@@ -22,7 +24,7 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=1
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=13
 {"f1": "03-03" }
 
-> SELECT f1 FROM kafka_multi_broker
+> SELECT f1 FROM kafka_multi_broker_tbl
 01-01
 01-02
 01-03

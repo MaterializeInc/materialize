@@ -1,0 +1,98 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for database-issues#11256
+# CAST to regclass/regtype on NULL values from materialized views
+# previously errored with "dimension values must not be null" during planning.
+
+# Minimal reproducer
+statement ok
+CREATE TABLE t(c0 VARCHAR NOT NULL)
+
+statement ok
+INSERT INTO t VALUES ('')
+
+statement ok
+CREATE MATERIALIZED VIEW v(c0) AS SELECT NULL FROM t GROUP BY ((NULL)||(t.c0))
+
+query T
+SELECT v.c0 FROM v WHERE (CASE v.c0 WHEN v.c0 THEN false END) IS NULL ORDER BY CAST(v.c0 AS REGCLASS)
+----
+NULL
+
+statement ok
+DROP MATERIALIZED VIEW v
+
+statement ok
+DROP TABLE t
+
+# Original reproducer from database-issues#11256
+statement ok
+CREATE TABLE t0(c0 VARCHAR NOT NULL, c1 UUID NOT NULL, c2 INT2VECTOR, c3 INT NOT NULL)
+
+statement ok
+INSERT INTO t0(c3, c2, c1, c0) VALUES (2136794456, '1 2 3', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '')
+
+statement ok
+INSERT INTO t0(c1, c2, c3, c0) VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', NULL, -637579894, 'dazWgH2FB7CSyt9aNmAKqxyxqXEo6IH6JUoBPhu6wI0V5tnJq8ESHfiZd2XgpdWEgIVG67lx6xPYu8FNGd')
+
+statement ok
+INSERT INTO t0(c1, c0, c2, c3) VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '0ujDmr5gbmlmvKj', '1 2 3', -950179842)
+
+statement ok
+INSERT INTO t0(c3, c1, c0) VALUES (-950179842, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'NVcHV0xqDJvuiEnwMUs5B'), (17423741, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', ''), (1905619761, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Yp')
+
+statement ok
+INSERT INTO t0(c0, c1, c3, c2) VALUES ('UEauziDR4CYOiXwZISF1YOVh0P2w1TMmbeI03', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 1837023592, '1 2 3')
+
+statement ok
+INSERT INTO t0(c2, c1, c3, c0) VALUES ('1 2 3', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', -2074042641, 'BsH48m')
+
+statement ok
+INSERT INTO t0(c1, c0, c3) VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'VS', 1837023592)
+
+statement ok
+INSERT INTO t0(c3, c2, c0, c1) VALUES (-18102561, NULL, '', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11')
+
+statement ok
+INSERT INTO t0(c1, c0, c3, c2) VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'u1lBSwWWu3BD29FaGDxZyzARYL9SJeyClo1kFhQA6SA3dXu6iQXL4qsak', -1242730022, '1 2 3')
+
+statement ok
+INSERT INTO t0(c0, c1, c3) VALUES ('', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 429883002)
+
+statement ok
+INSERT INTO t0(c2, c1, c3, c0) VALUES (NULL, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 429883002, '7RQaGKqJ1WtAEYbR7WmuNhQwKPhVyTrooYLXN6pMjts9zagpbD4dz4anzEIku4B9wrxD1BDxp2Txx57ensifdyEVHBiZ8pQjj')
+
+statement ok
+UPDATE t0 SET c2='1 2 3', c3=-1613725245, c0='nWiF', c1=t0.c1
+
+statement ok
+CREATE INDEX t0i0 ON t0 (c0, c1)
+
+statement ok
+CREATE INDEX t0i1 ON t0 (c0)
+
+statement ok
+CREATE MATERIALIZED VIEW v0(c0) AS SELECT NULL FROM t0 GROUP BY ((NULL)||(t0.c0)) LIMIT 1914435174
+
+query T
+SELECT v0.c0 FROM v0 WHERE (((CASE v0.c0 WHEN v0.c0 THEN false END)) IS NULL) ORDER BY CAST(v0.c0 AS REGCLASS), HAS_TABLE_PRIVILEGE(v0.c0, v0.c0) ASC, '[2020-01-01 00:00:00+00,2021-01-01 00:00:00+00)'
+----
+NULL
+
+query T
+SELECT v0.c0 FROM v0 WHERE (((CASE v0.c0 WHEN v0.c0 THEN false END)) IS NULL) ORDER BY CAST(v0.c0 AS REGCLASS)
+----
+NULL
+
+statement ok
+DROP MATERIALIZED VIEW v0
+
+statement ok
+DROP TABLE t0

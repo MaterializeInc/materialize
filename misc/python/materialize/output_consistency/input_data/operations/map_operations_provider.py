@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mz_version import MzVersion
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyOperationParam,
@@ -23,6 +22,9 @@ from materialize.output_consistency.input_data.params.map_operation_param import
 )
 from materialize.output_consistency.input_data.params.record_operation_param import (
     RecordOperationParam,
+)
+from materialize.output_consistency.input_data.params.row_indices_param import (
+    RowIndicesParam,
 )
 from materialize.output_consistency.input_data.params.same_operation_param import (
     SameOperationParam,
@@ -89,7 +91,6 @@ MAP_OPERATION_TYPES.append(
         [MAP_FIELD_NAME_PARAM, AnyOperationParam()],
         MapReturnTypeSpec(),
         comment="using a set of specified keys",
-        since_mz_version=MzVersion.parse_mz("v0.100.0"),
     )
 )
 MAP_OPERATION_TYPES.append(
@@ -98,7 +99,6 @@ MAP_OPERATION_TYPES.append(
         [StringOperationParam(only_type_text=True), AnyOperationParam()],
         MapReturnTypeSpec(),
         comment="using arbitrary text values as keys",
-        since_mz_version=MzVersion.parse_mz("v0.100.0"),
     )
 )
 
@@ -112,10 +112,14 @@ MAP_OPERATION_TYPES.append(
 MAP_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "map_agg",
-        {3: "map_agg($, $ ORDER BY row_index, $)"},
+        {4: "map_agg($, $ ORDER BY $, $)"},
         [
+            # key
             StringOperationParam(only_type_text=True),
+            # value
             AnyOperationParam(),
+            RowIndicesParam(index_of_param_to_share_data_source=0),
+            # order within aggregated values
             SameOperationParam(index_of_previous_param=1),
         ],
         MapReturnTypeSpec(),

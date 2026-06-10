@@ -100,7 +100,7 @@ NULL           NULL
 query error invalid input syntax for type bytea
 SELECT decode('\9', 'escape')
 
-# checks https://github.com/MaterializeInc/materialize/issues/11369
+# checks https://github.com/MaterializeInc/database-issues/issues/3311
 query T
 SELECT encode('se', 'base64')
 ----

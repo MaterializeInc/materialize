@@ -11,7 +11,7 @@
 # Make sure that any JSON operators in views are properly persisted
 #
 
-> CREATE CLUSTER json_compute_cluster SIZE '1';
+> CREATE CLUSTER json_compute_cluster SIZE 'scale=1,workers=1';
 
 > CREATE TABLE json_table (a JSONB);
 

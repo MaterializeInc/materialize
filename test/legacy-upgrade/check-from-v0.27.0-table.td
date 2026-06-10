@@ -31,7 +31,7 @@
 123 "default value"
 
 > SHOW COLUMNS IN not_null
-f1 false integer
+f1 false integer ""
 
 ! INSERT INTO not_null VALUES (null)
 contains:null value in column "f1" violates not-null constraint

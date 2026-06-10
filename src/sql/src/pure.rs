@@ -12,62 +12,66 @@
 //! See the [crate-level documentation](crate) for details.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::ast::AlterSourceAddSubsourceOption;
 use anyhow::anyhow;
 use itertools::Itertools;
-use mz_adapter_types::dyncfgs;
-use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
+use mz_adapter_types::dyncfgs::ENABLE_S3_TABLES_REGION_CHECK;
+use mz_ccsr::{Client, GetBySubjectError};
+use mz_cloud_provider::CloudProvider;
 use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
 use mz_mysql_util::MySqlTableDesc;
-use mz_ore::assert_none;
+use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::replication::WalLevel;
 use mz_proto::RustType;
-use mz_repr::{strconv, RelationDesc, Timestamp};
+use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::visit::{visit_function, Visit};
-use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
+use mz_sql_parser::ast::visit::{Visit, visit_function};
+use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
-    CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
-    CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function,
-    FunctionArgs, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName,
+    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption, CreateSubsourceOptionName,
+    CreateTableFromSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier,
+    DocOnSchema, Expr, Function, FunctionArgs, Ident, KafkaSourceConfigOption,
+    KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption, LoadGeneratorOptionName,
     MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
     PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
-    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement,
-    UnresolvedItemName,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableFromSourceColumns,
+    TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
 };
+use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
-use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::Connection;
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::errors::ContextCreationError;
+use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    ExternalCatalogReference, GenericSourceConnection, SourceConnection,
-    SourceExportStatementDetails, SourceReferenceResolver,
+    GenericSourceConnection, SourceDesc, SourceExportStatementDetails, SqlServerSourceExtras,
 };
 use prost::Message;
-use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use rdkafka::admin::AdminClient;
+use references::{RetrievedSourceReferences, SourceReferenceClient};
 use uuid::Uuid;
 
 use crate::ast::{
-    AvroSchema, CreateSourceConnection, CreateSourceStatement, CreateSubsourceStatement,
-    CsrConnectionAvro, CsrConnectionProtobuf, ExternalReferenceExport, ExternalReferences, Format,
-    FormatSpecifier, ProtobufSchema, Value, WithOptionValue,
+    AlterSourceAddSubsourceOption, AvroSchema, CreateSourceConnection, CreateSourceStatement,
+    CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf, ExternalReferenceExport,
+    ExternalReferences, Format, FormatSpecifier, ProtobufSchema, Value, WithOptionValue,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
@@ -77,7 +81,9 @@ use crate::names::{
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
-use crate::plan::StatementContext;
+use crate::plan::{SourceReferences, StatementContext};
+use crate::pure::error::{IcebergSinkPurificationError, SqlServerSourcePurificationError};
+use crate::pure::mysql::{ensure_binlog_full_metadata, is_binlog_full_metadata};
 use crate::{kafka_util, normalize};
 
 use self::error::{
@@ -86,61 +92,36 @@ use self::error::{
 };
 
 pub(crate) mod error;
+mod references;
+
 pub mod mysql;
 pub mod postgres;
+pub mod sql_server;
 
-pub(crate) struct RequestedSourceExport<'a, T> {
+pub(crate) struct RequestedSourceExport<T> {
     external_reference: UnresolvedItemName,
     name: UnresolvedItemName,
-    table: &'a T,
+    meta: T,
 }
 
-/// Generates appropriate source exports for a set of external references to export from a source.
-fn source_export_gen<'a, T: ExternalCatalogReference>(
-    selected_references: &mut Vec<ExternalReferenceExport>,
-    resolver: &SourceReferenceResolver,
-    references: &'a [T],
-    canonical_width: usize,
-    source_name: &UnresolvedItemName,
-) -> Result<Vec<RequestedSourceExport<'a, T>>, PlanError> {
-    let mut validated_exports = vec![];
-
-    for reference in selected_references {
-        let name = match &reference.alias {
-            Some(name) => {
-                let partial = normalize::unresolved_item_name(name.clone())?;
-                match partial.schema {
-                    Some(_) => name.clone(),
-                    // In cases when a prefix is not provided for the deferred name
-                    // fallback to using the schema of the source with the given name
-                    None => source_export_name_gen(source_name, &partial.item)?,
-                }
-            }
-            None => {
-                // Use the entered name as the upstream reference, and then use
-                // the item as the subsource name to ensure it's created in the
-                // current schema or the source's schema if provided, not mirroring
-                // the schema of the reference.
-                source_export_name_gen(
-                    source_name,
-                    &normalize::unresolved_item_name(reference.reference.clone())?.item,
-                )?
-            }
-        };
-
-        let (external_reference, idx) =
-            resolver.resolve(&reference.reference.0, canonical_width)?;
-
-        let table = &references[idx];
-
-        validated_exports.push(RequestedSourceExport {
-            external_reference,
-            name,
-            table,
-        });
+impl<T: fmt::Debug> fmt::Debug for RequestedSourceExport<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RequestedSourceExport")
+            .field("external_reference", &self.external_reference)
+            .field("name", &self.name)
+            .field("meta", &self.meta)
+            .finish()
     }
+}
 
-    Ok(validated_exports)
+impl<T> RequestedSourceExport<T> {
+    fn change_meta<F>(self, new_meta: F) -> RequestedSourceExport<F> {
+        RequestedSourceExport {
+            external_reference: self.external_reference,
+            name: self.name,
+            meta: new_meta,
+        }
+    }
 }
 
 /// Generates a subsource name by prepending source schema name if present
@@ -149,13 +130,14 @@ fn source_export_gen<'a, T: ExternalCatalogReference>(
 /// so that it's generated in the same schema as source
 fn source_export_name_gen(
     source_name: &UnresolvedItemName,
-    subsource_name: &String,
+    subsource_name: &str,
 ) -> Result<UnresolvedItemName, PlanError> {
     let mut partial = normalize::unresolved_item_name(source_name.clone())?;
     partial.item = subsource_name.to_string();
     Ok(UnresolvedItemName::from(partial))
 }
 
+// TODO(database-issues#8620): Remove once subsources are removed
 /// Validates the requested subsources do not have name conflicts with each other
 /// and that the same upstream table is not referenced multiple times.
 fn validate_source_export_names<T>(
@@ -190,11 +172,11 @@ fn validate_source_export_names<T>(
         })?;
     }
 
-    // TODO: Remove this when supporting source-fed tables which can ingest the same external
-    // reference.
-
-    // We technically could allow multiple subsources to ingest the same upstream table, but
-    // it is almost certainly an error on the user's end.
+    // We disallow subsource statements from referencing the same upstream table, but we allow
+    // `CREATE TABLE .. FROM SOURCE` statements to do so. Since `CREATE TABLE .. FROM SOURCE`
+    // purification will only provide 1 `requested_source_export`, we can leave this here without
+    // needing to differentiate between the two types of statements.
+    // TODO(roshan): Remove this when auto-generated subsources are deprecated.
     if let Some(name) = requested_source_exports
         .iter()
         .map(|export| &export.external_reference)
@@ -224,10 +206,14 @@ fn validate_source_export_names<T>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PurifiedStatement {
     PurifiedCreateSource {
-        create_progress_subsource_stmt: CreateSubsourceStatement<Aug>,
+        // The progress subsource, if we are offloading progress info to a separate relation
+        create_progress_subsource_stmt: Option<CreateSubsourceStatement<Aug>>,
         create_source_stmt: CreateSourceStatement<Aug>,
         // Map of subsource names to external details
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
+        /// All the available upstream references that can be added as tables
+        /// to this primary source.
+        available_source_references: SourceReferences,
     },
     PurifiedAlterSource {
         alter_source_stmt: AlterSourceStatement<Aug>,
@@ -241,7 +227,15 @@ pub enum PurifiedStatement {
         // Map of subsource names to external details
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
     },
+    PurifiedAlterSourceRefreshReferences {
+        source_name: ResolvedItemName,
+        /// The updated available upstream references for the primary source.
+        available_source_references: SourceReferences,
+    },
     PurifiedCreateSink(CreateSinkStatement<Aug>),
+    PurifiedCreateTableFromSource {
+        stmt: CreateTableFromSourceStatement<Aug>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,16 +249,26 @@ pub enum PurifiedExportDetails {
     MySql {
         table: MySqlTableDesc,
         text_columns: Option<Vec<Ident>>,
-        ignore_columns: Option<Vec<Ident>>,
+        exclude_columns: Option<Vec<Ident>>,
         initial_gtid_set: String,
+        binlog_full_metadata: bool,
     },
     Postgres {
         table: PostgresTableDesc,
         text_columns: Option<Vec<Ident>>,
+        exclude_columns: Option<Vec<Ident>>,
+    },
+    SqlServer {
+        table: SqlServerTableDesc,
+        text_columns: Option<Vec<Ident>>,
+        excl_columns: Option<Vec<Ident>>,
+        capture_instance: Arc<str>,
+        initial_lsn: mz_sql_server_util::cdc::Lsn,
     },
     Kafka {},
     LoadGenerator {
-        table: RelationDesc,
+        table: Option<RelationDesc>,
+        output: LoadGeneratorOutput,
     },
 }
 
@@ -302,35 +306,60 @@ pub async fn purify_statement(
                 cluster_id,
             )
         }
-        o => unreachable!("{:?} does not need to be purified", o),
+        Statement::CreateTableFromSource(stmt) => (
+            purify_create_table_from_source(catalog, stmt, storage_configuration).await,
+            None,
+        ),
+        o => (
+            Err(internal_err!(
+                "unexpected statement type in purification: {:?}",
+                o
+            )),
+            None,
+        ),
     }
 }
 
-/// Updates the CREATE SINK statement with materialize comments
-pub(crate) fn add_materialize_comments(
+/// Injects `DOC ON` comments into all Avro formats that are using a schema
+/// registry by finding all SQL `COMMENT`s that are attached to the sink's
+/// underlying materialized view (as well as any types referenced by that
+/// underlying materialized view).
+pub(crate) fn purify_create_sink_avro_doc_on_options(
     catalog: &dyn SessionCatalog,
-    stmt: &mut CreateSinkStatement<Aug>,
+    from_id: CatalogItemId,
+    format: &mut Option<FormatSpecifier<Aug>>,
 ) -> Result<(), PlanError> {
-    // updating avro format with comments so that they are frozen in the `create_sql`
-    let from_id = stmt.from.item_id();
-    let from = catalog.get_item(from_id);
-    let object_ids = from.references().0.clone().into_iter().chain_one(from.id());
+    // Collect all objects referenced by the sink.
+    let from = catalog.get_item(&from_id);
+    let object_ids = from
+        .references()
+        .items()
+        .copied()
+        .chain_one(from.id())
+        .collect::<Vec<_>>();
 
-    // add comments to the avro doc comments
-    if let Some(
-        FormatSpecifier::Bare(Format::Avro(AvroSchema::Csr { csr_connection }))
-        | FormatSpecifier::KeyValue {
-            key: _,
-            value: Format::Avro(AvroSchema::Csr { csr_connection }),
+    // Collect all Avro formats that use a schema registry, as well as a set of
+    // all identifiers named in user-provided `DOC ON` options.
+    let mut avro_format_options = vec![];
+    for_each_format(format, |doc_on_schema, fmt| match fmt {
+        Format::Avro(AvroSchema::InlineSchema { .. })
+        | Format::Bytes
+        | Format::Csv { .. }
+        | Format::Json { .. }
+        | Format::Protobuf(..)
+        | Format::Regex(..)
+        | Format::Text => (),
+        Format::Avro(AvroSchema::Csr {
+            csr_connection: CsrConnectionAvro { connection, .. },
+        }) => {
+            avro_format_options.push((doc_on_schema, &mut connection.options));
         }
-        | FormatSpecifier::KeyValue {
-            key: Format::Avro(AvroSchema::Csr { csr_connection }),
-            value: _,
-        },
-    ) = &mut stmt.format
-    {
-        let options = &mut csr_connection.connection.options;
-        let user_provided_comments = &options
+    });
+
+    // For each Avro format in the sink, inject the appropriate `DOC ON` options
+    // for each item referenced by the sink.
+    for (for_schema, options) in avro_format_options {
+        let user_provided_comments = options
             .iter()
             .filter_map(|CsrConfigOption { name, .. }| match name {
                 CsrConfigOptionName::AvroDocOn(doc_on) => Some(doc_on.clone()),
@@ -339,24 +368,28 @@ pub(crate) fn add_materialize_comments(
             .collect::<BTreeSet<_>>();
 
         // Adding existing comments if not already provided by user
-        for object_id in object_ids {
-            let item = catalog.get_item(&object_id);
-            let full_name = catalog.resolve_full_name(item.name());
+        for object_id in &object_ids {
+            // Always add comments to the latest version of the item.
+            let item = catalog
+                .get_item(object_id)
+                .at_version(RelationVersionSelector::Latest);
             let full_resolved_name = ResolvedItemName::Item {
-                id: object_id,
+                id: *object_id,
                 qualifiers: item.name().qualifiers.clone(),
-                full_name: full_name.clone(),
+                full_name: catalog.resolve_full_name(item.name()),
                 print_id: !matches!(
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
                 ),
+                version: RelationVersionSelector::Latest,
             };
 
-            if let Some(comments_map) = catalog.get_item_comments(&object_id) {
-                // Getting comment on the item
+            if let Some(comments_map) = catalog.get_item_comments(object_id) {
+                // Attach comment for the item itself, if the user has not
+                // already provided an overriding `DOC ON` option for the item.
                 let doc_on_item_key = AvroDocOn {
                     identifier: DocOnIdentifier::Type(full_resolved_name.clone()),
-                    for_schema: DocOnSchema::All,
+                    for_schema,
                 };
                 if !user_provided_comments.contains(&doc_on_item_key) {
                     if let Some(root_comment) = comments_map.get(&None) {
@@ -369,11 +402,17 @@ pub(crate) fn add_materialize_comments(
                     }
                 }
 
-                // Getting comments on columns in the item
-                if let Ok(desc) = item.desc(&full_name) {
+                // Attach comment for each column in the item, if the user has
+                // not already provided an overriding `DOC ON` option for the
+                // column.
+                let column_descs = match item.type_details() {
+                    Some(details) => details.typ.desc(catalog).unwrap_or_default(),
+                    None => item.relation_desc().map(|d| d.into_owned()),
+                };
+
+                if let Some(desc) = column_descs {
                     for (pos, column_name) in desc.iter_names().enumerate() {
-                        let comment = comments_map.get(&Some(pos + 1));
-                        if let Some(comment_str) = comment {
+                        if let Some(comment_str) = comments_map.get(&Some(pos + 1)) {
                             let doc_on_column_key = AvroDocOn {
                                 identifier: DocOnIdentifier::Column(ColumnName {
                                     relation: full_resolved_name.clone(),
@@ -382,7 +421,7 @@ pub(crate) fn add_materialize_comments(
                                         index: pos,
                                     },
                                 }),
-                                for_schema: DocOnSchema::All,
+                                for_schema,
                             };
                             if !user_provided_comments.contains(&doc_on_column_key) {
                                 options.push(CsrConfigOption {
@@ -398,22 +437,17 @@ pub(crate) fn add_materialize_comments(
             }
         }
     }
+
     Ok(())
 }
 
 /// Checks that the sink described in the statement can connect to its external
 /// resources.
-///
-/// We must not leave any state behind in the Kafka broker, so just ensure that
-/// we can connect. This means we don't ensure that we can create the topic and
-/// introduces TOCTOU errors, but creating an inoperable sink is infinitely
-/// preferable to leaking state in users' environments.
 async fn purify_create_sink(
     catalog: impl SessionCatalog,
     mut create_sink_stmt: CreateSinkStatement<Aug>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<PurifiedStatement, PlanError> {
-    add_materialize_comments(&catalog, &mut create_sink_stmt)?;
     // General purification
     let CreateSinkStatement {
         connection,
@@ -422,12 +456,16 @@ async fn purify_create_sink(
         name: _,
         in_cluster: _,
         if_not_exists: _,
-        from: _,
+        from,
         envelope: _,
+        mode: _,
     } = &mut create_sink_stmt;
 
     // The list of options that the user is allowed to specify.
-    const USER_ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[CreateSinkOptionName::Snapshot];
+    const USER_ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[
+        CreateSinkOptionName::Snapshot,
+        CreateSinkOptionName::CommitInterval,
+    ];
 
     if let Some(op) = with_options
         .iter()
@@ -435,16 +473,9 @@ async fn purify_create_sink(
     {
         sql_bail!(
             "CREATE SINK...WITH ({}..) is not allowed",
-            op.name.to_ast_string(),
+            op.name.to_ast_string_simple(),
         )
     }
-
-    let default_strategy =
-        dyncfgs::DEFAULT_SINK_PARTITION_STRATEGY.get(catalog.system_vars().dyncfgs());
-    with_options.push(CreateSinkOption {
-        name: CreateSinkOptionName::PartitionStrategy,
-        value: Some(WithOptionValue::Value(Value::String(default_strategy))),
-    });
 
     match &connection {
         CreateSinkConnection::Kafka {
@@ -453,6 +484,10 @@ async fn purify_create_sink(
             key: _,
             headers: _,
         } => {
+            // We must not leave any state behind in the Kafka broker, so just ensure that
+            // we can connect. This means we don't ensure that we can create the topic and
+            // introduces TOCTOU errors, but creating an inoperable sink is infinitely
+            // preferable to leaking state in users' environments.
             let scx = StatementContext::new(None, &catalog);
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
@@ -506,70 +541,176 @@ async fn purify_create_sink(
                 Err(KafkaSinkPurificationError::ZeroBrokers)?;
             }
         }
-    }
+        CreateSinkConnection::Iceberg {
+            catalog_connection,
+            aws_connection,
+            ..
+        } => {
+            let scx = StatementContext::new(None, &catalog);
+            let connection = {
+                let item = scx.get_item_by_resolved_name(catalog_connection)?;
+                // Get Iceberg connection
+                match item.connection()? {
+                    Connection::IcebergCatalog(connection) => {
+                        connection.clone().into_inline_connection(scx.catalog)
+                    }
+                    _ => sql_bail!(
+                        "{} is not an iceberg connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
+                }
+            };
 
-    if let Some(format) = format {
-        match format {
-            FormatSpecifier::Bare(
-                Format::Avro(AvroSchema::Csr {
-                    csr_connection: CsrConnectionAvro { connection, .. },
-                })
-                | Format::Protobuf(ProtobufSchema::Csr {
-                    csr_connection: CsrConnectionProtobuf { connection, .. },
-                }),
-            )
-            | FormatSpecifier::KeyValue {
-                key: _,
-                value:
-                    Format::Avro(AvroSchema::Csr {
-                        csr_connection: CsrConnectionAvro { connection, .. },
-                    }),
-            }
-            | FormatSpecifier::KeyValue {
-                key:
-                    Format::Avro(AvroSchema::Csr {
-                        csr_connection: CsrConnectionAvro { connection, .. },
-                    }),
-                value: _,
-            } => {
-                let connection = {
-                    let scx = StatementContext::new(None, &catalog);
-                    let item = scx.get_item_by_resolved_name(&connection.connection)?;
-                    // Get Kafka connection
-                    match item.connection()? {
-                        Connection::Csr(connection) => {
-                            connection.clone().into_inline_connection(&catalog)
+            // For S3 Tables connections in the Materialize Cloud product, verify the
+            // AWS region matches the environment's region. This check only applies when
+            // the enable_s3_tables_region_check dyncfg is set.
+            if let Some(s3tables) = connection.s3tables_catalog() {
+                let enable_region_check =
+                    ENABLE_S3_TABLES_REGION_CHECK.get(scx.catalog.system_vars().dyncfgs());
+                if enable_region_check {
+                    let env_id = &catalog.config().environment_id;
+                    if matches!(env_id.cloud_provider(), CloudProvider::Aws) {
+                        let env_region = env_id.cloud_provider_region();
+                        // Later on we default to "us-east-1" if the region is not set on the S3 Tables
+                        // connection, so we need to do the same check here.
+                        let s3_tables_region = s3tables
+                            .aws_connection
+                            .connection
+                            .region
+                            .clone()
+                            .unwrap_or_else(|| "us-east-1".to_string());
+                        if s3_tables_region != env_region {
+                            Err(IcebergSinkPurificationError::S3TablesRegionMismatch {
+                                s3_tables_region,
+                                environment_region: env_region.to_string(),
+                            })?;
                         }
-                        _ => Err(CsrPurificationError::NotCsrConnection(
-                            scx.catalog.resolve_full_name(item.name()),
-                        ))?,
+                    }
+                }
+            }
+
+            // Validate the sink's (optional) AWS connection even though we never use it.
+            // TODO(kynan): If we do start using the sink's creds, check again that this validation
+            //   accurately reflects what we need.
+            //   Consider rolling the storage creds validation into the catalog connection's "connect" fn,
+            //   which already validates the catalog creds (currently also used for the storage layer).
+            if let Some(aws_connection) = aws_connection {
+                let aws_conn_id = aws_connection.item_id();
+                let aws_connection = {
+                    let item = scx.get_item_by_resolved_name(aws_connection)?;
+                    // Get AWS connection
+                    match item.connection()? {
+                        Connection::Aws(aws_connection) => aws_connection.clone(),
+                        _ => sql_bail!(
+                            "{} is not an aws connection",
+                            scx.catalog.resolve_full_name(item.name())
+                        ),
                     }
                 };
 
-                let client = connection
-                    .connect(storage_configuration, InTask::No)
+                let _sdk_config = aws_connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws_conn_id.clone(),
+                        InTask::No,
+                        mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                            .get(storage_configuration.config_set()),
+                    )
                     .await
-                    .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
-
-                client
-                    .list_subjects()
-                    .await
-                    .map_err(|e| CsrPurificationError::ListSubjectsError(Arc::new(e)))?;
+                    .map_err(|e| IcebergSinkPurificationError::AwsSdkContextError(Arc::new(e)))?;
             }
-            FormatSpecifier::Bare(
-                Format::Avro(AvroSchema::InlineSchema { .. })
-                | Format::Bytes
-                | Format::Csv { .. }
-                | Format::Json { .. }
-                | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
-                | Format::Regex(..)
-                | Format::Text,
-            )
-            | FormatSpecifier::KeyValue { .. } => {}
+
+            // Now that we've validated the sink's storage creds (if they exist)
+            // we _could_ use them to build a complete Iceberg client (both catalog and storage).
+            // TODO(kynan): Actually use those sink-specific creds here instead of ignoring them.
+            let _catalog = connection
+                .connect(storage_configuration, InTask::No)
+                .await
+                .map_err(|e| IcebergSinkPurificationError::CatalogError(Arc::new(e)))?;
         }
     }
 
+    let mut csr_connection_ids = BTreeSet::new();
+    for_each_format(format, |_, fmt| match fmt {
+        Format::Avro(AvroSchema::InlineSchema { .. })
+        | Format::Bytes
+        | Format::Csv { .. }
+        | Format::Json { .. }
+        | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
+        | Format::Regex(..)
+        | Format::Text => (),
+        Format::Avro(AvroSchema::Csr {
+            csr_connection: CsrConnectionAvro { connection, .. },
+        })
+        | Format::Protobuf(ProtobufSchema::Csr {
+            csr_connection: CsrConnectionProtobuf { connection, .. },
+        }) => {
+            csr_connection_ids.insert(*connection.connection.item_id());
+        }
+    });
+
+    let scx = StatementContext::new(None, &catalog);
+    for csr_connection_id in csr_connection_ids {
+        let connection = {
+            let item = scx.get_item(&csr_connection_id);
+            // Get Kafka connection
+            match item.connection()? {
+                Connection::Csr(connection) => connection.clone().into_inline_connection(&catalog),
+                _ => Err(CsrPurificationError::NotCsrConnection(
+                    scx.catalog.resolve_full_name(item.name()),
+                ))?,
+            }
+        };
+
+        let client = connection
+            .connect(storage_configuration, InTask::No)
+            .await
+            .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
+
+        client
+            .list_subjects()
+            .await
+            .map_err(|e| CsrPurificationError::ListSubjectsError(Arc::new(e)))?;
+    }
+
+    purify_create_sink_avro_doc_on_options(&catalog, *from.item_id(), format)?;
+
     Ok(PurifiedStatement::PurifiedCreateSink(create_sink_stmt))
+}
+
+/// Runs a function on each format within the format specifier.
+///
+/// The function is provided with a `DocOnSchema` that indicates whether the
+/// format is for the key, value, or both.
+///
+// TODO(benesch): rename `DocOnSchema` to the more general `FormatRestriction`.
+fn for_each_format<'a, F>(format: &'a mut Option<FormatSpecifier<Aug>>, mut f: F)
+where
+    F: FnMut(DocOnSchema, &'a mut Format<Aug>),
+{
+    match format {
+        None => (),
+        Some(FormatSpecifier::Bare(fmt)) => f(DocOnSchema::All, fmt),
+        Some(FormatSpecifier::KeyValue { key, value }) => {
+            f(DocOnSchema::KeyOnly, key);
+            f(DocOnSchema::ValueOnly, value);
+        }
+    }
+}
+
+/// Defines whether purification should enforce that at least one valid source
+/// reference is provided on the provided statement.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) enum SourceReferencePolicy {
+    /// Don't allow source references to be provided. This is used for
+    /// enforcing that `CREATE SOURCE` statements don't create subsources.
+    NotAllowed,
+    /// Allow empty references, such as when creating a source that
+    /// will have tables added afterwards.
+    Optional,
+    /// Require that at least one reference is resolved to an upstream
+    /// object.
+    Required,
 }
 
 async fn purify_create_source(
@@ -580,14 +721,25 @@ async fn purify_create_source(
 ) -> Result<PurifiedStatement, PlanError> {
     let CreateSourceStatement {
         name: source_name,
-        connection,
+        col_names,
+        key_constraint,
+        connection: source_connection,
         format,
         envelope,
         include_metadata,
         external_references,
         progress_subsource,
+        with_options,
         ..
     } = &mut create_source_stmt;
+
+    let uses_old_syntax = !col_names.is_empty()
+        || key_constraint.is_some()
+        || format.is_some()
+        || envelope.is_some()
+        || !include_metadata.is_empty()
+        || external_references.is_some()
+        || progress_subsource.is_some();
 
     if let Some(DeferredItemName::Named(_)) = progress_subsource {
         sql_bail!("Cannot manually ID qualify progress subsource")
@@ -595,12 +747,15 @@ async fn purify_create_source(
 
     let mut requested_subsource_map = BTreeMap::new();
 
-    let progress_desc = match &connection {
+    let progress_desc = match &source_connection {
         CreateSourceConnection::Kafka { .. } => {
             &mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC
         }
         CreateSourceConnection::Postgres { .. } => {
             &mz_storage_types::sources::postgres::PG_PROGRESS_DESC
+        }
+        CreateSourceConnection::SqlServer { .. } => {
+            &mz_storage_types::sources::sql_server::SQL_SERVER_PROGRESS_DESC
         }
         CreateSourceConnection::MySql { .. } => {
             &mz_storage_types::sources::mysql::MYSQL_PROGRESS_DESC
@@ -609,8 +764,26 @@ async fn purify_create_source(
             &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
         }
     };
+    let scx = StatementContext::new(None, &catalog);
 
-    match connection {
+    // Depending on if the user must or can use the `CREATE TABLE .. FROM SOURCE` statement
+    // to add tables after this source is created we might need to enforce that
+    // auto-generated subsources are created or not created by this source statement.
+    let reference_policy = if scx.catalog.system_vars().enable_create_table_from_source()
+        && scx.catalog.system_vars().force_source_table_syntax()
+    {
+        SourceReferencePolicy::NotAllowed
+    } else if scx.catalog.system_vars().enable_create_table_from_source() {
+        SourceReferencePolicy::Optional
+    } else {
+        SourceReferencePolicy::Required
+    };
+
+    let mut format_options = SourceFormatOptions::Default;
+
+    let retrieved_source_references: RetrievedSourceReferences;
+
+    match source_connection {
         CreateSourceConnection::Kafka {
             connection,
             options: base_with_options,
@@ -622,7 +795,6 @@ async fn purify_create_source(
                 ))?;
             }
 
-            let scx = StatementContext::new(None, &catalog);
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 // Get Kafka connection
@@ -721,26 +893,29 @@ async fn purify_create_source(
                     });
                 }
             }
+
+            let reference_client = SourceReferenceClient::Kafka { topic: &topic };
+            retrieved_source_references = reference_client.get_source_references().await?;
+
+            format_options = SourceFormatOptions::Kafka { topic };
         }
         CreateSourceConnection::Postgres {
             connection,
             options,
         } => {
-            let scx = StatementContext::new(None, &catalog);
-            let connection = {
-                let item = scx.get_item_by_resolved_name(connection)?;
-                match item.connection().map_err(PlanError::from)? {
-                    Connection::Postgres(connection) => {
-                        connection.clone().into_inline_connection(&catalog)
-                    }
-                    _ => Err(PgSourcePurificationError::NotPgConnection(
-                        scx.catalog.resolve_full_name(item.name()),
-                    ))?,
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let connection = match connection_item.connection().map_err(PlanError::from)? {
+                Connection::Postgres(connection) => {
+                    connection.clone().into_inline_connection(&catalog)
                 }
+                _ => Err(PgSourcePurificationError::NotPgConnection(
+                    scx.catalog.resolve_full_name(connection_item.name()),
+                ))?,
             };
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
                 text_columns,
+                exclude_columns,
                 details,
                 ..
             } = options.clone().try_into()?;
@@ -751,54 +926,28 @@ async fn purify_create_source(
                 Err(PgSourcePurificationError::UserSpecifiedDetails)?;
             }
 
-            // verify that we can connect upstream and snapshot publication metadata
-            let config = connection
-                .config(
-                    &storage_configuration.connection_context.secrets_reader,
-                    storage_configuration,
-                    InTask::No,
-                )
+            let client = connection
+                .validate(connection_item.id(), storage_configuration)
                 .await?;
 
-            let client = config
-                .connect(
-                    "postgres_purification",
-                    &storage_configuration.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-
-            let wal_level = mz_postgres_util::get_wal_level(&client).await?;
-
-            if wal_level < WalLevel::Logical {
-                Err(PgSourcePurificationError::InsufficientWalLevel { wal_level })?;
-            }
-
-            let max_wal_senders = mz_postgres_util::get_max_wal_senders(&client).await?;
-
-            if max_wal_senders < 1 {
-                Err(PgSourcePurificationError::ReplicationDisabled)?;
-            }
-
-            let available_replication_slots =
-                mz_postgres_util::available_replication_slots(&client).await?;
-
-            // We need 1 replication slot for the snapshots and 1 for the continuing replication
-            if available_replication_slots < 2 {
-                Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 2 })?;
-            }
+            let reference_client = SourceReferenceClient::Postgres {
+                client: &client,
+                publication: &publication,
+                database: &connection.database,
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
 
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
-                referenced_tables,
                 normalized_text_columns,
             } = postgres::purify_source_exports(
                 &client,
-                &config,
-                &publication,
-                &connection,
+                &retrieved_source_references,
                 external_references,
                 text_columns,
+                exclude_columns,
                 source_name,
+                &reference_policy,
             )
             .await?;
 
@@ -813,15 +962,11 @@ async fn purify_create_source(
 
             // Record the active replication timeline_id to allow detection of a future upstream
             // point-in-time-recovery that will put the source into an error state.
-            let replication_client = config
-                .connect_replication(&storage_configuration.connection_context.ssh_tunnel_manager)
-                .await?;
-            let timeline_id = mz_postgres_util::get_timeline_id(&replication_client).await?;
+            let timeline_id = mz_postgres_util::get_timeline_id(&client).await?;
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
             let details = PostgresSourcePublicationDetails {
-                tables: referenced_tables,
                 slot: format!(
                     "materialize_{}",
                     Uuid::new_v4().to_string().replace('-', "")
@@ -836,11 +981,104 @@ async fn purify_create_source(
                 )))),
             })
         }
+        CreateSourceConnection::SqlServer {
+            connection,
+            options,
+        } => {
+            // Connect to the upstream SQL Server instance so we can validate
+            // we're compatible with CDC.
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let connection = match connection_item.connection()? {
+                Connection::SqlServer(connection) => {
+                    connection.clone().into_inline_connection(&catalog)
+                }
+                _ => Err(SqlServerSourcePurificationError::NotSqlServerConnection(
+                    scx.catalog.resolve_full_name(connection_item.name()),
+                ))?,
+            };
+            let crate::plan::statement::ddl::SqlServerConfigOptionExtracted {
+                details,
+                text_columns,
+                exclude_columns,
+                seen: _,
+            } = options.clone().try_into()?;
+
+            if details.is_some() {
+                Err(SqlServerSourcePurificationError::UserSpecifiedDetails)?;
+            }
+
+            let mut client = connection
+                .validate(connection_item.id(), storage_configuration)
+                .await?;
+
+            let database: Arc<str> = connection.database.into();
+            let reference_client = SourceReferenceClient::SqlServer {
+                client: &mut client,
+                database: Arc::clone(&database),
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+            tracing::debug!(?retrieved_source_references, "got source references");
+
+            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
+                .get(storage_configuration.config_set());
+
+            let purified_source_exports = sql_server::purify_source_exports(
+                &*database,
+                &mut client,
+                &retrieved_source_references,
+                external_references,
+                &text_columns,
+                &exclude_columns,
+                source_name,
+                timeout,
+                &reference_policy,
+            )
+            .await?;
+
+            let sql_server::PurifiedSourceExports {
+                source_exports,
+                normalized_text_columns,
+                normalized_excl_columns,
+            } = purified_source_exports;
+
+            // Update our set of requested source exports.
+            requested_subsource_map.extend(source_exports);
+
+            // Record the most recent restore_history_id, or none if the system has never been
+            // restored.
+
+            let restore_history_id =
+                mz_sql_server_util::inspect::get_latest_restore_history_id(&mut client).await?;
+            let details = SqlServerSourceExtras { restore_history_id };
+
+            options.retain(|SqlServerConfigOption { name, .. }| {
+                name != &SqlServerConfigOptionName::Details
+            });
+            options.push(SqlServerConfigOption {
+                name: SqlServerConfigOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            });
+
+            // Update our 'TEXT' and 'EXCLUDE' column options with the purified and normalized set.
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == SqlServerConfigOptionName::TextColumns)
+            {
+                text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
+            }
+            if let Some(excl_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == SqlServerConfigOptionName::ExcludeColumns)
+            {
+                excl_cols_option.value = Some(WithOptionValue::Sequence(normalized_excl_columns));
+            }
+        }
         CreateSourceConnection::MySql {
             connection,
             options,
         } => {
-            let scx = StatementContext::new(None, &catalog);
             let connection_item = scx.get_item_by_resolved_name(connection)?;
             let connection = match connection_item.connection()? {
                 Connection::MySql(connection) => {
@@ -853,7 +1091,7 @@ async fn purify_create_source(
             let crate::plan::statement::ddl::MySqlConfigOptionExtracted {
                 details,
                 text_columns,
-                ignore_columns,
+                exclude_columns,
                 seen: _,
             } = options.clone().try_into()?;
 
@@ -861,51 +1099,10 @@ async fn purify_create_source(
                 Err(MySqlSourcePurificationError::UserSpecifiedDetails)?;
             }
 
-            let config = connection
-                .config(
-                    &storage_configuration.connection_context.secrets_reader,
-                    storage_configuration,
-                    InTask::No,
-                )
-                .await?;
-
-            let mut conn = config
-                .connect(
-                    "mysql purification",
-                    &storage_configuration.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-
-            // Check if the MySQL database is configured to allow row-based consistent GTID replication
-            let mut replication_errors = vec![];
-            for error in [
-                mz_mysql_util::ensure_gtid_consistency(&mut conn)
-                    .await
-                    .err(),
-                mz_mysql_util::ensure_full_row_binlog_format(&mut conn)
-                    .await
-                    .err(),
-                mz_mysql_util::ensure_replication_commit_order(&mut conn)
-                    .await
-                    .err(),
-            ] {
-                match error {
-                    Some(mz_mysql_util::MySqlError::InvalidSystemSetting {
-                        setting,
-                        expected,
-                        actual,
-                    }) => {
-                        replication_errors.push((setting, expected, actual));
-                    }
-                    Some(err) => Err(err)?,
-                    None => (),
-                }
-            }
-            if !replication_errors.is_empty() {
-                Err(MySqlSourcePurificationError::ReplicationSettingsError(
-                    replication_errors,
-                ))?;
-            }
+            let mut conn = connection
+                .validate(connection_item.id(), storage_configuration)
+                .await
+                .map_err(MySqlSourcePurificationError::InvalidConnection)?;
 
             // Retrieve the current @gtid_executed value of the server to mark as the effective
             // initial snapshot point such that we can ensure consistency if the initial source
@@ -913,31 +1110,35 @@ async fn purify_create_source(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
+            let binlog_full_metadata = is_binlog_full_metadata(&mut conn).await?;
+
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: mysql::references_system_schemas(external_references),
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+
             let mysql::PurifiedSourceExports {
                 source_exports: subsources,
-                tables,
                 normalized_text_columns,
-                normalized_ignore_columns,
+                normalized_exclude_columns,
             } = mysql::purify_source_exports(
                 &mut conn,
+                &retrieved_source_references,
                 external_references,
                 text_columns,
-                ignore_columns,
+                exclude_columns,
                 source_name,
                 initial_gtid_set.clone(),
+                &reference_policy,
+                binlog_full_metadata,
             )
             .await?;
             requested_subsource_map.extend(subsources);
 
-            // Create/Update the details for the source to include the new tables
-            let details = MySqlSourceDetails {
-                tables,
-                // Since we're creating a new source, we can just use a single
-                // value in this vector which is assumed to be for all tables.
-                // If we ever alter this source, this will be expanded to have a
-                // distinct value for each table.
-                initial_gtid_set: vec![initial_gtid_set],
-            };
+            // We don't have any fields in this details struct but keep this around for
+            // conformity with postgres and in-case we end up needing it again in the future.
+            let details = MySqlSourceDetails {};
             // Update options with the purified details
             options
                 .retain(|MySqlConfigOption { name, .. }| name != &MySqlConfigOptionName::Details);
@@ -954,52 +1155,106 @@ async fn purify_create_source(
             {
                 text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
             }
-            if let Some(ignore_cols_option) = options
+            if let Some(exclude_cols_option) = options
                 .iter_mut()
-                .find(|option| option.name == MySqlConfigOptionName::IgnoreColumns)
+                .find(|option| option.name == MySqlConfigOptionName::ExcludeColumns)
             {
-                ignore_cols_option.value =
-                    Some(WithOptionValue::Sequence(normalized_ignore_columns));
+                exclude_cols_option.value =
+                    Some(WithOptionValue::Sequence(normalized_exclude_columns));
             }
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            let scx = StatementContext::new(None, &catalog);
-
-            let (_load_generator, available_subsources) =
+            let load_generator =
                 load_generator_ast_to_generator(&scx, generator, options, include_metadata)?;
 
+            let reference_client = SourceReferenceClient::LoadGenerator {
+                generator: &load_generator,
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+            // Filter to the references that need to be created as 'subsources', which
+            // doesn't include the default output for single-output sources.
+            // TODO(database-issues#8620): Remove once subsources are removed
+            let multi_output_sources =
+                retrieved_source_references
+                    .all_references()
+                    .iter()
+                    .any(|r| {
+                        matches!(
+                            r.load_generator_output(),
+                            Some(output) if output != &LoadGeneratorOutput::Default
+                        )
+                    });
+
             match external_references {
-                Some(ExternalReferences::All) => {
-                    let available_subsources = match &available_subsources {
-                        Some(available_subsources) => available_subsources,
-                        None => Err(LoadGeneratorSourcePurificationError::ForAllTables)?,
-                    };
-                    for (name, (_, desc)) in available_subsources {
-                        let external_reference = UnresolvedItemName::from(name.clone());
-                        let subsource_name = source_export_name_gen(source_name, &name.item)?;
+                Some(requested)
+                    if matches!(reference_policy, SourceReferencePolicy::NotAllowed) =>
+                {
+                    Err(PlanError::UseTablesForSources(requested.to_string()))?
+                }
+                Some(requested) if !multi_output_sources => match requested {
+                    ExternalReferences::SubsetTables(_) => {
+                        Err(LoadGeneratorSourcePurificationError::ForTables)?
+                    }
+                    ExternalReferences::SubsetSchemas(_) => {
+                        Err(LoadGeneratorSourcePurificationError::ForSchemas)?
+                    }
+                    ExternalReferences::All => {
+                        Err(LoadGeneratorSourcePurificationError::ForAllTables)?
+                    }
+                },
+                Some(requested) => {
+                    let requested_exports = retrieved_source_references
+                        .requested_source_exports(Some(requested), source_name)?;
+                    for export in requested_exports {
                         requested_subsource_map.insert(
-                            subsource_name,
+                            export.name,
                             PurifiedSourceExport {
-                                external_reference,
+                                external_reference: export.external_reference,
                                 details: PurifiedExportDetails::LoadGenerator {
-                                    table: desc.clone(),
+                                    table: export
+                                        .meta
+                                        .load_generator_desc()
+                                        .ok_or_else(|| {
+                                            internal_err!(
+                                                "expected load generator source reference"
+                                            )
+                                        })?
+                                        .clone(),
+                                    output: export
+                                        .meta
+                                        .load_generator_output()
+                                        .ok_or_else(|| {
+                                            internal_err!(
+                                                "expected load generator source reference"
+                                            )
+                                        })?
+                                        .clone(),
                                 },
                             },
                         );
                     }
                 }
-                Some(ExternalReferences::SubsetSchemas(..)) => {
-                    Err(LoadGeneratorSourcePurificationError::ForSchemas)?
-                }
-                Some(ExternalReferences::SubsetTables(_)) => {
-                    Err(LoadGeneratorSourcePurificationError::ForTables)?
-                }
                 None => {
-                    if available_subsources.is_some() {
+                    if multi_output_sources
+                        && matches!(reference_policy, SourceReferencePolicy::Required)
+                    {
                         Err(LoadGeneratorSourcePurificationError::MultiOutputRequiresForAllTables)?
                     }
                 }
-            };
+            }
+
+            if let LoadGenerator::Clock = generator {
+                if !options
+                    .iter()
+                    .any(|p| p.name == LoadGeneratorOptionName::AsOf)
+                {
+                    let now = catalog.now();
+                    options.push(LoadGeneratorOption {
+                        name: LoadGeneratorOptionName::AsOf,
+                        value: Some(WithOptionValue::Value(Value::Number(now.to_string()))),
+                    });
+                }
+            }
         }
     }
 
@@ -1008,62 +1263,82 @@ async fn purify_create_source(
     // part of the `CREATE SOURCE` statement in the catalog.
     *external_references = None;
 
-    // Generate progress subsource
+    // Generate progress subsource for old syntax
+    let create_progress_subsource_stmt = if uses_old_syntax {
+        // Take name from input or generate name
+        let name = match progress_subsource {
+            Some(name) => match name {
+                DeferredItemName::Deferred(name) => name.clone(),
+                // Already checked for this value above.
+                DeferredItemName::Named(_) => {
+                    sql_bail!("progress subsource name cannot be a resolved name")
+                }
+            },
+            None => {
+                let (item, prefix) = source_name
+                    .0
+                    .split_last()
+                    .ok_or_else(|| sql_err!("source name must have at least one component"))?;
+                let item_name =
+                    Ident::try_generate_name(item.to_string(), "_progress", |candidate| {
+                        let mut suggested_name = prefix.to_vec();
+                        suggested_name.push(candidate.clone());
 
-    // Create the targeted AST node for the original CREATE SOURCE statement
-    let scx = StatementContext::new(None, &catalog);
+                        let partial =
+                            normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
+                        let qualified = scx.allocate_qualified_name(partial)?;
+                        let item_exists = scx.catalog.get_item_by_name(&qualified).is_some();
+                        let type_exists = scx.catalog.get_type_by_name(&qualified).is_some();
+                        Ok::<_, PlanError>(!item_exists && !type_exists)
+                    })?;
 
-    // Take name from input or generate name
-    let name = match progress_subsource {
-        Some(name) => match name {
-            DeferredItemName::Deferred(name) => name.clone(),
-            DeferredItemName::Named(_) => unreachable!("already checked for this value"),
-        },
-        None => {
-            let (item, prefix) = source_name.0.split_last().unwrap();
-            let item_name = Ident::try_generate_name(item.to_string(), "_progress", |candidate| {
-                let mut suggested_name = prefix.to_vec();
-                suggested_name.push(candidate.clone());
+                let mut full_name = prefix.to_vec();
+                full_name.push(item_name);
+                let full_name = normalize::unresolved_item_name(UnresolvedItemName(full_name))?;
+                let qualified_name = scx.allocate_qualified_name(full_name)?;
+                let full_name = scx.catalog.resolve_full_name(&qualified_name);
 
-                let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
-                let qualified = scx.allocate_qualified_name(partial)?;
-                let item_exists = scx.catalog.get_item_by_name(&qualified).is_some();
-                let type_exists = scx.catalog.get_type_by_name(&qualified).is_some();
-                Ok::<_, PlanError>(!item_exists && !type_exists)
-            })?;
+                UnresolvedItemName::from(full_name.clone())
+            }
+        };
 
-            let mut full_name = prefix.to_vec();
-            full_name.push(item_name);
-            let full_name = normalize::unresolved_item_name(UnresolvedItemName(full_name))?;
-            let qualified_name = scx.allocate_qualified_name(full_name)?;
-            let full_name = scx.catalog.resolve_full_name(&qualified_name);
+        let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
 
-            UnresolvedItemName::from(full_name.clone())
-        }
-    };
-
-    let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
-
-    // Create the subsource statement
-    let create_progress_subsource_stmt = CreateSubsourceStatement {
-        name,
-        columns,
-        // Progress subsources do not refer to the source to which they belong.
-        // Instead the primary source depends on it (the opposite is true of
-        // ingestion exports, which depend on the primary source).
-        of_source: None,
-        constraints,
-        if_not_exists: false,
-        with_options: vec![CreateSubsourceOption {
+        // Create the subsource statement
+        let mut progress_with_options: Vec<_> = with_options
+            .iter()
+            .filter_map(|opt| match opt.name {
+                CreateSourceOptionName::TimestampInterval => None,
+                CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
+                    name: CreateSubsourceOptionName::RetainHistory,
+                    value: opt.value.clone(),
+                }),
+            })
+            .collect();
+        progress_with_options.push(CreateSubsourceOption {
             name: CreateSubsourceOptionName::Progress,
             value: Some(WithOptionValue::Value(Value::Boolean(true))),
-        }],
+        });
+
+        Some(CreateSubsourceStatement {
+            name,
+            columns,
+            // Progress subsources do not refer to the source to which they belong.
+            // Instead the primary source depends on it (the opposite is true of
+            // ingestion exports, which depend on the primary source).
+            of_source: None,
+            constraints,
+            if_not_exists: false,
+            with_options: progress_with_options,
+        })
+    } else {
+        None
     };
 
     purify_source_format(
         &catalog,
         format,
-        connection,
+        &format_options,
         envelope,
         storage_configuration,
     )
@@ -1073,11 +1348,10 @@ async fn purify_create_source(
         create_progress_subsource_stmt,
         create_source_stmt,
         subsources: requested_subsource_map,
+        available_source_references: retrieved_source_references.available_source_references(),
     })
 }
 
-/// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
-///
 /// On success, returns the details on new subsources and updated
 /// 'options' that sequencing expects for handling `ALTER SOURCE` statements.
 async fn purify_alter_source(
@@ -1122,42 +1396,84 @@ async fn purify_alter_source(
         qualifiers: item.name().qualifiers.clone(),
         full_name: scx.catalog.resolve_full_name(source_name),
         print_id: true,
-    };
-    let connection_name = desc.connection.name();
-
-    // Validate this is a source that can be altered.
-    match desc.connection {
-        GenericSourceConnection::Postgres(_) => {}
-        GenericSourceConnection::MySql(_) => {}
-        _ => sql_bail!(
-            "{} is a {} source, which does not support ALTER SOURCE.",
-            scx.catalog.minimal_qualification(source_name),
-            connection_name,
-        ),
+        version: RelationVersionSelector::Latest,
     };
 
-    // If we don't need to handle added subsources, early return.
-    let AlterSourceAction::AddSubsources {
-        external_references,
-        mut options,
-    } = action
-    else {
-        return Ok(PurifiedStatement::PurifiedAlterSource {
+    let partial_name = scx.catalog.minimal_qualification(source_name);
+
+    match action {
+        AlterSourceAction::AddSubsources {
+            external_references,
+            options,
+        } => {
+            if scx.catalog.system_vars().enable_create_table_from_source()
+                && scx.catalog.system_vars().force_source_table_syntax()
+            {
+                Err(PlanError::UseTablesForSources(
+                    "ALTER SOURCE .. ADD SUBSOURCES ..".to_string(),
+                ))?;
+            }
+
+            purify_alter_source_add_subsources(
+                external_references,
+                options,
+                desc,
+                partial_name,
+                unresolved_source_name,
+                resolved_source_name,
+                storage_configuration,
+            )
+            .await
+        }
+        AlterSourceAction::RefreshReferences => {
+            purify_alter_source_refresh_references(
+                desc,
+                resolved_source_name,
+                storage_configuration,
+            )
+            .await
+        }
+        _ => Ok(PurifiedStatement::PurifiedAlterSource {
             alter_source_stmt: AlterSourceStatement {
                 source_name: unresolved_source_name,
                 action,
                 if_exists,
             },
-        });
+        }),
+    }
+}
+
+// TODO(database-issues#8620): Remove once subsources are removed
+/// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
+async fn purify_alter_source_add_subsources(
+    external_references: Vec<ExternalReferenceExport>,
+    mut options: Vec<AlterSourceAddSubsourceOption<Aug>>,
+    desc: SourceDesc,
+    partial_source_name: PartialItemName,
+    unresolved_source_name: UnresolvedItemName,
+    resolved_source_name: ResolvedItemName,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    // Validate this is a source that can have subsources added.
+    let connection_id = match &desc.connection {
+        GenericSourceConnection::Postgres(c) => c.connection_id,
+        GenericSourceConnection::MySql(c) => c.connection_id,
+        GenericSourceConnection::SqlServer(c) => c.connection_id,
+        _ => sql_bail!(
+            "source {} does not support ALTER SOURCE.",
+            partial_source_name
+        ),
     };
 
     let crate::plan::statement::ddl::AlterSourceAddSubsourceOptionExtracted {
         text_columns,
-        ignore_columns,
+        exclude_columns,
         details,
         seen: _,
     } = options.clone().try_into()?;
-    assert_none!(details, "details cannot be explicitly set");
+    if details.is_some() {
+        sql_bail!("DETAILS option cannot be explicitly set");
+    }
 
     let mut requested_subsource_map = BTreeMap::new();
 
@@ -1166,51 +1482,28 @@ async fn purify_alter_source(
             // Get PostgresConnection for generating subsources.
             let pg_connection = &pg_source_connection.connection;
 
-            let config = pg_connection
-                .config(
-                    &storage_configuration.connection_context.secrets_reader,
-                    storage_configuration,
-                    InTask::No,
-                )
+            let client = pg_connection
+                .validate(connection_id, storage_configuration)
                 .await?;
 
-            let client = config
-                .connect(
-                    "postgres_purification",
-                    &storage_configuration.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-
-            let available_replication_slots =
-                mz_postgres_util::available_replication_slots(&client).await?;
-
-            // We need 1 additional replication slot for the snapshots
-            if available_replication_slots < 1 {
-                Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
-            }
-
-            if !ignore_columns.is_empty() {
-                sql_bail!(
-                    "{} is a {} source, which does not support IGNORE COLUMNS.",
-                    scx.catalog.minimal_qualification(source_name),
-                    connection_name
-                )
-            }
-
-            let mut references = Some(ExternalReferences::SubsetTables(external_references));
+            let reference_client = SourceReferenceClient::Postgres {
+                client: &client,
+                publication: &pg_source_connection.publication,
+                database: &pg_connection.database,
+            };
+            let retrieved_source_references = reference_client.get_source_references().await?;
 
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
-                referenced_tables,
                 normalized_text_columns,
             } = postgres::purify_source_exports(
                 &client,
-                &config,
-                &pg_source_connection.publication,
-                pg_connection,
-                &mut references,
+                &retrieved_source_references,
+                &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
+                exclude_columns,
                 &unresolved_source_name,
+                &SourceReferencePolicy::Required,
             )
             .await?;
 
@@ -1222,47 +1515,6 @@ async fn purify_alter_source(
             }
 
             requested_subsource_map.extend(subsources);
-
-            let timeline_id = match pg_source_connection.publication_details.timeline_id {
-                None => {
-                    // If we had not yet been able to fill in the source's timeline ID, fill it in now.
-                    let replication_client = config
-                        .connect_replication(
-                            &storage_configuration.connection_context.ssh_tunnel_manager,
-                        )
-                        .await?;
-                    let timeline_id =
-                        mz_postgres_util::get_timeline_id(&replication_client).await?;
-                    Some(timeline_id)
-                }
-                timeline_id => timeline_id,
-            };
-
-            // These new details need to be merged with the existing details and cannot
-            // simply overwrite the existing details. This suggests they should be their
-            // own options, but it's nice to be able to take the values to and from a
-            // hex-encoded string.
-            let new_details = PostgresSourcePublicationDetails {
-                // In this context, we only track the referenced tables; we will merge these with the tables
-                // referenced in the catalog.
-                //
-                // We MUST check for duplicate references when we rejoin the main coordinator thread! We do
-                // that later because the sources that are present might have changed while this
-                // purification occurs.
-                tables: referenced_tables,
-                timeline_id,
-                // This value is not allowed to be altered in the source.
-                slot: pg_source_connection.publication_details.slot,
-                // This value is not allowed to be altered in the source.
-                database: pg_source_connection.publication_details.database,
-            };
-
-            options.push(AlterSourceAddSubsourceOption {
-                name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::Details,
-                value: Some(WithOptionValue::Value(Value::String(hex::encode(
-                    new_details.into_proto().encode_to_vec(),
-                )))),
-            });
         }
         GenericSourceConnection::MySql(mysql_source_connection) => {
             let mysql_connection = &mysql_source_connection.connection;
@@ -1281,52 +1533,38 @@ async fn purify_alter_source(
                 )
                 .await?;
 
-            let mut references = Some(ExternalReferences::SubsetTables(external_references));
-
             // Retrieve the current @gtid_executed value of the server to mark as the effective
             // initial snapshot point for these subsources.
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
+            let binlog_full_metadata = is_binlog_full_metadata(&mut conn).await?;
+
+            let requested_references = Some(ExternalReferences::SubsetTables(external_references));
+
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: mysql::references_system_schemas(&requested_references),
+            };
+            let retrieved_source_references = reference_client.get_source_references().await?;
+
             let mysql::PurifiedSourceExports {
                 source_exports: subsources,
-                tables,
                 normalized_text_columns,
-                normalized_ignore_columns,
+                normalized_exclude_columns,
             } = mysql::purify_source_exports(
                 &mut conn,
-                &mut references,
+                &retrieved_source_references,
+                &requested_references,
                 text_columns,
-                ignore_columns,
+                exclude_columns,
                 &unresolved_source_name,
-                initial_gtid_set.clone(),
+                initial_gtid_set,
+                &SourceReferencePolicy::Required,
+                binlog_full_metadata,
             )
             .await?;
             requested_subsource_map.extend(subsources);
-
-            // These new details need to be merged with the existing details and cannot
-            // simply overwrite the existing details. This suggests they should be their
-            // own options, but it's nice to be able to take the values to and from a
-            // hex-encoded string.
-            let new_details = MySqlSourceDetails {
-                // In this context, we only track the referenced tables; we will merge these with the tables
-                // referenced in the catalog.
-                //
-                // We MUST check for duplicate references when we rejoin the main coordinator thread! We do
-                // that later because the sources that are present might have changed while this
-                // purification occurs.
-                tables,
-                // This value will be expanded and merged with the existing value during sequencing to
-                // match the final set of tables.
-                initial_gtid_set: vec![initial_gtid_set],
-            };
-
-            options.push(AlterSourceAddSubsourceOption {
-                name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::Details,
-                value: Some(WithOptionValue::Value(Value::String(hex::encode(
-                    new_details.into_proto().encode_to_vec(),
-                )))),
-            });
 
             // Update options with the purified details
             if let Some(text_cols_option) = options
@@ -1335,15 +1573,78 @@ async fn purify_alter_source(
             {
                 text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
             }
-            if let Some(ignore_cols_option) = options
+            if let Some(exclude_cols_option) = options
                 .iter_mut()
-                .find(|option| option.name == AlterSourceAddSubsourceOptionName::IgnoreColumns)
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::ExcludeColumns)
             {
-                ignore_cols_option.value =
-                    Some(WithOptionValue::Sequence(normalized_ignore_columns));
+                exclude_cols_option.value =
+                    Some(WithOptionValue::Sequence(normalized_exclude_columns));
             }
         }
-        _ => unreachable!(),
+        GenericSourceConnection::SqlServer(sql_server_source) => {
+            // Open a connection to the upstream SQL Server instance.
+            let sql_server_connection = &sql_server_source.connection;
+            let config = sql_server_connection
+                .resolve_config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+            let mut client = mz_sql_server_util::Client::connect(config).await?;
+
+            // Query the upstream SQL Server instance for available tables to replicate.
+            let database = sql_server_connection.database.clone().into();
+            let source_references = SourceReferenceClient::SqlServer {
+                client: &mut client,
+                database: Arc::clone(&database),
+            }
+            .get_source_references()
+            .await?;
+            let requested_references = Some(ExternalReferences::SubsetTables(external_references));
+
+            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
+                .get(storage_configuration.config_set());
+
+            let result = sql_server::purify_source_exports(
+                &*database,
+                &mut client,
+                &source_references,
+                &requested_references,
+                &text_columns,
+                &exclude_columns,
+                &unresolved_source_name,
+                timeout,
+                &SourceReferencePolicy::Required,
+            )
+            .await;
+            let sql_server::PurifiedSourceExports {
+                source_exports,
+                normalized_text_columns,
+                normalized_excl_columns,
+            } = result?;
+
+            // Add the new exports to our subsource map.
+            requested_subsource_map.extend(source_exports);
+
+            // Update options on the CREATE SOURCE statement with the purified details.
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::TextColumns)
+            {
+                text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
+            }
+            if let Some(exclude_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::ExcludeColumns)
+            {
+                exclude_cols_option.value =
+                    Some(WithOptionValue::Sequence(normalized_excl_columns));
+            }
+        }
+        // The source kind was already established earlier in this function;
+        // reaching this catch-all is an internal invariant violation.
+        _ => bail_internal!("source does not support ALTER SOURCE...ADD SUBSOURCE"),
     };
 
     Ok(PurifiedStatement::PurifiedAlterSourceAddSubsources {
@@ -1353,15 +1654,616 @@ async fn purify_alter_source(
     })
 }
 
+async fn purify_alter_source_refresh_references(
+    desc: SourceDesc,
+    resolved_source_name: ResolvedItemName,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    let retrieved_source_references = match desc.connection {
+        GenericSourceConnection::Postgres(pg_source_connection) => {
+            // Get PostgresConnection for generating subsources.
+            let pg_connection = &pg_source_connection.connection;
+
+            let config = pg_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let client = config
+                .connect(
+                    "postgres_purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+            let reference_client = SourceReferenceClient::Postgres {
+                client: &client,
+                publication: &pg_source_connection.publication,
+                database: &pg_connection.database,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::MySql(mysql_source_connection) => {
+            let mysql_connection = &mysql_source_connection.connection;
+            let config = mysql_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let mut conn = config
+                .connect(
+                    "mysql purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: false,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::SqlServer(sql_server_source) => {
+            // Open a connection to the upstream SQL Server instance.
+            let sql_server_connection = &sql_server_source.connection;
+            let config = sql_server_connection
+                .resolve_config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+            let mut client = mz_sql_server_util::Client::connect(config).await?;
+
+            // Query the upstream SQL Server instance for available tables to replicate.
+            let source_references = SourceReferenceClient::SqlServer {
+                client: &mut client,
+                database: sql_server_connection.database.clone().into(),
+            }
+            .get_source_references()
+            .await?;
+            source_references
+        }
+        GenericSourceConnection::LoadGenerator(load_gen_connection) => {
+            let reference_client = SourceReferenceClient::LoadGenerator {
+                generator: &load_gen_connection.load_generator,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::Kafka(kafka_conn) => {
+            let reference_client = SourceReferenceClient::Kafka {
+                topic: &kafka_conn.topic,
+            };
+            reference_client.get_source_references().await?
+        }
+    };
+    Ok(PurifiedStatement::PurifiedAlterSourceRefreshReferences {
+        source_name: resolved_source_name,
+        available_source_references: retrieved_source_references.available_source_references(),
+    })
+}
+
+async fn purify_create_table_from_source(
+    catalog: impl SessionCatalog,
+    mut stmt: CreateTableFromSourceStatement<Aug>,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    let scx = StatementContext::new(None, &catalog);
+    let CreateTableFromSourceStatement {
+        name: _,
+        columns,
+        constraints,
+        source: source_name,
+        if_not_exists: _,
+        external_reference,
+        format,
+        envelope,
+        include_metadata: _,
+        with_options,
+    } = &mut stmt;
+
+    // Columns and constraints cannot be specified by the user but will be populated below.
+    if matches!(columns, TableFromSourceColumns::Defined(_)) {
+        sql_bail!("CREATE TABLE .. FROM SOURCE column definitions cannot be specified directly");
+    }
+    if !constraints.is_empty() {
+        sql_bail!(
+            "CREATE TABLE .. FROM SOURCE constraint definitions cannot be specified directly"
+        );
+    }
+
+    // Get the source item
+    let item = match scx.get_item_by_resolved_name(source_name) {
+        Ok(item) => item,
+        Err(e) => return Err(e),
+    };
+
+    // Ensure it's an ingestion-based and alterable source.
+    let desc = match item.source_desc()? {
+        Some(desc) => desc.clone().into_inline_connection(scx.catalog),
+        None => {
+            sql_bail!("cannot ALTER this type of source")
+        }
+    };
+    let unresolved_source_name: UnresolvedItemName = source_name.full_item_name().clone().into();
+
+    let crate::plan::statement::ddl::TableFromSourceOptionExtracted {
+        text_columns,
+        exclude_columns,
+        retain_history: _,
+        details,
+        partition_by: _,
+        seen: _,
+    } = with_options.clone().try_into()?;
+    if details.is_some() {
+        sql_bail!("DETAILS option cannot be explicitly set");
+    }
+
+    // Our text column values are unqualified (just column names), but the purification methods below
+    // expect to match the fully-qualified names against the full set of tables in upstream, so we
+    // need to qualify them using the external reference first.
+    let qualified_text_columns = text_columns
+        .iter()
+        .map(|col| {
+            UnresolvedItemName(
+                external_reference
+                    .as_ref()
+                    .map(|er| er.0.iter().chain_one(col).map(|i| i.clone()).collect())
+                    .unwrap_or_else(|| vec![col.clone()]),
+            )
+        })
+        .collect_vec();
+    let qualified_exclude_columns = exclude_columns
+        .iter()
+        .map(|col| {
+            UnresolvedItemName(
+                external_reference
+                    .as_ref()
+                    .map(|er| er.0.iter().chain_one(col).map(|i| i.clone()).collect())
+                    .unwrap_or_else(|| vec![col.clone()]),
+            )
+        })
+        .collect_vec();
+
+    // Should be overriden below if a source-specific format is required.
+    let mut format_options = SourceFormatOptions::Default;
+
+    let retrieved_source_references: RetrievedSourceReferences;
+
+    let requested_references = external_reference.as_ref().map(|ref_name| {
+        ExternalReferences::SubsetTables(vec![ExternalReferenceExport {
+            reference: ref_name.clone(),
+            alias: None,
+        }])
+    });
+
+    // Run purification work specific to each source type: resolve the external reference to
+    // a fully qualified name and obtain the appropriate details for the source-export statement
+    let purified_export = match desc.connection {
+        GenericSourceConnection::Postgres(pg_source_connection) => {
+            // Get PostgresConnection for generating subsources.
+            let pg_connection = &pg_source_connection.connection;
+
+            let client = pg_connection
+                .validate(pg_source_connection.connection_id, storage_configuration)
+                .await?;
+
+            let reference_client = SourceReferenceClient::Postgres {
+                client: &client,
+                publication: &pg_source_connection.publication,
+                database: &pg_connection.database,
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+
+            let postgres::PurifiedSourceExports {
+                source_exports,
+                // TODO(database-issues#8620): Remove once subsources are removed
+                // This `normalized_text_columns` is not relevant for us and is only returned for
+                // `CREATE SOURCE` statements that automatically generate subsources
+                normalized_text_columns: _,
+            } = postgres::purify_source_exports(
+                &client,
+                &retrieved_source_references,
+                &requested_references,
+                qualified_text_columns,
+                qualified_exclude_columns,
+                &unresolved_source_name,
+                &SourceReferencePolicy::Required,
+            )
+            .await?;
+            // There should be exactly one source_export returned for this statement
+            let (_, purified_export) = source_exports.into_element();
+            purified_export
+        }
+        GenericSourceConnection::MySql(mysql_source_connection) => {
+            let mysql_connection = &mysql_source_connection.connection;
+            let config = mysql_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let mut conn = config
+                .connect(
+                    "mysql purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            ensure_binlog_full_metadata(&mut conn).await?;
+            let binlog_full_metadata = true;
+
+            // Retrieve the current @gtid_executed value of the server to mark as the effective
+            // initial snapshot point for this table.
+            let initial_gtid_set =
+                mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
+
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: mysql::references_system_schemas(&requested_references),
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+
+            let mysql::PurifiedSourceExports {
+                source_exports,
+                // TODO(database-issues#8620): Remove once subsources are removed
+                // `normalized_text/exclude_columns` is not relevant for us and is only returned for
+                // `CREATE SOURCE` statements that automatically generate subsources
+                normalized_text_columns: _,
+                normalized_exclude_columns: _,
+            } = mysql::purify_source_exports(
+                &mut conn,
+                &retrieved_source_references,
+                &requested_references,
+                qualified_text_columns,
+                qualified_exclude_columns,
+                &unresolved_source_name,
+                initial_gtid_set,
+                &SourceReferencePolicy::Required,
+                binlog_full_metadata,
+            )
+            .await?;
+            // There should be exactly one source_export returned for this statement
+            let (_, purified_export) = source_exports.into_element();
+            purified_export
+        }
+        GenericSourceConnection::SqlServer(sql_server_source) => {
+            let connection = sql_server_source.connection;
+            let config = connection
+                .resolve_config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+            let mut client = mz_sql_server_util::Client::connect(config).await?;
+
+            let database: Arc<str> = connection.database.into();
+            let reference_client = SourceReferenceClient::SqlServer {
+                client: &mut client,
+                database: Arc::clone(&database),
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+            tracing::debug!(?retrieved_source_references, "got source references");
+
+            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
+                .get(storage_configuration.config_set());
+
+            let purified_source_exports = sql_server::purify_source_exports(
+                &*database,
+                &mut client,
+                &retrieved_source_references,
+                &requested_references,
+                &qualified_text_columns,
+                &qualified_exclude_columns,
+                &unresolved_source_name,
+                timeout,
+                &SourceReferencePolicy::Required,
+            )
+            .await?;
+
+            // There should be exactly one source_export returned for this statement
+            let (_, purified_export) = purified_source_exports.source_exports.into_element();
+            purified_export
+        }
+        GenericSourceConnection::LoadGenerator(load_gen_connection) => {
+            let reference_client = SourceReferenceClient::LoadGenerator {
+                generator: &load_gen_connection.load_generator,
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+
+            let requested_exports = retrieved_source_references
+                .requested_source_exports(requested_references.as_ref(), &unresolved_source_name)?;
+            // There should be exactly one source_export returned
+            let export = requested_exports.into_element();
+            PurifiedSourceExport {
+                external_reference: export.external_reference,
+                details: PurifiedExportDetails::LoadGenerator {
+                    table: export
+                        .meta
+                        .load_generator_desc()
+                        .ok_or_else(|| internal_err!("expected load generator source reference"))?
+                        .clone(),
+                    output: export
+                        .meta
+                        .load_generator_output()
+                        .ok_or_else(|| internal_err!("expected load generator source reference"))?
+                        .clone(),
+                },
+            }
+        }
+        GenericSourceConnection::Kafka(kafka_conn) => {
+            let reference_client = SourceReferenceClient::Kafka {
+                topic: &kafka_conn.topic,
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+            let requested_exports = retrieved_source_references
+                .requested_source_exports(requested_references.as_ref(), &unresolved_source_name)?;
+            // There should be exactly one source_export returned
+            let export = requested_exports.into_element();
+
+            format_options = SourceFormatOptions::Kafka {
+                topic: kafka_conn.topic.clone(),
+            };
+            PurifiedSourceExport {
+                external_reference: export.external_reference,
+                details: PurifiedExportDetails::Kafka {},
+            }
+        }
+    };
+
+    purify_source_format(
+        &catalog,
+        format,
+        &format_options,
+        envelope,
+        storage_configuration,
+    )
+    .await?;
+
+    // Update the external reference in the statement to the resolved fully-qualified
+    // external reference
+    *external_reference = Some(purified_export.external_reference.clone());
+
+    // Update options in the statement using the purified export details
+    match &purified_export.details {
+        PurifiedExportDetails::Postgres { .. } => {
+            let mut unsupported_cols = vec![];
+            let postgres::PostgresExportStatementValues {
+                columns: gen_columns,
+                constraints: gen_constraints,
+                text_columns: gen_text_columns,
+                exclude_columns: gen_exclude_columns,
+                details: gen_details,
+                external_reference: _,
+            } = postgres::generate_source_export_statement_values(
+                &scx,
+                purified_export,
+                &mut unsupported_cols,
+            )?;
+            if !unsupported_cols.is_empty() {
+                unsupported_cols.sort();
+                Err(PgSourcePurificationError::UnrecognizedTypes {
+                    cols: unsupported_cols,
+                })?;
+            }
+
+            if let Some(text_cols_option) = with_options
+                .iter_mut()
+                .find(|option| option.name == TableFromSourceOptionName::TextColumns)
+            {
+                if let Some(gen_text_columns) = gen_text_columns {
+                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
+                }
+            }
+            if let Some(exclude_cols_option) = with_options
+                .iter_mut()
+                .find(|option| option.name == TableFromSourceOptionName::ExcludeColumns)
+            {
+                if let Some(gen_exclude_columns) = gen_exclude_columns {
+                    exclude_cols_option.value =
+                        Some(WithOptionValue::Sequence(gen_exclude_columns));
+                }
+            }
+            match columns {
+                TableFromSourceColumns::Defined(_) => {
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
+                }
+                TableFromSourceColumns::NotSpecified => {
+                    *columns = TableFromSourceColumns::Defined(gen_columns);
+                    *constraints = gen_constraints;
+                }
+                TableFromSourceColumns::Named(_) => {
+                    sql_bail!("columns cannot be named for Postgres sources")
+                }
+            }
+            with_options.push(TableFromSourceOption {
+                name: TableFromSourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    gen_details.into_proto().encode_to_vec(),
+                )))),
+            })
+        }
+        PurifiedExportDetails::MySql { .. } => {
+            let mysql::MySqlExportStatementValues {
+                columns: gen_columns,
+                constraints: gen_constraints,
+                text_columns: gen_text_columns,
+                exclude_columns: gen_exclude_columns,
+                details: gen_details,
+                external_reference: _,
+            } = mysql::generate_source_export_statement_values(&scx, purified_export)?;
+
+            if let Some(text_cols_option) = with_options
+                .iter_mut()
+                .find(|option| option.name == TableFromSourceOptionName::TextColumns)
+            {
+                if let Some(gen_text_columns) = gen_text_columns {
+                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
+                }
+            }
+            if let Some(exclude_cols_option) = with_options
+                .iter_mut()
+                .find(|option| option.name == TableFromSourceOptionName::ExcludeColumns)
+            {
+                if let Some(gen_exclude_columns) = gen_exclude_columns {
+                    exclude_cols_option.value =
+                        Some(WithOptionValue::Sequence(gen_exclude_columns));
+                }
+            }
+            match columns {
+                TableFromSourceColumns::Defined(_) => {
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
+                }
+                TableFromSourceColumns::NotSpecified => {
+                    *columns = TableFromSourceColumns::Defined(gen_columns);
+                    *constraints = gen_constraints;
+                }
+                TableFromSourceColumns::Named(_) => {
+                    sql_bail!("columns cannot be named for MySQL sources")
+                }
+            }
+            with_options.push(TableFromSourceOption {
+                name: TableFromSourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    gen_details.into_proto().encode_to_vec(),
+                )))),
+            })
+        }
+        PurifiedExportDetails::SqlServer { .. } => {
+            let sql_server::SqlServerExportStatementValues {
+                columns: gen_columns,
+                constraints: gen_constraints,
+                text_columns: gen_text_columns,
+                excl_columns: gen_excl_columns,
+                details: gen_details,
+                external_reference: _,
+            } = sql_server::generate_source_export_statement_values(&scx, purified_export)?;
+
+            if let Some(text_cols_option) = with_options
+                .iter_mut()
+                .find(|opt| opt.name == TableFromSourceOptionName::TextColumns)
+            {
+                if let Some(gen_text_columns) = gen_text_columns {
+                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
+                }
+            }
+            if let Some(exclude_cols_option) = with_options
+                .iter_mut()
+                .find(|opt| opt.name == TableFromSourceOptionName::ExcludeColumns)
+            {
+                if let Some(gen_excl_columns) = gen_excl_columns {
+                    exclude_cols_option.value = Some(WithOptionValue::Sequence(gen_excl_columns));
+                }
+            }
+
+            match columns {
+                TableFromSourceColumns::NotSpecified => {
+                    *columns = TableFromSourceColumns::Defined(gen_columns);
+                    *constraints = gen_constraints;
+                }
+                TableFromSourceColumns::Named(_) => {
+                    sql_bail!("columns cannot be named for SQL Server sources")
+                }
+                TableFromSourceColumns::Defined(_) => {
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
+                }
+            }
+
+            with_options.push(TableFromSourceOption {
+                name: TableFromSourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    gen_details.into_proto().encode_to_vec(),
+                )))),
+            })
+        }
+        PurifiedExportDetails::LoadGenerator { .. } => {
+            let (desc, output) = match purified_export.details {
+                PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
+                _ => bail_internal!("purified export details must be load generator"),
+            };
+            // We only determine the table description for multi-output load generator sources here,
+            // whereas single-output load generators will have their relation description
+            // determined during statment planning as envelope and format options may affect their
+            // schema.
+            if let Some(desc) = desc {
+                let (gen_columns, gen_constraints) = scx.relation_desc_into_table_defs(&desc)?;
+                match columns {
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    TableFromSourceColumns::Defined(_) => bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    ),
+                    TableFromSourceColumns::NotSpecified => {
+                        *columns = TableFromSourceColumns::Defined(gen_columns);
+                        *constraints = gen_constraints;
+                    }
+                    TableFromSourceColumns::Named(_) => {
+                        sql_bail!("columns cannot be named for multi-output load generator sources")
+                    }
+                }
+            }
+            let details = SourceExportStatementDetails::LoadGenerator { output };
+            with_options.push(TableFromSourceOption {
+                name: TableFromSourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            })
+        }
+        PurifiedExportDetails::Kafka {} => {
+            // NOTE: Kafka tables have their 'schemas' purified into the statement inside the
+            // format field, so we don't specify any columns or constraints to be stored
+            // on the statement here. The RelationDesc will be determined during planning.
+            let details = SourceExportStatementDetails::Kafka {};
+            with_options.push(TableFromSourceOption {
+                name: TableFromSourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            })
+        }
+    };
+
+    // TODO: We might as well use the retrieved available references to update the source
+    // available references table in the catalog, so plumb this through.
+    // available_source_references: retrieved_source_references.available_source_references(),
+    Ok(PurifiedStatement::PurifiedCreateTableFromSource { stmt })
+}
+
+enum SourceFormatOptions {
+    Default,
+    Kafka { topic: String },
+}
+
 async fn purify_source_format(
     catalog: &dyn SessionCatalog,
     format: &mut Option<FormatSpecifier<Aug>>,
-    connection: &mut CreateSourceConnection<Aug>,
+    options: &SourceFormatOptions,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     if matches!(format, Some(FormatSpecifier::KeyValue { .. }))
-        && !matches!(connection, CreateSourceConnection::Kafka { .. })
+        && !matches!(options, SourceFormatOptions::Kafka { .. })
     {
         sql_bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
@@ -1369,20 +2271,14 @@ async fn purify_source_format(
     match format.as_mut() {
         None => {}
         Some(FormatSpecifier::Bare(format)) => {
-            purify_source_format_single(
-                catalog,
-                format,
-                connection,
-                envelope,
-                storage_configuration,
-            )
-            .await?;
+            purify_source_format_single(catalog, format, options, envelope, storage_configuration)
+                .await?;
         }
 
         Some(FormatSpecifier::KeyValue { key, value: val }) => {
-            purify_source_format_single(catalog, key, connection, envelope, storage_configuration)
+            purify_source_format_single(catalog, key, options, envelope, storage_configuration)
                 .await?;
-            purify_source_format_single(catalog, val, connection, envelope, storage_configuration)
+            purify_source_format_single(catalog, val, options, envelope, storage_configuration)
                 .await?;
         }
     }
@@ -1392,7 +2288,7 @@ async fn purify_source_format(
 async fn purify_source_format_single(
     catalog: &dyn SessionCatalog,
     format: &mut Format<Aug>,
-    connection: &mut CreateSourceConnection<Aug>,
+    options: &SourceFormatOptions,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
@@ -1401,7 +2297,7 @@ async fn purify_source_format_single(
             AvroSchema::Csr { csr_connection } => {
                 purify_csr_connection_avro(
                     catalog,
-                    connection,
+                    options,
                     csr_connection,
                     envelope,
                     storage_configuration,
@@ -1414,7 +2310,7 @@ async fn purify_source_format_single(
             ProtobufSchema::Csr { csr_connection } => {
                 purify_csr_connection_proto(
                     catalog,
-                    connection,
+                    options,
                     csr_connection,
                     envelope,
                     storage_configuration,
@@ -1441,7 +2337,10 @@ pub fn generate_subsource_statements(
     if subsources.is_empty() {
         return Ok(vec![]);
     }
-    let (_, purified_export) = subsources.iter().next().unwrap();
+    let (_, purified_export) = subsources
+        .iter()
+        .next()
+        .ok_or_else(|| internal_err!("expected at least one subsource"))?;
 
     let statements = match &purified_export.details {
         PurifiedExportDetails::Postgres { .. } => {
@@ -1454,16 +2353,30 @@ pub fn generate_subsource_statements(
         PurifiedExportDetails::MySql { .. } => {
             crate::pure::mysql::generate_create_subsource_statements(scx, source_name, subsources)?
         }
+        PurifiedExportDetails::SqlServer { .. } => {
+            crate::pure::sql_server::generate_create_subsource_statements(
+                scx,
+                source_name,
+                subsources,
+            )?
+        }
         PurifiedExportDetails::LoadGenerator { .. } => {
             let mut subsource_stmts = Vec::with_capacity(subsources.len());
             for (subsource_name, purified_export) in subsources {
-                let desc = match &purified_export.details {
-                    PurifiedExportDetails::LoadGenerator { table } => table,
-                    _ => unreachable!("purified export details must be load generator"),
+                let (desc, output) = match purified_export.details {
+                    PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
+                    _ => {
+                        bail_internal!("purified export details must be load generator")
+                    }
                 };
+                let desc = desc.ok_or_else(|| {
+                    internal_err!(
+                        "subsources cannot be generated for single-output load generators"
+                    )
+                })?;
 
-                let (columns, table_constraints) = scx.relation_desc_into_table_defs(desc)?;
-                let details = SourceExportStatementDetails::LoadGenerator {};
+                let (columns, table_constraints) = scx.relation_desc_into_table_defs(&desc)?;
+                let details = SourceExportStatementDetails::LoadGenerator { output };
                 // Create the subsource statement
                 let subsource = CreateSubsourceStatement {
                     name: subsource_name,
@@ -1496,13 +2409,12 @@ pub fn generate_subsource_statements(
             subsource_stmts
         }
         PurifiedExportDetails::Kafka { .. } => {
-            // TODO: as part of #28430, Kafka sources will begin
+            // TODO: as part of database-issues#8322, Kafka sources will begin
             // producing data––we'll need to understand the schema
             // of the output here.
-            assert!(
-                subsources.is_empty(),
-                "Kafka sources do not produce data-bearing subsources"
-            );
+            if !subsources.is_empty() {
+                bail_internal!("Kafka sources do not produce data-bearing subsources");
+            }
             vec![]
         }
     };
@@ -1511,18 +2423,12 @@ pub fn generate_subsource_statements(
 
 async fn purify_csr_connection_proto(
     catalog: &dyn SessionCatalog,
-    connection: &mut CreateSourceConnection<Aug>,
+    options: &SourceFormatOptions,
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
-    let topic = if let CreateSourceConnection::Kafka { options, .. } = connection {
-        let KafkaSourceConfigOptionExtracted { topic, .. } = options
-            .clone()
-            .try_into()
-            .expect("already verified options valid provided");
-        topic.expect("already validated topic provided")
-    } else {
+    let SourceFormatOptions::Kafka { topic } = options else {
         sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
@@ -1566,18 +2472,12 @@ async fn purify_csr_connection_proto(
 
 async fn purify_csr_connection_avro(
     catalog: &dyn SessionCatalog,
-    connection: &mut CreateSourceConnection<Aug>,
+    options: &SourceFormatOptions,
     csr_connection: &mut CsrConnectionAvro<Aug>,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
-    let topic = if let CreateSourceConnection::Kafka { options, .. } = connection {
-        let KafkaSourceConfigOptionExtracted { topic, .. } = options
-            .clone()
-            .try_into()
-            .expect("already verified options valid provided");
-        topic.expect("already validated topic provided")
-    } else {
+    let SourceFormatOptions::Kafka { topic } = options else {
         sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
@@ -1601,6 +2501,8 @@ async fn purify_csr_connection_avro(
         let Schema {
             key_schema,
             value_schema,
+            key_reference_schemas,
+            value_reference_schemas,
         } = get_remote_csr_schema(
             &ccsr_client,
             key_strategy.clone().unwrap_or_default(),
@@ -1615,6 +2517,8 @@ async fn purify_csr_connection_avro(
         *seed = Some(CsrSeedAvro {
             key_schema,
             value_schema,
+            key_reference_schemas,
+            value_reference_schemas,
         })
     }
 
@@ -1625,17 +2529,33 @@ async fn purify_csr_connection_avro(
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
+    /// Reference schemas for the key schema, in dependency order.
+    pub key_reference_schemas: Vec<String>,
+    /// Reference schemas for the value schema, in dependency order.
+    pub value_reference_schemas: Vec<String>,
+}
+
+/// Result of fetching a schema, including any referenced schemas.
+struct SchemaWithReferences {
+    /// The primary schema.
+    schema: String,
+    /// Reference schemas in dependency order.
+    references: Vec<String>,
 }
 
 async fn get_schema_with_strategy(
     client: &Client,
     strategy: ReaderSchemaSelectionStrategy,
     subject: &str,
-) -> Result<Option<String>, PlanError> {
+) -> Result<Option<SchemaWithReferences>, PlanError> {
     match strategy {
         ReaderSchemaSelectionStrategy::Latest => {
-            match client.get_schema_by_subject(subject).await {
-                Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
+            // Use get_subject_and_references to also fetch referenced schemas
+            match client.get_subject_and_references(subject).await {
+                Ok((primary, dependencies)) => Ok(Some(SchemaWithReferences {
+                    schema: primary.schema.raw,
+                    references: dependencies.into_iter().map(|s| s.schema.raw).collect(),
+                })),
                 Err(GetBySubjectError::SubjectNotFound)
                 | Err(GetBySubjectError::VersionNotFound(_)) => Ok(None),
                 Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
@@ -1644,15 +2564,27 @@ async fn get_schema_with_strategy(
                 }),
             }
         }
-        ReaderSchemaSelectionStrategy::Inline(raw) => Ok(Some(raw)),
-        ReaderSchemaSelectionStrategy::ById(id) => match client.get_schema_by_id(id).await {
-            Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
-            Err(GetByIdError::SchemaNotFound) => Ok(None),
-            Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
-                schema_lookup: format!("ID {}", id),
-                cause: Arc::new(e),
-            }),
-        },
+        // It's possible that CSR was provided with an inline strategy, but without a subject
+        // or schema id to look up, there isn't a clean way to lookup references for the schema.
+        // This could be done with extra work, but at this point, it isn't clear this is needed.
+        ReaderSchemaSelectionStrategy::Inline(raw) => Ok(Some(SchemaWithReferences {
+            schema: raw,
+            references: vec![],
+        })),
+        ReaderSchemaSelectionStrategy::ById(id) => {
+            match client.get_subject_and_references_by_id(id).await {
+                Ok((primary, dependencies)) => Ok(Some(SchemaWithReferences {
+                    schema: primary.schema.raw,
+                    references: dependencies.into_iter().map(|s| s.schema.raw).collect(),
+                })),
+                Err(GetBySubjectError::SubjectNotFound)
+                | Err(GetBySubjectError::VersionNotFound(_)) => Ok(None),
+                Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
+                    schema_lookup: format!("subject {}", subject.quoted()),
+                    cause: Arc::new(e),
+                }),
+            }
+        }
     }
 }
 
@@ -1660,17 +2592,20 @@ async fn get_remote_csr_schema(
     ccsr_client: &mz_ccsr::Client,
     key_strategy: ReaderSchemaSelectionStrategy,
     value_strategy: ReaderSchemaSelectionStrategy,
-    topic: String,
+    topic: &str,
 ) -> Result<Schema, PlanError> {
     let value_schema_name = format!("{}-value", topic);
-    let value_schema =
+    let value_result =
         get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name).await?;
-    let value_schema = value_schema.ok_or_else(|| anyhow!("No value schema found"))?;
-    let subject = format!("{}-key", topic);
-    let key_schema = get_schema_with_strategy(ccsr_client, key_strategy, &subject).await?;
+    let value_result = value_result.ok_or_else(|| anyhow!("No value schema found"))?;
+
+    let key_subject = format!("{}-key", topic);
+    let key_result = get_schema_with_strategy(ccsr_client, key_strategy, &key_subject).await?;
     Ok(Schema {
-        key_schema,
-        value_schema,
+        key_schema: key_result.as_ref().map(|r| r.schema.clone()),
+        value_schema: value_result.schema,
+        key_reference_schemas: key_result.map(|r| r.references).unwrap_or_default(),
+        value_reference_schemas: value_result.references,
     })
 }
 
@@ -1689,6 +2624,12 @@ async fn compile_proto(
 
     // Compile .proto files into a file descriptor set.
     let mut source_tree = VirtualSourceTree::new();
+
+    // Add well-known types (e.g., google/protobuf/timestamp.proto) to the source
+    // tree. These are implicitly available to protoc but are typically not
+    // registered in the schema registry.
+    source_tree.as_mut().map_well_known_types();
+
     for subject in iter::once(&primary_subject).chain(dependency_subjects.iter()) {
         source_tree.as_mut().add_file(
             Path::new(&subject.name),
@@ -1705,8 +2646,8 @@ async fn compile_proto(
     let primary_fd = fds.file(0);
     let message_name = match primary_fd.message_type_size() {
         1 => String::from_utf8_lossy(primary_fd.message_type(0).name()).into_owned(),
-        0 => bail_unsupported!(9598, "Protobuf schemas with no messages"),
-        _ => bail_unsupported!(9598, "Protobuf schemas with multiple messages"),
+        0 => bail_unsupported!(29603, "Protobuf schemas with no messages"),
+        _ => bail_unsupported!(29603, "Protobuf schemas with multiple messages"),
     };
 
     // Encode the file descriptor set into a SQL byte string.
@@ -1754,6 +2695,7 @@ pub fn purify_create_materialized_view_options(
                     qualifiers: item.name().qualifiers.clone(),
                     full_name: catalog.resolve_full_name(item.name()),
                     print_id: false,
+                    version: RelationVersionSelector::Latest,
                 },
                 args: FunctionArgs::Args {
                     args: Vec::new(),
@@ -1850,7 +2792,7 @@ pub fn purify_create_materialized_view_options(
     // - added references to `mz_timestamp`;
     // - removed references to `mz_now`.
     if introduced_mz_timestamp {
-        resolved_ids.0.insert(mz_timestamp_id);
+        resolved_ids.add_item(mz_timestamp_id);
     }
     // Even though we always remove `mz_now()` from the `with_options`, there might be `mz_now()`
     // remaining in the main query expression of the MV, so let's visit the entire statement to look
@@ -1858,7 +2800,7 @@ pub fn purify_create_materialized_view_options(
     let mut visitor = ExprContainsTemporalVisitor::new();
     visitor.visit_create_materialized_view_statement(cmvs);
     if !visitor.contains_temporal {
-        resolved_ids.0.remove(&mz_now_id);
+        resolved_ids.remove_item(&mz_now_id);
     }
 }
 

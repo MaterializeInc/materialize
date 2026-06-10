@@ -61,3 +61,116 @@ FETCH 1 c
 
 statement ok
 ROLLBACK
+
+# Test that invalid UP TO expressions are rejected.
+# (`SUBSCRIBE ... AS OF ... UP TO` is also tested in `as_of.slt` and in some cargo tests:
+# test_empty_subscribe_error, test_empty_subscribe_notice, test_subscribe_basic)
+
+statement error AS OF or UP TO should be castable to a \(non\-null\) mz_timestamp value
+SUBSCRIBE mv UP TO -1;
+
+statement error AS OF or UP TO should be castable to a \(non\-null\) mz_timestamp value
+SUBSCRIBE mv UP TO null;
+
+statement error AS OF or UP TO should be castable to a \(non\-null\) mz_timestamp value
+SUBSCRIBE mv UP TO null::mz_timestamp;
+
+statement error AS OF or UP TO should be castable to a \(non\-null\) mz_timestamp value
+SUBSCRIBE mv UP TO 'xxx';
+
+statement error calling an unmaterializable function in AS OF or UP TO not yet supported
+SUBSCRIBE mv UP TO now();
+
+statement error calling an unmaterializable function in AS OF or UP TO not yet supported
+SUBSCRIBE mv UP TO mz_now();
+
+statement error calling an unmaterializable function in AS OF or UP TO not yet supported
+SUBSCRIBE mv UP TO current_database();
+
+statement error calling an unmaterializable function in AS OF or UP TO not yet supported
+SUBSCRIBE mv UP TO current_database()::mz_timestamp;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_envelope_debezium_in_subscribe = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t_envelope_dup (a INT, b INT)
+
+statement ok
+INSERT INTO t_envelope_dup VALUES (1, 2)
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c1 CURSOR FOR SUBSCRIBE t_envelope_dup ENVELOPE UPSERT (KEY (a, a))
+
+statement error column "a" appears more than once in SUBSCRIBE ENVELOPE KEY clause
+FETCH 1 c1
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c2 CURSOR FOR SUBSCRIBE t_envelope_dup ENVELOPE DEBEZIUM (KEY (a, a, a))
+
+statement error column "a" appears more than once in SUBSCRIBE ENVELOPE KEY clause
+FETCH 1 c2
+
+statement ok
+ROLLBACK
+
+# Mixed-case unquoted identifiers fold to the same column and must also be rejected.
+statement ok
+BEGIN
+
+statement ok
+DECLARE c3 CURSOR FOR SUBSCRIBE t_envelope_dup ENVELOPE UPSERT (KEY (a, A))
+
+statement error column "a" appears more than once in SUBSCRIBE ENVELOPE KEY clause
+FETCH 1 c3
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c4 CURSOR FOR SUBSCRIBE t_envelope_dup ENVELOPE DEBEZIUM (KEY (a, A))
+
+statement error column "a" appears more than once in SUBSCRIBE ENVELOPE KEY clause
+FETCH 1 c4
+
+statement ok
+ROLLBACK
+
+# Duplicate among 3+ key columns must also be rejected.
+statement ok
+BEGIN
+
+statement ok
+DECLARE c5 CURSOR FOR SUBSCRIBE t_envelope_dup ENVELOPE UPSERT (KEY (a, b, a))
+
+statement error column "a" appears more than once in SUBSCRIBE ENVELOPE KEY clause
+FETCH 1 c5
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c6 CURSOR FOR SUBSCRIBE t_envelope_dup ENVELOPE DEBEZIUM (KEY (a, b, a))
+
+statement error column "a" appears more than once in SUBSCRIBE ENVELOPE KEY clause
+FETCH 1 c6
+
+statement ok
+ROLLBACK

@@ -12,8 +12,6 @@ version: 2
 sources:
   - name: table
     schema: public_table
-    tables:
-      - name: table
 
 models:
   - name: table_mv

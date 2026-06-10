@@ -2,9 +2,9 @@
 
 -   Associated:
     -   [sentry: panic: Reference to absent
-        collection](https://github.com/MaterializeInc/materialize/issues/17210)
+        collection](https://github.com/MaterializeInc/database-issues/issues/4982)
     -   [sinks: bootstrapping catalog does not wait for sink
-        creation](https://github.com/MaterializeInc/materialize/issues/20019)
+        creation](https://github.com/MaterializeInc/database-issues/issues/5981)
 
 ## Context
 
@@ -12,7 +12,7 @@ The current implementation of sink connections relies on establishing the
 connection in adapter code. In addition to lacking parity with source connection
 management, this also introduces an issue which is detailed in [sinks:
 bootstrapping catalog does not wait for sink
-creation](https://github.com/MaterializeInc/materialize/issues/20019).
+creation](https://github.com/MaterializeInc/database-issues/issues/5981).
 
 ## Goals
 

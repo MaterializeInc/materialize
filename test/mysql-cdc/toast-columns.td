@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 #
@@ -24,8 +23,9 @@ $ set-max-tries max-tries=20
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
-# Insert data pre-snapshot by generating 16kB of uncompressible data to force
-# TOASTed storage by concatenating 1024 random MD5 hashes, each being 128bit
+# Insert data pre-snapshot by generating 32kB of uncompressible data to force
+# TOASTed storage by concatenating 512 random SHA-256 hashes, each being 256 bit.
+# Avoid md5()/sha1() which were moved to the classic_hashing component in MySQL 9.6.
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
@@ -37,19 +37,21 @@ SET SESSION group_concat_max_len = 32768;
 
 # necessary because the limit is not respected by group_concat
 CREATE TABLE temp_rand (rand_value TEXT);
-INSERT INTO temp_rand SELECT rand() FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1024;
+INSERT INTO temp_rand SELECT rand() FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 512;
 
-INSERT INTO t1 SELECT 1, group_concat(md5(rand_value) SEPARATOR '') FROM temp_rand;
+INSERT INTO t1 SELECT 1, group_concat(sha2(rand_value, 256) SEPARATOR '') FROM temp_rand;
 
 DELETE FROM temp_rand;
-INSERT INTO temp_rand SELECT rand() FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1024;
-INSERT INTO t1 SELECT 2, group_concat(md5(rand_value) SEPARATOR '') FROM temp_rand;
+INSERT INTO temp_rand SELECT rand() FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 512;
+INSERT INTO t1 SELECT 2, group_concat(sha2(rand_value, 256) SEPARATOR '') FROM temp_rand;
 
 DROP TABLE temp_rand;
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> BEGIN
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> COMMIT
 
 > SELECT a, length(b) FROM t1;
 1 32768

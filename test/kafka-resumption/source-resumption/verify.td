@@ -12,9 +12,15 @@
 # Could be run when storaged is down
 > SET transaction_isolation = serializable
 
-> SELECT * from topic
+> SELECT * from topic_tbl
 data         offset
 -----------------------------------
 one          0
 two          1
 three        2
+
+> select * from topic
+partition  offset
+--------------------
+(0,)    0
+[0,0]   3

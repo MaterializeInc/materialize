@@ -14,29 +14,29 @@ use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
-use mz_persist_client::critical::SinceHandle;
-use mz_persist_client::schema::SchemaId;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
-use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tracing::debug;
 
+use crate::TxnsCodecDefault;
 use crate::metrics::Metrics;
 use crate::txn_cache::{TxnsCache, Unapplied};
 use crate::txn_write::Txn;
-use crate::TxnsCodecDefault;
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -104,21 +104,20 @@ use crate::TxnsCodecDefault;
 /// (d1, <empty>, 2, 1)
 /// ```
 #[derive(Debug)]
-pub struct TxnsHandle<K: Codec, V: Codec, T, D, O = u64, C: TxnsCodec = TxnsCodecDefault> {
+pub struct TxnsHandle<K: Codec, V: Codec, T, D, C: TxnsCodec = TxnsCodecDefault> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) txns_cache: TxnsCache<T, C>,
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
-    pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
+    pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64>,
     pub(crate) datas: DataHandles<K, V, T, D>,
 }
 
-impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
+impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
-    O: Opaque + Debug + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
+    D: Debug + Monoid + Ord + Codec64 + Send + Sync,
     C: TxnsCodec,
 {
     /// Returns a [TxnsHandle] committing to the given txn shard.
@@ -136,11 +135,7 @@ where
         dyncfgs: ConfigSet,
         metrics: Arc<Metrics>,
         txns_id: ShardId,
-        // TODO(txn): Get rid of these once the persist schema stuff finishes
-        // rolling out. Once every shard in prod has a schema, we can look up
-        // the latest one instead of falling back to these.
-        key_schema: Arc<K::Schema>,
-        val_schema: Arc<V::Schema>,
+        opaque: Opaque,
     ) -> Self {
         let (txns_key_schema, txns_val_schema) = C::schemas();
         let (mut txns_write, txns_read) = client
@@ -162,6 +157,7 @@ where
                 // TODO: We likely need to use a different critical reader id
                 // for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                opaque,
                 Diagnostics {
                     shard_name: "txns".to_owned(),
                     handle_purpose: "commit txns".to_owned(),
@@ -180,8 +176,6 @@ where
                 client: Arc::new(client),
                 data_write_for_apply: BTreeMap::new(),
                 data_write_for_commit: BTreeMap::new(),
-                key_schema,
-                val_schema,
             },
         }
     }
@@ -221,7 +215,20 @@ where
     ) -> Result<Tidy, T> {
         let op = &Arc::clone(&self.metrics).register;
         op.run(async {
-            let data_writes = data_writes.into_iter().collect::<Vec<_>>();
+            let mut data_writes = data_writes.into_iter().collect::<Vec<_>>();
+
+            // The txns system requires that all participating data shards have a
+            // schema registered. Importantly, we must register a data shard's
+            // schema _before_ we publish it to the txns shard.
+            for data_write in &mut data_writes {
+                // Note that if this fails we'll bail out farther down in any case,
+                // so we might as well fail fast.
+                data_write
+                    .try_register_schema()
+                    .await
+                    .expect("schema should be registered");
+            }
+
             let updates = data_writes
                 .iter()
                 .map(|data_write| {
@@ -292,9 +299,49 @@ where
                 }
             }
             for data_write in data_writes {
-                self.datas
-                    .data_write_for_commit
-                    .insert(data_write.shard_id(), DataWriteCommit(data_write));
+                // If we already have a write handle for a newer version of a table, don't replace
+                // it! Currently we only support adding columns to tables with a default value, so
+                // the latest/newest schema will always be the most complete.
+                //
+                // TODO(alter_table): Revisit when we support dropping columns.
+                match self.datas.data_write_for_commit.get(&data_write.shard_id()) {
+                    None => {
+                        self.datas
+                            .data_write_for_commit
+                            .insert(data_write.shard_id(), DataWriteCommit(data_write));
+                    }
+                    Some(previous) => {
+                        let new_schema_id = data_write.schema_id().expect("ensured above");
+
+                        if let Some(prev_schema_id) = previous.schema_id()
+                            && prev_schema_id > new_schema_id
+                        {
+                            mz_ore::soft_panic_or_log!(
+                                "tried registering a WriteHandle with an older SchemaId; \
+                                 prev_schema_id: {} new_schema_id: {} shard_id: {}",
+                                prev_schema_id,
+                                new_schema_id,
+                                previous.shard_id(),
+                            );
+                            continue;
+                        } else if previous.schema_id().is_none() {
+                            mz_ore::soft_panic_or_log!(
+                                "encountered data shard without a schema; shard_id: {}",
+                                previous.shard_id(),
+                            );
+                        }
+
+                        tracing::info!(
+                            prev_schema_id = ?previous.schema_id(),
+                            ?new_schema_id,
+                            shard_id = %previous.shard_id(),
+                            "replacing WriteHandle"
+                        );
+                        self.datas
+                            .data_write_for_commit
+                            .insert(data_write.shard_id(), DataWriteCommit(data_write));
+                    }
+                }
             }
             let tidy = self.apply_le(&register_ts).await;
 
@@ -656,9 +703,20 @@ where
             if min_unapplied_ts < &since_ts {
                 since_ts.clone_from(min_unapplied_ts);
             }
-            crate::cads::<T, O, C>(&mut self.txns_since, since_ts).await;
+            crate::cads::<T, C>(&mut self.txns_since, since_ts).await;
         })
         .await
+    }
+
+    /// Upgrade the version on the backing shard.
+    ///
+    /// In practice, this will likely only be called from the singleton
+    /// controller process.
+    pub async fn upgrade_version(&mut self) {
+        self.txns_since
+            .upgrade_version()
+            .await
+            .expect("invalid usage")
     }
 
     /// Returns the [ShardId] of the txns shard.
@@ -707,16 +765,14 @@ pub(crate) struct DataHandles<K: Codec, V: Codec, T, D> {
     /// of shards, but this is not required. A shard can be in either and not
     /// the other.
     data_write_for_commit: BTreeMap<ShardId, DataWriteCommit<K, V, T, D>>,
-    key_schema: Arc<K::Schema>,
-    val_schema: Arc<V::Schema>,
 }
 
 impl<K, V, T, D> DataHandles<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     async fn open_data_write_for_apply(&self, data_id: ShardId) -> DataWriteApply<K, V, T, D> {
         let diagnostics = Diagnostics::from_purpose("txn data");
@@ -727,10 +783,9 @@ where
             .expect("codecs have not changed");
         let (key_schema, val_schema) = match schemas {
             Some((_, key_schema, val_schema)) => (Arc::new(key_schema), Arc::new(val_schema)),
-            None => {
-                tracing::warn!("falling back to default schemas for {}", data_id);
-                (Arc::clone(&self.key_schema), Arc::clone(&self.val_schema))
-            }
+            // We will always have at least one schema registered by the time we reach this point,
+            // because that is ensured at txn-registration time.
+            None => unreachable!("data shard {} should have a schema", data_id),
         };
         let wrapped = self
             .client
@@ -853,8 +908,8 @@ impl<K, V, T, D> DataWriteApply<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     pub(crate) async fn maybe_replace_with_batch_schema(&mut self, batches: &[Batch<K, V, T, D>]) {
         // TODO: Remove this once everything is rolled out and we're sure it's
@@ -915,22 +970,21 @@ mod tests {
     use mz_ore::cast::CastFrom;
     use mz_ore::collections::CollectionExt;
     use mz_ore::metrics::MetricsRegistry;
+    use mz_persist_client::PersistLocation;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::RetryParameters;
-    use mz_persist_client::PersistLocation;
-    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use rand::rngs::SmallRng;
     use rand::{RngCore, SeedableRng};
     use timely::progress::Antichain;
     use tokio::sync::oneshot;
-    use tracing::{info, info_span, Instrument};
+    use tracing::{Instrument, info, info_span};
 
     use crate::operator::DataSubscribe;
-    use crate::tests::{reader, write_directly, writer, CommitLog};
+    use crate::tests::{CommitLog, reader, write_directly, writer};
 
     use super::*;
 
-    impl TxnsHandle<String, (), u64, i64, u64, TxnsCodecDefault> {
+    impl TxnsHandle<String, (), u64, i64, TxnsCodecDefault> {
         pub(crate) async fn expect_open(client: PersistClient) -> Self {
             Self::expect_open_id(client, ShardId::new()).await
         }
@@ -943,8 +997,7 @@ mod tests {
                 dyncfgs,
                 Arc::new(Metrics::new(&MetricsRegistry::new())),
                 txns_id,
-                Arc::new(StringSchema),
-                Arc::new(UnitSchema),
+                Opaque::encode(&0u64),
             )
             .await
         }
@@ -1068,6 +1121,13 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
     async fn forget_at() {
+        // Body is boxed because the debug-build async state machine for this
+        // test exceeds 2 MiB (~940 KiB single frame) and overflows the default
+        // tokio test thread stack.
+        Box::pin(forget_at_inner()).await
+    }
+
+    async fn forget_at_inner() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
         let log = txns.new_log();
@@ -1118,7 +1178,7 @@ mod tests {
 
         // Close shard to writes
         d0_write
-            .compare_and_append_batch(&mut [], d0_write.shared_upper(), Antichain::new())
+            .compare_and_append_batch(&mut [], d0_write.shared_upper(), Antichain::new(), true)
             .await
             .unwrap()
             .unwrap();
@@ -1131,7 +1191,7 @@ mod tests {
 
             // Close shards to writes
             di_write
-                .compare_and_append_batch(&mut [], di_write.shared_upper(), Antichain::new())
+                .compare_and_append_batch(&mut [], di_write.shared_upper(), Antichain::new(), true)
                 .await
                 .unwrap()
                 .unwrap();
@@ -1311,8 +1371,8 @@ mod tests {
                     debug!("stress update {:.9} to {}", data_id.to_string(), self.ts);
                     let _ = self.txns.txns_cache.update_ge(&self.ts).await;
                 }
-                4 => self.start_read(data_id, true),
-                5 => self.start_read(data_id, false),
+                4 => self.start_read(data_id),
+                5 => self.start_read(data_id),
                 _ => unreachable!(""),
             }
             debug!("stress {} step {} DONE ts={}", self.idx, self.step, self.ts);
@@ -1440,7 +1500,7 @@ mod tests {
             .await
         }
 
-        fn start_read(&mut self, data_id: ShardId, use_global_txn_cache: bool) {
+        fn start_read(&mut self, data_id: ShardId) {
             debug!(
                 "stress start_read {:.9} at {}",
                 data_id.to_string(),
@@ -1461,7 +1521,6 @@ mod tests {
                         data_id,
                         as_of,
                         Antichain::new(),
-                        use_global_txn_cache,
                     );
                     let data_id = format!("{:.9}", data_id.to_string());
                     let _guard = info_span!("read_worker", %data_id, as_of).entered();
@@ -1570,7 +1629,7 @@ mod tests {
         let mut max_ts = 0;
         let mut reads = Vec::new();
         for worker in workers {
-            let (t, mut r) = worker.await.unwrap();
+            let (t, mut r) = worker.await;
             max_ts = std::cmp::max(max_ts, t);
             reads.append(&mut r);
         }
@@ -1588,7 +1647,7 @@ mod tests {
             info!("now waiting for reads {}", max_ts);
             for (tx, data_id, as_of, subscribe) in reads {
                 let _ = tx.send(max_ts + 1);
-                let output = subscribe.await.unwrap();
+                let output = subscribe.await;
                 log.assert_eq(data_id, as_of, max_ts + 1, output);
             }
         })
@@ -1655,7 +1714,8 @@ mod tests {
             txn.write(&d0, "bar".into(), (), 1).await;
             // This panics.
             let _ = txn.commit_at(&mut txns1, 3).await;
-        });
+        })
+        .into_tokio_handle();
         assert!(res.await.is_err());
 
         // Forgetting the data shard removes it, so we don't leave the schema

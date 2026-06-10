@@ -27,8 +27,18 @@ asdf     asdf     NULL
 asdfjkl  asdf     NULL
 jkl      NULL     jkl
 
+query TTTI colnames
+SELECT data.*, reg.*
+FROM data, regexp_extract('(asdf)|(?P<foo>jkl)', data.input) reg WITH ORDINALITY
+ORDER BY data.input
+----
+input    column1  foo   ordinality
+asdf     asdf     NULL  1
+asdfjkl  asdf     NULL  1
+jkl      NULL     jkl   1
+
 # TODO(brennan): test that the regex columns have the correct nullability, once
-# they actually do (#1685).
+# they actually do (database-issues#612).
 
 query TTT colnames
 SELECT data.*, csv.* FROM data, csv_extract(2, data.input) csv
@@ -38,13 +48,13 @@ input        column1  column2
 some,csv     some     csv
 testing,123  testing  123
 
-query error db error: ERROR: csv_extract number of columns must be a positive integer literal
+query error csv_extract number of columns must be a positive integer literal
 SELECT * FROM data, (VALUES (2)) ncols, csv_extract(ncols.column1, data.input)
 
-query error db error: ERROR: csv_extract number of columns must be a positive integer literal
+query error csv_extract number of columns must be a positive integer literal
 SELECT * FROM data, csv_extract((SELECT 2), data.input)
 
-query error db error: ERROR: attempt to create relation with too many columns, 8193 max: 8192
+query error attempt to create relation with too many columns, 8193 max: 8192
 SELECT * FROM data, csv_extract(8193, data.input)
 
 statement ok

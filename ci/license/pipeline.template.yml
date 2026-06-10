@@ -7,9 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Very fast
+priority: 70
+
 steps:
   - label: Bump change date
     timeout_in_minutes: 10
     command: ci/license/bump-change-date.sh
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small

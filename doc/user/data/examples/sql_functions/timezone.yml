@@ -1,0 +1,30 @@
+- name: "syntax-timezone"
+  code: |
+    TIMEZONE ( <zone>::<type>, <timestamp> | <timestamptz> )
+  syntax_elements:
+    - name: "`<zone>`"
+      description: |
+        A [`text`](/sql/types/text/) value specifying the target time zone.
+    - name: "`<type>`"
+      description: |
+        A [`text`](/sql/types/text/) or [`numeric`](/sql/types/numeric/) type specifying the datatype in which the time zone is expressed. **Known limitation:** You must explicitly cast the type for the time zone.
+    - name: "`<timestamp>`"
+      description: |
+        A [`timestamp`](/sql/types/timestamp/) value (timestamp without time zone).
+    - name: "`<timestamptz>`"
+      description: |
+        A [`timestamptz`](/sql/types/timestamp/) value (timestamp with time zone).
+
+- name: "syntax-at-time-zone"
+  code: |
+    <timestamp> | <timestamptz> AT TIME ZONE <zone>::<type>
+  syntax_elements:
+    - name: "`<timestamp>`"
+      description: |
+        A [`timestamp`](/sql/types/timestamp/) value (timestamp without time zone).
+    - name: "`<timestamptz>`"
+      description: |
+        A [`timestamptz`](/sql/types/timestamp/) value (timestamp with time zone).
+    - name: "**AT TIME ZONE** `<zone>::<type>`"
+      description: |
+        The target time zone. `<zone>` is a [`text`](/sql/types/text/) value. `<type>` is a [`text`](/sql/types/text/) or [`numeric`](/sql/types/numeric/) type. **Known limitation:** You must explicitly cast the type for the time zone.

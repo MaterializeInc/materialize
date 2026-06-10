@@ -119,7 +119,7 @@ impl FormatBuffer for String {
     }
 
     unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
-        str::as_bytes_mut(self)
+        unsafe { str::as_bytes_mut(self) }
     }
 }
 

@@ -1,0 +1,25 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`createMySqlConnectionStatement > filters out undefined connection creation parameters 1`] = `
+"
+CREATE CONNECTION "materialize"."public"."my_connection" TO MYSQL
+(
+HOST 'example.com',
+USER 'user'
+);"
+`;
+
+exports[`createMySqlConnectionStatement > generates a valid statement 1`] = `
+"
+CREATE CONNECTION "materialize"."public"."my_connection" TO MYSQL
+(
+HOST 'example.com',
+PORT 5432,
+USER 'user',
+PASSWORD SECRET "materialize"."public"."secret_1",
+SSL MODE 'required',
+SSL KEY SECRET "materialize"."public"."secret_1",
+SSL CERTIFICATE 'MIICzjCCAbeg...',
+SSL CERTIFICATE AUTHORITY SECRET "materialize"."public"."secret_1"
+);"
+`;

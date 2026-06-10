@@ -41,6 +41,7 @@
 //! }
 //! ```
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -59,9 +60,11 @@ use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, Registry};
 
 mod delete_on_drop;
+mod rule;
 
 pub use delete_on_drop::*;
 pub use prometheus::Opts as PrometheusOpts;
+pub use rule::{NameLookup, ObjectName, Rule};
 
 /// Define a metric for use in materialize.
 #[macro_export]
@@ -73,6 +76,7 @@ macro_rules! metric {
         $(, const_labels: { $($cl_key:expr => $cl_value:expr ),* })?
         $(, var_labels: [ $($vl_name:expr),* ])?
         $(, buckets: $bk_name:expr)?
+        $(, rules: [ $($rule:expr),* $(,)? ])?
         $(,)?
     ) => {{
         let const_labels = (&[
@@ -91,6 +95,7 @@ macro_rules! metric {
                 .const_labels(const_labels)
                 .variable_labels(var_labels),
             buckets: None,
+            rules: vec![ $($($rule),*)? ],
         };
         // Set buckets if passed
         $(mk_opts.buckets = Some($bk_name);)*
@@ -106,6 +111,10 @@ pub struct MakeCollectorOpts {
     /// Buckets to be used with Histogram and HistogramVec. Must be set to create Histogram types
     /// and must not be set for other types.
     pub buckets: Option<Vec<f64>>,
+    /// Enrichment rules attached to this metric. Applied by environmentd's public
+    /// scrape endpoint to attach human-readable name labels (e.g. `cluster_name`)
+    /// alongside the ID labels the metric already carries.
+    pub rules: Vec<Rule>,
 }
 
 /// The materialize metrics registry.
@@ -115,6 +124,10 @@ pub struct MetricsRegistry {
     inner: Registry,
     #[derivative(Debug = "ignore")]
     postprocessors: Arc<Mutex<Vec<Box<dyn FnMut(&mut Vec<MetricFamily>) + Send + Sync>>>>,
+    /// Enrichment rules declared per-metric via [`MakeCollectorOpts::rules`].
+    /// Keyed by the fully-qualified Prometheus metric name (matches
+    /// `MetricFamily::name()` at scrape time).
+    rules_by_metric: Arc<Mutex<BTreeMap<String, Vec<Rule>>>>,
 }
 
 /// A wrapper for metrics to require delete on drop semantics
@@ -155,10 +168,10 @@ impl<M: MakeCollector> MakeCollector for DeleteOnDropWrapper<M> {
 
 impl<M: MetricVecExt> DeleteOnDropWrapper<M> {
     /// Returns a metric that deletes its labels from this metrics vector when dropped.
-    pub fn get_delete_on_drop_metric<'a, L: PromLabelsExt<'a>>(
+    pub fn get_delete_on_drop_metric<L: PromLabelsExt>(
         &self,
         labels: L,
-    ) -> DeleteOnDropMetric<'a, M, L> {
+    ) -> DeleteOnDropMetric<M, L> {
         self.inner.get_delete_on_drop_metric(labels)
     }
 }
@@ -171,7 +184,7 @@ pub type UIntGauge = GenericGauge<AtomicU64>;
 pub type CounterVec = DeleteOnDropWrapper<prometheus::CounterVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::Gauge].
 pub type Gauge = DeleteOnDropWrapper<prometheus::Gauge>;
-/// Delete-on-drop shadow of Prometheus [prometheus::CounterVec].
+/// Delete-on-drop shadow of Prometheus [prometheus::GaugeVec].
 pub type GaugeVec = DeleteOnDropWrapper<prometheus::GaugeVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::HistogramVec].
 pub type HistogramVec = DeleteOnDropWrapper<prometheus::HistogramVec>;
@@ -182,19 +195,19 @@ pub type IntGaugeVec = DeleteOnDropWrapper<prometheus::IntGaugeVec>;
 /// Delete-on-drop shadow of Prometheus [raw::UIntGaugeVec].
 pub type UIntGaugeVec = DeleteOnDropWrapper<raw::UIntGaugeVec>;
 
-pub use prometheus::{Counter, Histogram, IntCounter, IntGauge};
-
 use crate::assert_none;
+
+pub use prometheus::{Counter, Histogram, IntCounter, IntGauge};
 
 /// Access to non-delete-on-drop vector types
 pub mod raw {
     use prometheus::core::{AtomicU64, GenericGaugeVec};
 
-    /// The unsigned integer version of [`GaugeVec`](prometheus::GaugeVec).
+    /// The unsigned integer version of [`GaugeVec`].
     /// Provides better performance if metric values are all unsigned integers.
     pub type UIntGaugeVec = GenericGaugeVec<AtomicU64>;
 
-    pub use prometheus::{CounterVec, HistogramVec, IntCounterVec, IntGaugeVec};
+    pub use prometheus::{CounterVec, Gauge, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 }
 
 impl MetricsRegistry {
@@ -203,7 +216,29 @@ impl MetricsRegistry {
         MetricsRegistry {
             inner: Registry::new(),
             postprocessors: Arc::new(Mutex::new(vec![])),
+            rules_by_metric: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+
+    /// Returns a snapshot of per-metric enrichment rules, keyed by the
+    /// fully-qualified Prometheus metric name.
+    pub fn rules_by_metric(&self) -> BTreeMap<String, Vec<Rule>> {
+        self.rules_by_metric.lock().expect("lock poisoned").clone()
+    }
+
+    /// Records the per-metric rules from `opts` under the metric's
+    /// fully-qualified name, if any are declared.
+    fn record_per_metric_rules(&self, opts: &MakeCollectorOpts) {
+        if opts.rules.is_empty() {
+            return;
+        }
+        let fq_name = opts.opts.fq_name();
+        self.rules_by_metric
+            .lock()
+            .expect("lock poisoned")
+            .entry(fq_name)
+            .or_default()
+            .extend(opts.rules.iter().cloned());
     }
 
     /// Register a metric defined with the [`metric`] macro.
@@ -211,21 +246,22 @@ impl MetricsRegistry {
     where
         M: MakeCollector,
     {
+        self.record_per_metric_rules(&opts);
         let collector = M::make_collector(opts);
         self.inner.register(Box::new(collector.clone())).unwrap();
         collector
     }
 
     /// Registers a gauge whose value is computed when observed.
-    pub fn register_computed_gauge<F, P>(
+    pub fn register_computed_gauge<P>(
         &self,
         opts: MakeCollectorOpts,
-        f: F,
+        f: impl Fn() -> P::T + Send + Sync + 'static,
     ) -> ComputedGenericGauge<P>
     where
-        F: Fn() -> P::T + Send + Sync + 'static,
         P: Atomic + 'static,
     {
+        self.record_per_metric_rules(&opts);
         let gauge = ComputedGenericGauge {
             gauge: GenericGauge::make_collector(opts),
             f: Arc::new(f),
@@ -769,6 +805,149 @@ impl DurationMetric for &'_ mut f64 {
     }
 }
 
+/// Register the Tokio runtime's metrics in our metrics registry.
+#[cfg(feature = "async")]
+pub fn register_runtime_metrics(
+    name: &'static str,
+    runtime_metrics: tokio::runtime::RuntimeMetrics,
+    registry: &MetricsRegistry,
+) {
+    macro_rules! register {
+        ($method:ident, $doc:literal) => {
+            let metrics = runtime_metrics.clone();
+            registry.register_computed_gauge::<prometheus::core::AtomicU64>(
+                crate::metric!(
+                    name: concat!("mz_tokio_", stringify!($method)),
+                    help: $doc,
+                    const_labels: {"runtime" => name},
+                ),
+                move || <u64 as crate::cast::CastFrom<_>>::cast_from(metrics.$method()),
+            );
+        };
+    }
+
+    macro_rules! register_per_worker {
+        ($method:ident, $doc:literal) => {
+            let metrics = runtime_metrics.clone();
+            registry.register_computed_gauge::<prometheus::core::AtomicU64>(
+                crate::metric!(
+                    name: concat!("mz_tokio_", stringify!($method)),
+                    help: $doc,
+                    const_labels: {"runtime" => name},
+                ),
+                move || {
+                    (0..metrics.num_workers())
+                        .map(|i| <u64 as crate::cast::CastFrom<_>>::cast_from(metrics.$method(i)))
+                        .sum::<u64>()
+                },
+            );
+        };
+    }
+
+    macro_rules! register_per_worker_duration_secs {
+        ($method:ident, $doc:literal) => {
+            let metrics = runtime_metrics.clone();
+            registry.register_computed_gauge::<prometheus::core::AtomicF64>(
+                crate::metric!(
+                    name: concat!("mz_tokio_", stringify!($method)),
+                    help: $doc,
+                    const_labels: {"runtime" => name},
+                ),
+                move || {
+                    (0..metrics.num_workers())
+                        .map(|i| metrics.$method(i).as_secs_f64())
+                        .sum::<f64>()
+                },
+            );
+        };
+    }
+
+    register!(
+        num_workers,
+        "The number of worker threads used by the runtime."
+    );
+    register!(
+        num_alive_tasks,
+        "The current number of alive tasks in the runtime."
+    );
+    register!(
+        global_queue_depth,
+        "The number of tasks currently scheduled in the runtime's global queue."
+    );
+    register_per_worker_duration_secs!(
+        worker_total_busy_duration,
+        "The amount of time the worker threads have been busy, in seconds."
+    );
+    register_per_worker!(
+        worker_park_count,
+        "The total number of times the worker threads have parked."
+    );
+    register_per_worker!(
+        worker_park_unpark_count,
+        "The total number of times the worker threads have parked and unparked."
+    );
+
+    #[cfg(tokio_unstable)]
+    {
+        register!(
+            num_blocking_threads,
+            "The number of additional threads spawned by the runtime."
+        );
+        register!(
+            num_idle_blocking_threads,
+            "The number of idle threads which have spawned by the runtime for spawn_blocking calls."
+        );
+        register_per_worker!(
+            worker_local_queue_depth,
+            "The number of tasks currently scheduled in the workers' local queues."
+        );
+        register!(
+            blocking_queue_depth,
+            "The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking."
+        );
+        register!(
+            spawned_tasks_count,
+            "The number of tasks spawned in this runtime since it was created."
+        );
+        register!(
+            remote_schedule_count,
+            "The number of tasks scheduled from outside of the runtime."
+        );
+        register!(
+            budget_forced_yield_count,
+            "The number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets."
+        );
+        register_per_worker!(
+            worker_noop_count,
+            "The number of times the given worker thread unparked but performed no work before parking again."
+        );
+        register_per_worker!(
+            worker_steal_count,
+            "The number of tasks the given worker thread stole from another worker thread."
+        );
+        register_per_worker!(
+            worker_steal_operations,
+            "The number of times the given worker thread stole tasks from another worker thread."
+        );
+        register_per_worker!(
+            worker_poll_count,
+            "The number of tasks the given worker thread has polled."
+        );
+        register_per_worker!(
+            worker_local_schedule_count,
+            "The number of tasks scheduled from within the runtime on the given worker's local queue."
+        );
+        register_per_worker!(
+            worker_overflow_count,
+            "The number of times the given worker thread saturated its local queue."
+        );
+        register_per_worker_duration_secs!(
+            worker_mean_poll_time,
+            "The mean duration of task polls in seconds."
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -827,7 +1006,7 @@ mod tests {
 
         // Record the walltime and execution time of an async sleep.
         let async_sleep_future = async {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         };
         runtime.block_on(
             async_sleep_future
@@ -841,31 +1020,30 @@ mod tests {
 
         let exec_family = reports
             .iter()
-            .find(|m| m.get_name() == "exec_time_hist")
+            .find(|m| m.name() == "exec_time_hist")
             .expect("metric not found");
         let exec_metric = exec_family.get_metric();
         assert_eq!(exec_metric.len(), 1);
-        assert_eq!(exec_metric[0].get_label()[0].get_value(), "async_sleep_e");
+        assert_eq!(exec_metric[0].get_label()[0].value(), "async_sleep_e");
 
         let exec_histogram = exec_metric[0].get_histogram();
         assert_eq!(exec_histogram.get_sample_count(), 1);
-        // The 4th bucket is 1ms, which we should complete faster than, but is still much quicker
-        // than the 1 second we slept for.
-        assert_eq!(exec_histogram.get_bucket()[3].get_cumulative_count(), 1);
+        // This future will normally complete very quickly, but it's hard to guarantee any particular
+        // timing in an arbitrary test environment, so we don't assert on it here.
 
         let wall_family = reports
             .iter()
-            .find(|m| m.get_name() == "wall_time_hist")
+            .find(|m| m.name() == "wall_time_hist")
             .expect("metric not found");
         let wall_metric = wall_family.get_metric();
         assert_eq!(wall_metric.len(), 1);
-        assert_eq!(wall_metric[0].get_label()[0].get_value(), "async_sleep_w");
+        assert_eq!(wall_metric[0].get_label()[0].value(), "async_sleep_w");
 
         let wall_histogram = wall_metric[0].get_histogram();
         assert_eq!(wall_histogram.get_sample_count(), 1);
         // The 13th bucket is 512ms, which the wall time should be longer than, but is also much
         // faster than the actual execution time of the async sleep.
-        assert_eq!(wall_histogram.get_bucket()[12].get_cumulative_count(), 0);
+        assert_eq!(wall_histogram.get_bucket()[12].cumulative_count(), 0);
 
         // Reset the registery to make collecting metrics easier.
         let registry = MetricsRegistry::new();
@@ -888,25 +1066,62 @@ mod tests {
 
         let exec_family = reports
             .iter()
-            .find(|m| m.get_name() == "exec_time_cnt")
+            .find(|m| m.name() == "exec_time_cnt")
             .expect("metric not found");
         let exec_metric = exec_family.get_metric();
         assert_eq!(exec_metric.len(), 1);
-        assert_eq!(exec_metric[0].get_label()[0].get_value(), "thread_sleep_e");
+        assert_eq!(exec_metric[0].get_label()[0].value(), "thread_sleep_e");
 
         let exec_counter = exec_metric[0].get_counter();
         // Since we're synchronously sleeping the execution time will be long.
-        assert!(exec_counter.get_value() >= 1.0);
+        assert!(exec_counter.value() >= 1.0);
 
         let wall_family = reports
             .iter()
-            .find(|m| m.get_name() == "wall_time_cnt")
+            .find(|m| m.name() == "wall_time_cnt")
             .expect("metric not found");
         let wall_metric = wall_family.get_metric();
         assert_eq!(wall_metric.len(), 1);
 
         let wall_counter = wall_metric[0].get_counter();
         // We filtered wall time to < 10ms, so our wall time metric should be filtered out.
-        assert_eq!(wall_counter.get_value(), 0.0);
+        assert_eq!(wall_counter.value(), 0.0);
+    }
+
+    #[crate::test]
+    fn register_metric_stores_rules() {
+        let registry = MetricsRegistry::new();
+        let cluster_rule = super::Rule::ClusterNameLookup {
+            cluster_id_label: "cluster_id".into(),
+            output_label: "cluster_name".into(),
+        };
+        let replica_rule = super::Rule::ReplicaNameLookup {
+            cluster_id_label: "cluster_id".into(),
+            replica_id_label: "replica_id".into(),
+            output_label: "replica_name".into(),
+        };
+        let _: prometheus::IntCounter = registry.register(crate::metric!(
+            name: "mz_test_register_metric_stores_rules",
+            help: "test metric",
+            rules: [
+                cluster_rule.clone(),
+                replica_rule.clone(),
+            ],
+        ));
+        let by_metric = registry.rules_by_metric();
+        let rules = by_metric
+            .get("mz_test_register_metric_stores_rules")
+            .expect("rules registered under fq name");
+        assert_eq!(rules, &vec![cluster_rule, replica_rule]);
+    }
+
+    #[crate::test]
+    fn register_metric_without_rules_omits_entry() {
+        let registry = MetricsRegistry::new();
+        let _: prometheus::IntCounter = registry.register(crate::metric!(
+            name: "mz_test_register_metric_without_rules",
+            help: "test metric without rules",
+        ));
+        assert!(registry.rules_by_metric().is_empty());
     }
 }

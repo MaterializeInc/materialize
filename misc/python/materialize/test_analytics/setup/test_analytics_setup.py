@@ -9,15 +9,9 @@
 
 import os
 
-from pg8000 import Cursor
+from psycopg import Cursor
 
-from materialize import MZ_ROOT
-
-
-def setup_all_structures(cursor: Cursor) -> None:
-    setup_directory = f"{MZ_ROOT}/misc/python/materialize/test_analytics/setup/"
-    setup_structures(cursor, f"{setup_directory}/tables")
-    setup_structures(cursor, f"{setup_directory}/views")
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 def setup_structures(cursor: Cursor, directory: str) -> None:
@@ -38,16 +32,12 @@ def setup_structures(cursor: Cursor, directory: str) -> None:
 
         for command in sql_commands:
             print(f"> {command}")
-            cursor.execute(command)
+            cursor.execute(command.encode())
 
 
 def exist_structures(cursor: Cursor) -> bool:
     table_name_to_test = "build"
     cursor.execute(
-        f"SELECT exists(SELECT 1 FROM mz_tables WHERE name = '{table_name_to_test}');"
+        f"SELECT exists(SELECT 1 FROM mz_tables WHERE name = {as_sanitized_literal(table_name_to_test)});".encode()
     )
     return cursor.fetchall()[0][0]
-
-
-def drop_structures_and_data(cursor: Cursor) -> None:
-    cursor.execute("DROP DATABASE test_analytics;")

@@ -9,6 +9,6 @@
 
 MZFROM ubuntu-base
 
-RUN apt-get update && apt-get install -y postgresql-client
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENTRYPOINT ["psql"]

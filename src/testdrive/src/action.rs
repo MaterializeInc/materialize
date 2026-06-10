@@ -9,12 +9,13 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::net::ToSocketAddrs;
+
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_types::SdkConfig;
@@ -23,37 +24,41 @@ use itertools::Itertools;
 use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
-use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
+use mz_catalog::config::ClusterReplicaSizeMap;
+use mz_catalog::durable::BootstrapArgs;
+use mz_ccsr::SubjectVersion;
+use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
-use once_cell::sync::Lazy;
-use rand::Rng;
-use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
+use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
+use semver::Version;
+use tokio_postgres::error::{DbError, SqlState};
 use tracing::info;
 use url::Url;
 
 use crate::error::PosError;
 use crate::parser::{
-    validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput, VersionConstraint,
+    Command, PosCommand, SqlExpectedError, SqlOutput, VersionConstraint, validate_ident,
 };
 use crate::util;
 use crate::util::postgres::postgres_client;
 
 pub mod consistency;
 
+mod duckdb;
 mod file;
-mod fivetran;
 mod http;
 mod kafka;
 mod mysql;
@@ -74,7 +79,7 @@ mod version_check;
 mod webhook;
 
 /// User-settable configuration parameters.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     // === Testdrive options. ===
     /// Variables to make available to the testdrive script.
@@ -83,7 +88,7 @@ pub struct Config {
     /// variable named `arg.KEY`.
     pub arg_vars: BTreeMap<String, String>,
     /// A random number to distinguish each run of a testdrive script.
-    pub seed: Option<u32>,
+    pub seed: Option<String>,
     /// Whether to reset Materialize state before executing each script and
     /// to clean up AWS state after each script.
     pub reset: bool,
@@ -108,6 +113,9 @@ pub struct Config {
     pub backoff_factor: f64,
     /// Should we skip coordinator and catalog consistency checks.
     pub consistency_checks: consistency::Level,
+    /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
+    /// test file).
+    pub check_statement_logging: bool,
     /// Whether to automatically rewrite wrong results instead of failing.
     pub rewrite_results: bool,
 
@@ -126,18 +134,26 @@ pub struct Config {
     /// The port for the internal endpoints of the materialize instance that
     /// testdrive will connect to via HTTP.
     pub materialize_internal_http_port: u16,
+    /// The port for the password endpoints of the materialize instance that
+    /// testdrive will connect to via SQL.
+    pub materialize_password_sql_port: u16,
+    /// The port for the SASL endpoints of the materialize instance that
+    /// testdrive will connect to via SQL.
+    pub materialize_sasl_sql_port: u16,
     /// Session parameters to set after connecting to materialize.
     pub materialize_params: Vec<(String, String)>,
     /// An optional catalog configuration.
     pub materialize_catalog_config: Option<CatalogConfig>,
     /// Build information
     pub build_info: &'static BuildInfo,
+    /// Configured cluster replica sizes
+    pub materialize_cluster_replica_sizes: ClusterReplicaSizeMap,
 
     // === Persist options. ===
     /// Handle to the persist consensus system.
-    pub persist_consensus_url: Option<String>,
+    pub persist_consensus_url: Option<SensitiveUrl>,
     /// Handle to the persist blob storage.
-    pub persist_blob_url: Option<String>,
+    pub persist_blob_url: Option<SensitiveUrl>,
 
     // === Confluent options. ===
     /// The address of the Kafka broker that testdrive will interact with.
@@ -168,12 +184,6 @@ pub struct Config {
     pub aws_config: SdkConfig,
     /// The ID of the AWS account that `aws_config` configures.
     pub aws_account: String,
-
-    // === Fivetran options. ===
-    /// Address of the Fivetran Destination that is currently running.
-    pub fivetran_destination_url: String,
-    /// Directory that is accessible to the Fivetran Destination.
-    pub fivetran_destination_files_path: String,
 }
 
 pub struct MaterializeState {
@@ -184,16 +194,22 @@ pub struct MaterializeState {
     http_addr: String,
     internal_sql_addr: String,
     internal_http_addr: String,
+    password_sql_addr: String,
+    sasl_sql_addr: String,
     user: String,
     pgclient: tokio_postgres::Client,
     environment_id: EnvironmentId,
+    bootstrap_args: BootstrapArgs,
 }
 
 pub struct State {
+    // The Config that this `State` was originally created from.
+    pub config: Config,
+
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
     cmd_vars: BTreeMap<String, String>,
-    seed: u32,
+    seed: String,
     temp_path: PathBuf,
     _tempfile: Option<tempfile::TempDir>,
     default_timeout: Duration,
@@ -202,16 +218,19 @@ pub struct State {
     initial_backoff: Duration,
     backoff_factor: f64,
     consistency_checks: consistency::Level,
+    check_statement_logging: bool,
     consistency_checks_adhoc_skip: bool,
     regex: Option<Regex>,
     regex_replacement: String,
+    error_line_count: usize,
+    error_string: String,
 
     // === Materialize state. ===
     materialize: MaterializeState,
 
     // === Persist state. ===
-    persist_consensus_url: Option<String>,
-    persist_blob_url: Option<String>,
+    persist_consensus_url: Option<SensitiveUrl>,
+    persist_blob_url: Option<SensitiveUrl>,
     build_info: &'static BuildInfo,
     persist_clients: PersistClientCache,
 
@@ -231,14 +250,10 @@ pub struct State {
     aws_config: SdkConfig,
 
     // === Database driver state. ===
+    pub duckdb_clients: BTreeMap<String, std::sync::Arc<std::sync::Mutex<::duckdb::Connection>>>,
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
-    sql_server_clients:
-        BTreeMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
-
-    // === Fivetran state. ===
-    fivetran_destination_url: String,
-    fivetran_destination_files_path: String,
+    sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
 
     // === Rewrite state. ===
     rewrite_results: bool,
@@ -261,20 +276,11 @@ impl State {
         self.cmd_vars
             .insert("testdrive.kafka-addr".into(), self.kafka_addr.clone());
         self.cmd_vars.insert(
-            "testdrive.kafka-addr-resolved".into(),
-            self.kafka_addr
-                .to_socket_addrs()
-                .ok()
-                .and_then(|mut addrs| addrs.next())
-                .map(|addr| addr.to_string())
-                .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
-        );
-        self.cmd_vars.insert(
             "testdrive.schema-registry-url".into(),
             self.schema_registry_url.to_string(),
         );
         self.cmd_vars
-            .insert("testdrive.seed".into(), self.seed.to_string());
+            .insert("testdrive.seed".into(), self.seed.clone());
         self.cmd_vars.insert(
             "testdrive.temp-dir".into(),
             self.temp_path.display().to_string(),
@@ -322,16 +328,16 @@ impl State {
             self.materialize.internal_sql_addr.clone(),
         );
         self.cmd_vars.insert(
+            "testdrive.materialize-password-sql-addr".into(),
+            self.materialize.password_sql_addr.clone(),
+        );
+        self.cmd_vars.insert(
+            "testdrive.materialize-sasl-sql-addr".into(),
+            self.materialize.sasl_sql_addr.clone(),
+        );
+        self.cmd_vars.insert(
             "testdrive.materialize-user".into(),
             self.materialize.user.clone(),
-        );
-        self.cmd_vars.insert(
-            "testdrive.fivetran-destination-url".into(),
-            self.fivetran_destination_url.clone(),
-        );
-        self.cmd_vars.insert(
-            "testdrive.fivetran-destination-files-path".into(),
-            self.fivetran_destination_files_path.clone(),
         );
 
         for (key, value) in env::vars() {
@@ -351,14 +357,17 @@ impl State {
     pub async fn with_catalog_copy<F, T>(
         &self,
         system_parameter_defaults: BTreeMap<String, String>,
+        build_info: &'static BuildInfo,
+        bootstrap_args: &BootstrapArgs,
+        enable_expression_cache_override: Option<bool>,
         f: F,
     ) -> Result<Option<T>, anyhow::Error>
     where
         F: FnOnce(ConnCatalog) -> T,
     {
         async fn persist_client(
-            persist_consensus_url: String,
-            persist_blob_url: String,
+            persist_consensus_url: SensitiveUrl,
+            persist_blob_url: SensitiveUrl,
             persist_clients: &PersistClientCache,
         ) -> Result<PersistClient, anyhow::Error> {
             let persist_location = PersistLocation {
@@ -384,6 +393,9 @@ impl State {
                 SYSTEM_TIME.clone(),
                 self.materialize.environment_id.clone(),
                 system_parameter_defaults,
+                build_info,
+                bootstrap_args,
+                enable_expression_cache_override,
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));
@@ -408,7 +420,7 @@ impl State {
         std::mem::replace(&mut self.consistency_checks_adhoc_skip, false)
     }
 
-    pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
+    pub async fn reset_materialize(&self) -> Result<(), anyhow::Error> {
         let (inner_client, _) = postgres_client(
             &format!(
                 "postgres://mz_system:materialize@{}",
@@ -424,16 +436,43 @@ impl State {
             .context("getting version of materialize")
             .map(|row| row.get::<_, i32>(0))?;
 
+        let semver = inner_client
+            .query_one("SELECT right(split_part(mz_version(), ' ', 1), -1)", &[])
+            .await
+            .context("getting semver of materialize")
+            .map(|row| row.get::<_, String>(0))?
+            .parse::<semver::Version>()
+            .context("parsing semver of materialize")?;
+
         inner_client
             .batch_execute("ALTER SYSTEM RESET ALL")
             .await
             .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
 
         // Dangerous functions are useful for tests so we enable it for all tests.
-        inner_client
-            .batch_execute("ALTER SYSTEM SET enable_unsafe_functions = on")
-            .await
-            .context("enabling dangerous functions")?;
+        {
+            let rename_version = Version::parse("0.128.0-dev.1").expect("known to be valid");
+            let enable_unsafe_functions = if semver >= rename_version {
+                "unsafe_enable_unsafe_functions"
+            } else {
+                "enable_unsafe_functions"
+            };
+            let res = inner_client
+                .batch_execute(&format!("ALTER SYSTEM SET {enable_unsafe_functions} = on"))
+                .await
+                .context("enabling dangerous functions");
+            if let Err(e) = res {
+                match e.root_cause().downcast_ref::<DbError>() {
+                    Some(e) if *e.code() == SqlState::CANT_CHANGE_RUNTIME_PARAM => {
+                        info!(
+                            "can't enable unsafe functions because the server is safe mode; \
+                             testdrive scripts will fail if they use unsafe functions",
+                        );
+                    }
+                    _ => return Err(e),
+                }
+            }
+        }
 
         for row in inner_client
             .query("SHOW DATABASES", &[])
@@ -578,7 +617,8 @@ impl State {
     }
 
     /// Delete Kafka topics + CCSR subjects that were created in this run
-    pub async fn reset_kafka(&mut self) -> Result<(), anyhow::Error> {
+    pub async fn reset_kafka(&self) -> Result<(), anyhow::Error> {
+        use rdkafka::types::RDKafkaErrorCode;
         let mut errors: Vec<anyhow::Error> = Vec::new();
 
         let metadata = self.kafka_producer.client().fetch_metadata(
@@ -612,12 +652,9 @@ impl State {
                             testdrive_topics.len()
                         ));
                     }
-                    for (res, topic) in res.iter().zip(testdrive_topics.iter()) {
+                    for (res, topic) in res.iter().zip_eq(testdrive_topics.iter()) {
                         match res {
-                            Ok(_)
-                            | Err((_, rdkafka::types::RDKafkaErrorCode::UnknownTopicOrPartition)) => {
-                                ()
-                            }
+                            Ok(_) | Err((_, RDKafkaErrorCode::UnknownTopicOrPartition)) => (),
                             Err((_, err)) => {
                                 errors.push(anyhow!("unable to delete {}: {}", topic, err));
                             }
@@ -630,30 +667,9 @@ impl State {
             };
         }
 
-        match self
-            .ccsr_client
-            .list_subjects()
-            .await
-            .context("listing schema registry subjects")
-        {
-            Ok(subjects) => {
-                let testdrive_subjects: Vec<_> = subjects
-                    .iter()
-                    .filter(|s| s.starts_with("testdrive-"))
-                    .collect();
+        let schema_registry_errors = self.reset_schema_registry().await;
 
-                for subject in testdrive_subjects {
-                    match self.ccsr_client.delete_subject(subject).await {
-                        Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
-                        Err(e) => errors.push(e.into()),
-                    }
-                }
-            }
-            Err(e) => {
-                errors.push(e);
-            }
-        }
-
+        errors.extend(schema_registry_errors);
         if errors.is_empty() {
             Ok(())
         } else {
@@ -667,15 +683,93 @@ impl State {
             );
         }
     }
+
+    #[allow(clippy::disallowed_types)]
+    async fn reset_schema_registry(&self) -> Vec<anyhow::Error> {
+        use std::collections::HashMap;
+
+        let mut errors = Vec::new();
+        match self
+            .ccsr_client
+            .list_subjects()
+            .await
+            .context("listing schema registry subjects")
+        {
+            Ok(subjects) => {
+                let testdrive_subjects: Vec<_> = subjects
+                    .into_iter()
+                    .filter(|s| s.starts_with("testdrive-"))
+                    .collect();
+
+                // Build the dependency graphs: subject -> list of subjects it references
+                let mut graphs: HashMap<SubjectVersion, Vec<SubjectVersion>> = HashMap::new();
+
+                for subject in &testdrive_subjects {
+                    match self.ccsr_client.get_subject_with_references(subject).await {
+                        Ok((subj, refs)) => {
+                            // Filter to only testdrive subjects
+                            let refs: Vec<_> = refs
+                                .into_iter()
+                                .filter(|r| r.subject.starts_with("testdrive-"))
+                                .collect();
+                            graphs.insert(
+                                SubjectVersion {
+                                    subject: subj.name,
+                                    version: subj.version,
+                                },
+                                refs,
+                            );
+                        }
+                        Err(mz_ccsr::GetBySubjectError::SubjectNotFound) => {
+                            // Subject was already deleted, skip it
+                        }
+                        Err(e) => {
+                            errors.push(anyhow::anyhow!(
+                                "failed to get references for subject {}: {}",
+                                subject,
+                                e
+                            ));
+                        }
+                    }
+                }
+
+                // Get topological ordering (0 = root/no dependencies, higher = more dependents)
+                // We need to delete in reverse order (highest first = subjects that depend on others)
+                let subjects_to_delete: Vec<_> = match mz_ccsr::topological_sort(&graphs) {
+                    Ok(ordered) => {
+                        let mut subjects: Vec<_> = ordered.into_iter().collect();
+                        subjects.sort_by(|a, b| a.1.cmp(&b.1));
+                        subjects.into_iter().map(|(s, _)| s.clone()).collect()
+                    }
+                    Err(_) => {
+                        tracing::info!("Cycle detected, attempting to delete anyway");
+                        // Cycle detected or other error - fall back to deleting in any order
+                        graphs.into_keys().collect()
+                    }
+                };
+
+                for subject in subjects_to_delete {
+                    match self.ccsr_client.delete_subject(&subject.subject).await {
+                        Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
+                        Err(e) => errors.push(e.into()),
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(e);
+            }
+        }
+        errors
+    }
 }
 
 /// Configuration for the Catalog.
 #[derive(Debug, Clone)]
 pub struct CatalogConfig {
     /// Handle to the persist consensus system.
-    pub persist_consensus_url: String,
+    pub persist_consensus_url: SensitiveUrl,
     /// Handle to the persist blob storage.
-    pub persist_blob_url: String,
+    pub persist_blob_url: SensitiveUrl,
 }
 
 pub enum ControlFlow {
@@ -736,17 +830,17 @@ impl Run for PosCommand {
                         consistency::skip_consistency_checks(builtin, state)
                     }
                     "check-shard-tombstone" => {
-                        consistency::run_check_shard_tombstoned(builtin, state).await
+                        consistency::run_check_shard_tombstone(builtin, state).await
                     }
-                    "fivetran-destination" => {
-                        fivetran::run_destination_command(builtin, state).await
-                    }
+                    "duckdb-execute" => duckdb::run_execute(builtin, state).await,
+                    "duckdb-query" => duckdb::run_query(builtin, state).await,
                     "file-append" => file::run_append(builtin, state).await,
                     "file-delete" => file::run_delete(builtin, state).await,
                     "http-request" => http::run_request(builtin, state).await,
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
                     "kafka-wait-topic" => kafka::run_wait_topic(builtin, state).await,
+                    "kafka-delete-records" => kafka::run_delete_records(builtin, state).await,
                     "kafka-delete-topic-flaky" => kafka::run_delete_topic(builtin, state).await,
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,
@@ -764,6 +858,12 @@ impl Run for PosCommand {
                     "psql-execute" => psql::run_execute(builtin, state).await,
                     "s3-verify-data" => s3::run_verify_data(builtin, state).await,
                     "s3-verify-keys" => s3::run_verify_keys(builtin, state).await,
+                    "s3-file-upload" => s3::run_upload(builtin, state).await,
+                    "s3-set-presigned-url" => s3::run_set_presigned_url(builtin, state).await,
+                    "s3-upload-parquet-types" => s3::run_upload_parquet_types(builtin, state).await,
+                    "s3-upload-parquet-unsorted-map" => {
+                        s3::run_upload_parquet_unsorted_map(builtin, state).await
+                    }
                     "schema-registry-publish" => schema_registry::run_publish(builtin, state).await,
                     "schema-registry-verify" => schema_registry::run_verify(builtin, state).await,
                     "schema-registry-wait" => schema_registry::run_wait(builtin, state).await,
@@ -771,6 +871,7 @@ impl Run for PosCommand {
                     "skip-end" => skip_end::run_skip_end(),
                     "sql-server-connect" => sql_server::run_connect(builtin, state).await,
                     "sql-server-execute" => sql_server::run_execute(builtin, state).await,
+                    "sql-server-set-from-sql" => sql_server::run_set_from_sql(builtin, state).await,
                     "persist-force-compaction" => {
                         persist::run_force_compaction(builtin, state).await
                     }
@@ -837,7 +938,7 @@ fn substitute_vars(
     ignore_prefix: &Option<String>,
     regex_escape: bool,
 ) -> Result<String, anyhow::Error> {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
     let mut err = None;
     let out = RE.replace_all(msg, |caps: &Captures| {
         let name = &caps[1];
@@ -875,7 +976,10 @@ fn substitute_vars(
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
-    let seed = config.seed.unwrap_or_else(|| rand::thread_rng().gen());
+    let seed = config
+        .seed
+        .clone()
+        .unwrap_or_else(|| format!("{:010}", rand::random::<u32>()));
 
     let (_tempfile, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {
@@ -905,10 +1009,8 @@ pub async fn create_state(
         })
         .await?;
 
-    let pgconn_task = task::spawn(|| "pgconn_task", pgconn).map(|join| {
-        join.expect("pgconn_task unexpectedly canceled")
-            .context("running SQL connection")
-    });
+    let pgconn_task =
+        task::spawn(|| "pgconn_task", pgconn).map(|join| join.context("running SQL connection"));
 
     let materialize_state =
         create_materialize_state(&config, materialize_catalog_config, pgclient).await?;
@@ -978,6 +1080,8 @@ pub async fn create_state(
     };
 
     let mut state = State {
+        config: config.clone(),
+
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
         cmd_vars: BTreeMap::new(),
@@ -990,10 +1094,13 @@ pub async fn create_state(
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
         consistency_checks: config.consistency_checks,
+        check_statement_logging: config.check_statement_logging,
         consistency_checks_adhoc_skip: false,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         rewrite_results: config.rewrite_results,
+        error_line_count: 0,
+        error_string: "".to_string(),
 
         // === Materialize state. ===
         materialize: materialize_state,
@@ -1024,13 +1131,10 @@ pub async fn create_state(
         aws_config: config.aws_config.clone(),
 
         // === Database driver state. ===
+        duckdb_clients: BTreeMap::new(),
         mysql_clients: BTreeMap::new(),
         postgres_clients: BTreeMap::new(),
         sql_server_clients: BTreeMap::new(),
-
-        // === Fivetran state. ===
-        fivetran_destination_url: config.fivetran_destination_url.clone(),
-        fivetran_destination_files_path: config.fivetran_destination_files_path.clone(),
 
         rewrites: Vec::new(),
         rewrite_pos_start: 0,
@@ -1077,6 +1181,16 @@ async fn create_materialize_state(
         materialize_internal_url.host_str().unwrap(),
         materialize_internal_url.port().unwrap()
     );
+    let materialize_password_sql_addr = format!(
+        "{}:{}",
+        materialize_url.host_str().unwrap(),
+        config.materialize_password_sql_port
+    );
+    let materialize_sasl_sql_addr = format!(
+        "{}:{}",
+        materialize_url.host_str().unwrap(),
+        config.materialize_sasl_sql_port
+    );
     let materialize_internal_http_addr = format!(
         "{}:{}",
         materialize_internal_url.host_str().unwrap(),
@@ -1089,6 +1203,13 @@ async fn create_materialize_state(
         .parse()
         .context("parsing environment ID")?;
 
+    let bootstrap_args = BootstrapArgs {
+        cluster_replica_size_map: config.materialize_cluster_replica_sizes.clone(),
+        default_cluster_replica_size: "ABC".to_string(),
+        default_cluster_replication_factor: 1,
+        bootstrap_role: None,
+    };
+
     let materialize_state = MaterializeState {
         catalog_config: materialize_catalog_config,
         sql_addr: materialize_sql_addr,
@@ -1096,9 +1217,12 @@ async fn create_materialize_state(
         http_addr: materialize_http_addr,
         internal_sql_addr: materialize_internal_sql_addr,
         internal_http_addr: materialize_internal_http_addr,
+        password_sql_addr: materialize_password_sql_addr,
+        sasl_sql_addr: materialize_sasl_sql_addr,
         user: materialize_user,
         pgclient,
         environment_id,
+        bootstrap_args,
     };
 
     Ok(materialize_state)

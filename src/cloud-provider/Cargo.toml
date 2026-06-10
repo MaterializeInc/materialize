@@ -1,0 +1,17 @@
+[package]
+name = "mz-cloud-provider"
+description = "Representation of a cloud provider"
+version = "0.1.0"
+authors = ["Materialize, Inc."]
+license = "proprietary"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+
+[features]
+default = []
+
+[lints]
+workspace = true
