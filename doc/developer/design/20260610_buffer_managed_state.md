@@ -242,6 +242,7 @@ This keeps codec CPU off the access path — and off worker threads entirely in 
 Differential batch storage is generic over containers: `OrdValBatch` is parameterized by a `Layout` whose `KeyContainer`, `ValContainer`, offset, time, and diff containers each implement `BatchContainer`, and Materialize already substitutes its own containers in `mz_row_spine`.
 A paged container — elements stored across Layer 2 chunks plus a small resident header — implements `BatchContainer` without forking `OrdValBatch` or cursor logic.
 Stable addresses make this sound: `index` returns a borrow into pool memory, valid because eviction cannot reclaim a page mid-borrow (epochs) and fault-in never moves data.
+Differential's pending `Chunk` abstraction offers a cleaner, chunk-granular seam that this design prefers where available; see "Integration with differential's `Chunk` abstraction" below.
 
 #### What is free to vary, and what is not
 
@@ -302,6 +303,49 @@ Large `Row` values dominate some arrangements and are rewritten by every merge.
 WiscKey-style full key-value separation conflicts with differential consolidation — merges compare `(key, val)` pairs, and out-of-line values would cost a dereference per comparison — but values are only compared when keys and times tie, so with mostly-unique keys the dereference rate may be low enough that separation wins for large rows.
 The template is Umbra's string layout: small values inline in the leaf page, large values out-of-line in write-once extents referenced by pointer, threshold chosen by measurement.
 The initial format keeps the val container abstract enough to add this without a format break.
+
+### Integration with differential's `Chunk` abstraction
+
+Differential [PR #744](https://github.com/TimelyDataflow/differential-dataflow/pull/744) introduces `trait Chunk`: a consolidated, sorted, `Rc`-shared run of `(data, time, diff)` updates with a size bound and a maximal-packing ("grading") invariant, designed so one abstraction backs the containers collections transit, the merge batcher's chains, and — as a `Vec<Chunk>` plus a time description — a whole batch (`ChunkBatch`).
+The harness code (binary merger, fueled batch merger, compaction queue, builder) is generic; all layout-aware work lives behind the trait.
+If it lands, it is the natural differential-side landing zone for Layer 3, and several pieces of this design simplify into it.
+
+#### The mapping
+
+* **`ChunkBatch` is the run format of this design, minus the paging.**
+  It carries per-chunk `first_keys` / `last_keys` / `first_vals` / `last_vals` containers — the resident header's fence keys, including the val-level fences that boundary-straddling `(key, val)` runs need — and its cursor binary-searches that index before opening a within-chunk cursor, handling boundary spills explicitly without touching chunk contents.
+* **The fault boundary is the trait.**
+  Everything a seek needs is resident in the `ChunkBatch` (fence containers are copied out of chunks at construction), and all data access funnels through `Chunk::cursor` and the inner cursor's accessors.
+  Chunk-granular paging therefore matches the pool's unit exactly, and is a cleaner seam than paging inside `BatchContainer`: the integration-seam subsection above describes the container-level fallback, but `Chunk` is the preferred target.
+* **The fueled batch merger is the bounded-window consumer.**
+  It reads sources by cloning chunks (refcount bumps, never consuming), holds at most two heads plus graded output, and its source indices announce exactly which chunks fault next — the readahead driver comes for free.
+  Its implementor contract (output bounded by input consumed; recycle drained-input storage as output buffers) is the write-behind and pool-slot-recycling discipline of Layer 2, stated independently.
+* **One representation across the lifecycle.**
+  The same chunk transits the collection, sits in batcher chains, and lands in the sealed batch as an `Rc` move — eliminating the re-serialization at seal that today's pipeline pays between batcher and spine containers, and making Layer 2's zero-copy end state (builders filling pool memory directly) reachable across the whole path.
+* **The trait formalizes "what is free to vary."**
+  Within-chunk layout is opaque to the harness, so the index-structure zoo is contested per-implementor, exactly as the narrowing argument above wants.
+
+#### A `PagedChunk` implementor
+
+The integration is a third `Chunk` implementor whose backing is a Layer 2 pool handle rather than `Rc<Vec>`:
+
+* `Clone` is a handle refcount bump, satisfying the cheap-clone contract.
+* `cursor()` and the inner accessors fault evicted backing in through interior mutability and return borrows tied to `&self` — sound only because of stable addresses plus epoch protection; this consumer is what makes that machinery earn its keep.
+* `bounds()` serves from an owned resident copy captured at seal time (the trait already demands cheap endpoint access, and `ChunkBatch::new` calls it while the chunk is naturally resident); after construction, seeks touch no evicted chunk until an inner cursor opens.
+* `prune` overrides the default copy-merge with a range adjustment over shared storage, which the trait documentation already anticipates.
+
+#### Frictions
+
+* **Grading counts updates; paging wants bytes.**
+  `TARGET` is an update count serving merge-suspension granularity and index size; a paged chunk wants byte-targeted sizing for I/O efficiency, and variable-size rows make the two diverge.
+  The columnar implementor already tolerates oversized chunks at val boundaries, so the invariant bends; byte-based grading is feedback for the PR rather than a blocker.
+* **The columnar implementor's v1 merge decompresses and recompresses**, materializing owned keys and vals — flagged in the PR as a known limitation.
+  Paged columnar chunks want range-copy merging for the same reason `ord_neu`'s merger has it; one fix serves both.
+* **Boundary spill-walks fault mid-iteration.**
+  `map_times` and val-stepping open cursors on neighbor chunks inside operator closures — accesses the readahead API cannot easily predict.
+  Acceptable under synchronous fault-in; they belong on the fault-point inventory that milestone 3 audits.
+
+The consequence for sequencing: milestone 3 re-targets from a paged `BatchContainer` to a paged `Chunk`, shrinking from "prototype a paged container and audit borrow lifetimes across the cursor stack" to "implement one trait and audit the inner-cursor fault points."
 
 ### Backing policy: lazy and eager
 
@@ -390,6 +434,7 @@ Treat it as qualitatively-swap rather than independently measured.
    At this milestone the swap and file backends are deletable.
 3. **Borrow-safety prototype for Layer 3.**
    A paged `BatchContainer` for one container type plus an audit (and assertion machinery) that no consumer holds a container borrow across a yield.
+   If differential's `Chunk` abstraction lands first, this milestone re-targets to a paged `Chunk` implementor and the audit narrows to the inner-cursor fault points (see "Integration with differential's `Chunk` abstraction").
    This is the step most likely to send the design back for revision; do it before committing to the full format.
 4. **Paged sealed batches for one spine.**
    `ValRowSpine` (upsert feedback) first: single consumer, batched lookups, no interactive peeks.
