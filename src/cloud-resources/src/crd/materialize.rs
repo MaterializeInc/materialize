@@ -564,7 +564,7 @@ pub mod v1alpha1 {
         pub fn should_force_promote(&self) -> bool {
             self.spec.force_promote == self.spec.request_rollout.hyphenated().to_string()
                 || self.spec.force_promote
-                    == super::v1alpha2::Materialize::from(self.clone()).generate_rollout_hash()
+                    == super::v1::Materialize::from(self.clone()).generate_rollout_hash()
                 || self.spec.rollout_strategy
                     == MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime
         }
@@ -761,7 +761,7 @@ pub mod v1alpha1 {
         /// If you want to trigger a rollout without making other changes that would cause this
         /// hash to change, you must set forceRollout to the same UUID as requestRollout.
         pub resources_hash: String,
-        /// The last completed rollout hash from v1alpha2.
+        /// The last completed rollout hash from v1.
         /// This exists on this older version only for round-trip conversion support.
         pub last_completed_rollout_hash: Option<String>,
         pub conditions: Vec<Condition>,
@@ -801,11 +801,11 @@ pub mod v1alpha1 {
         }
     }
 
-    impl From<v1alpha2::Materialize> for Materialize {
-        fn from(value: v1alpha2::Materialize) -> Self {
+    impl From<v1::Materialize> for Materialize {
+        fn from(value: v1::Materialize) -> Self {
             let rollout_hash = value.generate_rollout_hash();
             // Derive a deterministic UUID from the rollout hash so that the
-            // same v1alpha2 spec always produces the same requestRollout,
+            // same v1 spec always produces the same requestRollout,
             // making re-applies of an unchanged spec idempotent.
             let request_rollout = Uuid::new_v5(&Uuid::NAMESPACE_OID, rollout_hash.as_bytes());
             Materialize {
@@ -870,7 +870,7 @@ pub mod v1alpha1 {
     }
 }
 
-pub mod v1alpha2 {
+pub mod v1 {
     use super::*;
 
     #[derive(
@@ -887,7 +887,7 @@ pub mod v1alpha2 {
     #[kube(
         namespaced,
         group = "materialize.cloud",
-        version = "v1alpha2",
+        version = "v1",
         kind = "Materialize",
         singular = "materialize",
         plural = "materializes",

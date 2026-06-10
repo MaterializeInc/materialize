@@ -108,7 +108,7 @@ pub async fn register_crds(
     ca_cert_path: String,
 ) -> Result<(), anyhow::Error> {
     let ca_bytes = tokio::fs::read(ca_cert_path).await?;
-    let mut mz_crd = crd::materialize::v1alpha2::Materialize::crd();
+    let mut mz_crd = crd::materialize::v1::Materialize::crd();
     let default_columns = mz_crd.spec.versions[0]
         .additional_printer_columns
         .take()
