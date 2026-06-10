@@ -5381,7 +5381,7 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
                     },
                     column_names: vec!["generate_series_unoptimized".into()],
                 })
-            }) => ReturnType::set_of(Int64.into()), oid::FUNC_MZ_GENERATE_SERIES_UNOPTIMIZED_OID;
+            }) => ReturnType::set_of(Int64.into()), oid::FUNC_MZ_GEN_SERIES_UNOPT_OID;
             params!(Int64, Int64, Int64) => Operation::variadic(move |_ecx, exprs| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
@@ -5390,7 +5390,7 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
                     },
                     column_names: vec!["generate_series_unoptimized".into()],
                 })
-            }) => ReturnType::set_of(Int64.into()), oid::FUNC_MZ_GENERATE_SERIES_UNOPTIMIZED_STEP_OID;
+            }) => ReturnType::set_of(Int64.into()), oid::FUNC_MZ_GEN_SERIES_UNOPT_STEP_OID;
         },
         "mz_sleep" => Scalar {
             params!(Float64) => UnaryFunc::Sleep(func::Sleep)
