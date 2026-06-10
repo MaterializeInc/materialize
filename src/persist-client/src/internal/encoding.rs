@@ -1976,6 +1976,7 @@ mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::assert_err;
+    use mz_ore::cast::CastFrom;
     use mz_persist::location::SeqNo;
     use proptest::prelude::*;
 
@@ -2301,6 +2302,167 @@ mod tests {
             result.is_err(),
             "a rollup proto with diffs but no rollups must error, not panic"
         );
+    }
+
+    /// Returns a valid rollup proto whose trace was mutated by `update_trace`.
+    fn rollup_proto_with_trace(update_trace: impl FnOnce(&mut ProtoTrace)) -> ProtoRollup {
+        let state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "host".to_owned(),
+            0,
+        );
+        let mut proto = Rollup::from_untyped_state_without_diffs(state.into()).into_proto();
+        update_trace(proto.trace.as_mut().expect("fresh state has a trace"));
+        proto
+    }
+
+    fn u64_desc_proto(lower: u64, upper: u64, since: u64) -> ProtoU64Description {
+        Description::new(
+            Antichain::from_elem(lower),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(since),
+        )
+        .into_proto()
+    }
+
+    fn legacy_batch_proto(lower: u64, upper: u64, since: u64) -> ProtoHollowBatch {
+        ProtoHollowBatch {
+            desc: Some(u64_desc_proto(lower, upper, since)),
+            ..Default::default()
+        }
+    }
+
+    fn rollup_decode_err(proto: ProtoRollup) -> String {
+        let result: Result<Rollup<u64>, _> = proto.into_rust();
+        match result {
+            Ok(_) => panic!("crafted rollup proto must fail to decode"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    /// The trace in a rollup proto is decoded from an untrusted blob, and
+    /// `Trace::unflatten` re-inserts structureless legacy batches into a
+    /// spine whose (always-on) asserts require them to tile the timeline
+    /// contiguously from the minimum frontier. A batch that doesn't must fail
+    /// decoding instead. Regression for a rollup_proto_roundtrip fuzz crash
+    /// (crash-8603829ee2a3b9c28ee988a14136050d1afe984c).
+    #[mz_ore::test]
+    fn rollup_proto_with_noncontiguous_legacy_batches_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.legacy_batches.push(legacy_batch_proto(39, 40, 0));
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("legacy batch lower"), "{err}");
+    }
+
+    /// Like [rollup_proto_with_noncontiguous_legacy_batches_is_rejected], but
+    /// for `Spine::insert`'s other assert: a legacy batch with an empty time
+    /// range.
+    #[mz_ore::test]
+    fn rollup_proto_with_empty_range_legacy_batch_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.legacy_batches.push(legacy_batch_proto(0, 0, 0));
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("empty time range"), "{err}");
+    }
+
+    /// A batch whose since is past the trace's since reconstructs without
+    /// tripping any spine assert but violates `Trace::validate`, which used
+    /// to run only under `debug_assert` (a panic in cargo-fuzz builds, silent
+    /// acceptance of corrupted state in release builds). It must be a decode
+    /// error.
+    #[mz_ore::test]
+    fn rollup_proto_with_batch_since_past_trace_since_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.legacy_batches.push(legacy_batch_proto(0, 1, 5));
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("past the spine since"), "{err}");
+    }
+
+    /// An absurd batch len overflows the spine's maintenance arithmetic
+    /// (`len.next_power_of_two()`, summing lens of merged batches), which
+    /// panics in builds with overflow checks. It must be a decode error.
+    #[mz_ore::test]
+    fn rollup_proto_with_absurd_batch_len_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.legacy_batches.push(ProtoHollowBatch {
+                desc: Some(u64_desc_proto(0, 1, 0)),
+                len: u64::MAX,
+                ..Default::default()
+            });
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("maximum trace size"), "{err}");
+    }
+
+    /// An absurd spine batch level previously overflowed `level + 1` (a panic
+    /// in builds with overflow checks) and sized a `vec![]` allocation (an
+    /// abort). It must be a decode error.
+    #[mz_ore::test]
+    fn rollup_proto_with_absurd_spine_level_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.spine_batches.push(ProtoIdSpineBatch {
+                id: Some(SpineId(0, 1).into_proto()),
+                batch: Some(ProtoSpineBatch {
+                    level: u64::MAX,
+                    desc: Some(u64_desc_proto(0, 1, 0)),
+                    parts: vec![],
+                    descs: vec![],
+                }),
+            });
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("exceeds the maximum"), "{err}");
+    }
+
+    /// A spine batch whose parts don't tile its id range (here: no parts at
+    /// all) previously tripped the `debug_assert`s in `SpineBatch::id`. It
+    /// must be a decode error.
+    #[mz_ore::test]
+    fn rollup_proto_with_partless_spine_batch_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.spine_batches.push(ProtoIdSpineBatch {
+                id: Some(SpineId(0, 1).into_proto()),
+                batch: Some(ProtoSpineBatch {
+                    level: 0,
+                    desc: Some(u64_desc_proto(0, 1, 0)),
+                    parts: vec![],
+                    descs: vec![],
+                }),
+            });
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("do not cover"), "{err}");
+    }
+
+    /// Three spine batches at one level overflow the two-batch layer, which
+    /// `MergeState::push_batch` previously `expect`ed against. It must be a
+    /// decode error.
+    #[mz_ore::test]
+    fn rollup_proto_with_overfull_spine_level_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            for i in 0..3u64 {
+                let id = SpineId(usize::cast_from(i), usize::cast_from(i + 1));
+                trace.spine_batches.push(ProtoIdSpineBatch {
+                    id: Some(id.into_proto()),
+                    batch: Some(ProtoSpineBatch {
+                        level: 0,
+                        desc: Some(u64_desc_proto(i, i + 1, 0)),
+                        parts: vec![id.into_proto()],
+                        descs: vec![],
+                    }),
+                });
+                trace.hollow_batches.push(ProtoIdHollowBatch {
+                    id: Some(id.into_proto()),
+                    batch: Some(legacy_batch_proto(i, i + 1, 0)),
+                });
+            }
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("full layer"), "{err}");
     }
 
     #[mz_persist_proc::test(tokio::test)]
