@@ -96,44 +96,6 @@ Before modifying timestamp selection or oracle interaction, verify:
    `read_ts` calls (including the fast path, if any) return `>= t`? This must
    hold across nodes, not just within the local process.
 
-## Statement Logging
-
-### End-of-execution logging: linear ownership, tolerant sink
-
-Every sampled statement gets exactly one `begin_statement_execution`; the
-matching `end_statement_execution` must be emitted by whoever currently *owns*
-the end of that statement. Ownership is linear and handoffs are one-way:
-
-- The side that begins logging owns the end from that moment: the frontend's
-  `StatementLoggingGuard` in the frontend peek sequencing, or whoever holds
-  the `ExecuteContext` (and the `ExecuteContextGuard` inside it) in the old
-  sequencing.
-- Handing a statement to the coordinator transfers ownership *only on
-  success*, at the dispatch site:
-  - Fast-path peek: when `RegisterFrontendPeek` returns `Ok`, the
-    coordinator's `pending_peeks` entry owns the end. That holds even when
-    the subsequent `client.peek()` fails to issue: `UnregisterFrontendPeek`
-    carries the error reason, and the coordinator logs it unless a concurrent
-    teardown already retired the peek.
-  - Slow-path peek, subscribe: when the command returns `Ok`. On `Err` the
-    coordinator defuses its own guard and logs nothing; the frontend still
-    owns the end and logs the error.
-- Never derive "who logs the end" after the fact --- by inspecting response
-  shapes, or by asking the other side whether it already logged. Transfer the
-  capability (defuse the guard) at the dispatch site instead. The inference
-  approach was tried and produced double-end races whenever a teardown
-  (`DROP CLUSTER`, cancellation) raced a dispatch, and every new
-  frontend-sequenced statement type re-introduced them.
-
-The sink additionally tolerates duplicate ends (first end wins, see
-`end_statement_execution`), because exactly-once handoff is unattainable under
-async cancellation: a frontend future can be dropped between the coordinator
-registering a peek and the frontend defusing its guard, leaving both sides
-owning the end. A duplicate end must degrade to a warning and slightly
-nondeterministic telemetry, never a panic: statement logging is observability,
-and an `expect` at this spot once let a `DROP CLUSTER` racing a frontend peek
-abort all of environmentd (incident-1070).
-
 ## Rejected Optimizations
 
 This section records specific optimizations that have been attempted and found
