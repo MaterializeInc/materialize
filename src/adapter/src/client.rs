@@ -1583,12 +1583,9 @@ impl RecordFirstRowStream {
         instance_id: Option<ComputeInstanceId>,
         strategy: Option<StatementExecutionStrategy>,
     ) -> Histogram {
-        let isolation_level = *client
-            .session
-            .as_ref()
-            .expect("session invariant")
-            .vars()
-            .transaction_isolation();
+        let session = client.session.as_ref().expect("session invariant");
+        let isolation_level = *session.vars().transaction_isolation();
+        let name_hint = ApplicationNameHint::from_str(session.application_name());
         let instance = match instance_id {
             Some(i) => Cow::Owned(i.to_string()),
             None => Cow::Borrowed("none"),
@@ -1606,6 +1603,7 @@ impl RecordFirstRowStream {
                 instance.as_ref(),
                 isolation_level.as_variant_str(),
                 strategy,
+                name_hint.as_str(),
             ])
     }
 

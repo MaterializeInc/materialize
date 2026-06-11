@@ -140,7 +140,7 @@ impl Metrics {
             time_to_first_row_seconds: registry.register(metric! {
                 name: "mz_time_to_first_row_seconds",
                 help: "Latency of an execute for a successful query from pgwire's perspective",
-                var_labels: ["instance_id", "isolation_level", "strategy"],
+                var_labels: ["instance_id", "isolation_level", "strategy", "application_name"],
                 buckets: histogram_seconds_buckets(0.000_128, 32.0)
             }),
             statement_logging_records: registry.register(metric! {
