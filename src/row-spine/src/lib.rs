@@ -1753,9 +1753,12 @@ mod row_codec {
             /// These tags never collide with datum first-bytes, so the codec can be
             /// installed without observing all data first.
             pub(super) fn new_safe(stats: Self) -> Self {
-                let mut mg = stats
-                    .stats
-                    .0
+                // The codec's container stores its pre-install rows raw, so the
+                // first-byte bitmap gathered while observing them must carry over
+                // to the installed codec: a later `new_from` merge consults it to
+                // decide which tags are safe to hand out as dictionary tags.
+                let (mg, observed_tags) = stats.stats;
+                let mut mg = mg
                     .done()
                     .into_iter()
                     .filter(|(next_bytes, count)| next_bytes.len() > 1 && count > &1);
@@ -1775,7 +1778,7 @@ mod row_codec {
                 Self {
                     encode,
                     decode,
-                    stats: (MisraGries::default(), [0u64; 4]),
+                    stats: (MisraGries::default(), observed_tags),
                 }
             }
         }
