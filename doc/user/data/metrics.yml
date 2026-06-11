@@ -1696,12 +1696,6 @@ metrics:
 - name: outer_join_lowering_cases
   help: How many times the different outer join lowering cases happened.
   source: src/sql/src/optimizer_metrics.rs
-- name: test_counter
-  help: a counter for testing
-  source: src/ore/src/metrics/tests.rs
-- name: test_counter_third_party
-  help: an third_party counter for testing
-  source: src/ore/src/metrics/tests.rs
 - name: transform_hits
   help: How many times a given transform changed the plan.
   source: src/sql/src/optimizer_metrics.rs

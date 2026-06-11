@@ -10,9 +10,8 @@
 //! Generates a YAML file of every `metric!` definition in the Materialize
 //! source tree for the user-facing metrics documentation.
 //!
-//! It walks the Rust AST with `syn`,
-//! visiting every `metric!` invocation outside of `#[cfg(test)]` and extracts
-//! its properties.
+//! It walks the Rust AST with `syn`, visiting every `metric!` invocation
+//! outside of test code.
 //!
 //! Regenerate with `bin/gen-metrics-catalog`.
 
@@ -24,11 +23,14 @@ use serde::Serialize;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::visit::Visit;
-use syn::{Attribute, Expr, Ident, ItemMod, Lit, Macro, Meta, Token, braced, bracketed};
+use syn::{
+    Attribute, Expr, Ident, ImplItemFn, ItemFn, ItemImpl, ItemMod, Lit, Macro, Token, braced,
+    bracketed,
+};
 use walkdir::WalkDir;
 
 // Known directories that we want to ignore when walking the source tree.
-static IGNORED_DIRS: &[&str] = &["tests", "benches", "examples"];
+static IGNORED_DIRS: &[&str] = &["target", "tests", "benches", "examples"];
 
 /// The catalog as serialized to YAML.
 #[derive(Serialize)]
@@ -214,12 +216,18 @@ fn expr_to_string(e: &Expr) -> String {
     }
 }
 
-/// Returns true if any attribute is `#[cfg(test)]` (or `#[cfg(any(test, ..))]`).
-fn has_cfg_test(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        attr.path().is_ident("cfg")
-            && matches!(&attr.meta, Meta::List(list) if list.tokens.to_string().contains("test"))
-    })
+/// Whether `attrs` mark an item as test-only, so the user-facing catalog should
+/// skip it (and everything inside it). This deliberately just checks whether any
+/// attribute mentions `test`, which catches both test-runner attributes
+/// (`#[test]`, `#[mz_ore::test]`, `#[tokio::test]`, …) and `#[cfg(test)]` gates.
+///
+/// It's a coarse over-approximation: a feature name that
+/// merely contains "test" would also match. However the
+/// simplicity is worth more than precision for a docs generator.
+fn is_test_only(attrs: &[Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(|attr| attr.to_token_stream().to_string().contains("test"))
 }
 
 struct Collector<'a> {
@@ -228,12 +236,30 @@ struct Collector<'a> {
 }
 
 impl<'ast> Visit<'ast> for Collector<'_> {
+    // Prune test-only subtrees before they reach `visit_macro`, so the
+    // user-facing catalog excludes test metrics.
     fn visit_item_mod(&mut self, node: &'ast ItemMod) {
-        // Skip test-only modules so the user-facing catalog excludes test metrics.
-        if has_cfg_test(&node.attrs) {
-            return;
+        if !is_test_only(&node.attrs) {
+            syn::visit::visit_item_mod(self, node);
         }
-        syn::visit::visit_item_mod(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast ItemFn) {
+        if !is_test_only(&node.attrs) {
+            syn::visit::visit_item_fn(self, node);
+        }
+    }
+
+    fn visit_item_impl(&mut self, node: &'ast ItemImpl) {
+        if !is_test_only(&node.attrs) {
+            syn::visit::visit_item_impl(self, node);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
+        if !is_test_only(&node.attrs) {
+            syn::visit::visit_impl_item_fn(self, node);
+        }
     }
 
     fn visit_macro(&mut self, mac: &'ast Macro) {
@@ -525,5 +551,34 @@ mod tests {
         let doc = parse_metric(r#"metric!(name: "mz_foo")"#);
         assert_eq!(doc.name, "mz_foo");
         assert_eq!(doc.help, "");
+    }
+
+    /// Parses `#[<attr>] fn f() {}` and returns its attributes, so `is_test_only`
+    /// can be exercised against realistically parsed attributes.
+    fn attrs_of(attr: &str) -> Vec<Attribute> {
+        let item: ItemFn = syn::parse_str(&format!("{attr} fn f() {{}}")).expect("valid attribute");
+        item.attrs
+    }
+
+    /// `#[cfg(test)]` and test-runner attributes (`#[test]`, `#[mz_ore::test]`,
+    /// `#[tokio::test]`, …) mark an item as test-only.
+    #[mz_ore::test]
+    fn is_test_only_matches_test_items() {
+        assert!(is_test_only(&attrs_of("#[cfg(test)]")));
+        assert!(is_test_only(&attrs_of("#[test]")));
+        assert!(is_test_only(&attrs_of("#[mz_ore::test]")));
+        assert!(is_test_only(&attrs_of("#[tokio::test]")));
+        assert!(is_test_only(&attrs_of("#[mz_ore::test(tokio::test)]")));
+    }
+
+    /// Attributes with no mention of `test` are not test-only, so metrics gated
+    /// on a target, a feature, or carrying ordinary attributes stay documented.
+    #[mz_ore::test]
+    fn is_test_only_ignores_non_test_items() {
+        assert!(!is_test_only(&attrs_of("#[cfg(unix)]")));
+        assert!(!is_test_only(&attrs_of(r#"#[cfg(target_os = "linux")]"#)));
+        assert!(!is_test_only(&attrs_of(r#"#[cfg(feature = "chrono")]"#)));
+        assert!(!is_test_only(&attrs_of("#[inline]")));
+        assert!(!is_test_only(&attrs_of("#[derive(Clone)]")));
     }
 }
