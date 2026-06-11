@@ -3547,6 +3547,52 @@ async fn test_http_metrics() {
     assert_eq!(failure_metric.get_label()[2].value(), "422");
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+async fn test_time_to_first_row_metric() {
+    let server = test_util::TestHarness::default().start().await;
+
+    let client = server.connect().application_name("dbt").await.unwrap();
+    let _ = client.query_one("SELECT 1", &[]).await.unwrap();
+
+    let metrics = server.metrics_registry.gather();
+    let metric = metrics
+        .into_iter()
+        .find(|m| m.name() == "mz_time_to_first_row_seconds")
+        .expect("mz_time_to_first_row_seconds metric should exist");
+
+    // Find the series produced by our query.
+    let series = metric
+        .get_metric()
+        .iter()
+        .find(|m| {
+            m.get_label()
+                .iter()
+                .any(|l| l.name() == "application_name" && l.value() == "dbt")
+        })
+        .expect("a `mz_time_to_first_row_seconds` series for application_name=dbt should exist");
+
+    // Validate the labels are correct
+    let mut labels: Vec<(&str, &str)> = series
+        .get_label()
+        .iter()
+        .map(|l| (l.name(), l.value()))
+        .collect();
+
+    labels.sort();
+
+    assert_eq!(
+        labels,
+        vec![
+            ("application_name", "dbt"),
+            ("instance_id", "none"),
+            ("isolation_level", "strict serializable"),
+            ("strategy", "constant"),
+        ],
+    );
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]

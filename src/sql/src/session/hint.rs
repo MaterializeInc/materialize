@@ -106,11 +106,9 @@ impl ApplicationNameHint {
             // Terraform provides the version as a suffix.
             x if x.starts_with("terraform-provider-materialize") => {
                 ApplicationNameHint::TerraformProviderMaterialize(Private)
-            },
-            // dbt provides the version as a suffix.
-            x if x.starts_with("dbt") => {
-                ApplicationNameHint::Dbt(Private),
             }
+            // dbt provides the version as a suffix.
+            x if x.starts_with("dbt") => ApplicationNameHint::Dbt(Private),
             // DataGrip provides the version as a suffix.
             x if x.starts_with("datagrip") => ApplicationNameHint::DataGrip(Private),
             // DBeaver provides the version as a suffix.
