@@ -83,7 +83,7 @@ use mz_persist_client::batch::Added;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{ColumnName, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{ColumnName, DatumVec, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::{AppendOnlyUpdate, Status, TimestamplessUpdate};
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
 use mz_storage_client::healthcheck::{
@@ -1521,10 +1521,12 @@ async fn partially_truncate_metrics_history(
 
     // Produce retractions by inverting diffs of rows we want to delete.
     let mut builder = write_handle.builder(Antichain::from_elem(old_upper_ts));
+    // Re-used allocation for decoding rows, avoids allocating a fresh vector per row.
+    let mut datum_vec = DatumVec::new();
     while let Some(chunk) = rows.next().await {
         for (data, _t, diff) in chunk {
             let Ok(row) = &data.0 else { continue };
-            let datums = row.unpack();
+            let datums = datum_vec.borrow_with(row);
             let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
             if *occurred_at >= keep_since {
                 continue;
