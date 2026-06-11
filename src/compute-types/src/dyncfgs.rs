@@ -136,13 +136,14 @@ pub const COLUMN_PAGED_BATCHER_USE_POOL: Config<bool> = Config::new(
 
 /// Number of buffer-pool spill threads performing eviction I/O (lz4
 /// compression plus the synchronous-reclaim `MADV_PAGEOUT`) off the threads
-/// that trip the budget. Zero (the default) evicts inline on the calling
-/// thread. Thread spawning is once per process: raising the value later has
+/// that trip the budget. Zero evicts inline on the calling thread, which
+/// measurably convoys workers behind eviction I/O at hydration eviction
+/// rates. Thread spawning is once per process: raising the value later has
 /// no effect beyond re-enabling, and lowering it to zero falls back to
 /// inline eviction while spawned threads idle.
 pub const COLUMN_PAGED_BATCHER_POOL_SPILL_THREADS: Config<usize> = Config::new(
     "column_paged_batcher_pool_spill_threads",
-    0,
+    2,
     "Buffer-pool spill threads for off-worker eviction I/O; 0 evicts inline on the caller.",
 );
 
