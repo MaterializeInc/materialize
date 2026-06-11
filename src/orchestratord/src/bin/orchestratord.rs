@@ -11,8 +11,10 @@ use std::{
     future,
     net::SocketAddr,
     sync::{Arc, LazyLock},
+    time::Duration,
 };
 
+use axum_server::tls_openssl::OpenSSLConfig;
 use http::HeaderValue;
 use k8s_openapi::{
     api::{
@@ -37,9 +39,10 @@ use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, util::create_client}
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_orchestratord::{
     controller,
-    k8s::register_crds,
+    k8s::{ConversionWebhookConfig, register_crds},
     metrics::{self, Metrics},
     tls::DefaultCertificateSpecs,
+    webhook,
 };
 use mz_ore::{
     cli::{self, CliConfig, KeyValueArg},
@@ -60,6 +63,35 @@ pub struct Args {
     profiling_listen_address: SocketAddr,
     #[clap(long, default_value = "[::]:3100")]
     metrics_listen_address: SocketAddr,
+    #[clap(long, default_value = "[::]:8001")]
+    webhook_listen_address: SocketAddr,
+
+    /// Whether to install the v1 version of the Materialize CRD and the
+    /// conversion webhook between v1 and v1alpha1. When false, only the
+    /// v1alpha1 version is installed and the webhook server is not started.
+    #[clap(long)]
+    install_v1_crd: bool,
+    /// Required when --install-v1-crd is set.
+    #[clap(long, required_if_eq("install_v1_crd", "true"))]
+    webhook_service_name: Option<String>,
+    /// Required when --install-v1-crd is set.
+    #[clap(long, required_if_eq("install_v1_crd", "true"))]
+    webhook_service_namespace: Option<String>,
+    #[clap(long, default_value = "8001")]
+    webhook_service_port: u16,
+    #[clap(long, default_value = "/etc/tls/ca.crt")]
+    tls_ca: String,
+    #[clap(long, default_value = "/etc/tls/tls.crt")]
+    tls_cert: String,
+    #[clap(long, default_value = "/etc/tls/tls.key")]
+    tls_key: String,
+    /// How often to reload the webhook TLS serving certificate from disk and,
+    /// when the CA changes, refresh the conversion webhook's CA bundle. The
+    /// certificate is rotated out-of-band (e.g. by cert-manager), so this must
+    /// be short enough that rotations are picked up before the old certificate
+    /// expires.
+    #[clap(long, default_value = "1h", value_parser = humantime::parse_duration)]
+    webhook_cert_reload_interval: Duration,
 
     #[clap(long)]
     cloud_provider: CloudProvider,
@@ -265,12 +297,111 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
+    let tls_cert = args.tls_cert;
+    let tls_key = args.tls_key;
+    let tls_ca = args.tls_ca;
+    let reload_config = if args.install_v1_crd {
+        let config = OpenSSLConfig::from_pem_file(&tls_cert, &tls_key).unwrap();
+        let reload_config = config.clone();
+        let webhook_listen_address = args.webhook_listen_address;
+
+        mz_ore::task::spawn(|| "webhook server", async move {
+            if let Err(e) = axum_server::bind_openssl(webhook_listen_address, config)
+                .serve(webhook::router().into_make_service())
+                .await
+            {
+                panic!("webhook server failed: {}", e.display_with_causes());
+            }
+        });
+
+        Some(reload_config)
+    } else {
+        None
+    };
+
     let (client, namespace) = create_client(args.kubernetes_context.clone()).await?;
+    let additional_crd_columns = args.additional_crd_columns.unwrap_or_default();
+    let conversion_webhook = args.install_v1_crd.then(|| ConversionWebhookConfig {
+        service_name: args
+            .webhook_service_name
+            .expect("clap requires --webhook-service-name with --install-v1-crd"),
+        service_namespace: args
+            .webhook_service_namespace
+            .expect("clap requires --webhook-service-namespace with --install-v1-crd"),
+        service_port: args.webhook_service_port,
+        ca_cert_path: tls_ca.clone(),
+    });
     register_crds(
         client.clone(),
-        args.additional_crd_columns.unwrap_or_default(),
+        additional_crd_columns.clone(),
+        conversion_webhook.clone(),
     )
     .await?;
+
+    // Periodically reload the webhook serving certificate from disk, and
+    // refresh the conversion webhook's CA bundle whenever the CA changes.
+    //
+    // The certificate is rotated out-of-band (e.g. by cert-manager). The
+    // serving certificate is signed by a stable root CA, so routine rotations
+    // reuse the same CA and the CA bundle registered into the CRD at startup
+    // keeps working. But if the CA itself rotates (e.g. on root CA renewal),
+    // that startup CA bundle would not trust the served certificate, and the
+    // Kubernetes API server would reject every conversion request. Refreshing
+    // the CA bundle when the CA changes keeps the webhook working across CA
+    // rotations.
+    if let Some(reload_config) = reload_config {
+        let conversion_webhook = conversion_webhook
+            .expect("conversion webhook config is set whenever the webhook server is started");
+        let reload_interval = args.webhook_cert_reload_interval;
+        let client = client.clone();
+        let additional_crd_columns = additional_crd_columns.clone();
+        mz_ore::task::spawn(|| "webhook certificate reload", async move {
+            let mut last_ca = tokio::fs::read(&tls_ca).await.ok();
+            let mut interval = tokio::time::interval(reload_interval);
+            // The first tick completes immediately; skip it so we don't
+            // re-register the CRDs we just registered above.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if let Err(err) = reload_config.reload_from_pem_file(&tls_cert, &tls_key) {
+                    tracing::error!("failed to reload webhook TLS certificate: {err}");
+                    continue;
+                }
+                let current_ca = match tokio::fs::read(&tls_ca).await {
+                    Ok(ca) => ca,
+                    Err(err) => {
+                        tracing::error!("failed to read webhook CA certificate: {err}");
+                        continue;
+                    }
+                };
+                if last_ca.as_deref() == Some(current_ca.as_slice()) {
+                    continue;
+                }
+                // The CA changed, meaning the certificate was rotated. Re-register
+                // the CRDs so the conversion webhook's caBundle matches the
+                // newly-served certificate.
+                match register_crds(
+                    client.clone(),
+                    additional_crd_columns.clone(),
+                    Some(conversion_webhook.clone()),
+                )
+                .await
+                {
+                    Ok(()) => {
+                        tracing::info!(
+                            "refreshed conversion webhook CA bundle after certificate rotation"
+                        );
+                        last_ca = Some(current_ca);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            "failed to refresh conversion webhook CA bundle after rotation: {err}"
+                        );
+                    }
+                }
+            }
+        });
+    }
 
     let crd_api: Api<CustomResourceDefinition> = Api::all(client.clone());
     let crds = crd_api.list(&ListParams::default()).await?;
@@ -545,4 +676,43 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     info!("All tasks started successfully.");
 
     future::pending().await
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Args;
+
+    const REQUIRED_ARGS: &[&str] = &[
+        "orchestratord",
+        "--cloud-provider=local",
+        "--region=kind",
+        "--console-image-tag-default=latest",
+    ];
+
+    #[mz_ore::test]
+    fn webhook_service_args_required_with_install_v1_crd() {
+        let args = Args::try_parse_from(REQUIRED_ARGS).expect("parses without webhook args");
+        assert!(!args.install_v1_crd);
+
+        assert!(
+            Args::try_parse_from(REQUIRED_ARGS.iter().copied().chain(["--install-v1-crd"]))
+                .is_err(),
+            "--install-v1-crd should require the webhook service args"
+        );
+
+        let args = Args::try_parse_from(REQUIRED_ARGS.iter().copied().chain([
+            "--install-v1-crd",
+            "--webhook-service-name=orchestratord",
+            "--webhook-service-namespace=materialize",
+        ]))
+        .expect("parses with webhook args");
+        assert!(args.install_v1_crd);
+        assert_eq!(args.webhook_service_name.as_deref(), Some("orchestratord"));
+        assert_eq!(
+            args.webhook_service_namespace.as_deref(),
+            Some("materialize")
+        );
+    }
 }
