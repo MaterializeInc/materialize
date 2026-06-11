@@ -413,11 +413,12 @@ pub fn global_pool() -> Option<mz_ore::pool::Pool> {
 /// is pool-backed when `enabled` (disabled otherwise — per-consumer opt-ins
 /// via [`shared_pager`] still work either way), and the pool's resident
 /// budget is retuned in place so live handles stay coherent.
-pub fn apply_pool_config(enabled: bool, budget_bytes: usize) -> bool {
+pub fn apply_pool_config(enabled: bool, budget_bytes: usize, spill_threads: usize) -> bool {
     let Some(pool) = global_pool() else {
         return false;
     };
     pool.set_budget(budget_bytes);
+    pool.set_spill_threads(spill_threads);
     POOL_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
     if enabled {
         set_global_pager(ColumnPager::pooled(pool));
@@ -975,7 +976,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
     fn pool_mode_routing() {
         // Pool mode on: the global pager and shared pager both go pooled.
-        let ok = apply_pool_config(true, 1 << 30);
+        let ok = apply_pool_config(true, 1 << 30, 0);
         assert!(ok, "pool reservation expected to succeed in tests");
         let mut col = sample_typed();
         let paged = global_pager().page(&mut col);

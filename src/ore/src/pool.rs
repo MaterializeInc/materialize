@@ -75,6 +75,11 @@ pub enum Residency {
     /// Resident, and an identical extent copy exists; eviction releases
     /// physical pages without I/O.
     BackedResident,
+    /// Resident and readable, with compression into an extent scheduled on a
+    /// spill thread. Completion moves the chunk to [`Residency::Evicted`]
+    /// (or [`Residency::BackedResident`] if pins appeared meanwhile); a free
+    /// or a pin observed at dequeue cancels the write instead.
+    WriteInFlight,
     /// Extent copy only. The pool slot's contents are undefined and must
     /// never be read; access faults the chunk back in from the extent.
     Evicted,
@@ -101,6 +106,13 @@ pub struct PoolStats {
     pub faults: u64,
     /// Compressed bytes written into extents.
     pub extent_bytes_written: u64,
+    /// Evictions handed to spill threads.
+    pub spill_scheduled: u64,
+    /// Scheduled evictions cancelled before compressing (freed or pinned at
+    /// dequeue).
+    pub spill_cancelled: u64,
+    /// Entries currently queued for or being processed by spill threads.
+    pub spill_in_flight: u64,
     /// Uncompressed bytes of currently resident chunks (including oversize).
     pub resident_bytes: u64,
     /// Uncompressed bytes of live oversize chunks.
@@ -110,6 +122,8 @@ pub struct PoolStats {
 #[derive(Debug, Default)]
 struct Counters {
     inserts: AtomicU64,
+    spill_scheduled: AtomicU64,
+    spill_cancelled: AtomicU64,
     frees: AtomicU64,
     elided_frees: AtomicU64,
     evictions_compress: AtomicU64,
@@ -140,7 +154,32 @@ struct PoolInner {
     /// entries; [`PoolInner::prune_queue`] compacts the queue against it.
     live_slotted: AtomicU64,
     counters: Counters,
+    spill: Spill,
 }
+
+/// Hand-off point between budget enforcement and spill threads. Eviction I/O
+/// (compression and the synchronous-reclaim `pageout`) runs on spill threads
+/// when enabled, keeping multi-millisecond work off the threads that trip the
+/// budget; with no spill threads, eviction runs inline on the caller.
+#[derive(Debug, Default)]
+struct Spill {
+    /// Chunks in `WriteInFlight`, awaiting a spill thread.
+    queue: Mutex<VecDeque<Arc<ChunkMeta>>>,
+    cv: std::sync::Condvar,
+    /// Whether evictions are handed to spill threads. Set when threads are
+    /// first spawned; cleared to fall back to inline eviction.
+    enabled: std::sync::atomic::AtomicBool,
+    /// Number of spill threads spawned (spawn-once; later config changes
+    /// only toggle `enabled`).
+    threads: AtomicU64,
+    /// Queued plus currently-processing entries; `quiesce` waits on zero.
+    in_flight: AtomicU64,
+}
+
+/// Beyond this many queued spill entries, eviction degrades to inline on the
+/// caller: bounded memory overshoot under burst beats an unbounded queue of
+/// still-resident chunks.
+const SPILL_QUEUE_MAX: usize = 64;
 
 /// Location of a chunk's pool slot.
 #[derive(Debug, Clone, Copy)]
@@ -217,6 +256,7 @@ impl Pool {
             queue: Mutex::new(VecDeque::new()),
             live_slotted: AtomicU64::new(0),
             counters: Counters::default(),
+            spill: Spill::default(),
         })))
     }
 
@@ -331,7 +371,77 @@ impl Pool {
             extent_bytes_written: c.extent_bytes_written.load(Ordering::Relaxed),
             resident_bytes: c.resident_bytes.load(Ordering::Relaxed),
             oversize_bytes: c.oversize_bytes.load(Ordering::Relaxed),
+            spill_scheduled: c.spill_scheduled.load(Ordering::Relaxed),
+            spill_cancelled: c.spill_cancelled.load(Ordering::Relaxed),
+            spill_in_flight: self.0.spill.in_flight.load(Ordering::Relaxed),
         }
+    }
+
+    /// Enables or disables off-worker eviction I/O. The first call with
+    /// `threads > 0` spawns that many spill threads (spawn-once: later calls
+    /// only toggle participation); `threads == 0` falls back to inline
+    /// eviction on the caller for subsequent victims, letting any queued
+    /// work drain.
+    pub fn set_spill_threads(&self, threads: usize) {
+        if threads == 0 {
+            self.0.spill.enabled.store(false, Ordering::Relaxed);
+            return;
+        }
+        let spawned = self.0.spill.threads.load(Ordering::Relaxed);
+        if spawned == 0 {
+            let to_spawn = u64::cast_from(threads);
+            if self
+                .0
+                .spill
+                .threads
+                .compare_exchange(0, to_spawn, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                for i in 0..threads {
+                    let inner = Arc::clone(&self.0);
+                    std::thread::Builder::new()
+                        .name(format!("pool-spill-{i}"))
+                        .spawn(move || inner.spill_worker())
+                        .expect("spawn pool spill thread");
+                }
+            }
+        }
+        self.0.spill.enabled.store(true, Ordering::Relaxed);
+    }
+
+    /// Test hook: waits until the spill queue is empty and no entry is being
+    /// processed, so tests observe deterministic post-eviction states.
+    #[doc(hidden)]
+    pub fn quiesce_spill(&self) {
+        while self.0.spill.in_flight.load(Ordering::Relaxed) > 0 {
+            std::thread::yield_now();
+        }
+    }
+
+    /// Test hook: enables spill scheduling without spawning threads, so tests
+    /// drive the queue deterministically via [`Pool::spill_step`].
+    #[doc(hidden)]
+    pub fn enable_spill_without_threads(&self) {
+        self.0.spill.enabled.store(true, Ordering::Relaxed);
+    }
+
+    /// Test hook: processes one queued spill entry on the calling thread.
+    /// Returns whether an entry was processed.
+    #[doc(hidden)]
+    pub fn spill_step(&self) -> bool {
+        let popped = self
+            .0
+            .spill
+            .queue
+            .lock()
+            .expect("spill queue poisoned")
+            .pop_front();
+        let Some(meta) = popped else {
+            return false;
+        };
+        self.0.spill_process(&meta);
+        self.0.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
+        true
     }
 
     /// Evicts cold chunks until resident bytes fall to the budget or every
@@ -360,10 +470,23 @@ impl Pool {
     }
 
     /// Explicitly evicts one chunk. No-op if the chunk is pinned, already
-    /// evicted, empty, or oversize.
+    /// evicted, in flight, empty, or oversize. With spill threads enabled the
+    /// compression is handed off and completes asynchronously (observable via
+    /// [`Residency::WriteInFlight`]); without them it runs inline.
     pub fn evict(&self, handle: &ChunkHandle) {
-        let mut state = handle.meta.state.lock().expect("chunk state poisoned");
-        handle.meta.pool.evict_locked(&handle.meta, &mut state);
+        let meta = &handle.meta;
+        let mut state = meta.state.lock().expect("chunk state poisoned");
+        if state.residency == Residency::UnbackedResident
+            && state.pins == 0
+            && !state.freed
+            && meta.pool.spill_eligible()
+        {
+            state.residency = Residency::WriteInFlight;
+            drop(state);
+            meta.pool.spill_schedule(Arc::clone(meta));
+            return;
+        }
+        meta.pool.evict_locked(meta, &mut state);
     }
 
     /// Test hook: overwrites the chunk's slot bytes with `0xDE` if it has a
@@ -377,7 +500,7 @@ impl Pool {
         let Some(slot) = handle.meta.slot else {
             return;
         };
-        if state.pins > 0 || state.freed {
+        if state.pins > 0 || state.freed || state.residency == Residency::WriteInFlight {
             return;
         }
         let region = &handle.meta.pool.regions[slot.class];
@@ -431,13 +554,30 @@ impl PoolInner {
                 continue;
             };
             let requeue = {
-                let mut state = meta.state.lock().expect("chunk state poisoned");
+                // `try_lock`: a chunk mid-eviction or mid-fault holds its
+                // lock for milliseconds; skipping it beats convoying every
+                // budget enforcer in the process behind one chunk's I/O.
+                let Ok(mut state) = meta.state.try_lock() else {
+                    self.queue
+                        .lock()
+                        .expect("pool queue poisoned")
+                        .push_back(weak);
+                    continue;
+                };
                 if state.freed {
                     false
                 } else if state.pins > 0 {
                     true
                 } else if state.touched {
                     state.touched = false;
+                    true
+                } else if state.residency == Residency::UnbackedResident && self.spill_eligible() {
+                    state.residency = Residency::WriteInFlight;
+                    drop(state);
+                    self.spill_schedule(Arc::clone(&meta));
+                    // The chunk stays queued: completion makes it `Evicted`,
+                    // and a later fault-in makes it resident again without
+                    // re-inserting it.
                     true
                 } else {
                     self.evict_locked(&meta, &mut state);
@@ -489,7 +629,7 @@ impl PoolInner {
                     .evictions_cheap
                     .fetch_add(1, Ordering::Relaxed);
             }
-            Residency::Evicted | Residency::Oversize => return,
+            Residency::WriteInFlight | Residency::Evicted | Residency::Oversize => return,
         }
         // SAFETY: the slot belongs to this live chunk with no pins (checked
         // above under the state lock), so no reference into it exists. The
@@ -503,6 +643,158 @@ impl PoolInner {
         self.counters
             .resident_bytes
             .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+    }
+
+    /// Whether the next eviction should be handed to spill threads: enabled,
+    /// and the queue is below the backpressure bound (beyond it, callers
+    /// evict inline rather than growing an unbounded queue of still-resident
+    /// chunks).
+    fn spill_eligible(&self) -> bool {
+        self.spill.enabled.load(Ordering::Relaxed)
+            && usize::cast_from(self.spill.in_flight.load(Ordering::Relaxed)) < SPILL_QUEUE_MAX
+    }
+
+    /// Hands a `WriteInFlight` chunk to the spill threads.
+    fn spill_schedule(&self, meta: Arc<ChunkMeta>) {
+        self.counters
+            .spill_scheduled
+            .fetch_add(1, Ordering::Relaxed);
+        self.spill.in_flight.fetch_add(1, Ordering::Relaxed);
+        self.spill
+            .queue
+            .lock()
+            .expect("spill queue poisoned")
+            .push_back(meta);
+        self.spill.cv.notify_one();
+    }
+
+    /// Spill-thread main loop. The thread owns an `Arc<PoolInner>`, so the
+    /// pool (a process-wide singleton in production) lives as long as its
+    /// threads; threads park on the condvar when idle.
+    fn spill_worker(self: Arc<Self>) {
+        loop {
+            let meta = {
+                let mut queue = self.spill.queue.lock().expect("spill queue poisoned");
+                loop {
+                    if let Some(meta) = queue.pop_front() {
+                        break meta;
+                    }
+                    queue = self.spill.cv.wait(queue).expect("spill queue poisoned");
+                }
+            };
+            self.spill_process(&meta);
+            self.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Performs (or cancels) one scheduled eviction. Lock discipline: the
+    /// chunk lock is held only to validate and to commit — never across the
+    /// compression or the `pageout` reclaim, which are the multi-millisecond
+    /// costs this path exists to keep off budget-enforcing threads.
+    fn spill_process(&self, meta: &Arc<ChunkMeta>) {
+        // Validate under the lock, then release it for the I/O.
+        {
+            let mut state = meta.state.lock().expect("chunk state poisoned");
+            if state.freed {
+                // Freed while queued: the deferred cleanup below is ours, and
+                // the chunk dies without ever compressing — the write-behind
+                // cancellation window. `ChunkHandle::drop` already counted
+                // the free and the live-slotted decrement.
+                self.counters
+                    .spill_cancelled
+                    .fetch_add(1, Ordering::Relaxed);
+                self.counters.elided_frees.fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .resident_bytes
+                    .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+                self.release_slot_locked(meta, true);
+                return;
+            }
+            if state.residency != Residency::WriteInFlight {
+                return;
+            }
+            if state.pins > 0 {
+                // Being read: cancel rather than compress data that is
+                // demonstrably hot. The chunk stays in the second-chance
+                // queue and a later pass reconsiders it.
+                state.residency = Residency::UnbackedResident;
+                self.counters
+                    .spill_cancelled
+                    .fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+        let slot = meta.slot.expect("write-in-flight chunk has a slot");
+        let region = &self.regions[slot.class];
+        // SAFETY: the chunk is live (the queue holds an `Arc`) and in
+        // `WriteInFlight`, so the slot is not recycled (`ChunkHandle::drop`
+        // defers slot release to this thread in that state) and its contents
+        // are initialized and immutable; concurrent pins may read the slot
+        // but nothing writes it. `len` fits the class.
+        let data = unsafe {
+            std::slice::from_raw_parts(
+                region.slot_ptr(slot.index).cast_const().cast::<u64>(),
+                meta.len,
+            )
+        };
+        let extent = SwapExtent::write(data);
+        // Commit under the lock.
+        let mut state = meta.state.lock().expect("chunk state poisoned");
+        if state.freed {
+            // Freed during compression: the extent is garbage; cleanup is
+            // ours as above. Compression ran, so this is not an elided free.
+            self.counters
+                .spill_cancelled
+                .fetch_add(1, Ordering::Relaxed);
+            self.counters
+                .resident_bytes
+                .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+            self.release_slot_locked(meta, true);
+            return;
+        }
+        self.counters
+            .extent_bytes_written
+            .fetch_add(u64::cast_from(extent.comp_len()), Ordering::Relaxed);
+        self.counters
+            .evictions_compress
+            .fetch_add(1, Ordering::Relaxed);
+        state.extent = Some(extent);
+        if state.pins > 0 {
+            // Pinned during compression: keep the slot resident; the extent
+            // makes any later eviction cheap.
+            state.residency = Residency::BackedResident;
+            return;
+        }
+        // SAFETY: `pins == 0` under the state lock, so no reference into the
+        // slot exists; every later read first overwrites the slot in full
+        // from the extent, satisfying `dontneed`'s contents-undefined
+        // contract.
+        unsafe {
+            region::dontneed(region.slot_ptr(slot.index), region.class_size());
+        }
+        state.residency = Residency::Evicted;
+        self.counters
+            .resident_bytes
+            .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+    }
+
+    /// Releases a freed chunk's slot pages and returns the slot to the free
+    /// list, for the deferred-cleanup paths where `ChunkHandle::drop`
+    /// observed `WriteInFlight` and left slot ownership with the spill
+    /// thread.
+    fn release_slot_locked(&self, meta: &ChunkMeta, resident: bool) {
+        let slot = meta.slot.expect("slotted chunk");
+        let region = &self.regions[slot.class];
+        if resident {
+            // SAFETY: the handle is gone (`freed` observed under the state
+            // lock) and `WriteInFlight` admits no pins from a dropped
+            // handle, so no reference into the slot exists; the next
+            // occupant fully overwrites every byte it reads.
+            unsafe {
+                region::dontneed(region.slot_ptr(slot.index), region.class_size());
+            }
+        }
+        region.free(slot.index);
     }
 }
 
@@ -570,13 +862,15 @@ impl ChunkHandle {
                     .fetch_add(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
                 slot_ptr.cast_const().cast::<u64>()
             }
-            Residency::UnbackedResident | Residency::BackedResident => match meta.slot {
-                Some(slot) => meta.pool.regions[slot.class]
-                    .slot_ptr(slot.index)
-                    .cast_const()
-                    .cast::<u64>(),
-                None => std::ptr::NonNull::<u64>::dangling().as_ptr().cast_const(),
-            },
+            Residency::UnbackedResident | Residency::BackedResident | Residency::WriteInFlight => {
+                match meta.slot {
+                    Some(slot) => meta.pool.regions[slot.class]
+                        .slot_ptr(slot.index)
+                        .cast_const()
+                        .cast::<u64>(),
+                    None => std::ptr::NonNull::<u64>::dangling().as_ptr().cast_const(),
+                }
+            }
         };
         state.touched = true;
         state.pins += 1;
@@ -677,6 +971,12 @@ impl Drop for ChunkHandle {
                 // Eviction already released the slot's pages.
                 release_slot(slot, false);
                 state.extent = None;
+            }
+            Residency::WriteInFlight => {
+                // A spill thread may be reading the slot to compress it.
+                // `freed` (set above) tells it the chunk died; it owns the
+                // slot release, the `resident_bytes` decrement, and the
+                // cancellation accounting from here.
             }
             Residency::Oversize => {
                 pool.counters
@@ -1157,5 +1457,84 @@ mod tests {
         }
         let len = pool.queue_len();
         assert!(len <= 32, "queue holds {len} entries for zero live chunks");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn spill_async_evict_round_trip() {
+        let pool = test_pool(usize::MAX);
+        pool.enable_spill_without_threads();
+        let h = pool.insert(&mut payload(SMALL, 400));
+        pool.evict(&h);
+        assert_eq!(h.residency(), Residency::WriteInFlight);
+        // Readable while in flight.
+        {
+            let pin = h.pin();
+            assert_eq!(&pin[..3], &payload(SMALL, 400)[..3]);
+        }
+        // The pin set `touched` and a pin existed at processing time? No —
+        // the guard dropped, so processing commits the eviction.
+        assert!(pool.spill_step());
+        assert_eq!(h.residency(), Residency::Evicted);
+        let stats = pool.stats();
+        assert_eq!(stats.spill_scheduled, 1);
+        assert_eq!(stats.evictions_compress, 1);
+        pool.poison_resident(&h);
+        let pin = h.pin();
+        assert_eq!(&*pin, &payload(SMALL, 400)[..]);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn spill_freed_while_queued_is_elided() {
+        let pool = test_pool(usize::MAX);
+        pool.enable_spill_without_threads();
+        let h = pool.insert(&mut payload(SMALL, 401));
+        pool.evict(&h);
+        assert_eq!(h.residency(), Residency::WriteInFlight);
+        drop(h);
+        assert!(pool.spill_step());
+        let stats = pool.stats();
+        assert_eq!(stats.spill_cancelled, 1);
+        assert_eq!(stats.elided_frees, 1, "freed before compression: elided");
+        assert_eq!(stats.extent_bytes_written, 0, "no extent was written");
+        assert_eq!(stats.resident_bytes, 0, "slot accounting settled");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn spill_pinned_at_processing_cancels() {
+        let pool = test_pool(usize::MAX);
+        pool.enable_spill_without_threads();
+        let h = pool.insert(&mut payload(SMALL, 402));
+        pool.evict(&h);
+        let pin = h.pin();
+        assert!(pool.spill_step());
+        // Pinned at processing time: cancelled back to resident, no extent.
+        assert_eq!(h.residency(), Residency::UnbackedResident);
+        assert_eq!(pool.stats().spill_cancelled, 1);
+        assert_eq!(pool.stats().extent_bytes_written, 0);
+        assert_eq!(&*pin, &payload(SMALL, 402)[..]);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap, madvise, and threads
+    fn spill_threads_end_to_end() {
+        let pool = test_pool(128 << 10);
+        pool.set_spill_threads(2);
+        let mut handles = Vec::new();
+        for seed in 0..16 {
+            handles.push(pool.insert(&mut payload(SMALL, 500 + seed)));
+        }
+        pool.quiesce_spill();
+        let stats = pool.stats();
+        assert!(
+            stats.spill_scheduled > 0,
+            "budget pressure should have scheduled spills",
+        );
+        for (i, h) in handles.iter().enumerate() {
+            let pin = h.pin();
+            assert_eq!(&*pin, &payload(SMALL, 500 + u64::cast_from(i))[..]);
+        }
     }
 }
