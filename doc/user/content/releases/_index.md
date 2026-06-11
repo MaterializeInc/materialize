@@ -15,6 +15,73 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.28.0
+*Released to Materialize Cloud: 2026-06-11* <br>
+*Released to Materialize Self-Managed: 2026-06-12* <br>
+
+This release includes OIDC improvements for self-managed deployments,
+improvements, and bug fixes.
+
+### Improvements {#v26.28-improvements}
+
+- **MCP query tool enabled by default**: The MCP Server for Agents now
+  enables the `query` tool by default, allowing agents to run ad-hoc
+  SQL queries across data products.
+- **Multi-item `DROP` with dependencies**: `DROP` statements now succeed
+  when multiple co-dependent items are named in the same command,
+  matching PostgreSQL behavior.
+- **Self-Managed OIDC configuration**: Environment superusers can now
+  configure `oidc_group_claim` and `oidc_group_role_sync_strict` via
+  `ALTER SYSTEM SET` without requiring `mz_system` access.
+- **OIDC group claim nested paths**: OIDC group claims now support
+  dot-separated paths (e.g., `groups.materialize`) for navigating
+  nested JWT structures.
+- **Self-Managed Console connection info**: The Console in self-managed
+  deployments now displays the actual balancerd hostname in the OIDC
+  and MCP connection dialogs.
+- **Password redaction in system catalog**: `pg_catalog.pg_user.passwd`
+  now returns `'********'` instead of the actual password hash,
+  matching PostgreSQL behavior.
+- **Faster temporal filters**: Restored filter pushdown for temporal
+  predicates using day-only intervals (e.g.,
+  `t_col - INTERVAL '1' DAY < literal`), which was inadvertently
+  disabled in a prior release.
+
+### Bug Fixes {#v26.28-bug-fixes}
+
+- Fixed Kafka sources appearing healthy after a low-watermark data-loss
+  error by preventing automatic restarts that masked the stalled state.
+- Fixed Kafka sources becoming unhealthy and producing stale data due to
+  transient connection failures when fetching low watermarks.
+- Fixed Kafka sinks using upsert envelope becoming permanently stale
+  when a concurrent writer advanced the output shard.
+- Fixed `generate_subscripts` returning incorrect results for arrays
+  with custom lower bounds.
+- Fixed `array_lower` and `array_upper` returning incorrect results for
+  arrays with custom lower bounds.
+- Fixed `SUM(float8)` returning incorrect results when summing large
+  finite values.
+- Fixed `date_bin` returning incorrect results for timestamps exactly on
+  a bin boundary before the origin.
+- Fixed `INSERT INTO ... SELECT` queries being incorrectly classified as
+  constant, potentially producing wrong results.
+- Fixed `SHOW CREATE SINK` including an internal version number that
+  prevented the output from being used to recreate the sink.
+- Fixed MCP `read_data_product` failing when the role lacks `USAGE`
+  privilege on the data product's cluster; the tool now falls back to
+  the default cluster instead.
+- Fixed a panic when setting `statement_timeout` or similar duration
+  parameters with Unicode numeric characters.
+- Fixed a panic when calling `pg_cancel_backend(NULL)`; now returns
+  `NULL` to match PostgreSQL behavior.
+- Fixed a crash when using `SUBSCRIBE` with duplicate columns in the
+  key; now returns a clear error.
+- Fixed a crash when using `CREATE TABLE ... FROM SOURCE` with only
+  constraints and no explicit columns.
+- Fixed a panic when setting `default_timestamp_interval` to `0`; now
+  returns an error.
+- Fixed cluster size options appearing in incorrect order in the Console.
+
 ## v26.27.0
 *Released to Materialize Cloud: 2026-06-04* <br>
 *Released to Materialize Self-Managed: 2026-06-05* <br>
