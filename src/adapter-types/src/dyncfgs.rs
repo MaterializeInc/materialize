@@ -249,6 +249,15 @@ pub const ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::
     "How long to retain rows in mz_internal.mz_object_arrangement_size_history.",
 );
 
+/// How frequently the catalog `*_info` metrics (`mz_object_info`,
+/// `mz_cluster_info`, …) are reconciled with the catalog. A zero duration
+/// disables reconciliation.
+pub const CATALOG_INFO_METRICS_RECONCILE_INTERVAL: Config<Duration> = Config::new(
+    "catalog_info_metrics_reconcile_interval",
+    Duration::from_secs(30),
+    "How frequently to reconcile the catalog `*_info` metrics with the catalog. A zero duration disables reconciliation.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -284,4 +293,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CONSOLE_OIDC_SCOPES)
         .add(&ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL)
         .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
+        .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
 }

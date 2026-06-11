@@ -23,6 +23,7 @@
 
 use std::time::{Duration, Instant};
 
+use mz_adapter_types::dyncfgs::CATALOG_INFO_METRICS_RECONCILE_INTERVAL;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, ClusterVariant, DataSourceDesc,
 };
@@ -36,15 +37,16 @@ use mz_repr::CatalogItemId;
 use mz_sql::names::{FullItemName, RawDatabaseSpecifier};
 use prometheus::core::AtomicU64;
 use tokio::sync::oneshot;
-use tokio::time::MissedTickBehavior;
 use tracing::{debug, warn};
 
 use crate::catalog::{Catalog, catalog_type_to_audit_object_type};
 use crate::command::{CatalogSnapshot, Command};
 use crate::coord::{Coordinator, Message};
 
-/// How often the info metrics are reconciled with the catalog.
-pub(crate) const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+/// Fallback reconcile cadence: the re-poll cadence used while reconciliation is
+/// disabled (a zero [CATALOG_INFO_METRICS_RECONCILE_INTERVAL]), so it can be
+/// re-enabled at runtime.
+const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Reconciles that take longer than this are logged at warn level.
 const RECONCILE_WARN_THRESHOLD: Duration = Duration::from_secs(5);
@@ -259,10 +261,7 @@ impl Coordinator {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let mut metrics = CatalogInfoMetrics::new(&self.catalog_info_metrics_registry);
         task::spawn(|| "catalog_info_metrics", async move {
-            let mut interval = tokio::time::interval(RECONCILE_INTERVAL);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
-                interval.tick().await;
                 let (tx, rx) = oneshot::channel();
                 let send = internal_cmd_tx.send(Message::Command(
                     OpenTelemetryContext::obtain(),
@@ -275,8 +274,23 @@ impl Coordinator {
                 let Ok(CatalogSnapshot { catalog }) = rx.await else {
                     break;
                 };
-                // Reconcile the metrics with the catalog.
-                metrics.reconcile(&catalog);
+
+                // The reconcile cadence is a dyncfg; a zero interval disables
+                // reconciliation.
+                let interval =
+                    CATALOG_INFO_METRICS_RECONCILE_INTERVAL.get(catalog.system_config().dyncfgs());
+                if !interval.is_zero() {
+                    metrics.reconcile(&catalog);
+                }
+
+                // When disabled, keep polling at the fallback cadence so it can
+                // be re-enabled at runtime.
+                let sleep = if interval.is_zero() {
+                    RECONCILE_INTERVAL
+                } else {
+                    interval
+                };
+                tokio::time::sleep(sleep).await;
             }
         });
     }
