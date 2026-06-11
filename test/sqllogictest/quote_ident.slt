@@ -359,7 +359,7 @@ SELECT quote_ident('true'), quote_ident('false'), quote_ident('null'), quote_ide
 "false"
 "null"
 "array"
-list
+"list"
 map
 "case"
 "cast"
