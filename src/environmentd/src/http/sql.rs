@@ -176,7 +176,6 @@ async fn execute_promsql_query(
             metrics_registry.register::<GenericGaugeVec<AtomicF64>>(MakeCollectorOpts {
                 opts: Opts::new(query.metric_name, query.help).variable_labels(label_names),
                 buckets: None,
-                rules: Vec::new(),
             })
         });
 

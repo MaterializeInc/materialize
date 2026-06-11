@@ -6782,8 +6782,6 @@ dependencies = [
  "askama",
  "axum",
  "axum-extra",
- "base64 0.22.1",
- "flate2",
  "headers",
  "http 1.4.0",
  "hyper 1.9.0",
