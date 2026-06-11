@@ -271,6 +271,13 @@ impl Coordinator {
                     let _ = tx.send(result);
                 }
 
+                Command::UpdateScopedSystemParameters { overrides, tx } => {
+                    // Store the new working copy, persist it durably, and
+                    // reconcile it into the per-scope resolution boundaries.
+                    self.reconcile_scoped_system_parameters(overrides).await;
+                    let _ = tx.send(());
+                }
+
                 Command::InjectAuditEvents {
                     events,
                     conn_id,

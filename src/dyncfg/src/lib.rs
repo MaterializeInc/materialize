@@ -65,6 +65,45 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
+/// The scope at which a synced parameter's value may be overridden.
+///
+/// Every synced parameter declares its scope class as part of its definition.
+/// The declaration is the single source of truth for which contexts the
+/// LaunchDarkly sync loop evaluates and where the resolved value may be
+/// overridden. See `doc/developer/design/20260609_scoped_feature_flags.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParameterScope {
+    /// Environment-wide only; no cluster/replica overrides. The default, so all
+    /// existing synced parameters are unchanged.
+    Environment,
+    /// Cluster-coherent: env-wide base plus per-cluster overrides. Evaluated
+    /// with the `cluster` context (replica-free) and resolved at plan time via
+    /// `OptimizerFeatureOverrides`. e.g. optimizer features.
+    Cluster,
+    /// Replica-local: env-wide base plus per-replica / per-size-family
+    /// overrides. Evaluated with the `replica` context and resolved at the
+    /// controller's per-replica dyncfg push. e.g. `lgalloc`, persist pager, LZ4.
+    Replica,
+}
+
+impl Default for ParameterScope {
+    fn default() -> Self {
+        ParameterScope::Environment
+    }
+}
+
+impl ParameterScope {
+    /// Returns the lowercase string name of this scope, as surfaced in
+    /// documentation and introspection.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            ParameterScope::Environment => "environment",
+            ParameterScope::Cluster => "cluster",
+            ParameterScope::Replica => "replica",
+        }
+    }
+}
+
 /// A handle to a dynamically updatable configuration value.
 ///
 /// This represents a strongly-typed named config of type `T`. It may be
@@ -78,6 +117,7 @@ pub struct Config<D: ConfigDefault> {
     name: &'static str,
     desc: &'static str,
     default: D,
+    scope: ParameterScope,
 }
 
 impl<D: ConfigDefault> Config<D> {
@@ -100,7 +140,19 @@ impl<D: ConfigDefault> Config<D> {
             name,
             default,
             desc,
+            scope: ParameterScope::Environment,
         }
+    }
+
+    /// Declares the [`ParameterScope`] of this config, overriding the default of
+    /// [`ParameterScope::Environment`].
+    ///
+    /// Use this to mark a config as cluster-coherent or replica-local so the
+    /// LaunchDarkly sync loop evaluates the appropriate scoped contexts and
+    /// resolution applies the override at the right boundary.
+    pub const fn scoped(mut self, scope: ParameterScope) -> Self {
+        self.scope = scope;
+        self
     }
 
     /// The name of this config.
@@ -111,6 +163,11 @@ impl<D: ConfigDefault> Config<D> {
     /// The description of this config.
     pub fn desc(&self) -> &str {
         self.desc
+    }
+
+    /// The [`ParameterScope`] of this config.
+    pub fn scope(&self) -> ParameterScope {
+        self.scope
     }
 
     /// The default value of this config.
@@ -226,6 +283,7 @@ impl ConfigSet {
         let config = ConfigEntry {
             name: config.name,
             desc: config.desc,
+            scope: config.scope,
             default: default.clone(),
             val: ConfigValAtomic::from(default),
         };
@@ -251,6 +309,7 @@ impl ConfigSet {
 pub struct ConfigEntry {
     name: &'static str,
     desc: &'static str,
+    scope: ParameterScope,
     default: ConfigVal,
     val: ConfigValAtomic,
 }
@@ -266,11 +325,34 @@ impl ConfigEntry {
         self.desc
     }
 
+    /// The [`ParameterScope`] of this config.
+    pub fn scope(&self) -> ParameterScope {
+        self.scope
+    }
+
     /// The default value of this config.
     ///
     /// This value is never updated.
     pub fn default(&self) -> &ConfigVal {
         &self.default
+    }
+
+    /// Parses a string into a [`ConfigVal`] of this config's type.
+    ///
+    /// The type-erased analog of [`Config::parse_val`], dispatching on the
+    /// variant of this entry's value.
+    pub fn parse_val(&self, val: &str) -> Result<ConfigVal, String> {
+        match self.default {
+            ConfigVal::Bool(_) => <bool as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::U32(_) => <u32 as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::Usize(_) => <usize as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::OptUsize(_) => <Option<usize> as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::F64(_) => <f64 as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::String(_) => <String as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::OptString(_) => <Option<String> as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::Duration(_) => <Duration as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::Json(_) => <serde_json::Value as ConfigType>::parse(val).map(Into::into),
+        }
     }
 
     /// The value of this config in the set.

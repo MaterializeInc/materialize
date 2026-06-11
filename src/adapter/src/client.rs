@@ -56,6 +56,7 @@ use crate::command::{
     CatalogDump, CatalogSnapshot, Command, CopyFromStdinWriter, ExecuteResponse, Response,
     SASLChallengeResponse, SASLVerifyProofResponse, SuperuserAttribute,
 };
+use crate::config::ScopedParameters;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::metrics::{self, Metrics};
@@ -553,6 +554,23 @@ Issue a SQL query to get started. Need help?
         let (tx, rx) = oneshot::channel();
         self.send(Command::GetSystemVars { tx });
         rx.await.expect("coordinator unexpectedly gone")
+    }
+
+    /// Returns a snapshot of the catalog.
+    pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::CatalogSnapshot { tx });
+        let CatalogSnapshot { catalog } = rx.await.expect("coordinator unexpectedly gone");
+        catalog
+    }
+
+    /// Replaces the scoped feature-flag overrides (the complete desired state).
+    /// Used by the system-parameter sync loop to reconcile the coordinator's
+    /// scoped-parameter working copy from continuous LaunchDarkly evaluation.
+    pub async fn update_scoped_system_parameters(&self, overrides: ScopedParameters) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::UpdateScopedSystemParameters { overrides, tx });
+        let _ = rx.await;
     }
 
     #[instrument(level = "debug")]
@@ -1320,6 +1338,7 @@ impl SessionClient {
                 | Command::PrivilegedCancelRequest { .. }
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
+                | Command::UpdateScopedSystemParameters { .. }
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }

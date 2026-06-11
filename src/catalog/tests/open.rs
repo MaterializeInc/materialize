@@ -95,6 +95,8 @@ impl Debug for StableSnapshot<'_> {
             source_references,
             system_object_mappings,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -124,6 +126,14 @@ impl Debug for StableSnapshot<'_> {
             .field("source_references", source_references)
             .field("system_object_mappings", system_object_mappings)
             .field("system_configurations", system_configurations)
+            .field(
+                "cluster_system_configurations",
+                cluster_system_configurations,
+            )
+            .field(
+                "replica_system_configurations",
+                replica_system_configurations,
+            )
             .field("default_privileges", default_privileges)
             .field("system_privileges", system_privileges)
             .field("storage_collection_metadata", storage_collection_metadata)

@@ -2776,6 +2776,56 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     }),
 });
 
+pub static MZ_CLUSTER_SYSTEM_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_cluster_system_parameters",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_CLUSTER_SYSTEM_PARAMETERS_OID,
+    desc: RelationDesc::builder()
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("value", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "cluster_id",
+            "The ID of the cluster. Corresponds to `mz_clusters.id`.",
+        ),
+        ("name", "The name of the cluster-coherent system parameter."),
+        (
+            "value",
+            "The cluster-scoped value of the system parameter, as resolved from LaunchDarkly.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+pub static MZ_REPLICA_SYSTEM_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_replica_system_parameters",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_REPLICA_SYSTEM_PARAMETERS_OID,
+    desc: RelationDesc::builder()
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("value", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "replica_id",
+            "The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.",
+        ),
+        ("name", "The name of the replica-local system parameter."),
+        (
+            "value",
+            "The replica-scoped value of the system parameter, as resolved from LaunchDarkly.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
 pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_comments",
     schema: MZ_INTERNAL_SCHEMA,

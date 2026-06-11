@@ -46,6 +46,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
+use crate::config::ScopedParameters;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
@@ -166,6 +167,17 @@ pub enum Command {
         vars: BTreeMap<String, String>,
         conn_id: ConnectionId,
         tx: oneshot::Sender<Result<(), AdapterError>>,
+    },
+
+    /// Replace the scoped feature-flag overrides (the complete desired state).
+    /// Computed by the system-parameter sync loop from continuous LaunchDarkly
+    /// evaluation; the coordinator stores this working copy and reconciles it
+    /// into the per-scope resolution boundaries (the compute controller's
+    /// per-replica dyncfg layer for `replica`-scoped parameters). See the
+    /// scoped feature flags design.
+    UpdateScopedSystemParameters {
+        overrides: ScopedParameters,
+        tx: oneshot::Sender<()>,
     },
 
     InjectAuditEvents {
@@ -369,6 +381,7 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
+            | Command::UpdateScopedSystemParameters { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
@@ -407,6 +420,7 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
+            | Command::UpdateScopedSystemParameters { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }

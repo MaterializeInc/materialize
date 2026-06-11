@@ -95,6 +95,14 @@ pub struct ReplicaAllocation {
     /// T-shirt size.
     #[serde(default = "default_true")]
     pub is_cc: bool,
+    /// The size *family* this size belongs to, e.g. `D.1` belongs to family
+    /// `D` and the legacy t-shirt sizes belong to family `legacy`. Used as the
+    /// `replica_size_family` attribute when evaluating replica-local scoped
+    /// feature flags (see the scoped feature flags design). When unset, the
+    /// family falls back to a value derived from [`Self::is_cc`] via
+    /// [`ReplicaAllocation::family`].
+    #[serde(default)]
+    pub family: Option<String>,
     /// Whether instances of this type use swap as the spill-to-disk mechanism.
     #[serde(default)]
     pub swap_enabled: bool,
@@ -104,6 +112,24 @@ pub struct ReplicaAllocation {
     /// Additional node selectors.
     #[serde(default)]
     pub selectors: BTreeMap<String, String>,
+}
+
+impl ReplicaAllocation {
+    /// The name of the size family this allocation belongs to, used as the
+    /// `replica_size_family` attribute when evaluating replica-local scoped
+    /// feature flags.
+    ///
+    /// Falls back to a value derived from [`Self::is_cc`] when [`Self::family`]
+    /// is unset: `"cc"` for modern sizes and `"legacy"` for the legacy t-shirt
+    /// sizes. This keeps the legacy family targetable even before every size
+    /// gains an explicit `family` in the size configuration.
+    pub fn family(&self) -> &str {
+        match &self.family {
+            Some(family) => family.as_str(),
+            None if self.is_cc => "cc",
+            None => "legacy",
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -146,6 +172,7 @@ fn test_replica_allocation_deserialization() {
             cpu_request: None,
             cpu_exclusive: false,
             is_cc: true,
+            family: None,
             swap_enabled: true,
             scale: NonZero::new(16).unwrap(),
             workers: NonZero::new(1).unwrap(),
@@ -182,6 +209,7 @@ fn test_replica_allocation_deserialization() {
             cpu_request: None,
             cpu_exclusive: true,
             is_cc: true,
+            family: None,
             swap_enabled: false,
             scale: NonZero::new(1).unwrap(),
             workers: NonZero::new(1).unwrap(),

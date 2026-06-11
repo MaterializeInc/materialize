@@ -17,16 +17,17 @@ use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_DEFAULT_PRIVILEGES,
-    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS,
-    MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
-    MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_SYSTEM_PARAMETERS, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS,
+    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES,
+    MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
+    MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
     MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SESSIONS,
-    MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES,
-    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_REPLICA_SYSTEM_PARAMETERS, MZ_ROLE_AUTH,
+    MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES,
+    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -1760,6 +1761,46 @@ impl CatalogState {
                 Datum::String(&conn.authenticated_role_id().to_string()),
                 Datum::from(conn.client_ip().map(|ip| ip.to_string()).as_deref()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
+            ]),
+            diff,
+        )
+    }
+
+    /// Packs a row for the `mz_cluster_system_parameters` introspection table:
+    /// the cluster-coherent scoped value of `name` on the cluster `cluster_id`.
+    pub fn pack_cluster_system_parameter_update(
+        &self,
+        cluster_id: &str,
+        name: &str,
+        value: &str,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        BuiltinTableUpdate::row(
+            &*MZ_CLUSTER_SYSTEM_PARAMETERS,
+            Row::pack_slice(&[
+                Datum::String(cluster_id),
+                Datum::String(name),
+                Datum::String(value),
+            ]),
+            diff,
+        )
+    }
+
+    /// Packs a row for the `mz_replica_system_parameters` introspection table:
+    /// the replica-local scoped value of `name` on the replica `replica_id`.
+    pub fn pack_replica_system_parameter_update(
+        &self,
+        replica_id: &str,
+        name: &str,
+        value: &str,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        BuiltinTableUpdate::row(
+            &*MZ_REPLICA_SYSTEM_PARAMETERS,
+            Row::pack_slice(&[
+                Datum::String(replica_id),
+                Datum::String(name),
+                Datum::String(value),
             ]),
             diff,
         )

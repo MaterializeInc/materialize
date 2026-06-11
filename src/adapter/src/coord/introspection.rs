@@ -203,7 +203,9 @@ impl Coordinator {
 
         let vars = self.catalog().system_config();
         let overrides = self.catalog.get_cluster(cluster_id).config.features();
-        let optimizer_config = optimize::OptimizerConfig::from(vars).override_from(&overrides);
+        let optimizer_config = optimize::OptimizerConfig::from(vars)
+            .override_from(&overrides)
+            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
 
         let mut optimizer = optimize::subscribe::Optimizer::new(
             self.owned_catalog(),

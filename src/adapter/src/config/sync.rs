@@ -9,11 +9,15 @@
 
 use std::time::Duration;
 
+use mz_controller::clusters::ReplicaLocation;
+use mz_dyncfg::ParameterScope;
 use tokio::time;
 
 use crate::Client;
+use crate::catalog::Catalog;
 use crate::config::{
-    SynchronizedParameters, SystemParameterBackend, SystemParameterFrontend,
+    ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext,
+    ScopedParameters, SynchronizedParameters, SystemParameterBackend, SystemParameterFrontend,
     SystemParameterSyncConfig,
 };
 
@@ -29,6 +33,10 @@ pub async fn system_parameter_sync(
         tracing::info!("skipping system parameter sync as tick_interval = None");
         return Ok(());
     };
+
+    // Keep a client handle for catalog snapshots and the per-replica scoped
+    // config push, since the backend consumes its own clone.
+    let scoped_client = adapter_client.clone();
 
     // Ensure the frontend client is initialized.
     let mut frontend = Option::<SystemParameterFrontend>::None; // lazy initialize the frontend below
@@ -74,5 +82,110 @@ pub async fn system_parameter_sync(
         if frontend.pull(&mut params) {
             backend.push(&mut params).await;
         }
+
+        // Reconcile the scoped (per-cluster and per-replica) parameters. We do
+        // this every tick (independent of whether the environment-wide values
+        // changed) so the overrides track the current set of live objects.
+        sync_scoped_params(&scoped_client, frontend, &params).await;
     }
+}
+
+/// Evaluate the scoped parameters (cluster-coherent and replica-local) for the
+/// currently live clusters and replicas and push the resulting overrides to the
+/// coordinator's working copy.
+async fn sync_scoped_params(
+    client: &Client,
+    frontend: &SystemParameterFrontend,
+    params: &SynchronizedParameters,
+) {
+    let catalog = client.catalog_snapshot().await;
+    let system_config = catalog.system_config();
+
+    // The synced parameters, partitioned by scope class. The scope declaration
+    // bounds per-tick evaluation to exactly the flags in use: an environment
+    // with no scoped flags evaluates neither pass.
+    let replica_param_names: Vec<&'static str> = system_config
+        .iter_synced()
+        .filter(|var| var.scope() == ParameterScope::Replica)
+        .map(|var| var.name())
+        .collect();
+    let cluster_param_names: Vec<&'static str> = system_config
+        .iter_synced()
+        .filter(|var| var.scope() == ParameterScope::Cluster)
+        .map(|var| var.name())
+        .collect();
+
+    if replica_param_names.is_empty() && cluster_param_names.is_empty() {
+        return;
+    }
+
+    let replica = if replica_param_names.is_empty() {
+        Default::default()
+    } else {
+        let replicas = build_replica_eval_contexts(&catalog);
+        frontend.pull_replica_overrides(params, &replica_param_names, &replicas)
+    };
+    let cluster = if cluster_param_names.is_empty() {
+        Default::default()
+    } else {
+        let clusters = build_cluster_eval_contexts(&catalog);
+        frontend.pull_cluster_overrides(params, &cluster_param_names, &clusters)
+    };
+
+    // Push the complete desired state to the coordinator, which holds the
+    // working copy and resolves each layer at its boundary: the controller's
+    // per-replica dyncfg push for `replica`, plan-time
+    // `OptimizerFeatureOverrides` for `cluster`.
+    let scoped = ScopedParameters { cluster, replica };
+    client.update_scoped_system_parameters(scoped).await;
+}
+
+/// Build a [`ClusterEvalContext`] for every live cluster in the catalog.
+fn build_cluster_eval_contexts(catalog: &Catalog) -> Vec<ClusterEvalContext> {
+    catalog
+        .clusters()
+        .map(|cluster| ClusterEvalContext {
+            cluster_id: cluster.id,
+            cluster: ClusterScopeContext {
+                id: cluster.id.to_string(),
+                name: cluster.name.clone(),
+                is_builtin: cluster.id.is_system(),
+            },
+        })
+        .collect()
+}
+
+/// Build a [`ReplicaEvalContext`] for every live managed replica in the catalog.
+fn build_replica_eval_contexts(catalog: &Catalog) -> Vec<ReplicaEvalContext> {
+    let mut contexts = Vec::new();
+    for cluster in catalog.clusters() {
+        let is_builtin = cluster.id.is_system();
+        let cluster_ctx = ClusterScopeContext {
+            id: cluster.id.to_string(),
+            name: cluster.name.clone(),
+            is_builtin,
+        };
+        for replica in cluster.replicas() {
+            // Only managed replicas have a size (and therefore a size family).
+            let ReplicaLocation::Managed(location) = &replica.config.location else {
+                continue;
+            };
+            let replica_ctx = ReplicaScopeContext {
+                id: replica.replica_id.to_string(),
+                name: replica.name.clone(),
+                is_builtin,
+                size: location.size.clone(),
+                size_family: location.allocation.family().to_string(),
+                cluster_id: cluster.id.to_string(),
+                cluster_name: cluster.name.clone(),
+            };
+            contexts.push(ReplicaEvalContext {
+                cluster_id: cluster.id,
+                replica_id: replica.replica_id,
+                cluster: cluster_ctx.clone(),
+                replica: replica_ctx,
+            });
+        }
+    }
+    contexts
 }

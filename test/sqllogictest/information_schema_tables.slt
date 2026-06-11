@@ -341,6 +341,10 @@ mz_cluster_schedules
 BASE TABLE
 materialize
 mz_internal
+mz_cluster_system_parameters
+BASE TABLE
+materialize
+mz_internal
 mz_cluster_workload_classes
 MATERIALIZED VIEW
 materialize
@@ -546,6 +550,10 @@ VIEW
 materialize
 mz_internal
 mz_replacements
+BASE TABLE
+materialize
+mz_internal
+mz_replica_system_parameters
 BASE TABLE
 materialize
 mz_internal

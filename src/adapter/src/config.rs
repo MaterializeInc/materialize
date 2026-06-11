@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::ReplicaId;
+use mz_controller_types::ClusterId;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use mz_ore::now::NowFn;
@@ -23,9 +25,35 @@ mod params;
 mod sync;
 
 pub use backend::SystemParameterBackend;
-pub use frontend::SystemParameterFrontend;
+pub use frontend::{
+    ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext,
+    SystemParameterFrontend, scoped_ld_ctx,
+};
 pub use params::{ModifiedParameter, SynchronizedParameters};
 pub use sync::system_parameter_sync;
+
+/// The full desired state of the scoped system parameters, reconciled by the
+/// system-parameter sync loop from continuous LaunchDarkly evaluation.
+///
+/// Values are the raw (unparsed) strings LaunchDarkly served, keyed by object
+/// id; the coordinator parses and resolves them at the appropriate boundary
+/// (the controller's per-replica dyncfg push for `replica`, plan-time
+/// `OptimizerFeatureOverrides` for `cluster`). Only values that differ from the
+/// environment-wide value are present, so the maps stay sparse. The sync loop
+/// is the sole writer, and each push is the *complete* desired state, so the
+/// coordinator can apply removals by diffing against its working copy.
+///
+/// This is the in-memory working copy. A durable backing (so values survive an
+/// `environmentd` restart and LD outage) is a follow-up; see the scoped feature
+/// flags design.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScopedParameters {
+    /// Cluster-coherent overrides, keyed by cluster id. (Populated by the
+    /// cluster-coherent path; empty for the replica-local path.)
+    pub cluster: BTreeMap<ClusterId, BTreeMap<String, String>>,
+    /// Replica-local overrides, keyed by replica id.
+    pub replica: BTreeMap<ReplicaId, BTreeMap<String, String>>,
+}
 
 /// A factory for [SystemParameterFrontend] instances.
 #[derive(Clone, Debug)]
