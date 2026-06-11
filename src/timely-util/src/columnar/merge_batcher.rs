@@ -69,6 +69,27 @@ const STASH_CAP: usize = 2;
 /// ones.
 const MAX_RECYCLE_BYTES: usize = 1 << 22;
 
+/// Chains shorter than this (in chunks) keep their entries resident instead
+/// of routing them through the pager.
+///
+/// The rebalancing cascade in [`ColumnMergeBatcher::insert_chain`] merges
+/// short chains almost immediately after they form, so paging their chunks
+/// schedules work the next merge cancels: the chunk pays an insert into the
+/// pool, an eviction nomination, and (under pressure) a spill-queue slot,
+/// then dies before compression starts. Measured under hydration load, this
+/// churn ran the spill queue to its cap with cancellation rates of hundreds
+/// per second. Chunks enter the pager only once they land in a chain long
+/// enough to sit out a few rebalance rounds.
+///
+/// The resident overhead is bounded by the chain-stack shape: rebalancing
+/// keeps the youngest chain under half its predecessor, so chains below
+/// this threshold hold fewer than `MIN_PAGED_CHAIN_LEN` chunks between
+/// them — at the ~2-4 MiB chunk band, single-digit MiB per batcher, paid
+/// per worker per consumer. The value balances cancellation coverage
+/// (chains of n chunks live roughly n push intervals before the cascade
+/// consumes them) against that unevictable floor.
+const MIN_PAGED_CHAIN_LEN: usize = 4;
+
 /// Recycle `chunk` only if the stash isn't already at [`STASH_CAP`] and the
 /// chunk isn't oversize per [`MAX_RECYCLE_BYTES`]. `length_in_bytes` is
 /// measured before clear, so it reflects the data the chunk was carrying
@@ -371,11 +392,14 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
-    /// Accept an already-consolidated chunk from the upstream chunker, route
-    /// it through the pager, and insert it as a singleton chain.
+    /// Accept an already-consolidated chunk from the upstream chunker and
+    /// insert it as a singleton chain. The chunk stays resident — a
+    /// singleton is the shortest possible chain (see
+    /// [`MIN_PAGED_CHAIN_LEN`]), and the rebalance that follows consumes it
+    /// almost immediately; it reaches the pager once it lands in a chain
+    /// long enough to survive a few rounds.
     fn push_into(&mut self, mut chunk: Column<(D, T, R)>) {
-        let pager = self.pager();
-        let paged = pager.page(&mut chunk);
+        let paged = ColumnPager::disabled().page(&mut chunk);
         self.insert_chain(VecDeque::from([paged]));
     }
 }
@@ -415,7 +439,16 @@ where
         b: VecDeque<PagedColumn<(D, T, R)>>,
     ) -> VecDeque<PagedColumn<(D, T, R)>> {
         let mut output: VecDeque<PagedColumn<(D, T, R)>> = VecDeque::new();
-        let pager = self.pager();
+        // Short result chains keep their outputs resident: the cascade
+        // consumes them almost immediately, and paging chunks that die
+        // younger than the spill path's latency only schedules cancelled
+        // work (see MIN_PAGED_CHAIN_LEN). `take` is variant-driven, so the
+        // disabled pager rehydrates paged inputs just as well.
+        let pager = if a.len() + b.len() < MIN_PAGED_CHAIN_LEN {
+            ColumnPager::disabled()
+        } else {
+            self.pager()
+        };
         let pager = &pager;
         let stash = &mut self.stash;
         merge_chains(
@@ -1069,6 +1102,51 @@ mod tests {
         let mut out_sorted = out.clone();
         out_sorted.sort();
         assert_eq!(out_sorted, expected);
+    }
+
+    #[mz_ore::test]
+    fn short_chains_stay_resident() {
+        let policy = ForcePagePolicy::new();
+        let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
+            differential_dataflow::trace::Batcher::new(None, 0);
+        b.set_pager(ColumnPager::new(policy.clone()));
+
+        // Singleton pushes form chains far below MIN_PAGED_CHAIN_LEN;
+        // despite the force-page pager, every entry stays resident because
+        // short chains never route through it.
+        for i in 0..3u64 {
+            b.push_into(col(&[((i, 0), 0, 1)]));
+        }
+        for entry in b.chains.iter().flatten() {
+            assert!(
+                matches!(entry, PagedColumn::Resident(..)),
+                "short chains stay resident",
+            );
+        }
+
+        let chain = |range: std::ops::Range<u64>| -> VecDeque<PagedColumn<KvUpdate>> {
+            range
+                .map(|i| {
+                    let mut c = col(&[((i, 0), 0, 1)]);
+                    ColumnPager::disabled().page(&mut c)
+                })
+                .collect()
+        };
+
+        // A merge whose combined input is below the threshold keeps its
+        // outputs resident; one at the threshold routes them through the
+        // (force-page) pager.
+        let k: u64 = mz_ore::cast::CastFrom::cast_from(MIN_PAGED_CHAIN_LEN);
+        let out = b.merge_by(chain(0..1), chain(1..k - 1));
+        assert!(
+            out.iter().all(|e| matches!(e, PagedColumn::Resident(..))),
+            "below-threshold merges keep outputs resident",
+        );
+        let out = b.merge_by(chain(0..k / 2), chain(k / 2..k));
+        assert!(
+            out.iter().any(|e| !matches!(e, PagedColumn::Resident(..))),
+            "at-threshold merges page their outputs",
+        );
     }
 
     #[mz_ore::test]
