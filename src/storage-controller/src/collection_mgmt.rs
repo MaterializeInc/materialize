@@ -83,7 +83,7 @@ use mz_persist_client::batch::Added;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{ColumnName, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{ColumnName, DatumVec, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::{AppendOnlyUpdate, Status, TimestamplessUpdate};
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
 use mz_storage_client::healthcheck::{
@@ -1605,8 +1605,10 @@ where
 
     let mut handle_row = {
         let latest_row_per_key = &mut latest_row_per_key;
+        // Re-used allocation for decoding rows, avoids allocating a fresh vector per row.
+        let mut datum_vec = DatumVec::new();
         move |row: &Row, diff| {
-            let datums = row.unpack();
+            let datums = datum_vec.borrow_with(row);
             let key = (status_history_desc.extract_key)(&datums);
             let timestamp = (status_history_desc.extract_time)(&datums);
 
