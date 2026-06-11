@@ -634,15 +634,16 @@ mod tests {
         // `oversize_bytes` gauge surfaces it.
         let budget = 64 << 10;
         let pool = test_pool(budget);
+        // Ten 1 MiB values serialize past the largest (8 MiB) size class.
         let updates: Vec<(Vec<u8>, u64, i64)> = (0..10u8)
-            .map(|d| (vec![d; 300 << 10], u64::from(d), 1))
+            .map(|d| (vec![d; 1 << 20], u64::from(d), 1))
             .collect();
         let run = PagedRun::build(&pool, [Column::Typed(Columnar::as_columns(updates.iter()))]);
         assert_eq!(run.chunk_count(), 1);
         assert_eq!(run.residencies(), vec![Residency::Oversize]);
         let stats = pool.stats();
         assert!(
-            stats.oversize_bytes > 2 << 20,
+            stats.oversize_bytes > 8 << 20,
             "oversize gauge reflects the page: {stats:?}"
         );
         assert!(
@@ -654,7 +655,7 @@ mod tests {
         pool.enforce_budget();
         assert_eq!(run.residencies(), vec![Residency::Oversize]);
         // Reads remain correct in the degraded mode.
-        assert_eq!(run.seek(&vec![3u8; 300 << 10]), vec![(3u64, 1i64)]);
+        assert_eq!(run.seek(&vec![3u8; 1 << 20]), vec![(3u64, 1i64)]);
         assert_eq!(run.iter().count(), updates.len());
     }
 

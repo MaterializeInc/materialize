@@ -28,8 +28,24 @@ use crate::cast::CastFrom;
 
 /// Chunk size classes in bytes, smallest first. The pool places each chunk in
 /// the smallest class that fits its payload.
-pub(crate) const SIZE_CLASSES: [usize; 6] =
-    [64 << 10, 128 << 10, 256 << 10, 512 << 10, 1 << 20, 2 << 20];
+///
+/// The top classes deliberately overshoot the batchers' nominal ~2 MiB chunk
+/// target: the ship heuristic re-targets the next 2 MiB boundary whenever a
+/// single push crosses one, so real chunk sizes are multimodal with bands
+/// just under each boundary. A class that fits only the nominal target sends
+/// the higher bands to the unpageable heap fallback. Slot internal
+/// fragmentation is virtual-only — slots populate lazily, so a chunk costs
+/// physical memory for its payload, not its class size.
+pub(crate) const SIZE_CLASSES: [usize; 8] = [
+    64 << 10,
+    128 << 10,
+    256 << 10,
+    512 << 10,
+    1 << 20,
+    2 << 20,
+    4 << 20,
+    8 << 20,
+];
 
 /// One anonymous virtual-memory reservation serving fixed-size slots of a
 /// single size class.

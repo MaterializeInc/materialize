@@ -1488,7 +1488,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
     fn oversize_round_trips() {
         let pool = test_pool(256 << 20);
-        let words = (2 << 20) / 8 + 1;
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1;
         let orig = payload(words, 10);
         let handle = pool.insert(&mut orig.clone());
         assert_eq!(handle.residency(), Residency::Oversize);
