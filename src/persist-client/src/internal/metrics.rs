@@ -41,7 +41,7 @@ use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
-use tracing::{Instrument, debug, info, info_span};
+use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
@@ -2531,9 +2531,12 @@ impl SemaphoreMetrics {
         let registry = self.registry.clone();
         let init = async move {
             let total_permits = match cfg.announce_memory_limit {
-                // Non-cc replicas have the old physical flow control mechanism,
-                // so only apply this one on cc replicas.
-                Some(mem) if cfg.is_cc_active => {
+                // Bound outstanding fetched+decoding bytes to a fraction of the
+                // process memory limit. This is the only read-ahead bound: there
+                // is no disk to spill to, so these bytes are heap-resident and
+                // must coexist with the arrangements being built. Applied to all
+                // replicas (the cc/non-cc distinction is gone).
+                Some(mem) => {
                     // We can't easily adjust the number of permits later, so
                     // make sure we've synced dyncfg values at least once.
                     info!("fetch semaphore awaiting first dyncfg values");
@@ -2544,7 +2547,12 @@ impl SemaphoreMetrics {
                     info!("fetch_semaphore got first dyncfg values");
                     total_permits
                 }
-                Some(_) | None => Semaphore::MAX_PERMITS,
+                // No announced memory limit (embedded/test processes); we have
+                // nothing to size against, so read-ahead is unbounded.
+                None => {
+                    warn!("fetch semaphore unbounded: no announced memory limit");
+                    Semaphore::MAX_PERMITS
+                }
             };
             MetricsSemaphore::new(&registry, "fetch", total_permits)
         };
@@ -3243,5 +3251,43 @@ pub fn encode_ts_metric<T: Codec64>(ts: &Antichain<T>) -> i64 {
     match ts.elements().first() {
         Some(ts) => i64::from_le_bytes(Codec64::encode(ts)),
         None => i64::MAX,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_dyncfg::ConfigUpdates;
+    use mz_ore::metrics::MetricsRegistry;
+
+    use super::*;
+
+    /// The fetch semaphore must be sized from the announced memory limit on all
+    /// replicas, regardless of `is_cc_active` (the cc/non-cc distinction is
+    /// gone), and only fall back to unbounded when no memory limit is announced.
+    #[mz_ore::test(tokio::test)]
+    async fn fetch_semaphore_sized_from_memory_limit() {
+        async fn total_permits(is_cc_active: bool, mem: Option<usize>) -> usize {
+            let mut cfg = PersistConfig::new_for_tests();
+            cfg.is_cc_active = is_cc_active;
+            cfg.announce_memory_limit = mem;
+            // Mark configs synced so the semaphore initializes rather than
+            // blocking on `configs_synced_once`.
+            cfg.apply_from(&ConfigUpdates::default());
+            SemaphoreMetrics::new(cfg, MetricsRegistry::new())
+                .fetch()
+                .await
+                .total_permits
+        }
+
+        let cfg = PersistConfig::new_for_tests();
+        let adjustment = FETCH_SEMAPHORE_PERMIT_ADJUSTMENT.get(&cfg);
+        let mem = 1 << 30;
+        let expected = usize::cast_lossy(f64::cast_lossy(mem) * adjustment);
+
+        // Both cc and non-cc replicas get the memory-derived bound.
+        assert_eq!(total_permits(true, Some(mem)).await, expected);
+        assert_eq!(total_permits(false, Some(mem)).await, expected);
+        // No announced limit => unbounded.
+        assert_eq!(total_permits(false, None).await, Semaphore::MAX_PERMITS);
     }
 }

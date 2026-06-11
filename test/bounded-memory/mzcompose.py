@@ -220,6 +220,40 @@ class KafkaScenario(Scenario):
 
 
 SCENARIOS = [
+    Scenario(
+        # Regression guard for persist-source fetch backpressure: re-hydrating a
+        # large index must keep read-ahead within the announced memory limit
+        # instead of prefetching the whole snapshot and OOMing. See the
+        # `persist_fetch_semaphore_permit_adjustment` dyncfg.
+        name="persist-source-read-ahead",
+        pre_restart=dedent(f"""
+            > CREATE TABLE t1 (f1 INTEGER, f2 TEXT)
+
+            # ~1 GiB of data spread across many persist parts. The index below
+            # must re-read this entire snapshot from persist on re-hydration.
+            > INSERT INTO t1 SELECT g, '{STRING_PAD}' FROM generate_series(1, 256 * 1024) g
+            > INSERT INTO t1 SELECT g, '{STRING_PAD}' FROM generate_series(1, 256 * 1024) g
+            > INSERT INTO t1 SELECT g, '{STRING_PAD}' FROM generate_series(1, 256 * 1024) g
+            > INSERT INTO t1 SELECT g, '{STRING_PAD}' FROM generate_series(1, 256 * 1024) g
+
+            > CREATE INDEX i1 IN CLUSTER clusterd ON t1 (f1)
+
+            > SELECT count(*) FROM t1
+            {4 * 256 * 1024}
+            """),
+        post_restart=dedent(f"""
+            # On restart the index re-hydrates by reading t1's full snapshot
+            # through persist_source. The fetch semaphore must bound read-ahead
+            # so clusterd stays within its announced memory limit; an OOM here
+            # kills the replica and fails this step.
+            > SET CLUSTER = clusterd
+
+            > SELECT count(*) FROM t1
+            {4 * 256 * 1024}
+            """),
+        materialized_memory="8Gb",
+        clusterd_memory="1.5Gb",
+    ),
     PgCdcScenario(
         name="pg-cdc-snapshot",
         pre_restart=PgCdcScenario.PG_SETUP
@@ -1452,9 +1486,17 @@ def run_scenario(
 ) -> None:
     c.down(destroy_volumes=True)
 
+    # Mirror production: announce clusterd's memory limit so persist sizes its
+    # fetch-backpressure semaphore. Without this the semaphore is unbounded and
+    # the suite would not exercise persist's memory budget at all.
+    announce_bytes = int(_get_memory_in_gb(clusterd_memory) * 1024**3)
+
     with c.override(
         Materialized(memory=materialized_memory, support_external_clusterd=True),
-        Clusterd(memory=clusterd_memory),
+        Clusterd(
+            memory=clusterd_memory,
+            options=[f"--announce-memory-limit={announce_bytes}"],
+        ),
     ):
         c.up(
             "redpanda",
