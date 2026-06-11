@@ -56,19 +56,15 @@ SYSTEM_SCHEMAS = [
     "mz_unsafe",
 ]
 
-# Feature flags to enable so that flag-gated builtins are covered. These must be
-# kept identical to the flags applied to the embedded server that fills the
-# plans in the .slt (sqllogictest's default config), otherwise the object set
-# enumerated here will not match what that server can EXPLAIN. With the empty
-# default below, flag-gated builtins are absent from both and their coverage is
-# conditional -- see the COVERAGE note in the .slt header.
-SYSTEM_PARAMETER_DEFAULTS: dict[str, str] = {}
-
-SERVICES = [
-    Materialized(
-        additional_system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-    ),
-]
+# Enumerate builtins from a stock `Materialized`. Its system-parameter defaults
+# come from `get_default_system_parameters()` -- the very function that
+# sqllogictest's embedded server uses to fill the plans (see
+# misc/python/materialize/cli/run.py). Both servers therefore enable the same
+# flag-gated builtins, so the object set enumerated here matches exactly what
+# the plan-filling server can EXPLAIN. Do not pass
+# `additional_system_parameter_defaults`: any override here that the
+# sqllogictest server does not also apply would desync the two.
+SERVICES = [Materialized()]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:

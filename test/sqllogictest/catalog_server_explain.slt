@@ -44,13 +44,10 @@
 #   coverage, and this file is part of the normal sqllogictest run so any plan
 #   change shows up as a diff.
 #
-# COVERAGE / FLAG-GATED BUILTINS
-#   Builtins gated behind a feature flag are only covered when that flag is
-#   enabled identically for both the validator
-#   (test/catalog-server-explain/mzcompose.py) and the embedded server that
-#   fills the plans here. With the default flags, flag-gated builtins are
-#   absent from both, so coverage of them is conditional. See the validator's
-#   SYSTEM_PARAMETER_DEFAULTS for the enabled flag set.
+#   The validator and the embedded server that fills these plans both derive
+#   their system parameters from `get_default_system_parameters()`, so they
+#   enable the same flag-gated builtins and coverage here is complete, not
+#   conditional.
 # ============================================================================
 
 mode cockroach
