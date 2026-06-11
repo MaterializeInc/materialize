@@ -90,7 +90,7 @@ pub fn register(registry: &MetricsRegistry) {
         register_pool_gauge(registry, "oversize_bytes", "Bytes held by oversize chunks that bypass pool paging.", |s| s.oversize_bytes);
         register_pool_gauge(registry, "inserts_total", "Chunks inserted into the buffer pool.", |s| s.inserts);
         register_pool_gauge(registry, "frees_total", "Chunks freed from the buffer pool.", |s| s.frees);
-        register_pool_gauge(registry, "elided_frees_total", "Chunks freed while unbacked: dead data that never cost a compression or an extent write.", |s| s.elided_frees);
+        register_pool_gauge(registry, "writes_elided_total", "Backing writes elided: chunks freed while unbacked, dead before any compression or extent write happened.", |s| s.writes_elided);
         register_pool_gauge(registry, "evictions_compress_total", "Evictions that compressed a chunk into a new swap-backed extent.", |s| s.evictions_compress);
         register_pool_gauge(registry, "evictions_cheap_total", "Evictions of already-backed chunks: physical pages released with no compression or extent write.", |s| s.evictions_cheap);
         register_pool_gauge(registry, "faults_total", "Fault-ins decompressing a chunk from its extent back into its pool slot.", |s| s.faults);
