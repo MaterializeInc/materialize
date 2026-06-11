@@ -23,10 +23,10 @@ use mz_catalog::builtin::{
     MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
     MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SESSIONS,
-    MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES,
-    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES,
+    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -59,8 +59,6 @@ use mz_sql::catalog::{CatalogCluster, CatalogType, DefaultPrivilegeObject, TypeC
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, SchemaSpecifier};
 use mz_sql::plan::{ClusterSchedule, ConnectionDetails, SshKey};
-use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
-use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
 use mz_storage_types::connections::KafkaConnection;
@@ -160,91 +158,6 @@ impl CatalogState {
             ]),
             diff,
         )
-    }
-
-    pub(super) fn pack_role_update(
-        &self,
-        id: RoleId,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        match id {
-            // PUBLIC role should not show up in mz_roles.
-            RoleId::Public => vec![],
-            id => {
-                let role = self.get_role(&id);
-                let builtin_supers = [MZ_SYSTEM_ROLE_ID, MZ_SUPPORT_ROLE_ID];
-
-                let rolcanlogin = if let Some(login) = role.attributes.login {
-                    login
-                } else {
-                    builtin_supers.contains(&role.id)
-                };
-
-                let rolsuper = if let Some(superuser) = role.attributes.superuser {
-                    Datum::from(superuser)
-                } else if builtin_supers.contains(&role.id) {
-                    // System roles (mz_system, mz_support) are superusers
-                    Datum::from(true)
-                } else {
-                    // In cloud environments, superuser status is determined
-                    // at login, so we set `rolsuper` to `null` here because
-                    // it cannot be known beforehand. For self-managed
-                    // auth, roles created without an explicit SUPERUSER
-                    // attribute would typically have `rolsuper` set to false.
-                    // However, since we cannot reliably distinguish between
-                    // cloud and self-managed here, we conservatively use NULL
-                    // for indeterminate cases.
-                    Datum::Null
-                };
-
-                let role_update = BuiltinTableUpdate::row(
-                    &*MZ_ROLES,
-                    Row::pack_slice(&[
-                        Datum::String(&role.id.to_string()),
-                        Datum::UInt32(role.oid),
-                        Datum::String(&role.name),
-                        Datum::from(role.attributes.inherit),
-                        Datum::from(rolcanlogin),
-                        rolsuper,
-                    ]),
-                    diff,
-                );
-                let mut updates = vec![role_update];
-
-                // HACK/TODO(parkmycar): Creating an empty SessionVars like this is pretty hacky,
-                // we should instead have a static list of all session vars.
-                let session_vars_reference = SessionVars::new_unchecked(
-                    &mz_build_info::DUMMY_BUILD_INFO,
-                    SYSTEM_USER.clone(),
-                    None,
-                );
-
-                for (name, val) in role.vars() {
-                    let result = session_vars_reference
-                        .inspect(name)
-                        .and_then(|var| var.check(val.borrow()));
-                    let Ok(formatted_val) = result else {
-                        // Note: all variables should have been validated by this point, so we
-                        // shouldn't ever hit this.
-                        tracing::error!(?name, ?val, ?result, "found invalid role default var");
-                        continue;
-                    };
-
-                    let role_var_update = BuiltinTableUpdate::row(
-                        &*MZ_ROLE_PARAMETERS,
-                        Row::pack_slice(&[
-                            Datum::String(&role.id.to_string()),
-                            Datum::String(name),
-                            Datum::String(&formatted_val),
-                        ]),
-                        diff,
-                    );
-                    updates.push(role_var_update);
-                }
-
-                updates
-            }
-        }
     }
 
     pub(super) fn pack_cluster_update(

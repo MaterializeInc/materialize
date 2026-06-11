@@ -214,11 +214,11 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_role_parameters
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_roles
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_schemas
