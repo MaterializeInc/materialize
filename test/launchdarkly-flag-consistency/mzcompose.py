@@ -504,7 +504,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "compute_subscribe_snapshot_optimization",
     "enable_cast_elimination",
     "enable_compute_correction_v2",
-    "enable_compute_sync_mv_sink",
     "enable_create_table_from_source",
     "enable_new_outer_join_lowering",
     "enable_variadic_left_join_lowering",
@@ -526,7 +525,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     compute_subscribe_snapshot_optimization
     enable_cluster_schedule_refresh
     enable_compute_correction_v2
-    enable_compute_sync_mv_sink
     enable_create_table_from_source
     enable_eager_delta_joins
     enable_index_options

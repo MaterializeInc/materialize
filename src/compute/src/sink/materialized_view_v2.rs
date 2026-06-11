@@ -9,9 +9,8 @@
 
 //! Sync Timely operator implementation of the MV sink.
 //!
-//! This module provides an alternative implementation of `persist_sink` that uses sync Timely
-//! operators communicating with Tokio tasks via channels, instead of async Timely operators.
-//! Gated behind the `ENABLE_SYNC_MV_SINK` dyncfg.
+//! This module implements `persist_sink` using sync Timely operators communicating with Tokio
+//! tasks via channels, instead of async Timely operators.
 //!
 //! See the [main module](super::materialized_view) for the operator graph and design docs.
 //!
