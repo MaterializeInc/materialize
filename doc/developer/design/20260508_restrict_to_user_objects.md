@@ -84,9 +84,9 @@ Fix: `UnmaterializableFunc` has an `allowed_in_restricted_session()` method with
 
 ### MCP data product discovery
 
-`mz_mcp_data_products` and `mz_mcp_data_product_details` are system views used by the MCP agent endpoint to discover data products the session has access to. They are exempted from the system object block via an OID allowlist in `check_restrict_to_user_objects`.
+`mz_mcp_data_products`, `mz_mcp_data_product_details`, and `mz_show_my_cluster_privileges` are system views used by the MCP agent endpoint to discover data products the session has access to and to decide whether their catalog cluster is usable. They are exempted from the system object block via an OID allowlist in `check_restrict_to_user_objects`. `mz_show_my_cluster_privileges` is in the allowlist because the `read_data_product` lookup query LEFT JOINs it instead of calling `has_cluster_privilege` directly; that function's `sql_impl` body references `mz_catalog.mz_roles`, and the resolved IDs propagate into the restriction check, so the function itself fails to plan under restriction (deferred bug; the call site is rewritten around it).
 
-These views depend on `mz_show_my_object_privileges`, which originally used `pg_has_role(grantee, 'USAGE')`. That function calls `mz_role_oid_memberships()`, which is correctly blocked because it exposes the full system role graph. `mz_show_my_object_privileges` now uses `mz_session_role_memberships()` instead, which returns only the current session's transitive role chain as role names. This is semantically equivalent for the filter purpose and safe to allow in restricted sessions.
+These views depend on the `mz_show_my_*_privileges` family, which originally used `pg_has_role(grantee, 'USAGE')`. That function calls `mz_role_oid_memberships()`, which is correctly blocked because it exposes the full system role graph. The `mz_show_my_*_privileges` views (`system`, `cluster`, `database`, `schema`, `object`, `default`, `all_my`) now use `mz_session_role_memberships()` instead, which returns only the current session's transitive role chain as role names. This is semantically equivalent for the filter purpose and safe to allow in restricted sessions.
 
 ### `pg_catalog` and `information_schema`
 

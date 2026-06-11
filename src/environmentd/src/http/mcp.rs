@@ -1023,18 +1023,21 @@ async fn read_data_product(
     // Existence check + recover the cluster for auto-routing. The view
     // filters by SELECT on the object but not by cluster privileges, so we
     // also fetch USAGE on the cluster and prefer a usable one in ORDER BY
-    // (an MV indexed on multiple clusters can appear more than once).
+    // (an MV indexed on multiple clusters can appear more than once). Uses
+    // `mz_show_my_cluster_privileges` instead of `has_cluster_privilege`
+    // because the latter's body references `mz_roles` and trips
+    // `restrict_to_user_objects`.
     let lookup_query = format!(
         "SELECT \
-             cluster, \
-             cluster IS NULL OR has_cluster_privilege(cluster, 'USAGE') \
-                 AS has_cluster_usage \
-         FROM mz_internal.mz_mcp_data_products \
-         WHERE object_name = {} \
+             dp.cluster, \
+             dp.cluster IS NULL OR cp.name IS NOT NULL AS has_cluster_usage \
+         FROM mz_internal.mz_mcp_data_products dp \
+         LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp \
+             ON cp.name = dp.cluster AND cp.privilege_type = 'USAGE' \
+         WHERE dp.object_name = {} \
          ORDER BY \
-             (cluster IS NOT NULL \
-                 AND has_cluster_privilege(cluster, 'USAGE')) DESC, \
-             cluster NULLS LAST \
+             (dp.cluster IS NOT NULL AND cp.name IS NOT NULL) DESC, \
+             dp.cluster NULLS LAST \
          LIMIT 1",
         escaped_string_literal(name)
     );

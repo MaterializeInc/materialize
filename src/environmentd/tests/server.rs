@@ -5065,6 +5065,23 @@ fn test_webhook_request_compression() {
 /// Helper to set up an MCP test server and run datadriven tests.
 #[allow(clippy::disallowed_methods)]
 fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
+    run_mcp_datadriven_inner(testdata_path, harness, false)
+}
+
+/// Same as [`run_mcp_datadriven`], but additionally sets
+/// `restrict_to_user_objects = true` as a default for the HTTP user, so
+/// every MCP HTTP request session starts with the restriction active.
+#[allow(clippy::disallowed_methods)]
+fn run_mcp_datadriven_restricted(testdata_path: &str, harness: test_util::TestHarness) {
+    run_mcp_datadriven_inner(testdata_path, harness, true)
+}
+
+#[allow(clippy::disallowed_methods)]
+fn run_mcp_datadriven_inner(
+    testdata_path: &str,
+    harness: test_util::TestHarness,
+    restrict_to_user_objects: bool,
+) {
     let version_re = Regex::new(r#"\d+\.\d+\.\d+(\.\d+)?(-(dev|rc)(\.\d+)?)?"#).unwrap();
 
     datadriven::walk(testdata_path, |f| {
@@ -5104,6 +5121,21 @@ fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
                     &HTTP_DEFAULT_USER.name
                 ))
                 .unwrap();
+
+            if restrict_to_user_objects {
+                // restrict_to_user_objects only takes effect on session start,
+                // so it must be set as a role default; the per-request MCP
+                // sessions pick it up automatically.
+                super_user
+                    .batch_execute("ALTER SYSTEM SET enable_rbac_checks TO true")
+                    .unwrap();
+                super_user
+                    .batch_execute(&format!(
+                        "ALTER ROLE {} SET restrict_to_user_objects = true",
+                        &HTTP_DEFAULT_USER.name
+                    ))
+                    .unwrap();
+            }
         }
 
         let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
@@ -5154,6 +5186,18 @@ fn test_mcp_agent_query_tool() {
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
     run_mcp_datadriven("tests/testdata/mcp/agent_query_tool", harness);
+}
+
+/// Tests the MCP agent endpoint under `restrict_to_user_objects = true`,
+/// the setting clients use to scope sessions down to user objects only.
+/// Covers a small, focused set of cases; broader agent coverage lives in
+/// `test_mcp_agent` / `test_mcp_agent_query_tool`.
+#[mz_ore::test]
+fn test_mcp_agent_restricted() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
+    run_mcp_datadriven_restricted("tests/testdata/mcp/agent_restricted", harness);
 }
 
 /// Tests that the MCP agent endpoint returns 503 when the feature flag is disabled.
