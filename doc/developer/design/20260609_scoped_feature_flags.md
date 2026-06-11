@@ -204,6 +204,19 @@ The `family` field need not be populated for every size up front:
 targetable immediately, before the new families (`M`, `D`) get explicit `family`
 entries. Explicit values are required only where the fallback is wrong.
 
+This fallback must always yield a **sensible default family string**, never fail
+or leave the attribute unset, because we do not control size (or cluster) naming
+everywhere. In **self-managed**, operators define their own replica sizes via
+`--cluster-replica-sizes`, with names we have never seen; `family()` must still
+return a well-defined string for them so the `replica` context is always
+complete. In practice this is harmless there: the scoped mechanism is LD-driven,
+and self-managed deployments use the file-based system-parameter frontend
+(`SystemParameterFrontendClient::File`) or none — so they produce no scoped
+overrides and resolve to environment-wide defaults regardless of how sizes are
+named. The feature is effectively a cloud-fleet operability mechanism that
+degrades gracefully to env-wide elsewhere; the only hard requirement self-managed
+imposes is that the family derivation has a sensible default for unknown names.
+
 We deliberately do **not** ask LD rule authors to derive the family from the
 size string with `startsWith` / `endsWith` operators. The family is a *curated
 mapping*, not a stable encoding: the new families follow `<family>.<version>`
@@ -367,6 +380,13 @@ overrides at plan time, at the (already cluster-aware) sequencing sites in
 `src/adapter/src/coord/sequencer/inner/*`. This is the direct path to
 "optimizer flags in LD per cluster."
 
+The cluster-scoped layer **feeds** `OptimizerFeatureOverrides`; it does **not**
+replace the mechanism. The overrides struct stays as the composition point and
+simply gains LD as one input. It is still needed independently for per-statement,
+what-if overrides — notably `EXPLAIN WITH (<flag>)`, which previews how a plan
+*would* look with a flag flipped. That per-statement override is the most specific
+scope of all and sits above the cluster layer (see precedence below).
+
 The cluster-scoped working copy must live in `CatalogState` (behind
 `Arc<Catalog>`), **not** on the coordinator. Cluster-coherent overrides must also
 apply on the fast-path peek route (`frontend_peek`) and inside the bootstrap
@@ -383,10 +403,13 @@ For cluster-coherent flags the ordering is **specificity-then-source**, lowest
 to highest:
 
 ```
-env-wide LD  <  manual CREATE CLUSTER ... FEATURES  <  cluster-scoped LD
+env-wide LD  <  manual CREATE CLUSTER ... FEATURES  <  cluster-scoped LD  <  EXPLAIN WITH (per-statement)
 ```
 
 i.e. a more specific scope wins, and at equal specificity **LD beats manual**.
+The per-statement `EXPLAIN WITH (<flag>)` override is the most specific and wins
+for that one statement's preview, which is why the `OptimizerFeatureOverrides`
+mechanism is retained rather than replaced by the cluster-scoped layer.
 This is consistent with the existing global behavior — LD already overrides a
 manual `ALTER SYSTEM SET` wherever LD serves a value (the sync loop rewrites the
 param every tick), and `FEATURES` is likewise a system-only operator knob, so it
