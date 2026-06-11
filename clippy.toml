@@ -68,6 +68,8 @@ disallowed-methods = [
     { path = "postgres::Client::simple_query", reason = "avoid direct string SQL; use `Sql` composition and wrappers where possible" },
     { path = "postgres::Client::batch_execute", reason = "avoid direct string SQL; use `Sql` composition and wrappers where possible" },
 
+    # Unlike PostgreSQL above, MySQL gets `query` → `exec` lints instead of an `Sql`-style typed
+    # builder, because `mysql_async`'s prepared-statement API already provides the trust boundary.
     { path = "mysql_async::queryable::Queryable::query", reason = "use `Queryable::exec` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
     { path = "mysql_async::queryable::Queryable::query_first", reason = "use `Queryable::exec_first` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
     { path = "mysql_async::queryable::Queryable::query_drop", reason = "use `Queryable::exec_drop` (prepared statements) instead, or validate inputs and `#[allow]` locally" },

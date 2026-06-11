@@ -219,6 +219,18 @@ impl Sql {
         Ok(Sql(Cow::Owned(out)))
     }
 
+    /// Like [`Sql::format`], but panics on invalid input instead of returning
+    /// an error.
+    ///
+    /// The [`crate::sql!`] macro is the only intended caller; it upholds at
+    /// compile time the invariants this function relies on:
+    ///
+    /// * `{` and `}` appear in the template only as `{{` and `}}` escapes or
+    ///   `{}` placeholders.
+    /// * The number of arguments matches the number of `{}` placeholders.
+    ///
+    /// Do not call this directly; use [`Sql::format`] instead, which reports
+    /// violations as errors.
     #[doc(hidden)]
     pub fn format_unchecked(self, args: impl IntoIterator<Item = Sql>) -> Self {
         let mut args = args.into_iter();

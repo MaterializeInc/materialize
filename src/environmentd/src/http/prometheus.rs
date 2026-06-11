@@ -17,7 +17,7 @@ use super::sql::SqlRequest;
 pub(crate) struct PrometheusSqlQuery<'a> {
     pub(crate) metric_name: &'a str,
     pub(crate) help: &'a str,
-    pub(crate) query: &'a str,
+    pub(crate) query: &'static str,
     pub(crate) value_column_name: &'a str,
     pub(crate) per_replica: bool,
 }
@@ -27,7 +27,7 @@ impl<'a> PrometheusSqlQuery<'a> {
         &self,
         cluster: Option<(&Cluster, &ClusterReplica)>,
     ) -> SqlRequest {
-        let query = Sql::raw_unchecked(self.query.to_string());
+        let query = Sql::new(self.query);
         let query = if let Some((cluster, replica)) = cluster {
             sql!(
                 "SET auto_route_catalog_queries = false; SET CLUSTER = {}; SET CLUSTER_REPLICA = {}; {}",
