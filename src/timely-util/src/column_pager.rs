@@ -495,8 +495,36 @@ impl ColumnPager {
             }
             PageDecision::Pool(pool) => {
                 debug_assert_eq!(len_bytes % 8, 0);
-                let mut body = drain_to_aligned(col, len_bytes);
-                let handle = pool.insert(&mut body);
+                // Serialize straight into the pool slot: one page population,
+                // no staging buffers. The `Align` variant is already the
+                // serialized form and copies in directly; other variants
+                // write their `ContainerBytes` encoding through a cursor over
+                // the slot memory. Sizing is exact, so a short or overlong
+                // write is a `ContainerBytes` contract violation and panics
+                // via the cursor's bounds.
+                let handle = match std::mem::take(col) {
+                    Column::Align(v) => {
+                        pool.insert_with(v.len(), |dst| dst.copy_from_slice(v.as_slice()))
+                    }
+                    mut other => {
+                        let handle = pool.insert_with(len_bytes / 8, |dst| {
+                            let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
+                            let mut cursor = std::io::Cursor::new(bytes);
+                            other.into_bytes(&mut cursor);
+                            assert_eq!(
+                                usize::try_from(cursor.position()).expect("usize position"),
+                                len_bytes,
+                                "serialized body must fill the chunk exactly",
+                            );
+                        });
+                        // `into_bytes` only borrowed `other`; clear it in
+                        // place and hand it back so the caller keeps the
+                        // `Typed` allocation for its next refill.
+                        other.clear();
+                        *col = other;
+                        handle
+                    }
+                };
                 // The pool compresses internally at eviction time, so the
                 // policy-visible size is the uncompressed body on both sides.
                 // The pool's extent store is swap-backed.
