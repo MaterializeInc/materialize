@@ -647,8 +647,8 @@ impl Coordinator {
         secret_id: CatalogItemId,
         contents: &str,
     ) -> Result<(), AdapterError> {
-        for user_id in self.catalog().get_entry(&secret_id).used_by() {
-            if let CatalogItem::Connection(conn) = self.catalog().get_entry(user_id).item() {
+        for dependent_id in self.catalog().get_entry(&secret_id).used_by() {
+            if let CatalogItem::Connection(conn) = self.catalog().get_entry(dependent_id).item() {
                 for (guarded_id, guard) in conn.details.secret_content_guards() {
                     if guarded_id == secret_id {
                         guard(contents)?;
