@@ -328,7 +328,7 @@ impl ComputeState {
 
             let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let use_pool = COLUMN_PAGED_BATCHER_USE_POOL.get(config);
-            let spill_threads = COLUMN_PAGED_BATCHER_POOL_SPILL_THREADS.get(config);
+            let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
             let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
             let swap_pageout = COLUMN_PAGED_BATCHER_SWAP_PAGEOUT.get(config);
 
