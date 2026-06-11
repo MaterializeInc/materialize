@@ -14,30 +14,40 @@
 //! labels. They give other metrics a stable `group_left` join target for
 //! resolving object IDs to names.
 //!
-//! The metrics are periodically reconciled with the catalog on the
-//! coordinator's main loop ([CatalogInfoMetrics::reconcile], driven by an
-//! interval ticking every [RECONCILE_INTERVAL]): whenever the catalog's
-//! [transient revision](Catalog::transient_revision) changes, all series are
-//! rebuilt from it. It's okay if the info metrics are not exactly up to date and
+//! The metrics are periodically reconciled with the catalog by a
+//! background task ([Coordinator::spawn_catalog_info_metrics_task], driven by an
+//! interval off the coordinator's main loop. It rebuilds the series whenever the
+//! catalog's [transient revision](Catalog::transient_revision) changes, from the
+//! catalog. It's okay if the info metrics are not exactly up to date and
 //! eventually consistent.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, ClusterVariant, DataSourceDesc,
 };
 use mz_controller::clusters::ReplicaLocation;
 use mz_ore::metric;
-use mz_ore::metrics::{DeleteOnDropGauge, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{DeleteOnDropGauge, Histogram, MetricsRegistry, UIntGaugeVec};
+use mz_ore::stats::histogram_seconds_buckets;
+use mz_ore::task;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::CatalogItemId;
 use mz_sql::names::{FullItemName, RawDatabaseSpecifier};
 use prometheus::core::AtomicU64;
-use tracing::debug;
+use tokio::sync::oneshot;
+use tokio::time::MissedTickBehavior;
+use tracing::{debug, warn};
 
 use crate::catalog::{Catalog, catalog_type_to_audit_object_type};
+use crate::command::{CatalogSnapshot, Command};
+use crate::coord::{Coordinator, Message};
 
 /// How often the info metrics are reconciled with the catalog.
 pub(crate) const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Reconciles that take longer than this are logged at warn level.
+const RECONCILE_WARN_THRESHOLD: Duration = Duration::from_secs(5);
 
 type InfoGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
 
@@ -59,6 +69,8 @@ pub(crate) struct CatalogInfoMetrics {
     /// The [Catalog::transient_revision] the metrics were last populated
     /// from. Used to avoid rebuilding the metrics if the catalog has not changed.
     last_revision: Option<u64>,
+    /// Times a full (re)build of the series in [CatalogInfoMetrics::populate].
+    reconcile_seconds: Histogram,
 }
 
 impl CatalogInfoMetrics {
@@ -88,6 +100,11 @@ impl CatalogInfoMetrics {
             )),
             series: Vec::new(),
             last_revision: None,
+            reconcile_seconds: registry.register(metric!(
+                name: "mz_catalog_info_metrics_reconcile_seconds",
+                help: "Time taken to rebuild the catalog info metrics from a catalog snapshot.",
+                buckets: histogram_seconds_buckets(0.000_128, 8.0),
+            )),
         }
     }
 
@@ -100,7 +117,17 @@ impl CatalogInfoMetrics {
                 last_revision = self.last_revision,
                 "reconciling catalog info metrics"
             );
+            let start = Instant::now();
             self.populate(catalog);
+            let elapsed = start.elapsed();
+            self.reconcile_seconds.observe(elapsed.as_secs_f64());
+            if elapsed > RECONCILE_WARN_THRESHOLD {
+                warn!(
+                    ?elapsed,
+                    series = self.series.len(),
+                    "catalog info metrics reconcile was slow"
+                );
+            }
             self.last_revision = Some(catalog.transient_revision());
         }
     }
@@ -222,6 +249,36 @@ impl CatalogInfoMetrics {
             ],
         );
         self.series.push(series);
+    }
+}
+
+impl Coordinator {
+    /// Spawns a background task that keeps the catalog info metrics in sync with
+    /// the catalog.
+    pub(crate) fn spawn_catalog_info_metrics_task(&self) {
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let mut metrics = CatalogInfoMetrics::new(&self.catalog_info_metrics_registry);
+        task::spawn(|| "catalog_info_metrics", async move {
+            let mut interval = tokio::time::interval(RECONCILE_INTERVAL);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let (tx, rx) = oneshot::channel();
+                let send = internal_cmd_tx.send(Message::Command(
+                    OpenTelemetryContext::obtain(),
+                    Command::CatalogSnapshot { tx },
+                ));
+                // Bail if the coordinator has gone away.
+                if send.is_err() {
+                    break;
+                }
+                let Ok(CatalogSnapshot { catalog }) = rx.await else {
+                    break;
+                };
+                // Reconcile the metrics with the catalog.
+                metrics.reconcile(&catalog);
+            }
+        });
     }
 }
 

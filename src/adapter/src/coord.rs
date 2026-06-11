@@ -189,7 +189,6 @@ use crate::coord::appends::{
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::info_metrics::CatalogInfoMetrics;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
@@ -1980,10 +1979,9 @@ pub struct Coordinator {
     /// Only used during 0dt deployment, while in read-only mode.
     caught_up_check: Option<CaughtUpCheckContext>,
 
-    /// Prometheus `*_info` metrics describing catalog objects.
-    catalog_info_metrics: CatalogInfoMetrics,
-    /// Periodically reconciles `catalog_info_metrics` with the catalog.
-    catalog_info_metrics_interval: Interval,
+    /// The metrics registry, handed to the catalog info-metrics background task
+    /// so it can register and own its `*_info` series.
+    catalog_info_metrics_registry: MetricsRegistry,
 
     /// Tracks the state associated with the currently installed watchsets.
     installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
@@ -3560,6 +3558,7 @@ impl Coordinator {
             self.schedule_arrangement_sizes_collection().await;
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
+            self.spawn_catalog_info_metrics_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
@@ -3700,14 +3699,6 @@ impl Coordinator {
                         // so optimizing for latency, not blocking the main loop
                         // is not that important.
                         self.maybe_check_caught_up().await;
-
-                        continue;
-                    },
-
-                    _ = self.catalog_info_metrics_interval.tick() => {
-                        // Reconcile directly on the main loop; this is a no-op
-                        // unless the catalog changed since the last tick.
-                        self.catalog_info_metrics.reconcile(&self.catalog);
 
                         continue;
                     },
@@ -4565,10 +4556,6 @@ pub fn serve(
 
         let metrics = Metrics::register_into(&metrics_registry);
         let metrics_clone = metrics.clone();
-        let catalog_info_metrics = CatalogInfoMetrics::new(&metrics_registry);
-        let mut catalog_info_metrics_interval =
-            tokio::time::interval(info_metrics::RECONCILE_INTERVAL);
-        catalog_info_metrics_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let optimizer_metrics = OptimizerMetrics::register_into(
             &metrics_registry,
             catalog.system_config().optimizer_e2e_latency_warning_threshold(),
@@ -4745,6 +4732,7 @@ pub fn serve(
                     storage_usage_collection_interval,
                     segment_client,
                     metrics,
+                    catalog_info_metrics_registry: metrics_registry.clone(),
                     optimizer_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
@@ -4754,8 +4742,6 @@ pub fn serve(
                     cluster_scheduling_decisions: BTreeMap::new(),
                     caught_up_check_interval: clusters_caught_up_check_interval,
                     caught_up_check: clusters_caught_up_check,
-                    catalog_info_metrics,
-                    catalog_info_metrics_interval,
                     installed_watch_sets: BTreeMap::new(),
                     connection_watch_sets: BTreeMap::new(),
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
