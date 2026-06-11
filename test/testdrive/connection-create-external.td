@@ -288,3 +288,12 @@ contains:token_uri must be https://oauth2.googleapis.com/token
 # validated against the benign key above. This must be rejected as well.
 ! ALTER SECRET gcp_good AS '{"type":"service_account","project_id":"x","client_email":"a@b.com","private_key":"${gcp-ssrf-key}","token_uri":"http://127.0.0.1:1/token"}'
 contains:token_uri must be https://oauth2.googleapis.com/token
+
+# Benign changes must still go through: a guard that rejected every ALTER would
+# also pass the tests above. ALTER SECRET first, while gcp_alter_conn still
+# depends on gcp_good -- afterwards the connection moves off it and the
+# dependent-based guard no longer applies.
+> ALTER SECRET gcp_good AS '{"type":"service_account","project_id":"y","client_email":"a@b.com","private_key":"${gcp-ssrf-key}","token_uri":"https://oauth2.googleapis.com/token"}'
+
+> CREATE SECRET gcp_good_2 AS '{"type":"service_account","project_id":"x","client_email":"a@b.com","private_key":"${gcp-ssrf-key}","token_uri":"https://oauth2.googleapis.com/token"}'
+> ALTER CONNECTION gcp_alter_conn SET (SERVICE ACCOUNT KEY = SECRET gcp_good_2) WITH (VALIDATE = false);
