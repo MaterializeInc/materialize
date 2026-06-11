@@ -94,6 +94,9 @@ pub fn register(registry: &MetricsRegistry, policy: &'static TieredPolicy) {
         register_pool_gauge(registry, "evictions_cheap_total", "Evictions of already-backed chunks: physical pages released with no compression or extent write.", |s| s.evictions_cheap);
         register_pool_gauge(registry, "faults_total", "Fault-ins decompressing a chunk from its extent back into its pool slot.", |s| s.faults);
         register_pool_gauge(registry, "extent_bytes_written_total", "Compressed bytes written into swap-backed extents.", |s| s.extent_bytes_written);
+        register_pool_gauge(registry, "spill_scheduled_total", "Evictions handed to buffer-pool spill threads.", |s| s.spill_scheduled);
+        register_pool_gauge(registry, "spill_cancelled_total", "Scheduled evictions cancelled before completing (chunk freed or pinned).", |s| s.spill_cancelled);
+        register_pool_gauge(registry, "spill_in_flight", "Spill entries queued or being processed.", |s| s.spill_in_flight);
 
         PagerMetrics {
             skip_decisions_total: registry.register(metric!(
