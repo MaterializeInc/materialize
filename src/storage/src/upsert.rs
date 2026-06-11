@@ -298,13 +298,14 @@ upsert_source_time_unit!(GtidPartition, Lsn);
 
 /// Pager for the upsert-v2 source stash.
 ///
-/// This draws from the same process-wide [`TieredPolicy`] budget pool as the
-/// compute column-paged batcher — there is one budget and one underlying
-/// `mz_ore::pager` — but whether the stash *uses* it is gated by storage's own
+/// This draws from the process-wide shared spill mechanism — the buffer pool
+/// when compute's config installed pool mode, else the [`TieredPolicy`]
+/// budget — but whether the stash *uses* it is gated by storage's own
 /// `enable_upsert_paged_spill` flag, independently of compute's
-/// `enable_column_paged_batcher_spill`. The shared pool's budget / backend /
-/// codec are configured by compute's `apply_tiered_config` (storage and compute
-/// run in the same `clusterd` process).
+/// `enable_column_paged_batcher_spill`. The shared mechanism's budget,
+/// backend, and codec are configured by compute's config handler (storage
+/// and compute run in the same `clusterd` process); each `pager` call
+/// resolves against whichever mechanism the last config apply installed.
 ///
 /// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
 pub mod upsert_stash_pager {
