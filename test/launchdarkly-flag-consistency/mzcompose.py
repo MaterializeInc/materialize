@@ -37,6 +37,16 @@ build red:
     production vs staging), which usually only happens during a staged rollout
     -- unless it is in `KNOWN_CROSS_ENV_DIVERGENCES`.
 
+For the two divergence checks (cloud-vs-default and cross-environment), a flag
+can alternatively be acknowledged directly in LaunchDarkly by tagging it
+(`EXPECTED_CLOUD_OVERRIDE_TAG` / `EXPECTED_CROSS_ENV_TAG`), which suppresses the
+failure without an in-repo allowlist edit. This is meant for *transient*
+differences -- e.g. a beta feature trialed in staging ahead of production --
+that would otherwise need a full PR just to acknowledge a temporary state;
+durable cloud-only tuning should stay in `INTENTIONAL_LD_OVERRIDES` so it
+remains code-reviewed. Tag-suppressed divergences are still printed as a
+non-failing NOTE so they stay auditable.
+
 The allowlists capture the accepted baseline and are expected to shrink over
 time; the check prints any entry that is no longer a discrepancy so it can be
 pruned. `--no-fail` downgrades failures to warnings for local runs.
@@ -166,6 +176,18 @@ SESSION_VARIABLES = {
 # throwaway flags created during the integration test. These are never real
 # system parameters, so we ignore them when warning about stale flags.
 CI_TEST_TAG = "ci-test"
+
+# LaunchDarkly tags that mark a flag's divergence as expected, as a
+# lighter-weight alternative to the in-repo allowlists below: a flag carrying
+# one of these tags is treated like an allowlist entry for the corresponding
+# divergence check, so a transient divergence can be acknowledged in the
+# LaunchDarkly UI without a repo change (no PR latency). Intended for
+# *transient* differences (e.g. a beta feature trialed in staging ahead of
+# production); durable cloud-only tuning should stay in INTENTIONAL_LD_OVERRIDES
+# so it remains code-reviewed. Tag-suppressed divergences are still reported as
+# a non-failing NOTE so they stay auditable.
+EXPECTED_CLOUD_OVERRIDE_TAG = "mz-expected-cloud-override"
+EXPECTED_CROSS_ENV_TAG = "mz-expected-cross-env"
 
 # Known synchronized parameters that intentionally have no LaunchDarkly flag.
 # Should normally be empty; add a name here (with a comment explaining why) only
@@ -928,18 +950,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # default, which should be reconciled in the compiled-in default).
     cloud_vs_default: dict[str, tuple[str, Any]] = {}
     diverging_from_default: set[str] = set()
+    tag_suppressed_cloud: set[str] = set()
     for name in in_both:
         prod_value = served_defaults.get(name, {}).get(PRODUCTION_ENVIRONMENT)
         if values_equivalent(current[name], prod_value) is False:
             diverging_from_default.add(name)
-            if name not in INTENTIONAL_LD_OVERRIDES:
-                cloud_vs_default[name] = (current[name], prod_value)
+            if name in INTENTIONAL_LD_OVERRIDES:
+                continue
+            if EXPECTED_CLOUD_OVERRIDE_TAG in ld_tags.get(name, []):
+                tag_suppressed_cloud.add(name)
+                continue
+            cloud_vs_default[name] = (current[name], prod_value)
 
     # Flags whose served default differs *between* LaunchDarkly environments
     # (e.g. production vs staging), which usually only happens during a staged
     # rollout. Long-running ones are allowlisted via KNOWN_CROSS_ENV_DIVERGENCES.
     env_divergences: dict[str, dict[str, Any]] = {}
     diverging_across_envs: set[str] = set()
+    tag_suppressed_cross_env: set[str] = set()
     for name in in_both:
         per_env = served_defaults.get(name, {})
         differs = any(
@@ -948,10 +976,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         if differs:
             diverging_across_envs.add(name)
-            if name not in KNOWN_CROSS_ENV_DIVERGENCES:
-                env_divergences[name] = {
-                    e: per_env.get(e) for e in LAUNCHDARKLY_ENVIRONMENTS
-                }
+            if name in KNOWN_CROSS_ENV_DIVERGENCES:
+                continue
+            if EXPECTED_CROSS_ENV_TAG in ld_tags.get(name, []):
+                tag_suppressed_cross_env.add(name)
+                continue
+            env_divergences[name] = {
+                e: per_env.get(e) for e in LAUNCHDARKLY_ENVIRONMENTS
+            }
 
     print(
         "Discrepancies beyond the known-exceptions allowlists: "
@@ -985,7 +1017,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"  {name}: default={mz_value!r} cloud={prod_value!r}")
         print(
             "Reconcile the compiled-in default, or -- if this is intentional "
-            "cloud-only tuning -- add the flag to INTENTIONAL_LD_OVERRIDES."
+            "cloud-only tuning -- add the flag to INTENTIONAL_LD_OVERRIDES (or, "
+            f"for a transient override, tag it {EXPECTED_CLOUD_OVERRIDE_TAG!r} "
+            "in LaunchDarkly)."
         )
 
     if env_divergences:
@@ -1000,8 +1034,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"  {name}: {rendered}")
         print(
             "Make the environments agree, or -- if this is a deliberate staged "
-            "rollout -- add the flag to KNOWN_CROSS_ENV_DIVERGENCES."
+            "rollout -- add the flag to KNOWN_CROSS_ENV_DIVERGENCES (or, for a "
+            f"transient rollout, tag it {EXPECTED_CROSS_ENV_TAG!r} in "
+            "LaunchDarkly)."
         )
+
+    # Divergences acknowledged via a LaunchDarkly tag rather than an in-repo
+    # allowlist. Non-failing, but printed so they stay auditable (a stray tag
+    # should not silently mask a divergence forever).
+    if tag_suppressed_cloud or tag_suppressed_cross_env:
+        print(
+            "--- NOTE: divergences suppressed by a LaunchDarkly tag (acknowledged "
+            "in LaunchDarkly instead of via the in-repo allowlists)"
+        )
+        for name in sorted(tag_suppressed_cloud):
+            print(f"  {EXPECTED_CLOUD_OVERRIDE_TAG}: {name}")
+        for name in sorted(tag_suppressed_cross_env):
+            print(f"  {EXPECTED_CROSS_ENV_TAG}: {name}")
 
     # Allowlist entries that are no longer discrepancies, so they can be pruned.
     # For the divergence lists we only flag entries we could actually evaluate
