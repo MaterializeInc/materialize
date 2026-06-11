@@ -246,6 +246,9 @@ The costs are the machinery — queues, completions, sizing knobs, cross-thread 
 A middle path exists if measurement splits the difference: workers take write stalls synchronously but submit their own readahead through a small per-worker io_uring, checking completions at access time — read-side overlap without dedicated threads.
 The chunk state machine is identical in all three shapes; only the executor of the `WriteInFlight` and `Faulting` transitions differs, so the choice is contained behind one interface and revisitable.
 
+The staging prototype supplies the first data point (see Measured under Performance estimates): on the swap-backed store, where eviction cost is `MADV_PAGEOUT` page-table work rather than a device write, unguarded on-worker enforcement pinned CPUs, and off-worker spill threads behind single-flight enforcement and a bounded queue resolved it.
+The on-worker option remains live for the file-extent backend, where the write is a single bounded `pwrite`.
+
 Eviction throughput is bounded by `madvise` page-table work and TLB shootdowns (the vmcache paper's measured ceiling; their fix, the exmap kernel module, is not shippable here).
 Mitigation is granularity: 2 MiB chunks are ~500× fewer page-table operations per byte than 4 KiB pages, and `MADV_DONTNEED` calls are batched.
 
@@ -440,7 +443,7 @@ On the swap-backed extent store (see Layer 1), write costs match the measured lz
 * **Write elision rate.**
   The merge-throughput gains assume a meaningful fraction of chunks die unbacked (lazy tier).
   In steady-state merging this fraction is high (chains turn over continuously); under eager backing it is zero by definition.
-  No measurement exists yet; milestone 2's elision-rate metric is the check.
+  The staging prototype observed the mechanism directly (see Measured, below): early-hydration churn produced spill-cancellation rates of 100–400/s, each an avoided compress-and-pageout.
 * **Compression ratio.**
   The 5.6× figure is one workload's arrangement data; the disk-ceiling multiplier scales directly with it and drops to 1× on incompressible data.
 * **Eviction overhead.**
@@ -451,6 +454,35 @@ On the swap-backed extent store (see Layer 1), write costs match the measured lz
   This is an accounting hazard, not a throughput one, but it can transiently overshoot the budget.
 * **Single-thread sync-executor estimate.**
   The ~0.6 GiB/s figure assumes read-process-write serialization per chunk with no overlap; it degrades toward the file backend's numbers if compression runs on-worker (see cost model) and improves toward device/2 with the io_uring middle path.
+
+### Measured: the staging prototype (June 2026)
+
+Milestone 2's swap-backed prototype ran on staging under the upsert-v2 source stash — a hydration workload that accumulates backlog while persist catches up — and replaced several estimates above with measurements.
+
+* **Bounded accumulation holds, at ~3000× past the budget.**
+  The workload accumulated ~395 GiB of logical stash (70.6 GiB of lz4 extents on the swap device; the 5.6× ratio reproduced on production-shaped data) while pool residency held at the configured 128 MiB floor and the process's anonymous RSS stayed under ~8.5 GiB.
+  Of that, ~3 GiB is the merge engine's working set, flat as the backlog grew — it scales with chunk size and concurrency, not state size.
+* **The kernel never reclaimed.**
+  Cgroup `pgscan` stayed zero across the run, and the pool VMAs showed `Swap: 0` throughout: the engine evicts ahead of pressure by construction, and slots are only ever discarded, never kernel-paged.
+* **Page tables tracked the compressed ledger at ~0.2–0.4%** (82–250 MiB against 20–70 GiB of extents) — the slot-per-resident economics the Address space section argues for, observed.
+* **Die-young elision is real and visible.**
+  Early in hydration the chains are small and merge constantly, so chunks die younger than the spill queue's latency: cancellations ran at 100–400/s — each an avoided write — decaying to zero as chains matured and lifetimes stretched.
+  The same churn saturated the bounded spill queue and pushed eviction inline onto workers; growable spill-thread counts and churn-aware victim selection (skip the youngest chains) are the identified follow-ups.
+* **Eviction must not run on workers unguarded.**
+  A first cut let every worker attempt budget enforcement concurrently; `madvise` plus lock contention pinned CPUs.
+  Single-flight enforcement over a resident-only queue plus dedicated spill threads resolved it — for the swap-backed store, where page-table work dominates eviction cost, the off-worker executor is the prototype's de facto answer to the I/O execution question.
+* **Extents must be sized to the compressed payload.**
+  Allocating lz4's worst case inflated swap writeback ~5.6×; at hydration eviction rates this backed up device writeback and bloated the working set with in-flight pages.
+  Compressing into reused scratch and allocating exact (page-rounded) extents fixed it.
+* **Size classes must cover the chunk shapes the ship heuristic actually produces.**
+  The batcher's capacity heuristic yields bimodal chunks (≈1.8–2.0 and 3.6–4.0 MiB serialized); without 4 and 8 MiB classes the large mode silently fell back to unpageable heap.
+* **Boundedness is phase-scoped, and drains are the sharp edge.**
+  Accumulation is budget-bounded; the drain initially was not: `Batcher::seal` materialized the entire ship side before the drain consumed it, an O(backlog) rehydration observed live at ~80 GiB RSS when persist caught up.
+  The stash drain now rehydrates sealed chunks one at a time; the arrangement-build path inside `arrange_core` retains the same materialization (see Open questions).
+* **Working-set metrics misread this architecture.**
+  `MADV_PAGEOUT` leaves clean swap-cache copies that the kernel, absent pressure, never drops; cgroup working-set charges them, so dashboards show the ledger as linear "memory growth" that is actually droppable cache.
+  Anonymous RSS is the honest health signal.
+  The cache also earns its keep: ~99% of observed fault-ins were served from it as minor faults — an accidental free middle tier between the pool and the device.
 
 ## Minimal viable prototype and milestones
 
@@ -515,6 +547,32 @@ It also reframes the volume-topology question for operators: provisioning a scra
 Each consumer the pool absorbs leaves the swap working set: first the batcher chunks (milestone 2), then sealed columnar batches (milestones 3–5).
 Columnation-era arrangements stay on lgalloc until the columnar path subsumes them — a separate project — and persist's buffers and operator heap state have their own timelines.
 Swap provisioning shrinks correspondingly, from working-set-sized toward insurance-sized; turning it off is a per-cluster operational decision for when monitoring shows negligible swap traffic, not a milestone of this design.
+
+## Remote extents: the object-store direction
+
+The extent store's contract — write compressed bytes, get an opaque handle; explicit, non-faulting reads; free — is already an object-store contract, and nothing in Layers 2–3 assumes the backing device is local.
+An S3-backed extent store is therefore an extension point of this design rather than a successor to it.
+This section records where the literature sits so the option stays deliberately reachable; none of it is committed work.
+
+The relevant literature splits into four veins.
+
+* **Cloud-native database tiering** (Snowflake, NSDI 2020; Socrates/SQL Hyperscale, SIGMOD 2019; Neon) is unanimous on architecture: object storage is never placed directly behind a synchronous miss; a local cache tier — Snowflake's ephemeral SSD file cache, Socrates' RBPEX buffer-pool extension — always sits between.
+  Translated here: S3 extents would not replace swap or file extents but sit below them, a third rung on the ladder (RAM pool → local extents → object segments).
+* **Object-store I/O economics** (AnyBlob — Durner, Leis & Neumann, VLDB 2023) quantifies the device: ~10–30 ms first-byte latency regardless of size, bandwidth effectively free, requests priced.
+  Saturating throughput takes ~8–16 MiB requests at dozens-to-hundreds of concurrent in-flight GETs under an engine-integrated download scheduler.
+  Two consequences: compressed extents are far too small to be objects and must coalesce into multi-extent **segments** with an extent → (segment, offset) indirection; and the batched-seek cursor (see Layer 3) stops being an optimization and becomes the API that lets a download manager turn a probe set into few, large, parallel requests.
+* **Far memory** (Infiniswap, NSDI 2017; Fastswap; Hermit, NSDI 2023; versus AIFM, OSDI 2020) settles the interface question: transparent page-granular remote paging amplifies unacceptably over high-latency links, and application-integrated, object-granular access with explicit dereference scopes wins decisively.
+  AIFM's deref scope is this design's pin, one network hop further out — the handle-and-pin discipline adopted in Layer 2 (and unavailable to lgalloc-style always-valid pointers) is precisely what makes a remote backend viable at all.
+* **Log-structured lifecycle** (LFS and its cleaning literature; RAMCloud's log cleaner; RocksDB-Cloud) names the new problem the tier brings: immutable remote segments turn `free` from a deallocation into garbage accumulation, so live-ratio tracking and segment compaction — machinery the swap backend's plain `dealloc` made unnecessary — arrive with the tier.
+
+What changes if this ships: the synchronous executor dies (a 10+ ms remote stall is not a 100 µs decompress, so the asynchronous prefetch path stops being a measured choice and becomes mandatory), and `free` becomes refcounted segment GC.
+What does not change: the pool, the budget, the chunk states, pins, and the extent seam itself.
+
+Two pragmatics temper the ambition.
+First, a zero-code intermediate exists: swapping to network block storage (EBS-class) extends capacity past the local device with no engine changes at all — the kernel does not care that the swap device is network-attached — and should be benched before any of this is built.
+Second, Materialize already operates an S3-backed, locally-cached, compacted store of immutable blobs: persist.
+Remote extents would reconstruct persist's bottom half (blob interface, cache, GC) for pre-consolidation state, so the load-bearing design question is not how to talk to S3 but whether cold extents become a tenant of persist's blob and cache layers or a deliberately separate mini-store.
+The prize that makes the question worth eventually answering is durability of state across process death: today a restart re-ingests the backlog from the source, where re-attaching to remote segments would turn restart into cache warming — the Snowflake/Neon elasticity story, and the reason warm restart sits in Out of scope as a follow-up rather than a non-goal.
 
 ## Prior art
 
@@ -605,6 +663,9 @@ Epochs cost nothing on the read path and only delay eviction by one yield cycle;
 * **Record-granular hot caching.**
   If sparse cold probes dominate some workloads even with small leaves, filters, and uncompressed lookup tiers, the page is the wrong caching unit for that traffic, and a record cache above the pool (Bf-Tree's mini-pages are the precedent) becomes worth its complexity.
   Decide on milestone 4 evidence rather than speculation.
+* **Drain-side materialization in `arrange_core`.**
+  Differential's `Batcher::seal` returns a materialized `Vec` of chunks and `Builder::seal` consumes it whole, so arrangement construction rehydrates an entire sealed run at once — measured on staging as the dominant drain-phase RSS spike once the stash drain went chunk-at-a-time.
+  Bounding it requires an iterator-shaped seam between batcher and builder in differential's trait pair (or the `Chunk`-based path, where a paged chunk transits by handle and nothing rehydrates); sizing data from the fixed-stash runs decides urgency.
 * **Scratch exhaustion.**
   When the extent store fills: stop evicting and let RSS grow (current behavior, in effect), or backpressure ingestion?
   Needs an answer before eager backing ships, since eager mode writes more.
