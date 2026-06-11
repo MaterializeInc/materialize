@@ -2414,9 +2414,10 @@ where
                             FetchResult::Error(err.into_response(Severity::Error))
                         }
                         Some(PeekResponseUnary::DependencyDropped(dep)) => {
-                            FetchResult::Error(
-                                dep.to_concurrent_dependency_drop().into_response(Severity::Error),
-                            )
+                            FetchResult::Error(ErrorResponse::error(
+                                SqlState::INTERNAL_ERROR,
+                                dep.query_terminated_error(),
+                            ))
                         }
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
