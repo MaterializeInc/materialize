@@ -454,6 +454,10 @@ enum PrepareQueryOutcome<'a> {
 pub struct Runner<'a> {
     config: &'a RunConfig<'a>,
     inner: Option<RunnerInner<'a>>,
+    /// Active `replace` substitutions, applied to actual query output before it
+    /// is compared/rewritten. Held on the outer `Runner` so they survive a
+    /// `reset-server`. See `Record::Replace`.
+    replacements: Vec<(Regex, String)>,
 }
 
 pub struct RunnerInner<'a> {
@@ -789,6 +793,7 @@ impl<'a> Runner<'a> {
         let mut runner = Self {
             config,
             inner: None,
+            replacements: Vec::new(),
         };
         runner.reset().await?;
         Ok(runner)
@@ -811,11 +816,20 @@ impl<'a> Runner<'a> {
         if let Record::ResetServer = record {
             self.reset().await?;
             Ok(Outcome::Success)
+        } else if let Record::Replace {
+            pattern,
+            replacement,
+        } = record
+        {
+            // Validated at parse time, so this compile cannot fail.
+            let regex = Regex::new(pattern).expect("replace regex validated by parser");
+            self.replacements.push((regex, replacement.clone()));
+            Ok(Outcome::Success)
         } else {
             self.inner
                 .as_mut()
                 .expect("RunnerInner missing")
-                .run_record(record, in_transaction)
+                .run_record(record, in_transaction, &self.replacements)
                 .await
         }
     }
@@ -1368,6 +1382,7 @@ impl<'a> RunnerInner<'a> {
         &mut self,
         record: &'r Record<'r>,
         in_transaction: &mut bool,
+        replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
         match &record {
             Record::Statement {
@@ -1413,7 +1428,7 @@ impl<'a> RunnerInner<'a> {
                 output,
                 location,
             } => {
-                self.run_query(sql, output, location.clone(), in_transaction)
+                self.run_query(sql, output, location.clone(), in_transaction, replacements)
                     .await
             }
             Record::Simple {
@@ -1595,6 +1610,7 @@ impl<'a> RunnerInner<'a> {
         sql: &str,
         output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
+        replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
         let rows = match self.client.query(sql, &[]).await {
             Ok(rows) => rows,
@@ -1670,6 +1686,18 @@ impl<'a> RunnerInner<'a> {
         let mut values = formatted_rows.into_iter().flatten().collect::<Vec<_>>();
         if let Sort::Value = sort {
             values.sort();
+        }
+
+        // Apply any `replace` substitutions to the actual output, so that
+        // non-deterministic tokens (e.g. a folded `mz_now()` timestamp) are
+        // masked before the output is compared against, or rewritten into, the
+        // expected output.
+        if !replacements.is_empty() {
+            for value in &mut values {
+                for (regex, replacement) in replacements {
+                    *value = regex.replace_all(value, replacement.as_str()).into_owned();
+                }
+            }
         }
 
         // Various checks as long as there are returned rows.
@@ -1771,6 +1799,7 @@ impl<'a> RunnerInner<'a> {
         num_attributes: Option<usize>,
         output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
+        replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
         // Create indexed view SQL commands and execute `CREATE VIEW`.
         let expected_column_names = if let Ok(QueryOutput { column_names, .. }) = output {
@@ -1804,7 +1833,7 @@ impl<'a> RunnerInner<'a> {
         } else {
             print_sql_if(self.stdout, view_sql.as_str(), self.verbose);
             view_outcome = self
-                .execute_query(view_sql.as_str(), output, location.clone())
+                .execute_query(view_sql.as_str(), output, location.clone(), replacements)
                 .await?;
         }
 
@@ -1821,6 +1850,7 @@ impl<'a> RunnerInner<'a> {
         output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
         in_transaction: &mut bool,
+        replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
         let prepare_outcome = self
             .prepare_query(sql, output, location.clone(), in_transaction)
@@ -1831,7 +1861,9 @@ impl<'a> RunnerInner<'a> {
                 num_attributes,
                 has_as_of,
             }) => {
-                let query_outcome = self.execute_query(sql, output, location.clone()).await?;
+                let query_outcome = self
+                    .execute_query(sql, output, location.clone(), replacements)
+                    .await?;
                 // `AS OF` queries are excluded from the indexed-view consistency
                 // check: re-running them against a freshly created indexed view
                 // is racy, since the view's `since` can advance past a historical
@@ -1839,7 +1871,7 @@ impl<'a> RunnerInner<'a> {
                 // timestamp" even though the one-shot query succeeded.
                 if is_select && !has_as_of && self.auto_index_selects && query_outcome.success() {
                     let view_outcome = self
-                        .execute_view(sql, None, output, location.clone())
+                        .execute_view(sql, None, output, location.clone(), replacements)
                         .await?;
 
                     if !view_outcome.success() {
@@ -1848,8 +1880,14 @@ impl<'a> RunnerInner<'a> {
                         // number of attributes. This two-level strategy can avoid errors
                         // produced by column ambiguity in the `SELECT`.
                         let view_outcome = if num_attributes.is_some() {
-                            self.execute_view(sql, num_attributes, output, location.clone())
-                                .await?
+                            self.execute_view(
+                                sql,
+                                num_attributes,
+                                output,
+                                location.clone(),
+                                replacements,
+                            )
+                            .await?
                         } else {
                             view_outcome
                         };
@@ -2079,6 +2117,18 @@ fn print_record(config: &RunConfig<'_>, record: &Record) {
                 "{}hash-threshold {}",
                 " ".repeat(PRINT_INDENT),
                 threshold
+            )
+        }
+        Record::Replace {
+            pattern,
+            replacement,
+        } => {
+            writeln!(
+                config.stdout,
+                "{}replace {}  {}",
+                " ".repeat(PRINT_INDENT),
+                pattern,
+                replacement
             )
         }
     }

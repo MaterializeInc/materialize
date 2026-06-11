@@ -109,36 +109,40 @@ def _qualified(schema: str, name: str) -> str:
 def enumerate_explain_queries(c: Composition) -> list[str]:
     """Return the deterministically-ordered list of EXPLAIN statements that
     should appear in the .slt, one per catalog-server object."""
-    indexes = c.sql_query(
-        f"""
+    # Exclude per-replica introspection log indexes (catalog kind
+    # `ClusterIntrospectionSourceIndex`, surfaced with an `si` id prefix; see
+    # `introspection_source_indexes_cte` in src/catalog/src/builtin/mz_catalog.rs).
+    # These are auto-created once per replica over the logging arrangements, so
+    # their names embed a non-deterministic replica id (e.g.
+    # `..._s2_primary_idx`) and they have no optimizer plan -- `EXPLAIN INDEX`
+    # errors with "cannot find dataflow metainformation". The `si`-prefix filter
+    # keys off the object kind, not the schema, so it still excludes them if a
+    # future log index is created over a relation outside `mz_introspection`.
+    indexes = c.sql_query(f"""
         SELECT s.name, o.name
         FROM mz_objects o
         JOIN mz_schemas s ON o.schema_id = s.id
         JOIN mz_clusters c ON o.cluster_id = c.id
         WHERE o.type = 'index' AND c.name = '{CATALOG_SERVER_CLUSTER}'
+          AND o.id NOT LIKE 'si%'
         ORDER BY s.name, o.name
-        """
-    )
-    materialized_views = c.sql_query(
-        f"""
+        """)
+    materialized_views = c.sql_query(f"""
         SELECT s.name, o.name
         FROM mz_objects o
         JOIN mz_schemas s ON o.schema_id = s.id
         JOIN mz_clusters c ON o.cluster_id = c.id
         WHERE o.type = 'materialized-view' AND c.name = '{CATALOG_SERVER_CLUSTER}'
         ORDER BY s.name, o.name
-        """
-    )
+        """)
     schema_list = ", ".join(f"'{s}'" for s in SYSTEM_SCHEMAS)
-    views = c.sql_query(
-        f"""
+    views = c.sql_query(f"""
         SELECT s.name, v.name
         FROM mz_views v
         JOIN mz_schemas s ON v.schema_id = s.id
         WHERE s.name IN ({schema_list})
         ORDER BY s.name, v.name
-        """
-    )
+        """)
 
     queries: list[str] = []
     for schema, name in indexes:
