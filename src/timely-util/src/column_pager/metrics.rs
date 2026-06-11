@@ -59,7 +59,8 @@ static METRICS: OnceLock<PagerMetrics> = OnceLock::new();
 /// after the first one are no-ops. Computed gauges read the singleton
 /// [`TieredPolicy`] atomics at scrape time; their values reflect the live
 /// policy whether or not the column-paged batcher is currently enabled.
-pub fn register(registry: &MetricsRegistry, policy: &'static TieredPolicy) {
+pub fn register(registry: &MetricsRegistry) {
+    let policy: &'static TieredPolicy = crate::column_pager::tiered_policy();
     let _ = METRICS.get_or_init(|| {
         // Computed gauges: closures hold the &'static policy reference.
         let _budget_remaining: ComputedUIntGauge = registry.register_computed_gauge(
@@ -79,12 +80,12 @@ pub fn register(registry: &MetricsRegistry, policy: &'static TieredPolicy) {
             move || u64::try_from(policy.configured_total()).unwrap_or(u64::MAX),
         );
 
-        // Buffer-pool gauges read the process-wide pool's stats at scrape
-        // time (the first scrape initializes the pool's virtual reservation;
-        // they report zero only if that reservation failed). The cumulative
-        // fields are exposed as computed gauges rather than counters because
-        // the pool owns the atomics; all are monotonic except
-        // resident/oversize bytes.
+        // Buffer-pool gauges peek at the process-wide pool's stats at scrape
+        // time, reporting zero until something else initializes the pool —
+        // a scrape must observe, not mmap an 8 TiB reservation into every
+        // process that happens to be monitored. The cumulative fields are
+        // exposed as computed gauges rather than counters because the pool
+        // owns the atomics; all are monotonic except resident/oversize bytes.
         register_pool_gauge(registry, "resident_bytes", "Uncompressed bytes resident in the buffer pool.", |s| s.resident_bytes);
         register_pool_gauge(registry, "oversize_bytes", "Bytes held by oversize chunks that bypass pool paging.", |s| s.oversize_bytes);
         register_pool_gauge(registry, "inserts_total", "Chunks inserted into the buffer pool.", |s| s.inserts);
@@ -143,8 +144,9 @@ pub fn register(registry: &MetricsRegistry, policy: &'static TieredPolicy) {
 }
 
 /// Registers one computed gauge over a [`mz_ore::pool::PoolStats`] field,
-/// named `mz_column_pool_{suffix}`. Reads the process-wide pool at scrape
-/// time, initializing it on first scrape; zero if the pool is unavailable.
+/// named `mz_column_pool_{suffix}`. Peeks at the process-wide pool at scrape
+/// time; zero until something initializes the pool (or if its reservation
+/// failed).
 fn register_pool_gauge(
     registry: &MetricsRegistry,
     suffix: &str,
@@ -157,7 +159,7 @@ fn register_pool_gauge(
             help: help,
         ),
         move || {
-            crate::column_pager::global_pool()
+            crate::column_pager::global_pool_peek()
                 .map(|pool| field(&pool.stats()))
                 .unwrap_or(0)
         },

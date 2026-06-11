@@ -2038,32 +2038,16 @@ mod tests {
         );
     }
 
-    /// A [`PagingPolicy`] that always spills to the swap backend, uncompressed.
-    ///
-    /// The default global pager keeps every chunk resident; installing this drives the actual
-    /// spill path so the tests exercise [`Chunk::column`]'s page-in through [`mz_ore::pager`].
-    ///
-    /// [`PagingPolicy`]: column_pager::PagingPolicy
-    struct ForceSwap;
-
-    impl column_pager::PagingPolicy for ForceSwap {
-        fn decide(&self, _hint: column_pager::PageHint) -> column_pager::PageDecision {
-            column_pager::PageDecision::Page {
-                backend: mz_ore::pager::Backend::Swap,
-                codec: None,
-            }
-        }
-        fn record(&self, _event: column_pager::PageEvent) {}
-    }
-
-    /// Install a global pager that spills every chunk to swap for the duration of `f`, then
-    /// restore the default (disabled) pager. The global pager is process-wide; concurrent tests
-    /// only ever observe a correct round-trip regardless of backend, so racing on it is benign.
+    /// Configure the global pager to spill every chunk to swap (uncompressed) for the duration
+    /// of `f`, then restore the default (disabled) pager. A zero tiered budget makes every
+    /// `decide` answer `Page`, driving the actual spill path so the tests exercise
+    /// [`Chunk::column`]'s page-in through [`mz_ore::pager`]. The pager configuration is
+    /// process-wide; concurrent tests only ever observe a correct round-trip regardless of
+    /// backend, so racing on it is benign.
     fn with_swap_pager<R>(f: impl FnOnce() -> R) -> R {
-        use std::sync::Arc;
-        column_pager::set_global_pager(column_pager::ColumnPager::new(Arc::new(ForceSwap)));
+        column_pager::apply_tiered_config(true, 0, mz_ore::pager::Backend::Swap, None, false);
         let result = f();
-        column_pager::set_global_pager(column_pager::ColumnPager::disabled());
+        column_pager::apply_tiered_config(false, 0, mz_ore::pager::Backend::Swap, None, false);
         result
     }
 

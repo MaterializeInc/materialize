@@ -42,7 +42,7 @@ pub mod policy;
 
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
 
 use columnar::Columnar;
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
@@ -277,16 +277,19 @@ impl PagingPolicy for AlwaysResidentPolicy {
 // either duplicate the global flag at the struct level or invite confusion
 // about which configuration wins."
 //
-// The lower-level `mz_ore::pager` already uses a global atomic for backend
-// selection. This module's policy/budget layer mirrors that shape: one
-// `ColumnPager` per process, swapped atomically when the controller changes
-// the configuration. Merge batchers clone the `Arc` inside on use; live
-// reinstalls take effect on the next call without per-thread coordination.
+// The configuration state is exactly two bits — which shared mechanism is
+// installed ([`POOL_MODE`]) and whether compute's own batchers are enabled
+// ([`COMPUTE_ENABLED`]) — plus the two mechanism singletons and the
+// [`SWAP_PAGEOUT`] toggle. Every pager a consumer sees is *derived* from
+// those bits at the moment it asks ([`global_pager`] for compute,
+// [`shared_pager`] for per-consumer opt-ins), so there is one resolution
+// path and nothing cached to fall out of sync. Consumers that capture a
+// pager (at render, say) keep it until they next ask; live reconfiguration
+// takes effect on the next call.
 
-/// Process-global active pager. Defaults to [`ColumnPager::disabled`]
-/// until worker init calls [`set_global_pager`].
-static GLOBAL_PAGER: LazyLock<RwLock<ColumnPager>> =
-    LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
+/// Whether compute's own batchers page through the shared mechanism.
+/// [`global_pager`] derives from this; set by the `apply_*_config` calls.
+static COMPUTE_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Process-global toggle for `MADV_PAGEOUT` on the lz4 + swap spill path.
 ///
@@ -298,17 +301,6 @@ static GLOBAL_PAGER: LazyLock<RwLock<ColumnPager>> =
 /// one, and every consumer of the shared pager reads the same value. Defaults
 /// to off; the eager-reclaim syscall stays gated until proven.
 static SWAP_PAGEOUT: AtomicBool = AtomicBool::new(false);
-
-/// Install `pager` as the process-wide active pager. Subsequent
-/// [`global_pager`] calls return a clone of this value across all threads.
-///
-/// Prefer [`apply_tiered_config`] for the production path so the
-/// `TieredPolicy` budget atomic stays stable across reconfigures. Direct
-/// `set_global_pager` use is appropriate for tests, the disabled pager, or
-/// callers that intentionally want a fresh policy.
-pub fn set_global_pager(pager: ColumnPager) {
-    *GLOBAL_PAGER.write().expect("global pager poisoned") = pager;
-}
 
 /// Process-wide [`policy::TieredPolicy`] singleton.
 ///
@@ -337,11 +329,11 @@ pub fn tiered_policy() -> &'static policy::TieredPolicy {
 /// [`policy::TieredPolicy`] so in-flight `ResidentTicket`s remain coherent
 /// with the running budget after the operator tunes any of the inputs.
 ///
-/// When `enabled` is true, installs a [`ColumnPager`] backed by the
-/// singleton policy. When false, installs [`ColumnPager::disabled`] —
-/// in-flight tickets still credit the singleton, which is harmless: the
-/// budget grows above the configured total until the next enable reconciles
-/// it via `reconfigure`.
+/// Makes the tiered policy the shared mechanism; [`global_pager`] resolves
+/// to it when `enabled` and to the disabled pager otherwise. With paging
+/// disabled, in-flight tickets still credit the singleton, which is
+/// harmless: the budget grows above the configured total until the next
+/// enable reconciles it via `reconfigure`.
 ///
 /// `swap_pageout` toggles `MADV_PAGEOUT` on the lz4 + swap spill path (see
 /// `SWAP_PAGEOUT`); it is stored unconditionally so the next `page` call
@@ -354,16 +346,9 @@ pub fn apply_tiered_config(
     swap_pageout: bool,
 ) {
     SWAP_PAGEOUT.store(swap_pageout, Ordering::Relaxed);
+    TIERED_POLICY.reconfigure(total_budget, backend, codec);
     POOL_MODE.store(false, std::sync::atomic::Ordering::Relaxed);
-    let p: &Arc<policy::TieredPolicy> = &TIERED_POLICY;
-    p.reconfigure(total_budget, backend, codec);
-    if enabled {
-        #[allow(clippy::clone_on_ref_ptr)]
-        let dyn_policy: Arc<dyn PagingPolicy> = p.clone();
-        set_global_pager(ColumnPager::new(dyn_policy));
-    } else {
-        set_global_pager(ColumnPager::disabled());
-    }
+    COMPUTE_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Process-wide buffer pool shared by every pooled pager in the process.
@@ -379,19 +364,7 @@ pub fn apply_tiered_config(
 /// or configurations where the reservation fails, the pool is permanently
 /// unavailable for this process and [`apply_pool_config`] reports that by
 /// returning `false` so callers can fall back to the tiered path.
-static GLOBAL_POOL: LazyLock<Option<mz_ore::pool::Pool>> =
-    LazyLock::new(
-        || match mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig::default()) {
-            Ok(pool) => Some(pool),
-            Err(err) => {
-                tracing::warn!(
-                    %err,
-                    "column pager: buffer pool reservation failed; pool mode unavailable",
-                );
-                None
-            }
-        },
-    );
+static GLOBAL_POOL: std::sync::OnceLock<Option<mz_ore::pool::Pool>> = std::sync::OnceLock::new();
 
 /// Whether the pool is the active shared spill mechanism (set by
 /// [`apply_pool_config`], cleared by [`apply_tiered_config`]). Read by
@@ -402,17 +375,39 @@ static POOL_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 /// Returns the process-wide buffer pool, initializing it on first call.
 /// `None` if the virtual reservation failed at first use.
 pub fn global_pool() -> Option<mz_ore::pool::Pool> {
-    GLOBAL_POOL.clone()
+    GLOBAL_POOL
+        .get_or_init(
+            || match mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig::default()) {
+                Ok(pool) => Some(pool),
+                Err(err) => {
+                    tracing::warn!(
+                        %err,
+                        "column pager: buffer pool reservation failed; pool mode unavailable",
+                    );
+                    None
+                }
+            },
+        )
+        .clone()
+}
+
+/// Returns the process-wide buffer pool only if something already
+/// initialized it; never triggers the virtual reservation itself. Metrics
+/// scrapes read through this so that observing a process (which may never
+/// enable pool mode) does not mmap the pool's address space as a side
+/// effect.
+pub fn global_pool_peek() -> Option<mz_ore::pool::Pool> {
+    GLOBAL_POOL.get().cloned().flatten()
 }
 
 /// Apply a pool-backed pager configuration. Returns `false` (and changes
 /// nothing) if the pool is unavailable, so the caller can fall back to
 /// [`apply_tiered_config`].
 ///
-/// On success the pool becomes the active shared mechanism: the global pager
-/// is pool-backed when `enabled` (disabled otherwise — per-consumer opt-ins
-/// via [`shared_pager`] still work either way), and the pool's resident
-/// budget is retuned in place so live handles stay coherent.
+/// On success the pool becomes the active shared mechanism — [`global_pager`]
+/// resolves to it when `enabled`, and per-consumer opt-ins via
+/// [`shared_pager`] reach it either way — and the pool's resident budget is
+/// retuned in place so live handles stay coherent.
 pub fn apply_pool_config(enabled: bool, budget_bytes: usize, spill_threads: usize) -> bool {
     let Some(pool) = global_pool() else {
         return false;
@@ -420,18 +415,16 @@ pub fn apply_pool_config(enabled: bool, budget_bytes: usize, spill_threads: usiz
     pool.set_budget(budget_bytes);
     pool.set_spill_threads(spill_threads);
     POOL_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
-    if enabled {
-        set_global_pager(ColumnPager::pooled(pool));
-    } else {
-        set_global_pager(ColumnPager::disabled());
-    }
+    COMPUTE_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
     true
 }
 
-/// Returns the current global pager. Cheap: clones the inner `Arc<dyn
-/// PagingPolicy>`.
+/// The pager for compute's own batchers: [`shared_pager`] resolved against
+/// the compute enable bit the last `apply_*_config` call stored. Cheap (one
+/// `Arc` clone); called per chunk, so unlike [`shared_pager`] it does not
+/// log its resolution.
 pub fn global_pager() -> ColumnPager {
-    GLOBAL_PAGER.read().expect("global pager poisoned").clone()
+    resolve_shared(COMPUTE_ENABLED.load(std::sync::atomic::Ordering::Relaxed)).0
 }
 
 /// A pager that, when `enabled`, draws from the process-wide shared spill
@@ -447,21 +440,29 @@ pub fn global_pager() -> ColumnPager {
 /// [`apply_tiered_config`]), so a consumer that captured a pager before a
 /// mechanism flip keeps its old one until it next calls here.
 pub fn shared_pager(enabled: bool) -> ColumnPager {
-    let pool_mode = POOL_MODE.load(std::sync::atomic::Ordering::Relaxed);
+    let (pager, resolved) = resolve_shared(enabled);
+    tracing::info!(
+        enabled,
+        pool_mode = POOL_MODE.load(std::sync::atomic::Ordering::Relaxed),
+        "shared column pager resolved: {resolved}",
+    );
+    pager
+}
+
+/// The one resolution path from the two configuration bits to a pager.
+/// Returns the pager and a label naming the resolution for logs.
+fn resolve_shared(enabled: bool) -> (ColumnPager, &'static str) {
     if !enabled {
-        tracing::info!(enabled, pool_mode, "shared column pager resolved: disabled");
-        return ColumnPager::disabled();
+        return (ColumnPager::disabled(), "disabled");
     }
-    if pool_mode {
+    if POOL_MODE.load(std::sync::atomic::Ordering::Relaxed) {
         if let Some(pool) = global_pool() {
-            tracing::info!(enabled, pool_mode, "shared column pager resolved: pool");
-            return ColumnPager::pooled(pool);
+            return (ColumnPager::pooled(pool), "pool");
         }
     }
-    tracing::info!(enabled, pool_mode, "shared column pager resolved: tiered");
     #[allow(clippy::clone_on_ref_ptr)]
     let dyn_policy: Arc<dyn PagingPolicy> = TIERED_POLICY.clone();
-    ColumnPager::new(dyn_policy)
+    (ColumnPager::new(dyn_policy), "tiered")
 }
 
 impl ColumnPager {
@@ -861,6 +862,16 @@ mod tests {
         assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
     }
 
+    /// Serializes tests that mutate the process-global pager configuration
+    /// (`POOL_MODE` / `COMPUTE_ENABLED` / `SWAP_PAGEOUT` / the singletons);
+    /// concurrent mutation makes their assertions race. Poison is recovered:
+    /// a prior test's panic doesn't invalidate the globals contract here.
+    fn global_config_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// With the swap-pageout flag on, the lz4 + swap path issues `MADV_PAGEOUT`
     /// over the compressed bytes; the round-trip must still reproduce the input
     /// (the advice is a non-destructive reclaim hint). Drives the global pager
@@ -870,6 +881,7 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `madvise` on OS `linux`
     fn round_trip_swap_lz4_pageout() {
+        let _guard = global_config_lock();
         apply_tiered_config(true, 0, Backend::Swap, Some(Codec::Lz4), true);
         let cp = global_pager();
         let mut col = sample_typed();
@@ -999,10 +1011,12 @@ mod tests {
 
     /// Exercises the process-global mechanism switch end to end. Runs as one
     /// test because it mutates the process-wide `POOL_MODE` / global pager;
-    /// no other test reads those globals (all construct their own pagers).
+    /// serialized against the other global-mutating tests via
+    /// [`global_config_lock`].
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
     fn pool_mode_routing() {
+        let _guard = global_config_lock();
         // Pool mode on: the global pager and shared pager both go pooled.
         let ok = apply_pool_config(true, 1 << 30, 0);
         assert!(ok, "pool reservation expected to succeed in tests");
@@ -1024,7 +1038,7 @@ mod tests {
         drop(paged);
 
         // Tiered config flips the mechanism back: shared pager no longer pools.
-        apply_tiered_config(true, usize::MAX, Backend::Swap, None);
+        apply_tiered_config(true, usize::MAX, Backend::Swap, None, false);
         let mut col = sample_typed();
         let paged = shared_pager(true).page(&mut col);
         assert!(
@@ -1034,6 +1048,6 @@ mod tests {
         drop(paged);
 
         // Leave the globals in the disabled state for any future test runs.
-        apply_tiered_config(false, 0, Backend::Swap, None);
+        apply_tiered_config(false, 0, Backend::Swap, None, false);
     }
 }
