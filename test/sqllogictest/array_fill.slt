@@ -273,25 +273,25 @@ SELECT array_fill(1, ARRAY[4, 0, 3]);
 
 # Too large of array
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(2, ARRAY[-1]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(2, ARRAY[-1]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(1, ARRAY[4, -199]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(1, ARRAY[-199, 4]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(1, ARRAY[4, 3, -199]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(1, ARRAY[4, -199, 3]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(8, ARRAY[-1, -1, -1, -1]);
 
 query error number of array dimensions \(10\) exceeds the maximum allowed \(6\)
@@ -301,6 +301,17 @@ query error number of array dimensions \(10\) exceeds the maximum allowed \(6\)
 SELECT array_fill(1, ARRAY[1,1,1,1,1,1,1,1,1,1], ARRAY[1,1,1,1,1,1,1,1,1,1]);
 
 # But large arrays are still ok
+
+# Regression test for database-issues#11267: the limit was previously parsed as
+# `1 << (28 - 1)` instead of `(1 << 28) - 1`, so arrays just below the intended
+# limit were rejected.
+query I
+SELECT array_length(array_fill(false, ARRAY[134217728]), 1);
+----
+134217728
+
+query error array size exceeds the maximum allowed \(268435455 bytes\)
+SELECT array_length(array_fill(false, ARRAY[268435455]), 1);
 
 query II
 SELECT array_length(a, 1), array_length(a, 2) FROM (
