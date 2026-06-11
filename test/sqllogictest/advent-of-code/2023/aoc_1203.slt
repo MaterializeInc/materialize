@@ -250,17 +250,16 @@ Explained Query:
                     ArrangeBy keys=[[]] // { arity: 1 }
                       Project (#1) // { arity: 1 }
                         FlatMap generate_series(1, #0, 1) // { arity: 2 }
-                          Project (#1) // { arity: 1 }
-                            Map (bigint_to_integer(#0{count})) // { arity: 2 }
-                              Union // { arity: 1 }
+                          Union // { arity: 1 }
+                            Project (#1) // { arity: 1 }
+                              Map (bigint_to_integer(#0{count})) // { arity: 2 }
                                 Get l0 // { arity: 1 }
-                                Map (0) // { arity: 1 }
-                                  Union // { arity: 0 }
-                                    Negate // { arity: 0 }
-                                      Project () // { arity: 0 }
-                                        Get l0 // { arity: 1 }
-                                    Constant // { arity: 0 }
-                                      - ()
+                            Negate // { arity: 1 }
+                              Project (#1) // { arity: 1 }
+                                Map (0) // { arity: 2 }
+                                  Get l0 // { arity: 1 }
+                            Constant // { arity: 1 }
+                              - (0)
     cte l2 =
       ArrangeBy keys=[[#2]] // { arity: 3 }
         Get l1 // { arity: 3 }
@@ -450,27 +449,25 @@ Explained Query:
       Return // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
-            %0[×]U » %1[×]U
+            %0[×] » %1[×]
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l15 // { arity: 1 }
-              Map (null) // { arity: 1 }
-                Union // { arity: 0 }
-                  Negate // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l15 // { arity: 1 }
-                  Constant // { arity: 0 }
-                    - ()
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map (null) // { arity: 2 }
+                    Get l15 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (null)
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l19 // { arity: 1 }
-              Map (null) // { arity: 1 }
-                Union // { arity: 0 }
-                  Negate // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l19 // { arity: 1 }
-                  Constant // { arity: 0 }
-                    - ()
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map (null) // { arity: 2 }
+                    Get l19 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (null)
 
 Source materialize.public.input
 

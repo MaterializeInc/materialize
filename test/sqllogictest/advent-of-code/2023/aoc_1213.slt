@@ -362,13 +362,12 @@ Explained Query:
     cte l6 =
       Union // { arity: 1 }
         Get l5 // { arity: 1 }
-        Map (null) // { arity: 1 }
-          Union // { arity: 0 }
-            Negate // { arity: 0 }
-              Project () // { arity: 0 }
-                Get l5 // { arity: 1 }
-            Constant // { arity: 0 }
-              - ()
+        Negate // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Map (null) // { arity: 2 }
+              Get l5 // { arity: 1 }
+        Constant // { arity: 1 }
+          - (null)
     cte l7 =
       ArrangeBy keys=[[#0{b}]] // { arity: 2 }
         Get l3 // { arity: 2 }
@@ -394,13 +393,12 @@ Explained Query:
     cte l9 =
       Union // { arity: 1 }
         Get l8 // { arity: 1 }
-        Map (null) // { arity: 1 }
-          Union // { arity: 0 }
-            Negate // { arity: 0 }
-              Project () // { arity: 0 }
-                Get l8 // { arity: 1 }
-            Constant // { arity: 0 }
-              - ()
+        Negate // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Map (null) // { arity: 2 }
+              Get l8 // { arity: 1 }
+        Constant // { arity: 1 }
+          - (null)
     cte l10 =
       Reduce aggregates=[sum((#0{r} - 1))] // { arity: 1 }
         Project (#1) // { arity: 1 }
@@ -421,13 +419,12 @@ Explained Query:
     cte l11 =
       Union // { arity: 1 }
         Get l10 // { arity: 1 }
-        Map (null) // { arity: 1 }
-          Union // { arity: 0 }
-            Negate // { arity: 0 }
-              Project () // { arity: 0 }
-                Get l10 // { arity: 1 }
-            Constant // { arity: 0 }
-              - ()
+        Negate // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Map (null) // { arity: 2 }
+              Get l10 // { arity: 1 }
+        Constant // { arity: 1 }
+          - (null)
     cte l12 =
       Reduce aggregates=[sum((#0{c} - 1))] // { arity: 1 }
         Project (#1) // { arity: 1 }
@@ -448,62 +445,57 @@ Explained Query:
     cte l13 =
       Union // { arity: 1 }
         Get l12 // { arity: 1 }
-        Map (null) // { arity: 1 }
-          Union // { arity: 0 }
-            Negate // { arity: 0 }
-              Project () // { arity: 0 }
-                Get l12 // { arity: 1 }
-            Constant // { arity: 0 }
-              - ()
+        Negate // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Map (null) // { arity: 2 }
+              Get l12 // { arity: 1 }
+        Constant // { arity: 1 }
+          - (null)
   Return // { arity: 2 }
     Project (#4, #5) // { arity: 2 }
       Map (((coalesce(#0{sum}, 0) * 100) + coalesce(#1{sum}, 0)), ((coalesce(#2{sum}, 0) * 100) + coalesce(#3{sum}, 0))) // { arity: 6 }
         CrossJoin type=delta // { arity: 4 }
           implementation
-            %0 » %1[×]U » %2[×]U » %3[×]U
-            %1 » %0[×]U » %2[×]U » %3[×]U
-            %2 » %0[×]U » %1[×]U » %3[×]U
-            %3 » %0[×]U » %1[×]U » %2[×]U
+            %0 » %1[×] » %2[×] » %3[×]
+            %1 » %0[×] » %2[×] » %3[×]
+            %2 » %0[×] » %1[×] » %3[×]
+            %3 » %0[×] » %1[×] » %2[×]
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l6 // { arity: 1 }
-              Map (null) // { arity: 1 }
-                Union // { arity: 0 }
-                  Negate // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l6 // { arity: 1 }
-                  Constant // { arity: 0 }
-                    - ()
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map (null) // { arity: 2 }
+                    Get l6 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (null)
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l9 // { arity: 1 }
-              Map (null) // { arity: 1 }
-                Union // { arity: 0 }
-                  Negate // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l9 // { arity: 1 }
-                  Constant // { arity: 0 }
-                    - ()
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map (null) // { arity: 2 }
+                    Get l9 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (null)
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l11 // { arity: 1 }
-              Map (null) // { arity: 1 }
-                Union // { arity: 0 }
-                  Negate // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l11 // { arity: 1 }
-                  Constant // { arity: 0 }
-                    - ()
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map (null) // { arity: 2 }
+                    Get l11 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (null)
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l13 // { arity: 1 }
-              Map (null) // { arity: 1 }
-                Union // { arity: 0 }
-                  Negate // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l13 // { arity: 1 }
-                  Constant // { arity: 0 }
-                    - ()
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map (null) // { arity: 2 }
+                    Get l13 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (null)
 
 Source materialize.public.input
 

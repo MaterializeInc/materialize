@@ -79,17 +79,17 @@ Explained Query:
               ReadStorage materialize.public.c
   Return
     Union
+      Negate
+        Project (#0..=#3, #5)
+          Map (null)
+            Join on=(#3{k} = #4) type=differential
+              Get l2
+              ArrangeBy keys=[[#0]]
+                Distinct project=[#0]
+                  Project (#3)
+                    Get l3
       Map (null)
-        Union
-          Negate
-            Project (#0..=#3)
-              Join on=(#3{k} = #4) type=differential
-                Get l2
-                ArrangeBy keys=[[#0]]
-                  Distinct project=[#0]
-                    Project (#3)
-                      Get l3
-          Get l1
+        Get l1
       Project (#0..=#3, #3)
         Get l3
 
@@ -161,17 +161,17 @@ Explained Query:
               ReadStorage materialize.public.c
   Return
     Union
+      Negate
+        Project (#0..=#3, #5)
+          Map (null)
+            Join on=(#3{k} = #4) type=differential
+              Get l2
+              ArrangeBy keys=[[#0]]
+                Distinct project=[#0]
+                  Project (#3)
+                    Get l3
       Map (null)
-        Union
-          Negate
-            Project (#0..=#3)
-              Join on=(#3{k} = #4) type=differential
-                Get l2
-                ArrangeBy keys=[[#0]]
-                  Distinct project=[#0]
-                    Project (#3)
-                      Get l3
-          Get l1
+        Get l1
       Project (#0..=#3, #3)
         Get l3
 
@@ -235,19 +235,21 @@ Explained Query:
         →Arrange (#2{k})
           →Read materialize.public.b
     cte l2 =
-      →Union
-        →Map/Filter/Project
+      →Consolidating Union
+        →Negate Diffs
+          →Differential Join %1[#0] » %0:l0[#0{k}]
+            Final closure:
+              Project: #0..=#3
+              Map: null, null, null
+            →Arranged l0
+            →Distinct GroupAggregate
+              →Fused with Child Map/Filter/Project
+                Project: #0
+                  →Read l1
+        →Fused with Child Map/Filter/Project
           Project: #0..=#3
           Map: null, null, null
-            →Consolidating Union
-              →Negate Diffs
-                →Differential Join %1[#0] » %0:l0[#0{k}]
-                  →Arranged l0
-                  →Distinct GroupAggregate
-                    →Fused with Child Map/Filter/Project
-                      Project: #0
-                        →Read l1
-              →Stream materialize.public.a
+            →Read materialize.public.a
         →Fused with Child Map/Filter/Project
           Project: #0..=#2, #0
             →Read l1
@@ -262,24 +264,25 @@ Explained Query:
         →Arrange (#0{k})
           →Read materialize.public.c
   →Return
-    →Union
-      →Map/Filter/Project
+    →Consolidating Union
+      →Negate Diffs
+        →Differential Join %1[#0] » %0:l3[#0{k}]
+          Final closure:
+            Project: #0..=#4
+            Map: null
+          →Arranged l3
+          →Distinct GroupAggregate
+            →Fused with Child Map/Filter/Project
+              Project: #0
+                →Read l4
+      →Fused with Child Map/Filter/Project
         Project: #0..=#4
         Map: null
-          →Consolidating Union
-            →Negate Diffs
-              →Differential Join %1[#0] » %0:l3[#0{k}]
-                →Arranged l3
-                →Distinct GroupAggregate
-                  →Fused with Child Map/Filter/Project
-                    Project: #0
-                      →Read l4
-            →Stream l2
+          →Read l2
       →Fused with Child Map/Filter/Project
         Project: #0..=#3, #0
           →Read l4
 
-Source materialize.public.a
 Source materialize.public.b
   filter=((#0 = #1) AND (#2{k}) IS NOT NULL)
 Source materialize.public.c

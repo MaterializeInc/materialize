@@ -488,7 +488,7 @@ Target cluster: quickstart
 
 Notices:
   - Notice: Index materialize.notices.t1i2 on t1(f2, f1) is too wide to use for literal equalities `f2 = 1`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (f2, ((f1 + f2) + (f1 + f2))).
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (f2, (#2 + #2)).
 
 EOF
 

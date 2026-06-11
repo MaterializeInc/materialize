@@ -566,17 +566,17 @@ Explained Query:
       Map (coalesce(#5{sum_stock}, 0))
         Reduce group_by=[#0{product_id}..=#4{adjusted_price}] aggregates=[sum(#5{stock})]
           Union
+            Negate
+              Project (#0{product_id}..=#4{adjusted_price}, #6)
+                Map (null)
+                  Join on=(#0{product_id} = #5{product_id}) type=differential
+                    Get l1
+                    ArrangeBy keys=[[#0{product_id}]]
+                      Distinct project=[#0{product_id}]
+                        Project (#0{product_id})
+                          Get l2
             Map (null)
-              Union
-                Negate
-                  Project (#0{product_id}..=#4{adjusted_price})
-                    Join on=(#0{product_id} = #5{product_id}) type=differential
-                      Get l1
-                      ArrangeBy keys=[[#0{product_id}]]
-                        Distinct project=[#0{product_id}]
-                          Project (#0{product_id})
-                            Get l2
-                Get l0
+              Get l0
             Get l2
 
 Source materialize.public.categories
@@ -676,61 +676,56 @@ JOIN has_subcategories s USING (category_id);
 Explained Query:
   With
     cte l0 =
-      Project (#0{category_id})
-        ReadStorage materialize.public.categories
-    cte l1 =
       ArrangeBy keys=[[#0{category_id}]]
-        Get l0
-    cte l2 =
+        Project (#0{category_id})
+          ReadStorage materialize.public.categories
+    cte l1 =
       Project (#0{category_id}, #2{price})
         Join on=(#0{category_id} = #1{category_id}) type=differential
-          Get l1
+          Get l0
           ArrangeBy keys=[[#0{category_id}]]
             Project (#2{category_id}, #4{price})
               ReadIndex on=dynamic_price_shopping_cart dynamic_price_shopping_cart_idx=[*** full scan ***]
   Return
     With Mutually Recursive
-      cte l3 =
-        Project (#0{category_id}, #1, #3)
-          Map (bigint_to_integer(#2{count_price}))
-            Union
-              Project (#0{category_id}, #3, #2{count_price})
-                Map (adjust_numeric_scale(coalesce(#1{sum_price}, 0)))
-                  Reduce group_by=[#0{category_id}] aggregates=[sum(#1{price}), count(#1{price})]
-                    Union
+      cte l2 =
+        Union
+          Project (#0{category_id}, #3, #4)
+            Map (adjust_numeric_scale(coalesce(#1{sum_price}, 0)), bigint_to_integer(#2{count_price}))
+              Reduce group_by=[#0{category_id}] aggregates=[sum(#1{price}), count(#1{price})]
+                Union
+                  Negate
+                    Project (#0{category_id}, #2)
                       Map (null)
-                        Union
-                          Negate
-                            Project (#0{category_id})
-                              Join on=(#0{category_id} = #1{category_id}) type=differential
-                                Get l1
-                                ArrangeBy keys=[[#0{category_id}]]
-                                  Distinct project=[#0{category_id}]
-                                    Project (#0{category_id})
-                                      Get l2
+                        Join on=(#0{category_id} = #1{category_id}) type=differential
                           Get l0
-                      Get l2
-              Project (#4{parent_id}, #1, #5)
-                Map (integer_to_bigint(#2))
-                  Join on=(#0{category_id} = #3{category_id}) type=differential
-                    ArrangeBy keys=[[#0{category_id}]]
-                      Get l3
-                    ArrangeBy keys=[[#0{category_id}]]
-                      Project (#0{category_id}, #2{parent_id})
-                        Filter (#2{parent_id}) IS NOT NULL
-                          ReadStorage materialize.public.categories
+                          ArrangeBy keys=[[#0{category_id}]]
+                            Distinct project=[#0{category_id}]
+                              Project (#0{category_id})
+                                Get l1
+                  Project (#0{category_id}, #3)
+                    Map (null)
+                      ReadStorage materialize.public.categories
+                  Get l1
+          Project (#4{parent_id}, #1, #5)
+            Map (bigint_to_integer(integer_to_bigint(#2)))
+              Join on=(#0{category_id} = #3{category_id}) type=differential
+                ArrangeBy keys=[[#0{category_id}]]
+                  Get l2
+                ArrangeBy keys=[[#0{category_id}]]
+                  Project (#0{category_id}, #2{parent_id})
+                    Filter (#2{parent_id}) IS NOT NULL
+                      ReadStorage materialize.public.categories
     Return
       With
+        cte l3 =
+          ArrangeBy keys=[[#0{category_id}]]
+            Project (#0{category_id})
+              ReadStorage materialize.public.categories
         cte l4 =
           Project (#0{category_id})
-            ReadStorage materialize.public.categories
-        cte l5 =
-          ArrangeBy keys=[[#0{category_id}]]
-            Get l4
-        cte l6 =
-          Project (#0{category_id})
             Join on=(#0{category_id} = #1{parent_id}) type=differential
-              Get l5
+              Get l3
               ArrangeBy keys=[[#0{parent_id}]]
                 Project (#2{parent_id})
                   Filter (#2{parent_id}) IS NOT NULL
@@ -744,26 +739,27 @@ Explained Query:
                   Reduce group_by=[#0{category_id}] aggregates=[sum(#1{total}), sum(#2{item_count})]
                     Project (#0{category_id}, #2, #3)
                       Join on=(#0{category_id} = #1{category_id}) type=differential
-                        Get l5
+                        Get l3
                         ArrangeBy keys=[[#0{category_id}]]
-                          Get l3
+                          Get l2
                 ArrangeBy keys=[[#0{category_id}]]
                   ReadStorage materialize.public.categories
                 ArrangeBy keys=[[#0{category_id}]]
                   Reduce group_by=[#0{category_id}] aggregates=[count((null OR (#1{category_id}) IS NOT NULL))]
                     Union
-                      Map (null)
-                        Union
-                          Negate
-                            Project (#0{category_id})
-                              Join on=(#0{category_id} = #1{category_id}) type=differential
-                                Get l5
-                                ArrangeBy keys=[[#0{category_id}]]
-                                  Distinct project=[#0{category_id}]
-                                    Get l6
-                          Get l4
+                      Negate
+                        Project (#0{category_id}, #2)
+                          Map (null)
+                            Join on=(#0{category_id} = #1{category_id}) type=differential
+                              Get l3
+                              ArrangeBy keys=[[#0{category_id}]]
+                                Distinct project=[#0{category_id}]
+                                  Get l4
+                      Project (#0{category_id}, #3)
+                        Map (null)
+                          ReadStorage materialize.public.categories
                       Project (#0{category_id}, #0{category_id})
-                        Get l6
+                        Get l4
 
 Source materialize.public.categories
 
@@ -847,12 +843,11 @@ Explained Query:
     Union
       Map (true)
         Get l0
-      Map (false)
-        Union
-          Negate
-            Get l0
-          Constant
-            - ()
+      Negate
+        Map (false)
+          Get l0
+      Constant
+        - (false)
 
 Used Indexes:
   - materialize.public.idx_inventory_product_id (lookup)

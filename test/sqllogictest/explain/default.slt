@@ -347,22 +347,19 @@ Explained Query:
             →Arranged materialize.public.t
               Key: (#0{a})
   →Return
-    →Map/Filter/Project
-      Project: #2
-      Map: abs((#0 - #1))
-        →Union
-          →Unarranged Raw Stream
+    →Consolidating Union
+      →Fused with Child Map/Filter/Project
+        Project: #2
+        Map: abs((#0 - #1))
+          →Arranged l0
+            Key: ()
+      →Negate Diffs
+        →Fused with Child Map/Filter/Project
+          Project: #2
+          Map: null
             →Arranged l0
-          →Map/Filter/Project
-            Project: #0, #1
-            Map: null, null
-              →Consolidating Union
-                →Negate Diffs
-                  →Fused with Child Map/Filter/Project
-                    Project: ()
-                      →Arranged l0
-                        Key: ()
-                →Constant (1 row)
+              Key: ()
+      →Constant (1 row)
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -393,28 +390,22 @@ Explained Query:
           raw=false
           arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
   Return
-    Mfp
-      project=(#2)
-      map=(abs((#0 - #1)))
-      Union
-        ArrangeBy
-          input_key=[]
-          raw=true
-          Get::PassArrangements l0
-            raw=false
-            arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-        Mfp
-          project=(#0, #1)
-          map=(null, null)
-          Union consolidate_output=true
-            Negate
-              Get::Arrangement l0
-                project=()
-                key=
-                raw=false
-                arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-            Constant
-              - ()
+    Union consolidate_output=true
+      Get::Arrangement l0
+        project=(#2)
+        map=(abs((#0 - #1)))
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Negate
+        Get::Arrangement l0
+          project=(#2)
+          map=(null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null)
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -528,36 +519,34 @@ Explained Query:
           →Arranged l2
           →Arrange (#1{b})
             →Read materialize.public.mv
+    cte l5 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #1
+        Map: null
+          →Arranged l1
+            Key: (#0)
   →Return
-    →Delta Join [%0:l0[#0] » %1[#0] » %2[#0]] [%1[#0] » %2[#0] » %0:l0[#0]] [%2[#0] » %1[#0] » %0:l0[#0]]
+    →Delta Join [%0:l0[#0] » %1[#0] » %2[#0]] [%1[#0] » %0:l0[#0] » %2[#0]] [%2[#0] » %0:l0[#0] » %1[#0]]
       →Arrange (#0)
         →Stream l0
       →Arrange (#0)
-        →Union
+        →Consolidating Union
           →Stream l3
-          →Map/Filter/Project
-            Project: #0, #1
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
-                  →Fused with Child Map/Filter/Project
-                    Project: #0
-                      →Read l3
-                →Unarranged Raw Stream
-                  →Arranged l1
+          →Negate Diffs
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2
+              Map: null
+                →Read l3
+          →Stream l5
       →Arrange (#0)
-        →Union
+        →Consolidating Union
           →Stream l4
-          →Map/Filter/Project
-            Project: #0, #1
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
-                  →Fused with Child Map/Filter/Project
-                    Project: #0
-                      →Read l4
-                →Unarranged Raw Stream
-                  →Arranged l1
+          →Negate Diffs
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2
+              Map: null
+                →Read l4
+          →Stream l5
 
 Source materialize.public.mv
   filter=((#1{b}) IS NOT NULL)
@@ -599,22 +588,22 @@ Explained Query:
         →Arranged l1
         →Arranged l2
   →Return
-    →Union
-      →Map/Filter/Project
-        Project: #0, #1
-        Map: null, null
-          →Consolidating Union
-            →Negate Diffs
-              →Differential Join %1[#0] » %0:l2[#0{b}]
-                →Arranged l2
-                →Distinct GroupAggregate
-                  →Fused with Child Map/Filter/Project
-                    Project: #1
-                      →Read l3
+    →Consolidating Union
+      →Negate Diffs
+        →Differential Join %1[#0] » %0:l2[#0{b}]
+          Final closure:
+            Project: #0, #1
+            Map: null, null
+          →Arranged l2
+          →Distinct GroupAggregate
             →Fused with Child Map/Filter/Project
-              Project: ()
-                →Arranged materialize.public.t
-                  Key: (#0{a})
+              Project: #1
+                →Read l3
+      →Fused with Child Map/Filter/Project
+        Project: #2, #3
+        Map: null, null
+          →Arranged materialize.public.t
+            Key: (#0{a})
       →Fused with Child Map/Filter/Project
         Project: #0, #2
           →Read l3
@@ -1882,19 +1871,16 @@ Explained Query:
         Simple aggregates: count(*)
         →Read materialize.public.t5
   →Return
-    →Union
+    →Consolidating Union
       →Unarranged Raw Stream
         →Arranged l0
-      →Map/Filter/Project
-        Project: #0
-        Map: 0
-          →Consolidating Union
-            →Negate Diffs
-              →Fused with Child Map/Filter/Project
-                Project: ()
-                  →Arranged l0
-                    Key: ()
-            →Constant (1 row)
+      →Negate Diffs
+        →Fused with Child Map/Filter/Project
+          Project: #1
+          Map: 0
+            →Arranged l0
+              Key: ()
+      →Constant (1 row)
 
 Source materialize.public.t5
   project=()
@@ -1921,19 +1907,16 @@ Explained Query:
         Simple aggregates: count(*)
         →Read materialize.public.t5
   →Return
-    →Union
+    →Consolidating Union
       →Unarranged Raw Stream
         →Arranged l0
-      →Map/Filter/Project
-        Project: #0
-        Map: 0
-          →Consolidating Union
-            →Negate Diffs
-              →Fused with Child Map/Filter/Project
-                Project: ()
-                  →Arranged l0
-                    Key: ()
-            →Constant (1 row)
+      →Negate Diffs
+        →Fused with Child Map/Filter/Project
+          Project: #1
+          Map: 0
+            →Arranged l0
+              Key: ()
+      →Constant (1 row)
 
 Source materialize.public.t5
   project=()
@@ -1955,19 +1938,16 @@ Explained Query:
         Distinct aggregates: count(distinct true)
         →Read materialize.public.t5
   →Return
-    →Union
+    →Consolidating Union
       →Unarranged Raw Stream
         →Arranged l0
-      →Map/Filter/Project
-        Project: #0
-        Map: 0
-          →Consolidating Union
-            →Negate Diffs
-              →Fused with Child Map/Filter/Project
-                Project: ()
-                  →Arranged l0
-                    Key: ()
-            →Constant (1 row)
+      →Negate Diffs
+        →Fused with Child Map/Filter/Project
+          Project: #1
+          Map: 0
+            →Arranged l0
+              Key: ()
+      →Constant (1 row)
 
 Source materialize.public.t5
   project=()
@@ -2027,19 +2007,17 @@ Explained Query:
       →Arrange (empty key)
         →Read materialize.public.t4
       →Arrange (empty key)
-        →Union
+        →Consolidating Union
           →Stream l1
-          →Map/Filter/Project
-            Project: #0
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
-                  →Unarranged Raw Stream
-                    →Distinct GroupAggregate
-                      →Fused with Child Map/Filter/Project
-                        Project: ()
-                          →Read l1
-                →Constant (1 row)
+          →Negate Diffs
+            →Map/Filter/Project
+              Project: #0
+              Map: null
+                →Distinct GroupAggregate
+                  →Fused with Child Map/Filter/Project
+                    Project: ()
+                      →Read l1
+          →Constant (1 row)
 
 Source materialize.public.t4
   project=(#0, #1)
