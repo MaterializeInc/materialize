@@ -183,7 +183,7 @@ Project (#1)
     Get x
 ----
 Project (#1)
-  FlatMap generate_series(#0, #2, 1)
+  FlatMap repeat_row_non_negative(case when (#2 >= #0) then (((#2 - #0) / 1) + 1) else 0 end)
     Get x
 
 # Query using the columns newly created by FlatMap

@@ -478,10 +478,12 @@ impl FoldConstants {
                 Ok(val) => val,
                 Err(e) => return Some(Err(e)),
             };
+            // Store the value once alongside its multiplicity rather than
+            // expanding it into `diff` copies. The count-aware aggregate
+            // `eval` consumes the multiplicity directly, so this avoids
+            // materializing a number of rows proportional to the diff.
             let entry = groups.entry(key).or_insert_with(Vec::new);
-            for _ in 0..diff.into_inner() {
-                entry.push(val.clone());
-            }
+            entry.push((val, *diff));
         }
 
         // For each group, apply the aggregate function to the rows
@@ -498,15 +500,20 @@ impl FoldConstants {
                     row_buf.packer().extend(key.into_iter().chain(
                         aggregates.iter().enumerate().map(|(i, agg)| {
                             if agg.distinct {
+                                // Distinct collapses to one copy per value, so
+                                // each distinct datum gets a unit multiplicity.
                                 agg.func.eval(
                                     vals.iter()
-                                        .map(|val| val[i].unpack_first())
-                                        .collect::<BTreeSet<_>>(),
+                                        .map(|(val, _diff)| val[i].unpack_first())
+                                        .collect::<BTreeSet<_>>()
+                                        .into_iter()
+                                        .map(|datum| (datum, Diff::ONE)),
                                     &temp_storage,
                                 )
                             } else {
                                 agg.func.eval(
-                                    vals.iter().map(|val| val[i].unpack_first()),
+                                    vals.iter()
+                                        .map(|(val, diff)| (val[i].unpack_first(), *diff)),
                                     &temp_storage,
                                 )
                             }
