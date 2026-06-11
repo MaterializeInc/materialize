@@ -28,12 +28,13 @@
 //! allocation holding the chunk's lz4-compressed bytes, pushed to the swap
 //! device with `MADV_PAGEOUT`.
 //!
-//! Residency is a state, not a type. This prototype uses the design's
-//! synchronous executor, so the `WriteInFlight` and `Faulting` transitions
-//! collapse into the evicting and faulting calls themselves and a chunk is
-//! always in one of the [`Residency`] states. Chunks are immutable after
-//! [`Pool::insert`], which is what makes a `BackedResident` slot always
-//! identical to its extent and re-eviction free of I/O.
+//! Residency is a state, not a type. Fault-in is synchronous on the pinning
+//! caller (the design's `Faulting` transition collapses into the call), while
+//! eviction I/O runs on spill threads when enabled — `WriteInFlight` marks a
+//! chunk whose compression a spill thread owns — and inline on the evicting
+//! caller otherwise. Chunks are immutable after [`Pool::insert`], which is
+//! what makes a `BackedResident` slot always identical to its extent and
+//! re-eviction free of I/O.
 //!
 //! Freeing an `UnbackedResident` chunk is a pure memory operation — the
 //! design's "never write dead data" win, surfaced as `elided_frees` in
@@ -172,11 +173,12 @@ struct PoolInner {
     /// Second-chance FIFO of eviction candidates. Entries for freed chunks
     /// go stale in place and are dropped by [`PoolInner::prune_queue`].
     queue: Mutex<VecDeque<Weak<ChunkMeta>>>,
-    /// Number of live slotted chunks, which is the number of non-stale queue
-    /// entries; [`PoolInner::prune_queue`] compacts the queue against it.
-    live_slotted: AtomicU64,
+    /// Number of live size-classed chunks (whatever their residency), which
+    /// is the number of non-stale queue entries; [`PoolInner::prune_queue`]
+    /// compacts the queue against it.
+    live_chunks: AtomicU64,
     /// Single-flight claim for budget enforcement.
-    enforcing: std::sync::atomic::AtomicBool,
+    enforcing: Mutex<()>,
     counters: Counters,
     spill: Spill,
 }
@@ -238,7 +240,10 @@ struct ChunkState {
     freed: bool,
     /// Whether the chunk currently has an entry in the eviction queue. The
     /// queue holds resident chunks only: entries are dropped when a visit
-    /// finds the chunk evicted, and fault-in re-enqueues.
+    /// finds the chunk evicted, and fault-in re-enqueues. The flag is queue
+    /// hygiene, not a safety invariant — duplicate entries would be benign
+    /// (visits are idempotent); it exists so fault-hot chunks cannot grow
+    /// the queue without bound between enforcement passes.
     queued: bool,
     /// The chunk's slot, held exactly while the chunk occupies pool memory
     /// (the resident states and `WriteInFlight`). Eviction returns the slot
@@ -291,8 +296,8 @@ impl Pool {
             budget_bytes: AtomicU64::new(u64::cast_from(cfg.budget_bytes)),
             regions,
             queue: Mutex::new(VecDeque::new()),
-            live_slotted: AtomicU64::new(0),
-            enforcing: std::sync::atomic::AtomicBool::new(false),
+            live_chunks: AtomicU64::new(0),
+            enforcing: Mutex::new(()),
             counters: Counters::default(),
             spill: Spill::default(),
         })))
@@ -417,7 +422,7 @@ impl Pool {
         };
         let meta = Arc::new(meta);
         if meta.class.is_some() {
-            inner.live_slotted.fetch_add(1, Ordering::Relaxed);
+            inner.live_chunks.fetch_add(1, Ordering::Relaxed);
             inner
                 .queue
                 .lock()
@@ -445,7 +450,7 @@ impl Pool {
             spill_cancelled: c.spill_cancelled.load(Ordering::Relaxed),
             spill_in_flight: self.0.spill.in_flight.load(Ordering::Relaxed),
             slot_exhausted_fallbacks: c.slot_exhausted_fallbacks.load(Ordering::Relaxed),
-            live_chunks: self.0.live_slotted.load(Ordering::Relaxed),
+            live_chunks: self.0.live_chunks.load(Ordering::Relaxed),
         }
     }
 
@@ -552,17 +557,9 @@ impl Pool {
     pub fn evict(&self, handle: &ChunkHandle) {
         let meta = &handle.meta;
         let mut state = meta.state.lock().expect("chunk state poisoned");
-        if state.residency == Residency::UnbackedResident
-            && state.pins == 0
-            && !state.freed
-            && meta.pool.spill_eligible()
-        {
-            state.residency = Residency::WriteInFlight;
-            drop(state);
-            meta.pool.spill_schedule(Arc::clone(meta));
-            return;
+        if !meta.pool.spill_handoff(meta, &mut state) {
+            meta.pool.evict_locked(meta, &mut state);
         }
-        meta.pool.evict_locked(meta, &mut state);
     }
 
     /// Test hook: overwrites every free slot's bytes with `0xDE`. The free
@@ -587,7 +584,7 @@ impl PoolInner {
     /// proportional to the number of live slotted chunks even when the pool
     /// never comes under budget pressure.
     fn prune_queue(&self) {
-        let live = usize::cast_from(self.live_slotted.load(Ordering::Relaxed));
+        let live = usize::cast_from(self.live_chunks.load(Ordering::Relaxed));
         let mut queue = self.queue.lock().expect("pool queue poisoned");
         if queue.len() > 2 * live + 16 {
             queue.retain(|weak| weak.strong_count() > 0);
@@ -599,12 +596,15 @@ impl PoolInner {
         // trips it (every insert and fault-in), and concurrent passes would
         // convoy on the queue mutex doing redundant scans of the same
         // candidates. One pass at a time reaches the budget just as well;
-        // skipped callers rely on the in-progress pass.
-        if self.enforcing.swap(true, Ordering::Acquire) {
-            return;
-        }
+        // skipped callers rely on the in-progress pass. A poisoned claim
+        // means a prior pass panicked; recover and keep enforcing rather
+        // than silently disabling the budget for the process's lifetime.
+        let _guard = match self.enforcing.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::WouldBlock) => return,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        };
         self.enforce_budget_inner();
-        self.enforcing.store(false, Ordering::Release);
     }
 
     fn enforce_budget_inner(&self) {
@@ -659,10 +659,7 @@ impl PoolInner {
                 } else if state.touched {
                     state.touched = false;
                     true
-                } else if state.residency == Residency::UnbackedResident && self.spill_eligible() {
-                    state.residency = Residency::WriteInFlight;
-                    drop(state);
-                    self.spill_schedule(Arc::clone(&meta));
+                } else if self.spill_handoff(&meta, &mut state) {
                     // Stays queued while in flight; once the spill commits to
                     // `Evicted`, the next visit drops the entry.
                     true
@@ -721,24 +718,10 @@ impl PoolInner {
             }
             Residency::WriteInFlight | Residency::Evicted | Residency::Oversize => return,
         }
-        // SAFETY: the slot belongs to this live chunk with no pins (checked
-        // above under the state lock), so no reference into it exists. The
-        // slot returns to the free list below; its next occupant fully
-        // overwrites every byte it reads, satisfying the contents-undefined
-        // contract of `dontneed`.
-        unsafe {
-            region::dontneed(region.slot_ptr(slot.index), region.class_size());
-        }
-        // Slots are scoped to residency: eviction releases the slot along
-        // with its physical pages, so slot demand tracks the resident set
-        // rather than the (potentially unbounded) live backlog. Fault-in
-        // allocates a fresh slot; addresses are stable only while resident.
-        region.free(slot.index);
-        state.slot = None;
+        // `release_slot`'s precondition holds: `pins == 0` and `!freed`,
+        // checked above under the held state lock.
+        self.release_slot(meta, state);
         state.residency = Residency::Evicted;
-        self.counters
-            .resident_bytes
-            .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
     }
 
     /// Records and (once) warns about a size-class slot exhaustion forcing a
@@ -812,18 +795,15 @@ impl PoolInner {
         {
             let mut state = meta.state.lock().expect("chunk state poisoned");
             if state.freed {
-                // Freed while queued: the deferred cleanup below is ours, and
-                // the chunk dies without ever compressing — the write-behind
+                // Freed while queued: the deferred cleanup is ours, and the
+                // chunk dies without ever compressing — the write-behind
                 // cancellation window. `ChunkHandle::drop` already counted
-                // the free and the live-slotted decrement.
+                // the free and the live-chunks decrement.
                 self.counters
                     .spill_cancelled
                     .fetch_add(1, Ordering::Relaxed);
                 self.counters.elided_frees.fetch_add(1, Ordering::Relaxed);
-                self.counters
-                    .resident_bytes
-                    .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
-                self.release_slot_locked(&mut state, true);
+                self.release_slot(meta, &mut state);
                 return;
             }
             if state.residency != Residency::WriteInFlight {
@@ -862,10 +842,7 @@ impl PoolInner {
             self.counters
                 .spill_cancelled
                 .fetch_add(1, Ordering::Relaxed);
-            self.counters
-                .resident_bytes
-                .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
-            self.release_slot_locked(&mut state, true);
+            self.release_slot(meta, &mut state);
             return;
         }
         self.counters
@@ -881,38 +858,56 @@ impl PoolInner {
             state.residency = Residency::BackedResident;
             return;
         }
-        // SAFETY: `pins == 0` under the state lock, so no reference into the
-        // slot exists; the slot returns to the free list below and its next
-        // occupant fully overwrites every byte it reads, satisfying
-        // `dontneed`'s contents-undefined contract.
+        // `release_slot`'s precondition holds: `pins == 0` and `!freed`,
+        // both observed under the held state lock.
+        self.release_slot(meta, &mut state);
+        state.residency = Residency::Evicted;
+    }
+
+    /// Releases `state`'s slot — physical pages discarded, slot returned to
+    /// the region free list — and decrements resident bytes. Releasing the
+    /// pages is what keeps RSS aligned with the `resident_bytes` gauge the
+    /// budget enforcer trusts; a pure free-list push would leave warm pages
+    /// in the free slot, invisible to the enforcer. Slots are scoped to
+    /// residency: fault-in allocates a fresh slot, so a chunk's address is
+    /// stable only between a fault-in and the next eviction.
+    ///
+    /// Precondition, established by every caller under the held state lock:
+    /// no reference into the slot exists — either `pins == 0`, or the handle
+    /// is gone (`freed` set) so no `PinGuard` can be created and none
+    /// survives. This is what makes the `dontneed` below sound: the slot's
+    /// next occupant fully overwrites every byte it reads, satisfying the
+    /// contents-undefined contract.
+    fn release_slot(&self, meta: &ChunkMeta, state: &mut ChunkState) {
+        let slot = state.slot.take().expect("slotted chunk");
+        let region = &self.regions[slot.class];
+        // SAFETY: no reference into the slot exists (the function-level
+        // precondition, established under the held state lock).
         unsafe {
             region::dontneed(region.slot_ptr(slot.index), region.class_size());
         }
         region.free(slot.index);
-        state.slot = None;
-        state.residency = Residency::Evicted;
         self.counters
             .resident_bytes
             .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
     }
 
-    /// Releases a freed chunk's slot pages and returns the slot to the free
-    /// list, for the deferred-cleanup paths where `ChunkHandle::drop`
-    /// observed `WriteInFlight` and left slot ownership with the spill
-    /// thread.
-    fn release_slot_locked(&self, state: &mut ChunkState, resident: bool) {
-        let slot = state.slot.take().expect("slotted chunk");
-        let region = &self.regions[slot.class];
-        if resident {
-            // SAFETY: the handle is gone (`freed` observed under the state
-            // lock) and `WriteInFlight` admits no pins from a dropped
-            // handle, so no reference into the slot exists; the next
-            // occupant fully overwrites every byte it reads.
-            unsafe {
-                region::dontneed(region.slot_ptr(slot.index), region.class_size());
-            }
+    /// If the chunk is an unpinned, live `UnbackedResident` and the spill
+    /// threads have capacity, transitions it to `WriteInFlight` and hands it
+    /// to them, returning `true`. The hand-off happens under the held state
+    /// lock; the spill thread blocks on that lock only after this call
+    /// returns and the caller releases it.
+    fn spill_handoff(&self, meta: &Arc<ChunkMeta>, state: &mut ChunkState) -> bool {
+        if state.residency != Residency::UnbackedResident
+            || state.pins > 0
+            || state.freed
+            || !self.spill_eligible()
+        {
+            return false;
         }
-        region.free(slot.index);
+        state.residency = Residency::WriteInFlight;
+        self.spill_schedule(Arc::clone(meta));
+        true
     }
 }
 
@@ -951,6 +946,17 @@ impl ChunkHandle {
     /// the budget; the just-pinned chunk is protected by its pin count.
     pub fn pin(&self) -> PinGuard<'_> {
         let meta = &*self.meta;
+        // The empty chunk holds no slot and nothing to protect: hand out a
+        // dangling-but-aligned pointer (valid for a zero-length slice)
+        // without touching the lock or the pin count. `PinGuard::drop`
+        // mirrors the skip.
+        if meta.len == 0 {
+            return PinGuard {
+                meta,
+                ptr: std::ptr::NonNull::<u64>::dangling().as_ptr().cast_const(),
+                len: 0,
+            };
+        }
         let mut state = meta.state.lock().expect("chunk state poisoned");
         let mut faulted = false;
         let ptr = match state.residency {
@@ -1013,13 +1019,11 @@ impl ChunkHandle {
                 }
             }
             Residency::UnbackedResident | Residency::BackedResident | Residency::WriteInFlight => {
-                match state.slot {
-                    Some(slot) => meta.pool.regions[slot.class]
-                        .slot_ptr(slot.index)
-                        .cast_const()
-                        .cast::<u64>(),
-                    None => std::ptr::NonNull::<u64>::dangling().as_ptr().cast_const(),
-                }
+                let slot = state.slot.expect("resident non-empty chunk has a slot");
+                meta.pool.regions[slot.class]
+                    .slot_ptr(slot.index)
+                    .cast_const()
+                    .cast::<u64>()
             }
         };
         state.touched = true;
@@ -1089,45 +1093,22 @@ impl Drop for ChunkHandle {
         pool.counters.frees.fetch_add(1, Ordering::Relaxed);
         state.freed = true;
         if self.meta.class.is_some() {
-            pool.live_slotted.fetch_sub(1, Ordering::Relaxed);
+            pool.live_chunks.fetch_sub(1, Ordering::Relaxed);
         }
         let len_bytes = u64::cast_from(self.meta.len_bytes());
-        // Releases the slot's physical pages and returns it to the free list.
-        // The release is what makes freeing a resident chunk lower actual RSS
-        // in step with the `resident_bytes` decrement; a pure free-list push
-        // would leave the pages warm in the free slot, invisible to the
-        // budget enforcer.
-        let release_slot = |slot: Slot, resident: bool| {
-            let region = &pool.regions[slot.class];
-            if resident {
-                // SAFETY: the handle is being dropped, so no `PinGuard`
-                // (which borrows the handle) exists, and `freed` was set
-                // under the state lock held here, so concurrent queue
-                // visitors skip the chunk. The slot's next occupant fully
-                // overwrites every byte it later reads, satisfying the
-                // contents-undefined contract of `dontneed`.
-                unsafe {
-                    region::dontneed(region.slot_ptr(slot.index), region.class_size());
-                }
-            }
-            region.free(slot.index);
-        };
+        // `release_slot`'s precondition holds in every arm below: the handle
+        // is being dropped, so no `PinGuard` (which borrows the handle)
+        // exists, and `freed` was set under the state lock held here, so
+        // concurrent queue visitors skip the chunk.
         match state.residency {
             Residency::UnbackedResident => {
-                if let Some(slot) = state.slot.take() {
+                if state.slot.is_some() {
                     pool.counters.elided_frees.fetch_add(1, Ordering::Relaxed);
-                    pool.counters
-                        .resident_bytes
-                        .fetch_sub(len_bytes, Ordering::Relaxed);
-                    release_slot(slot, true);
+                    pool.release_slot(&self.meta, &mut state);
                 }
             }
             Residency::BackedResident => {
-                let slot = state.slot.take().expect("backed chunk has a slot");
-                pool.counters
-                    .resident_bytes
-                    .fetch_sub(len_bytes, Ordering::Relaxed);
-                release_slot(slot, true);
+                pool.release_slot(&self.meta, &mut state);
                 state.extent = None;
             }
             Residency::Evicted => {
@@ -1172,6 +1153,10 @@ impl Deref for PinGuard<'_> {
 
 impl Drop for PinGuard<'_> {
     fn drop(&mut self) {
+        // Empty-chunk pins never took the lock or incremented the count.
+        if self.len == 0 {
+            return;
+        }
         let mut state = self.meta.state.lock().expect("chunk state poisoned");
         state.pins -= 1;
     }

@@ -61,8 +61,9 @@ impl SwapExtent {
     /// hydration eviction rates backs up device writeback and bloats the
     /// working set with swap-cache pages.
     pub(crate) fn write(data: &[u64]) -> SwapExtent {
+        use std::cell::RefCell;
         thread_local! {
-            static SCRATCH: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+            static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
         }
         let bytes: &[u8] = bytemuck::cast_slice(data);
         SCRATCH.with(|scratch| {
