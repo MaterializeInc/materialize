@@ -2252,6 +2252,7 @@ mod tests {
 
     use itertools::Itertools;
     use mz_catalog::memory::objects::CatalogItem;
+    use mz_postgres_util::{query, sql};
     use tokio_postgres::NoTls;
     use tokio_postgres::types::Type;
     use uuid::Uuid;
@@ -2798,8 +2799,9 @@ mod tests {
                 name: String,
             }
 
-            let pg_proc: BTreeMap<_, _> = client
-                .query(
+            let pg_proc: BTreeMap<_, _> = query(
+                &client,
+                sql!(
                     "SELECT
                     p.oid,
                     proname,
@@ -2807,30 +2809,33 @@ mod tests {
                     prorettype,
                     proretset
                 FROM pg_proc p
-                JOIN pg_namespace n ON p.pronamespace = n.oid",
-                    &[],
-                )
-                .await
-                .expect("pg query failed")
-                .into_iter()
-                .map(|row| {
-                    let oid: u32 = row.get("oid");
-                    let pg_proc = PgProc {
-                        name: row.get("proname"),
-                        arg_oids: row.get("proargtypes"),
-                        ret_oid: row.get("prorettype"),
-                        ret_set: row.get("proretset"),
-                    };
-                    (oid, pg_proc)
-                })
-                .collect();
+                JOIN pg_namespace n ON p.pronamespace = n.oid"
+                ),
+                &[],
+            )
+            .await
+            .expect("pg query failed")
+            .into_iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let pg_proc = PgProc {
+                    name: row.get("proname"),
+                    arg_oids: row.get("proargtypes"),
+                    ret_oid: row.get("prorettype"),
+                    ret_set: row.get("proretset"),
+                };
+                (oid, pg_proc)
+            })
+            .collect();
 
-            let pg_type: BTreeMap<_, _> = client
-                .query(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type",
-                    &[],
-                )
-                .await
+            let pg_type: BTreeMap<_, _> = query(
+                &client,
+                sql!(
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type"
+                ),
+                &[],
+            )
+            .await
                 .expect("pg query failed")
                 .into_iter()
                 .map(|row| {
@@ -2847,20 +2852,23 @@ mod tests {
                 })
                 .collect();
 
-            let pg_oper: BTreeMap<_, _> = client
-                .query("SELECT oid, oprname, oprresult FROM pg_operator", &[])
-                .await
-                .expect("pg query failed")
-                .into_iter()
-                .map(|row| {
-                    let oid: u32 = row.get("oid");
-                    let pg_oper = PgOper {
-                        name: row.get("oprname"),
-                        oprresult: row.get("oprresult"),
-                    };
-                    (oid, pg_oper)
-                })
-                .collect();
+            let pg_oper: BTreeMap<_, _> = query(
+                &client,
+                sql!("SELECT oid, oprname, oprresult FROM pg_operator"),
+                &[],
+            )
+            .await
+            .expect("pg query failed")
+            .into_iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let pg_oper = PgOper {
+                    name: row.get("oprname"),
+                    oprresult: row.get("oprresult"),
+                };
+                (oid, pg_oper)
+            })
+            .collect();
 
             let conn_catalog = catalog.for_system_session();
             let resolve_type_oid = |item: &str| {

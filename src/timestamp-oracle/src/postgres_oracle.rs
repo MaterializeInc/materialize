@@ -19,6 +19,8 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::tokio_postgres::error::SqlState;
+use deadpool_postgres::tokio_postgres::types::ToSql;
+use deadpool_postgres::tokio_postgres::{Row, Statement};
 use deadpool_postgres::{Object, PoolError};
 use dec::Decimal;
 use mz_adapter_types::timestamp_oracle::{
@@ -73,6 +75,52 @@ const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled 
 // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
 const CRDB_CONFIGURE_ZONE: &str =
     "ALTER TABLE timestamp_oracle CONFIGURE ZONE USING gc.ttlseconds = 600;";
+
+/// NOTE: `mz-timestamp-oracle` currently keeps its Postgres surface local; it
+/// does not use `mz-postgres-util` wrappers.
+async fn pg_batch_execute(
+    client: &Object,
+    query: &str,
+) -> Result<(), deadpool_postgres::tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    client.batch_execute(query).await
+}
+
+async fn pg_query_one_prepared(
+    client: &Object,
+    statement: &Statement,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<Row, deadpool_postgres::tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    client.query_one(statement, params).await
+}
+
+async fn pg_execute_prepared(
+    client: &Object,
+    statement: &Statement,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<u64, deadpool_postgres::tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    client.execute(statement, params).await
+}
+
+async fn pg_txn_query_prepared(
+    txn: &deadpool_postgres::Transaction<'_>,
+    statement: &Statement,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<Vec<Row>, deadpool_postgres::tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    txn.query(statement, params).await
+}
+
+async fn pg_txn_query_one_prepared(
+    txn: &deadpool_postgres::Transaction<'_>,
+    statement: &Statement,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<Row, deadpool_postgres::tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    txn.query_one(statement, params).await
+}
 
 /// A [`TimestampOracle`] backed by "Postgres".
 #[derive(Debug)]
@@ -561,12 +609,14 @@ where
 
             let client = postgres_client.get_connection().await?;
 
-            let crdb_mode = match client
-                .batch_execute(&format!(
+            let crdb_mode = match pg_batch_execute(
+                &client,
+                &format!(
                     "{}; {}{}; {}",
                     create_schema, SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
-                ))
-                .await
+                ),
+            )
+            .await
             {
                 Ok(()) => true,
                 Err(e)
@@ -583,9 +633,7 @@ where
             };
 
             if !crdb_mode {
-                client
-                    .batch_execute(&format!("{}; {};", create_schema, SCHEMA))
-                    .await?;
+                pg_batch_execute(&client, &format!("{}; {};", create_schema, SCHEMA)).await?;
             }
 
             let oracle = PostgresTimestampOracle {
@@ -609,12 +657,12 @@ where
             let statement = client.prepare_cached(q).await?;
 
             let initially_coerced = Self::ts_to_decimal(initially);
-            let _ = client
-                .execute(
-                    &statement,
-                    &[&oracle.timeline, &initially_coerced, &initially_coerced],
-                )
-                .await?;
+            let _ = pg_execute_prepared(
+                &client,
+                &statement,
+                &[&oracle.timeline, &initially_coerced, &initially_coerced],
+            )
+            .await?;
 
             // Forward timestamps to what we're given from outside. Remember,
             // the above query will only create the row at the initial timestamp
@@ -666,7 +714,7 @@ where
             SELECT EXISTS (SELECT * FROM information_schema.tables WHERE table_name = 'timestamp_oracle' AND table_schema = CURRENT_SCHEMA);
         "#;
             let statement = txn.prepare(q).await?;
-            let exists_row = txn.query_one(&statement, &[]).await?;
+            let exists_row = pg_txn_query_one_prepared(&txn, &statement, &[]).await?;
             let exists: bool = exists_row.try_get("exists").expect("missing exists column");
             if !exists {
                 return Ok(Vec::new());
@@ -676,7 +724,7 @@ where
             SELECT timeline, GREATEST(read_ts, write_ts) as ts FROM timestamp_oracle;
         "#;
             let statement = txn.prepare(q).await?;
-            let rows = txn.query(&statement, &[]).await?;
+            let rows = pg_txn_query_prepared(&txn, &statement, &[]).await?;
 
             txn.commit().await?;
 
@@ -718,9 +766,9 @@ where
         "#;
         let client = self.get_connection().await?;
         let statement = client.prepare_cached(q).await?;
-        let result = client
-            .query_one(&statement, &[&self.timeline, &proposed_next_ts])
-            .await?;
+        let result =
+            pg_query_one_prepared(&client, &statement, &[&self.timeline, &proposed_next_ts])
+                .await?;
 
         let write_ts: Numeric = result.try_get("write_ts").expect("missing column write_ts");
         let write_ts = Self::decimal_to_ts(write_ts);
@@ -747,7 +795,7 @@ where
         "#;
         let client = self.get_connection().await?;
         let statement = client.prepare_cached(q).await?;
-        let result = client.query_one(&statement, &[&self.timeline]).await?;
+        let result = pg_query_one_prepared(&client, &statement, &[&self.timeline]).await?;
 
         let write_ts: Numeric = result.try_get("write_ts").expect("missing column write_ts");
         let write_ts = Self::decimal_to_ts(write_ts);
@@ -768,7 +816,7 @@ where
         "#;
         let client = self.get_connection().await?;
         let statement = client.prepare_cached(q).await?;
-        let result = client.query_one(&statement, &[&self.timeline]).await?;
+        let result = pg_query_one_prepared(&client, &statement, &[&self.timeline]).await?;
 
         let read_ts: Numeric = result.try_get("read_ts").expect("missing column read_ts");
         let read_ts = Self::decimal_to_ts(read_ts);
@@ -795,9 +843,7 @@ where
         let statement = client.prepare_cached(q).await?;
         let write_ts = Self::ts_to_decimal(write_ts);
 
-        let _ = client
-            .execute(&statement, &[&self.timeline, &write_ts])
-            .await?;
+        let _ = pg_execute_prepared(&client, &statement, &[&self.timeline, &write_ts]).await?;
 
         debug!(
             timeline = ?self.timeline,

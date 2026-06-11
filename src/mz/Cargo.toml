@@ -22,6 +22,7 @@ mz-frontegg-client = { path = "../frontegg-client" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", features = ["async", "cli", "test"] }
+mz-postgres-util = { path = "../postgres-util" }
 mz-sql-parser = { path = "../sql-parser" }
 open.workspace = true
 openssl-probe.workspace = true
