@@ -266,11 +266,27 @@ impl Pool {
     /// slot; input larger than the largest class falls back to a plain heap
     /// allocation ([`Residency::Oversize`]), a prototype limitation.
     pub fn insert(&self, data: &mut Vec<u64>) -> ChunkHandle {
+        let handle = self.insert_with(data.len(), |dst| dst.copy_from_slice(data.as_slice()));
+        data.clear();
+        handle
+    }
+
+    /// Allocates a chunk of `len` words and fills it in place: `fill`
+    /// receives the chunk's slot memory directly and must overwrite all of
+    /// it (the slot's prior contents are unspecified). Payloads beyond the
+    /// largest size class fall back to a heap allocation, as in
+    /// [`Pool::insert`].
+    ///
+    /// This is the zero-staging insert: serialization can write its single
+    /// copy straight into pool memory, paying one page population instead of
+    /// staging through caller-side buffers that fault their own pages and
+    /// die immediately after.
+    pub fn insert_with(&self, len: usize, fill: impl FnOnce(&mut [u64])) -> ChunkHandle {
         let inner = &self.0;
         inner.counters.inserts.fetch_add(1, Ordering::Relaxed);
-        let len = data.len();
         let len_bytes = len * std::mem::size_of::<u64>();
         if len == 0 {
+            fill(&mut []);
             return ChunkHandle {
                 meta: Arc::new(ChunkMeta {
                     pool: Arc::clone(inner),
@@ -292,15 +308,16 @@ impl Pool {
             Some(class) => {
                 let region = &inner.regions[class];
                 let index = region.alloc();
-                let src: &[u8] = bytemuck::cast_slice(data.as_slice());
                 // SAFETY: the freshly allocated slot is at least `len_bytes`
                 // long (the class fits the payload) and is exclusively owned
-                // by this chunk; the source is a live borrow of `data`, which
-                // cannot alias an anonymous mapping.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(src.as_ptr(), region.slot_ptr(index), len_bytes);
-                }
-                data.clear();
+                // by this not-yet-shared chunk, so the mutable borrow is
+                // unique; region memory is mapped and writable, and `u64` has
+                // no validity requirements beyond size, so exposing the
+                // unspecified prior contents through `&mut [u64]` is sound.
+                let dst = unsafe {
+                    std::slice::from_raw_parts_mut(region.slot_ptr(index).cast::<u64>(), len)
+                };
+                fill(dst);
                 inner
                     .counters
                     .resident_bytes
@@ -320,8 +337,8 @@ impl Pool {
                 }
             }
             None => {
-                let payload = data.as_slice().to_vec();
-                data.clear();
+                let mut payload = vec![0u64; len];
+                fill(&mut payload);
                 inner
                     .counters
                     .resident_bytes
@@ -1536,5 +1553,29 @@ mod tests {
             let pin = h.pin();
             assert_eq!(&*pin, &payload(SMALL, 500 + u64::cast_from(i))[..]);
         }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn insert_with_fills_in_place() {
+        let pool = test_pool(usize::MAX);
+        let want = payload(SMALL, 600);
+        let h = pool.insert_with(SMALL, |dst| {
+            assert_eq!(dst.len(), SMALL, "fill sees exactly the chunk length");
+            dst.copy_from_slice(&want);
+        });
+        assert_eq!(h.residency(), Residency::UnbackedResident);
+        assert_eq!(&*h.pin(), &want[..]);
+        pool.evict(&h);
+        let pin = h.pin();
+        assert_eq!(&*pin, &want[..], "round-trips through the extent");
+
+        // Empty and oversize fall back like `insert`.
+        let empty = pool.insert_with(0, |dst| assert!(dst.is_empty()));
+        assert!(empty.is_empty());
+        let big_len = (SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8) + 1;
+        let big = pool.insert_with(big_len, |dst| dst.fill(7));
+        assert_eq!(big.residency(), Residency::Oversize);
+        assert_eq!(big.pin().len(), big_len);
     }
 }
