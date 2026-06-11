@@ -51,7 +51,7 @@ The following example Kubernetes manifest includes configuration for
 SASL/SCRAM-SHA-256 authentication:
 
 {{< tabs >}}
-{{< tab "v1alpha2 (v26.18+)" >}}
+{{< tab "v1 (v26.29+)" >}}
 
 ```hc {hl_lines="15 25"}
 apiVersion: v1
@@ -70,7 +70,7 @@ stringData:
   license_key: "..."
   external_login_password_mz_system: "enter_mz_system_password"
 ---
-apiVersion: materialize.cloud/v1alpha2
+apiVersion: materialize.cloud/v1
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012
@@ -82,7 +82,7 @@ spec:
 ```
 
 {{< /tab >}}
-{{< tab "v1alpha1 (before v26.18)" >}}
+{{< tab "v1alpha1 (before v26.29)" >}}
 
 ```hc {hl_lines="15 25"}
 apiVersion: v1
@@ -135,7 +135,7 @@ The following example Kubernetes manifest includes configuration for password
 authentication:
 
 {{< tabs >}}
-{{< tab "v1alpha2 (v26.18+)" >}}
+{{< tab "v1 (v26.29+)" >}}
 
 ```hc {hl_lines="15 25"}
 apiVersion: v1
@@ -154,7 +154,7 @@ stringData:
   license_key: "..."
   external_login_password_mz_system: "enter_mz_system_password"
 ---
-apiVersion: materialize.cloud/v1alpha2
+apiVersion: materialize.cloud/v1
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012
@@ -166,7 +166,7 @@ spec:
 ```
 
 {{< /tab >}}
-{{< tab "v1alpha1 (before v26.18)" >}}
+{{< tab "v1alpha1 (before v26.29)" >}}
 
 ```hc {hl_lines="15 25"}
 apiVersion: v1

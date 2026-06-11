@@ -95,14 +95,14 @@ helm upgrade -n materialize my-demo materialize/operator \
 
 Select the instructions for your CRD API version:
 
-- [v1alpha2 (v26.18+)](/self-managed-deployments/upgrading/materialize-instances/v1alpha2/)
-- [v1alpha1 (before v26.18)](/self-managed-deployments/upgrading/materialize-instances/v1alpha1/)
+- [v1 (v26.29+)](/self-managed-deployments/upgrading/materialize-instances/v1/)
+- [v1alpha1 (before v26.29)](/self-managed-deployments/upgrading/materialize-instances/v1alpha1/)
 
 ## Version Specific Upgrade Notes
 
-### Upgrading to `v26.19` and later versions
+### Upgrading to `v26.29` and later versions
 
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.19.md" >}}
+{{< include-md file="shared-content/self-managed/upgrade-notes/v26.29.md" >}}
 
 ### Upgrading to `v26.1` and later versions
 
