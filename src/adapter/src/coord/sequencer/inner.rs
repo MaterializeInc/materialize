@@ -64,7 +64,6 @@ use mz_sql::plan::{
     StatementContext,
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
-use mz_storage_types::connections::gcp::GcpServiceAccountKeyTokenUri;
 use mz_storage_types::sinks::StorageSinkDesc;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
@@ -625,6 +624,41 @@ impl Coordinator {
         }
     }
 
+    /// Applies `details.secret_content_guards()` by reading each guarded
+    /// secret's current contents. Must be called whenever a connection is
+    /// created or its options altered, before the change takes effect.
+    async fn check_connection_secret_content_guards(
+        &self,
+        details: &ConnectionDetails,
+    ) -> Result<(), AdapterError> {
+        for (secret_id, guard) in details.secret_content_guards() {
+            let contents = self.caching_secrets_reader.read_string(secret_id).await?;
+            guard(&contents)?;
+        }
+        Ok(())
+    }
+
+    /// Applies the secret-content guards of every connection that uses
+    /// `secret_id` against proposed new `contents` for that secret. Must be
+    /// called whenever a secret's contents change, before the new value is
+    /// persisted.
+    pub(super) fn check_secret_content_guards_of_dependents(
+        &self,
+        secret_id: CatalogItemId,
+        contents: &str,
+    ) -> Result<(), AdapterError> {
+        for user_id in self.catalog().get_entry(&secret_id).used_by() {
+            if let CatalogItem::Connection(conn) = self.catalog().get_entry(user_id).item() {
+                for (guarded_id, guard) in conn.details.secret_content_guards() {
+                    if guarded_id == secret_id {
+                        guard(contents)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[instrument]
     pub(super) async fn sequence_create_connection(
         &mut self,
@@ -664,21 +698,17 @@ impl Coordinator {
                 }
                 self.caching_secrets_reader.invalidate(connection_id);
             }
-            ConnectionDetails::Gcp(gcp) => {
-                // A service account key defines its own OAuth2 token URI.
-                // We only want to send requests to the actual Google OAuth2 token API,
-                // so we inspect the key as early as we can.
-                if let Err(err) = self
-                    .caching_secrets_reader
-                    .read_string(gcp.credentials_json)
-                    .await
-                    .and_then(|json| GcpServiceAccountKeyTokenUri::validate_json(&json))
-                {
-                    return ctx.retire(Err(err.into()));
-                }
-            }
             _ => (),
         };
+
+        // Inspect guarded secrets as early as we can, before the connection is
+        // installed in the catalog.
+        if let Err(err) = self
+            .check_connection_secret_content_guards(&plan.connection.details)
+            .await
+        {
+            return ctx.retire(Err(err));
+        }
 
         if plan.validate {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -3612,6 +3642,15 @@ impl Coordinator {
                 return ctx.retire(Err(e));
             }
         };
+
+        // Inspect guarded secrets whether or not validation was requested,
+        // before the altered connection is installed in the catalog.
+        if let Err(err) = self
+            .check_connection_secret_content_guards(&conn.details)
+            .await
+        {
+            return ctx.retire(Err(err));
+        }
 
         if validate {
             let connection = conn
