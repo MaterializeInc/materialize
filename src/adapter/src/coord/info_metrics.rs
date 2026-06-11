@@ -46,7 +46,7 @@ use crate::coord::{Coordinator, Message};
 /// Fallback reconcile cadence: the re-poll cadence used while reconciliation is
 /// disabled (a zero [CATALOG_INFO_METRICS_RECONCILE_INTERVAL]), so it can be
 /// re-enabled at runtime.
-const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+const FALLBACK_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Reconciles that take longer than this are logged at warn level.
 const RECONCILE_WARN_THRESHOLD: Duration = Duration::from_secs(5);
@@ -291,7 +291,7 @@ impl Coordinator {
                 // When disabled, keep polling at the fallback cadence so it can
                 // be re-enabled at runtime.
                 let sleep = if interval.is_zero() {
-                    RECONCILE_INTERVAL
+                    FALLBACK_RECONCILE_INTERVAL
                 } else {
                     interval
                 };
