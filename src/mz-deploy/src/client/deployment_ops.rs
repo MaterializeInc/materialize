@@ -64,6 +64,7 @@ use crate::client::models::{
     ProductionClusterRecord, SchemaDeploymentRecord, StagingDeployment,
 };
 use crate::client::quote_identifier;
+use crate::client::staging_suffix_like_pattern;
 use crate::project::SchemaQualifier;
 use crate::project::analysis::deployment_snapshot::DeploymentSnapshot;
 use crate::project::ir::object_id::ObjectId;
@@ -909,7 +910,7 @@ fn hydration_status_query(allowed_lag_secs: i64) -> String {
             FROM mz_clusters c
             LEFT JOIN mz_cluster_replicas r ON c.id = r.cluster_id
             LEFT JOIN problematic_replicas pr ON r.id = pr.replica_id
-            WHERE c.name LIKE $1
+            WHERE c.name LIKE $1 ESCAPE '\'
             GROUP BY c.name, c.id
         ),
         hydration_counts AS (
@@ -921,7 +922,7 @@ fn hydration_status_query(allowed_lag_secs: i64) -> String {
             FROM mz_clusters c
             JOIN mz_cluster_replicas r ON c.id = r.cluster_id
             LEFT JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
-            WHERE c.name LIKE $1
+            WHERE c.name LIKE $1 ESCAPE '\'
             GROUP BY c.name, r.id
         ),
         hydration_best AS (
@@ -937,7 +938,7 @@ fn hydration_status_query(allowed_lag_secs: i64) -> String {
             JOIN mz_cluster_replicas r ON c.id = r.cluster_id
             JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
             JOIN mz_internal.mz_wallclock_global_lag wgl ON wgl.object_id = mhs.object_id
-            WHERE c.name LIKE $1
+            WHERE c.name LIKE $1 ESCAPE '\'
             GROUP BY c.name
         )
         SELECT
@@ -987,7 +988,7 @@ pub(super) async fn get_deployment_hydration_status(
     deploy_id: &str,
     allowed_lag_secs: i64,
 ) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
-    let pattern = format!("%_{}", deploy_id);
+    let pattern = staging_suffix_like_pattern(deploy_id);
     let query = hydration_status_query(allowed_lag_secs);
     let rows = client.query(&query, &[&pattern]).await?;
 
@@ -1534,7 +1535,7 @@ impl DeploymentsClientMut<'_> {
 
         try_stream! {
                 let txn = self.client.begin_transaction().await?;
-                let pattern = format!("%_{}", deploy_id);
+                let pattern = staging_suffix_like_pattern(&deploy_id);
                 let query = hydration_status_query(allowed_lag_secs);
                 let subscribe_sql = format!(
                     "DECLARE c CURSOR FOR SUBSCRIBE ({query})"
@@ -1614,4 +1615,37 @@ pub(super) async fn delete_replacement_mvs(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hydration_status_query;
+
+    #[mz_ore::test]
+    fn test_hydration_status_query_escapes_like_patterns() {
+        // Regression test for QA round-2 Finding 1.
+        //
+        // The hydration-status query filters clusters with `c.name LIKE $1`,
+        // where $1 is the `_<deploy_id>` staging suffix pattern. Every such
+        // predicate must carry `ESCAPE '\'` so the `_` separator (and any `_`/`%`
+        // in the deploy id) is matched literally rather than as a wildcard —
+        // otherwise `wait`/`list` sweep in unrelated clusters ending in
+        // `<any char><deploy_id>` (e.g. `dataprod` for deploy id `prod`).
+        let query = hydration_status_query(60);
+
+        // There are three cluster-name LIKE predicates (cluster_health,
+        // hydration_counts, cluster_lag), and every one must be escaped.
+        assert_eq!(
+            query.matches("LIKE $1").count(),
+            3,
+            "expected exactly three `LIKE $1` predicates, query: {}",
+            query
+        );
+        assert_eq!(
+            query.matches(r"LIKE $1 ESCAPE '\'").count(),
+            3,
+            "every `LIKE $1` predicate must use `ESCAPE '\\'`, query: {}",
+            query
+        );
+    }
 }

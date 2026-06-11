@@ -334,9 +334,15 @@ impl TestResults {
 ///   [`CliError::Message`] or the corresponding variant
 /// Connection source for executing unit tests: an ephemeral Docker container
 /// (the default) or the profile's configured Materialize region (`--no-docker`).
+/// Where a single test runs. Both variants yield a *fresh* per-test connection
+/// in `run_single_test`: Docker spins up (or reuses) an ephemeral container and
+/// connects without the server-cluster pin; Profile opens a new pinned
+/// connection to the profile's region. A per-test connection keeps tests
+/// isolated — its session vars and `CREATE TEMPORARY VIEW` objects are discarded
+/// when the connection is dropped — without relying on in-session cleanup.
 enum TestTarget<'a> {
     Docker(&'a DockerRuntime),
-    Profile(&'a Client),
+    Profile(&'a Settings),
 }
 
 pub async fn run(
@@ -405,18 +411,10 @@ async fn run_tests(
     .await?;
     let empty_types = Types::default();
     let runtime = DockerRuntime::new().with_image(&settings.docker_image);
-    // With `--no-docker`, run every test through a single connection to the
-    // profile's region instead of an ephemeral container. Tests stay isolated
-    // because each builds its inputs as temporary objects (dropped per test).
-    let profile_client = if no_docker {
-        Some(
-            Client::connect_with_profile(settings.connection().clone())
-                .await
-                .map_err(CliError::Connection)?,
-        )
-    } else {
-        None
-    };
+    // With `--no-docker`, each test runs against the profile's region instead of
+    // an ephemeral container. Like the Docker path, every test gets its own
+    // connection (see `TestTarget`), so a test's temporary objects and any
+    // session-var changes can't leak into the next test.
     let test_filter = filter.map(TestFilter::parse);
 
     if planned_project.tests.is_empty() {
@@ -434,9 +432,10 @@ async fn run_tests(
                 continue;
             }
         }
-        let target = match &profile_client {
-            Some(client) => TestTarget::Profile(client),
-            None => TestTarget::Docker(&runtime),
+        let target = if no_docker {
+            TestTarget::Profile(settings)
+        } else {
+            TestTarget::Docker(&runtime)
         };
         let start_time = Instant::now();
         let outcome = run_single_test(
@@ -513,14 +512,17 @@ async fn run_single_test(
         )));
     }
 
-    let owned_client;
-    let client: &Client = match target {
-        TestTarget::Profile(client) => client,
-        TestTarget::Docker(runtime) => {
-            owned_client = runtime_client(runtime, empty_types).await?;
-            &owned_client
+    // Each test gets its own connection so its temporary objects and session
+    // state die with the connection, keeping tests isolated.
+    let owned_client = match target {
+        TestTarget::Profile(settings) => {
+            Client::connect_with_profile(settings.connection().clone())
+                .await
+                .map_err(CliError::Connection)?
         }
+        TestTarget::Docker(runtime) => runtime_client(runtime, empty_types).await?,
     };
+    let client: &Client = &owned_client;
     if let Err(e) = validate_at_time(client, test).await? {
         return Ok(TestOutcome::ValidationFailed(ValidationFailure::AtTime(e)));
     }
@@ -587,9 +589,10 @@ async fn run_single_test(
         ))),
     };
 
-    if let Err(e) = client.batch_execute("DISCARD ALL").await {
-        info!("warning: failed to execute DISCARD ALL: {}", e);
-    }
+    // No explicit cleanup: `owned_client` is dropped when this function returns,
+    // ending the session and discarding its TEMPORARY views. This holds on every
+    // exit path (including the early returns above on setup failure), so a broken
+    // test can't leak fixed-name temp views into the next one.
     Ok(outcome)
 }
 
