@@ -10,9 +10,33 @@
 import { SUBSCRIBE_METADATA_COLUMNS } from "~/api/materialize/SubscribeManager";
 import { Column } from "~/api/materialize/types";
 
-import { mergeMzDiffs } from "./shell";
+import {
+  mergeMzDiffs,
+  setStoredActiveTutorial,
+  SHELL_ACTIVE_TUTORIAL,
+} from "./shell";
 
 describe("shell", () => {
+  describe("setStoredActiveTutorial", () => {
+    afterEach(() => {
+      window.localStorage.removeItem(SHELL_ACTIVE_TUTORIAL);
+    });
+
+    it("persists an academy selection", () => {
+      setStoredActiveTutorial("academy");
+      expect(window.localStorage.getItem(SHELL_ACTIVE_TUTORIAL)).toBe(
+        "academy",
+      );
+    });
+
+    it("persists a quickstart selection", () => {
+      setStoredActiveTutorial("quickstart");
+      expect(window.localStorage.getItem(SHELL_ACTIVE_TUTORIAL)).toBe(
+        "quickstart",
+      );
+    });
+  });
+
   describe("mergeMzDiffs", () => {
     it("should return the input if isStreamingResult is false", () => {
       const commandResult = {
