@@ -17,9 +17,11 @@
 //!
 //! One [`Region`] per size class, each a single anonymous `mmap` reservation.
 //! The reservation is virtual; physical memory materializes on first write to
-//! a slot and is released on eviction with [`dontneed`], keeping the virtual
-//! slot. A chunk's slot address is stable for the chunk's whole lifetime, so a
-//! fault-in never invalidates a pointer.
+//! a slot. Slots are scoped to residency: eviction releases a slot's physical
+//! pages with [`dontneed`] and returns the slot index to the free list, and a
+//! fault-in allocates a fresh slot — possibly a different one — so a chunk's
+//! address is stable only between a fault-in and the next eviction, and
+//! pointers into a slot are valid only under the owning chunk's pin.
 
 use std::io;
 use std::sync::Mutex;
@@ -58,7 +60,7 @@ pub(crate) struct Region {
 }
 
 /// Free-list-plus-bump slot allocator. A slot index returns to the free list
-/// only when the chunk occupying it is freed, never on eviction.
+/// whenever its chunk stops being resident — eviction and free alike.
 #[derive(Debug)]
 struct SlotAllocator {
     free: Vec<u32>,
@@ -136,10 +138,11 @@ impl Region {
         self.class_size
     }
 
-    /// Allocates a slot index, or `None` if every slot of the class is live.
-    /// Slot demand scales with live chunks (an evicted chunk keeps its slot
-    /// for address stability), so exhaustion means the workload's live set
-    /// outgrew `class_capacity_bytes`; callers degrade rather than fail.
+    /// Allocates a slot index, or `None` if every slot of the class is in
+    /// use. Slots are scoped to residency (eviction frees them), so demand
+    /// scales with the *resident* set — bounded by the pool budget plus
+    /// pinned and in-flight slack — and exhaustion means residency outgrew
+    /// `class_capacity_bytes`; callers degrade rather than fail.
     pub(crate) fn alloc(&self) -> Option<u32> {
         let mut slots = self.slots.lock().expect("region allocator poisoned");
         if let Some(slot) = slots.free.pop() {

@@ -219,7 +219,9 @@ fn try_consume(atomic: &AtomicUsize, want: usize) -> bool {
         if cur < want {
             return false;
         }
-        match atomic.compare_exchange_weak(cur, cur - want, Ordering::AcqRel, Ordering::Relaxed) {
+        // Relaxed: the budget is a pure counter; no memory is published or
+        // acquired through it.
+        match atomic.compare_exchange_weak(cur, cur - want, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => return true,
             Err(actual) => cur = actual,
         }
