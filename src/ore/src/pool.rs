@@ -37,7 +37,7 @@
 //! re-eviction free of I/O.
 //!
 //! Freeing an `UnbackedResident` chunk is a pure memory operation — the
-//! design's "never write dead data" win, surfaced as `elided_frees` in
+//! design's "never write dead data" win, surfaced as `writes_elided` in
 //! [`PoolStats`]. Budget pressure evicts cold chunks via a second-chance FIFO,
 //! the design's backstop policy for unannotated chunks.
 
@@ -108,9 +108,9 @@ pub struct PoolStats {
     pub inserts: u64,
     /// Chunks freed (handle dropped or [`ChunkHandle::take`]n).
     pub frees: u64,
-    /// Chunks freed while `UnbackedResident`: dead data whose backing write
-    /// was never performed.
-    pub elided_frees: u64,
+    /// Backing writes elided: chunks freed while `UnbackedResident`, dead
+    /// before any compression or extent write happened.
+    pub writes_elided: u64,
     /// Evictions that compressed the chunk into a new extent.
     pub evictions_compress: u64,
     /// Evictions of `BackedResident` chunks: pure page release, no I/O.
@@ -148,7 +148,7 @@ struct Counters {
     spill_cancelled: AtomicU64,
     slot_exhausted_fallbacks: AtomicU64,
     frees: AtomicU64,
-    elided_frees: AtomicU64,
+    writes_elided: AtomicU64,
     evictions_compress: AtomicU64,
     evictions_cheap: AtomicU64,
     faults: AtomicU64,
@@ -439,7 +439,7 @@ impl Pool {
         PoolStats {
             inserts: c.inserts.load(Ordering::Relaxed),
             frees: c.frees.load(Ordering::Relaxed),
-            elided_frees: c.elided_frees.load(Ordering::Relaxed),
+            writes_elided: c.writes_elided.load(Ordering::Relaxed),
             evictions_compress: c.evictions_compress.load(Ordering::Relaxed),
             evictions_cheap: c.evictions_cheap.load(Ordering::Relaxed),
             faults: c.faults.load(Ordering::Relaxed),
@@ -802,7 +802,7 @@ impl PoolInner {
                 self.counters
                     .spill_cancelled
                     .fetch_add(1, Ordering::Relaxed);
-                self.counters.elided_frees.fetch_add(1, Ordering::Relaxed);
+                self.counters.writes_elided.fetch_add(1, Ordering::Relaxed);
                 self.release_slot(meta, &mut state);
                 return;
             }
@@ -1103,7 +1103,7 @@ impl Drop for ChunkHandle {
         match state.residency {
             Residency::UnbackedResident => {
                 if state.slot.is_some() {
-                    pool.counters.elided_frees.fetch_add(1, Ordering::Relaxed);
+                    pool.counters.writes_elided.fetch_add(1, Ordering::Relaxed);
                     pool.release_slot(&self.meta, &mut state);
                 }
             }
@@ -1370,7 +1370,7 @@ mod tests {
         drop(handle);
         let stats = pool.stats();
         assert_eq!(stats.frees, 1);
-        assert_eq!(stats.elided_frees, 1);
+        assert_eq!(stats.writes_elided, 1);
         assert_eq!(stats.extent_bytes_written, 0);
         assert_eq!(stats.resident_bytes, 0);
     }
@@ -1466,7 +1466,7 @@ mod tests {
         assert!(out.is_empty());
         let stats = pool.stats();
         assert_eq!(stats.resident_bytes, 0);
-        assert_eq!(stats.elided_frees, 0);
+        assert_eq!(stats.writes_elided, 0);
     }
 
     #[mz_ore::test]
@@ -1695,7 +1695,7 @@ mod tests {
         assert!(pool.spill_step());
         let stats = pool.stats();
         assert_eq!(stats.spill_cancelled, 1);
-        assert_eq!(stats.elided_frees, 1, "freed before compression: elided");
+        assert_eq!(stats.writes_elided, 1, "freed before compression: elided");
         assert_eq!(stats.extent_bytes_written, 0, "no extent was written");
         assert_eq!(stats.resident_bytes, 0, "slot accounting settled");
     }
