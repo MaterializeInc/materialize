@@ -175,6 +175,8 @@ struct PoolInner {
     /// Number of live slotted chunks, which is the number of non-stale queue
     /// entries; [`PoolInner::prune_queue`] compacts the queue against it.
     live_slotted: AtomicU64,
+    /// Single-flight claim for budget enforcement.
+    enforcing: std::sync::atomic::AtomicBool,
     counters: Counters,
     spill: Spill,
 }
@@ -234,6 +236,10 @@ struct ChunkState {
     /// Set when the owning handle is dropped, so a queue entry upgraded
     /// concurrently with the free cannot touch a recycled slot.
     freed: bool,
+    /// Whether the chunk currently has an entry in the eviction queue. The
+    /// queue holds resident chunks only: entries are dropped when a visit
+    /// finds the chunk evicted, and fault-in re-enqueues.
+    queued: bool,
     /// The chunk's slot, held exactly while the chunk occupies pool memory
     /// (the resident states and `WriteInFlight`). Eviction returns the slot
     /// to the region free list; fault-in allocates a fresh one, so a chunk's
@@ -286,6 +292,7 @@ impl Pool {
             regions,
             queue: Mutex::new(VecDeque::new()),
             live_slotted: AtomicU64::new(0),
+            enforcing: std::sync::atomic::AtomicBool::new(false),
             counters: Counters::default(),
             spill: Spill::default(),
         })))
@@ -328,6 +335,7 @@ impl Pool {
                         pins: 0,
                         touched: false,
                         freed: false,
+                        queued: false,
                         slot: None,
                         extent: None,
                         oversize: None,
@@ -372,6 +380,7 @@ impl Pool {
                         pins: 0,
                         touched: false,
                         freed: false,
+                        queued: true,
                         slot: Some(slot),
                         extent: None,
                         oversize: None,
@@ -398,6 +407,7 @@ impl Pool {
                         pins: 0,
                         touched: false,
                         freed: false,
+                        queued: false,
                         slot: None,
                         extent: None,
                         oversize: Some(payload),
@@ -518,10 +528,14 @@ impl Pool {
     /// a shrink takes effect by evicting on this call, a grow simply leaves
     /// more headroom for future inserts and fault-ins.
     pub fn set_budget(&self, budget_bytes: usize) {
-        self.0
-            .budget_bytes
-            .store(u64::cast_from(budget_bytes), Ordering::Relaxed);
-        self.0.enforce_budget();
+        let new = u64::cast_from(budget_bytes);
+        let prev = self.0.budget_bytes.swap(new, Ordering::Relaxed);
+        // Config application calls this per worker per tick; only a change
+        // warrants an enforcement pass (a grow needs none, and inserts and
+        // fault-ins enforce continuously anyway).
+        if new < prev {
+            self.0.enforce_budget();
+        }
     }
 
     /// Test-only: the number of entries in the second-chance queue, live and
@@ -581,13 +595,28 @@ impl PoolInner {
     }
 
     fn enforce_budget(&self) {
+        // Single-flight: enforcement runs synchronously on whichever thread
+        // trips it (every insert and fault-in), and concurrent passes would
+        // convoy on the queue mutex doing redundant scans of the same
+        // candidates. One pass at a time reaches the budget just as well;
+        // skipped callers rely on the in-progress pass.
+        if self.enforcing.swap(true, Ordering::Acquire) {
+            return;
+        }
+        self.enforce_budget_inner();
+        self.enforcing.store(false, Ordering::Release);
+    }
+
+    fn enforce_budget_inner(&self) {
         self.prune_queue();
         let resident = |counters: &Counters| counters.resident_bytes.load(Ordering::Relaxed);
-        // Visit each queued chunk at most twice per call: a first visit may
-        // only clear the second-chance bit, so a second is needed before an
-        // over-budget call is guaranteed to evict every unpinned chunk it
-        // saw. The bound keeps a queue of pinned chunks from spinning this
-        // loop forever.
+        // The queue holds resident chunks only (evicted chunks leave it and
+        // fault-in re-enqueues), so a full pass is proportional to the
+        // resident set. Visit each queued chunk at most twice per call: a
+        // first visit may only clear the second-chance bit, so a second is
+        // needed before an over-budget call is guaranteed to evict every
+        // unpinned chunk it saw. The bound keeps a queue of pinned chunks
+        // from spinning this loop forever.
         let mut remaining = self
             .queue
             .lock()
@@ -616,6 +645,14 @@ impl PoolInner {
                     continue;
                 };
                 if state.freed {
+                    state.queued = false;
+                    false
+                } else if matches!(state.residency, Residency::Evicted | Residency::Oversize) {
+                    // Nothing to evict: drop the entry. A fault-in re-enqueues
+                    // the chunk, so the queue stays proportional to the
+                    // resident set rather than accumulating every chunk ever
+                    // evicted.
+                    state.queued = false;
                     false
                 } else if state.pins > 0 {
                     true
@@ -626,15 +663,17 @@ impl PoolInner {
                     state.residency = Residency::WriteInFlight;
                     drop(state);
                     self.spill_schedule(Arc::clone(&meta));
-                    // The chunk stays queued: completion makes it `Evicted`,
-                    // and a later fault-in makes it resident again without
-                    // re-inserting it.
+                    // Stays queued while in flight; once the spill commits to
+                    // `Evicted`, the next visit drops the entry.
                     true
                 } else {
                     self.evict_locked(&meta, &mut state);
-                    // An evicted chunk stays queued: a later fault-in makes
-                    // it resident again without re-inserting it.
-                    true
+                    if state.residency == Residency::Evicted {
+                        state.queued = false;
+                        false
+                    } else {
+                        true
+                    }
                 }
             };
             if requeue {
@@ -985,7 +1024,21 @@ impl ChunkHandle {
         };
         state.touched = true;
         state.pins += 1;
+        // A fault-in made the chunk resident again: re-enqueue it as an
+        // eviction candidate (its entry was dropped when a queue visit found
+        // it evicted). The flag dedups against entries still circulating.
+        let enqueue = faulted && !state.queued && state.residency != Residency::Oversize;
+        if enqueue {
+            state.queued = true;
+        }
         drop(state);
+        if enqueue {
+            meta.pool
+                .queue
+                .lock()
+                .expect("pool queue poisoned")
+                .push_back(Arc::downgrade(&self.meta));
+        }
         // Enforce after releasing the state lock: the enforcer locks chunk
         // states itself, and the pin count already shields this chunk from
         // being chosen as a victim.
@@ -1283,6 +1336,45 @@ mod tests {
         assert_eq!(&*a.pin(), &payload(SMALL, 6)[..]);
         drop(a);
         assert_eq!(&*b.pin(), &payload(SMALL, 7)[..]);
+    }
+
+    /// The eviction queue holds resident chunks only: an enforcement pass
+    /// drops entries for evicted chunks, and fault-in re-enqueues, so the
+    /// scan each insert pays stays proportional to the resident set rather
+    /// than every chunk ever evicted.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn queue_holds_resident_chunks_only() {
+        let pool = test_pool(128 << 10);
+        let mut handles = Vec::new();
+        for seed in 0..8 {
+            handles.push(pool.insert(&mut payload(SMALL, 800 + seed)));
+        }
+        // Budget pressure evicted ~6 of 8; one more pass visits the evicted
+        // entries and drops them (their first visit performed the eviction
+        // and dropped them already, but second-chance survivors may linger).
+        pool.enforce_budget();
+        let resident = handles
+            .iter()
+            .filter(|h| h.residency() != Residency::Evicted)
+            .count();
+        assert!(
+            pool.queue_len() <= resident + 1,
+            "queue ({}) tracks the resident set ({resident}), not all 8 live chunks",
+            pool.queue_len(),
+        );
+        // Fault one back in: it must become an eviction candidate again.
+        let evicted = handles
+            .iter()
+            .find(|h| h.residency() == Residency::Evicted)
+            .expect("something was evicted");
+        drop(evicted.pin());
+        pool.evict(evicted);
+        assert_eq!(
+            evicted.residency(),
+            Residency::Evicted,
+            "fault-in re-enqueued the chunk, so it could be evicted again",
+        );
     }
 
     #[mz_ore::test]
