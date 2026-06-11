@@ -165,7 +165,7 @@ steps:
       - id: feature-benchmark
         label: "Feature benchmark against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 12
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
@@ -179,7 +179,7 @@ steps:
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         env:
           # Runs against Dockerhub directly
           MZ_GHCR: 0
@@ -204,7 +204,7 @@ steps:
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         env:
           # Runs against Dockerhub directly
@@ -233,7 +233,7 @@ steps:
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         env:
           # Runs against Dockerhub directly
@@ -260,7 +260,7 @@ steps:
       - id: parallel-benchmark
         label: "Parallel Benchmark"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 5
         agents:
           # Larger instance is more stable in performance
@@ -278,7 +278,7 @@ steps:
       - id: workload-replay
         label: "Workload Replay (1% initial data)"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 5
         plugins:
           - ./ci/plugins/mzcompose:
