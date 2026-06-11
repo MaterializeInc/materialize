@@ -98,7 +98,7 @@ pub fn register(registry: &MetricsRegistry, policy: &'static TieredPolicy) {
         register_pool_gauge(registry, "spill_cancelled_total", "Scheduled evictions cancelled before completing (chunk freed or pinned).", |s| s.spill_cancelled);
         register_pool_gauge(registry, "spill_in_flight", "Spill entries queued or being processed.", |s| s.spill_in_flight);
         register_pool_gauge(registry, "slot_exhausted_fallbacks_total", "Inserts that fell back to unpageable heap chunks because their size class had no free slot.", |s| s.slot_exhausted_fallbacks);
-        register_pool_gauge(registry, "live_chunks", "Live slotted chunks, whatever their residency: the un-drained backlog in chunks, and the quantity that exhausts a class reservation.", |s| s.live_chunks);
+        register_pool_gauge(registry, "live_chunks", "Live pool chunks, whatever their residency: for backlog-shaped consumers, the un-drained backlog in chunks.", |s| s.live_chunks);
 
         PagerMetrics {
             skip_decisions_total: registry.register(metric!(

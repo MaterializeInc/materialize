@@ -122,7 +122,7 @@ flowchart TB
     Pages["column pages (leaves)"]
   end
   subgraph L2["Layer 2: buffer manager"]
-    Pool["size-class VM regions, stable addresses"]
+    Pool["size-class VM regions, pin-mediated access"]
     State["per-chunk state word + epochs"]
     IO["spill threads: write-behind, prefetch"]
   end
@@ -156,7 +156,7 @@ This implementation is shippable behind the existing `Handle` API as a drop-in r
 #### Swap-backed extents
 
 Where no filesystem exists, the extent store is anonymous memory the engine deliberately hands to kernel swap.
-An extent is an extent-sized anonymous allocation: "write" compresses the evicted chunk into it and issues `MADV_PAGEOUT`, pushing the pages to the swap device; "read" issues `MADV_WILLNEED` ahead of need — asynchronous swap-in, the backend's readahead mechanism — then decompresses back into the chunk's stable address; "free" is a plain deallocation, with any swapped copy discarded for free.
+An extent is an extent-sized anonymous allocation: "write" compresses the evicted chunk into it and issues `MADV_PAGEOUT`, pushing the pages to the swap device; "read" issues `MADV_WILLNEED` ahead of need — asynchronous swap-in, the backend's readahead mechanism — then decompresses into the chunk's freshly allocated slot; "free" is a plain deallocation, with any swapped copy discarded for free.
 
 This is the lz4 + `MADV_PAGEOUT` strategy of [#36948](https://github.com/MaterializeInc/materialize/pull/36948) generalized from a spill-path special case into the pool's backing layer: the same measured costs, the same ~5.6× reduction in swap traffic from compression, now with the pool's write elision and lifecycle policy above it and the Layer 3 format readable through it.
 The I/O executor choice applies unchanged — compress-plus-madvise runs on the evicting worker or on spill threads.
@@ -169,14 +169,18 @@ Where both backends are available, the choice is a config knob over the same int
 #### Address space and translation
 
 Reserve large anonymous virtual-memory regions per size class (Umbra's design): a 2 MiB class for batcher chunks and large column pages, hugepage-aligned, plus one or two smaller classes for Layer 3 pages and headers.
-Virtual reservation is `MAP_NORESERVE`-cheap; physical memory materializes on use and is released on eviction with batched `MADV_DONTNEED`, keeping the virtual slot.
+Virtual reservation is `MAP_NORESERVE`-cheap; physical memory materializes on use and is released on eviction with batched `MADV_DONTNEED`.
 The pool memory is not file-backed: the pool is a cache over the extent store, not a view of it, and data moves between the two only through explicit, engine-scheduled I/O — the kernel never transfers a byte in either direction, unlike both lgalloc (where the mapping is the file) and swap (where anonymous memory is implicitly device-backed).
 
-A chunk's virtual address is fixed for its lifetime, vmcache-style: fault-in is a `pread` into the same reserved range, so a fault never invalidates a pointer.
-This is the load-bearing property for Layer 3 — borrowed reads into pool memory survive evict/reload cycles — and it is why this design takes vmcache's stable identity over Umbra's pointer swizzling: swizzling permits relocation on reload and therefore requires fixing up an owner pointer, which would thread relocation logic through container code and invalidate outstanding borrows.
-Address-space slots are recycled only after a chunk is freed and an epoch grace period passes.
+Slots are scoped to residency: eviction returns a chunk's slot to a free list along with its physical pages, and fault-in allocates a fresh slot, so a chunk's address is stable only between a fault-in and the next eviction.
+Pointers into a chunk are valid only under a pin (or within an epoch), which blocks eviction; nothing may cache a raw pointer across pins — the same discipline the borrow-safety rules below already require.
+This is the classical buffer-manager position (frame and page identity decoupled, all access latch-mediated) rather than vmcache's, and the divergence is deliberate.
+vmcache fixes every page's address for the lifetime of the *database* in order to serve two consumers Materialize does not have: optimistic lock-free readers (which must be restartable — differential's cursors hand out borrows that cannot retry, and timely's worker-sharded arrangements make reader-side contention structurally absent anyway) and arbitrary reference graphs without pointer fix-up (all access here re-derives from the handle under a pin).
+What lifetime-stable addresses would cost is decisive at Materialize's scale: slot demand would track the *live* set — for backlog-shaped consumers, an unbounded un-drained backlog — putting a virtual-address ceiling on backlog size and, worse, accreting ~0.2% of peak backlog as unevictable page-table memory (vmcache budgets exactly this, ~2 GB DRAM per TB, and accepts it because its mapped entity is a bounded, purchased database; a transient queue inverts that economics).
+Residency-scoped slots make slot demand track the budget instead: touched address space, and therefore page tables, are bounded by peak residency, and reservations can be absurdly generous (the prototype reserves 1 TiB per class) without ever costing anything.
+Should an optimistic-read tier ever be wanted, relocation does not preclude it: regions stay mapped, so a speculative read of a reused slot returns wrong-but-safe bytes, and validation needs one slot-ownership check beyond the version compare.
 
-Translation is arithmetic on the chunk handle.
+Translation while resident is arithmetic on the chunk handle.
 There is no page table, no hash map, no latch on the resident path.
 
 #### Chunk states
@@ -248,7 +252,7 @@ Mitigation is granularity: 2 MiB chunks are ~500× fewer page-table operations p
 #### Compression
 
 Compression is a property of the extent, not the residency state.
-Resident form is always uncompressed at its stable address; lz4 (or stronger, see BtrBlocks under Prior art) is applied at write time by whichever thread performs the write (see I/O execution) and reversed at fault-in.
+Resident form is always uncompressed in its slot; lz4 (or stronger, see BtrBlocks under Prior art) is applied at write time by whichever thread performs the write (see I/O execution) and reversed at fault-in.
 This keeps codec CPU off the access path — and off worker threads entirely in the off-worker option — and removes today's oddity where `CompressedInner::Memory` holds lz4 bytes in resident memory — softened by the eager `MADV_PAGEOUT` of [#36948](https://github.com/MaterializeInc/materialize/pull/36948), but still kernel-managed on the way back in.
 
 ### Layer 3: paged sealed batches
@@ -257,7 +261,7 @@ This keeps codec CPU off the access path — and off worker threads entirely in 
 
 Differential batch storage is generic over containers: `OrdValBatch` is parameterized by a `Layout` whose `KeyContainer`, `ValContainer`, offset, time, and diff containers each implement `BatchContainer`, and Materialize already substitutes its own containers in `mz_row_spine`.
 A paged container — elements stored across Layer 2 chunks plus a small resident header — implements `BatchContainer` without forking `OrdValBatch` or cursor logic.
-Stable addresses make this sound: `index` returns a borrow into pool memory, valid because eviction cannot reclaim a page mid-borrow (epochs) and fault-in never moves data.
+Pin/epoch protection makes this sound: `index` returns a borrow into pool memory, valid because eviction cannot reclaim or relocate a page mid-borrow, and accessors re-derive their view from the handle rather than caching pointers across borrows.
 Differential's pending `Chunk` abstraction offers a cleaner, chunk-granular seam that this design prefers where available; see "Integration with differential's `Chunk` abstraction" below.
 
 #### What is free to vary, and what is not
@@ -353,7 +357,7 @@ If it lands, it is the natural differential-side landing zone for Layer 3, and s
 The integration is a third `Chunk` implementor whose backing is a Layer 2 pool handle rather than `Rc<Vec>`:
 
 * `Clone` is a handle refcount bump, satisfying the cheap-clone contract.
-* `cursor()` and the inner accessors fault evicted backing in through interior mutability and return borrows tied to `&self` — sound only because of stable addresses plus epoch protection; this consumer is what makes that machinery earn its keep.
+* `cursor()` and the inner accessors fault evicted backing in through interior mutability and return borrows tied to `&self` — sound because pin/epoch protection blocks eviction and relocation during the borrow, and every access re-derives from the handle; this consumer is what makes that machinery earn its keep.
 * `bounds()` serves from an owned resident copy captured at seal time (the trait already demands cheap endpoint access, and `ChunkBatch::new` calls it while the chunk is naturally resident); after construction, seeks touch no evicted chunk until an inner cursor opens.
 * `prune` overrides the default copy-merge with a range adjustment over shared storage, which the trait documentation already anticipates.
 
@@ -518,13 +522,13 @@ The design is an application of the modern buffer-manager literature to a worklo
 
 * **Umbra** (Neumann & Freitag, CIDR 2020, [pdf](https://db.in.tum.de/~freitag/papers/p29-neumann-cidr20.pdf)).
   Size-class anonymous VM regions, `MADV_DONTNEED` release, variable-size pages so large objects stay contiguous, and the stance that all data structures share one buffer-managed budget — Layers 1–2 adopt all four.
-  Umbra's versioned latches and pointer swizzling are replaced (see vmcache and epochs above) because immutability and yield-bounded borrows make them unnecessary.
+  Umbra's versioned latches and pointer swizzling are replaced by pins/epochs over residency-scoped slots, because immutability and yield-bounded borrows make them unnecessary.
 * **LeanStore** (Leis et al., ICDE 2018, [pdf](https://db.in.tum.de/~leis/papers/leanstore.pdf); NVMe redesign VLDB 2024).
   The governing insight: make the resident path free and pay translation only at the disk boundary.
   Its cooling-FIFO replacement policy survives here only as a backstop, because the engine has lifecycle knowledge LeanStore must speculate about.
 * **vmcache** (Leis et al., SIGMOD 2023, [pdf](https://www.cs.cit.tum.de/fileadmin/w00cfj/dis/_my_direct_uploads/vmcache.pdf)).
-  Stable virtual addresses as page identity, per-page atomic state words, explicit fault/evict.
-  Layer 2's chunk model is vmcache minus dirty states.
+  Per-page atomic state words and explicit fault/evict over anonymous memory; Layer 2's chunk model is vmcache minus dirty states.
+  Its lifetime-stable page addresses, however, are deliberately *not* adopted: vmcache maps virtual memory one-to-one with storage (paying a budgeted ~2 GB of page tables per TB) to serve optimistic restartable readers and pointer graphs, neither of which exists here, and backlog-shaped state inverts the economics — see "Address space and translation".
   Its companion measurement — eviction throughput ceilinged by `madvise`/TLB-shootdown costs, fixed there by the exmap kernel module — is the constraint our 2 MiB granularity is designed around.
 * **mmap critique** (Crotty et al., CIDR 2022, [pdf](https://db.cs.cmu.edu/papers/2022/cidr2022-p13-crotty.pdf)).
   Why kernel-controlled paging (including our swap backend) fails: unschedulable synchronous faults, single-threaded reclaim, TLB shootdowns.

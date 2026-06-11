@@ -17,10 +17,16 @@
 //! `doc/developer/design/20260610_buffer_managed_state.md`.
 //!
 //! The pool is the cache: size-class anonymous virtual-memory regions whose
-//! slot addresses are stable for a chunk's whole lifetime, so a fault-in never
-//! invalidates a pointer. The backing is the swap-backed extent store of the
-//! design's Layer 1: a page-aligned anonymous allocation holding the chunk's
-//! lz4-compressed bytes, pushed to the swap device with `MADV_PAGEOUT`.
+//! slots hold resident chunks. Slots are scoped to residency — eviction
+//! returns a chunk's slot to the free list along with its physical pages, and
+//! fault-in allocates a fresh one — so slot demand tracks the resident set
+//! (bounded by the budget), not the potentially unbounded live backlog, and
+//! a chunk's address is stable only between a fault-in and the next eviction.
+//! Pointers into a chunk are valid only under a [`PinGuard`], which blocks
+//! eviction; nothing may cache a pointer across pins. The backing is the
+//! swap-backed extent store of the design's Layer 1: a page-aligned anonymous
+//! allocation holding the chunk's lz4-compressed bytes, pushed to the swap
+//! device with `MADV_PAGEOUT`.
 //!
 //! Residency is a state, not a type. This prototype uses the design's
 //! synchronous executor, so the `WriteInFlight` and `Faulting` transitions
@@ -53,11 +59,12 @@ pub struct PoolConfig {
     /// uncompressed bytes of resident chunks fall to this bound.
     pub budget_bytes: usize,
     /// Virtual reservation per size class. Purely virtual: physical memory
-    /// materializes only for slots in use. Sizing rule: every live chunk
-    /// holds a slot for its lifetime (evicted chunks keep their virtual slot
-    /// for address stability), so this must exceed the largest plausible
-    /// live set per class — for backlog-shaped consumers like the upsert
-    /// stash, that is the whole un-drained backlog, not the resident budget.
+    /// materializes only for slots in use, and slots are scoped to residency,
+    /// so this must exceed the largest plausible *resident* set per class —
+    /// the budget plus pinned and in-flight slack, not the backlog. The
+    /// default is deliberately enormous (address space costs nothing, and
+    /// touched pages are bounded by peak residency) so that no realistic
+    /// budget, on any machine size, reaches the heap-fallback path.
     pub class_capacity_bytes: usize,
 }
 
@@ -84,8 +91,9 @@ pub enum Residency {
     /// (or [`Residency::BackedResident`] if pins appeared meanwhile); a free
     /// or a pin observed at dequeue cancels the write instead.
     WriteInFlight,
-    /// Extent copy only. The pool slot's contents are undefined and must
-    /// never be read; access faults the chunk back in from the extent.
+    /// Extent copy only; the chunk holds no slot. Access faults it back in
+    /// from the extent into a freshly allocated slot, so its address may
+    /// differ from its last residence.
     Evicted,
     /// Larger than the largest size class; held as a plain heap allocation,
     /// always resident. A prototype limitation, not a design state.
@@ -121,10 +129,10 @@ pub struct PoolStats {
     /// free slot (the live set outgrew the class reservation). Heap-backed
     /// chunks behave like oversize ones: always resident, never paged.
     pub slot_exhausted_fallbacks: u64,
-    /// Live slotted chunks across all classes: every chunk holding a virtual
-    /// slot, whatever its residency. This is the quantity that exhausts a
-    /// class reservation — for backlog-shaped consumers it tracks the
-    /// un-drained backlog in chunks.
+    /// Live size-classed chunks across all classes, whatever their residency.
+    /// For backlog-shaped consumers this tracks the un-drained backlog in
+    /// chunks. (Slots are scoped to residency, so the quantity that exhausts
+    /// a class reservation is the resident subset, bounded by the budget.)
     pub live_chunks: u64,
     /// Uncompressed bytes of currently resident chunks (including oversize).
     pub resident_bytes: u64,
@@ -209,8 +217,10 @@ struct ChunkMeta {
     pool: Arc<PoolInner>,
     /// Length in `u64` words; immutable.
     len: usize,
-    /// `None` for empty and oversize chunks; immutable.
-    slot: Option<Slot>,
+    /// Size class for slot allocations; `None` for empty chunks and payloads
+    /// beyond the largest class. Immutable: the chunk's *slot* comes and goes
+    /// with residency, but it is always drawn from this class.
+    class: Option<usize>,
     state: Mutex<ChunkState>,
 }
 
@@ -224,6 +234,13 @@ struct ChunkState {
     /// Set when the owning handle is dropped, so a queue entry upgraded
     /// concurrently with the free cannot touch a recycled slot.
     freed: bool,
+    /// The chunk's slot, held exactly while the chunk occupies pool memory
+    /// (the resident states and `WriteInFlight`). Eviction returns the slot
+    /// to the region free list; fault-in allocates a fresh one, so a chunk's
+    /// address is stable only between a fault-in and the next eviction.
+    /// Pointers into the slot are valid only under a pin, which blocks
+    /// eviction.
+    slot: Option<Slot>,
     /// The backing copy; present exactly in the `BackedResident` and
     /// `Evicted` states.
     extent: Option<SwapExtent>,
@@ -238,11 +255,11 @@ impl ChunkMeta {
 }
 
 /// Handle to one immutable chunk in a [`Pool`]. Dropping the handle frees the
-/// chunk: the slot's physical pages are released, the slot returns to the
-/// region free list, and the extent (if any) is deallocated, discarding any
-/// swapped copy for free. Releasing the pages keeps RSS aligned with the
-/// `resident_bytes` gauge the budget enforcer trusts; without it, freed slots
-/// would hold warm pages the enforcer cannot see.
+/// chunk: the slot (if resident) returns to the region free list with its
+/// physical pages released, and the extent (if any) is deallocated,
+/// discarding any swapped copy for free. Releasing the pages keeps RSS
+/// aligned with the `resident_bytes` gauge the budget enforcer trusts;
+/// without it, freed slots would hold warm pages the enforcer cannot see.
 #[derive(Debug)]
 pub struct ChunkHandle {
     meta: Arc<ChunkMeta>,
@@ -305,12 +322,13 @@ impl Pool {
                 meta: Arc::new(ChunkMeta {
                     pool: Arc::clone(inner),
                     len: 0,
-                    slot: None,
+                    class: None,
                     state: Mutex::new(ChunkState {
                         residency: Residency::UnbackedResident,
                         pins: 0,
                         touched: false,
                         freed: false,
+                        slot: None,
                         extent: None,
                         oversize: None,
                     }),
@@ -319,29 +337,18 @@ impl Pool {
         }
         let class = SIZE_CLASSES.iter().position(|&c| c >= len_bytes);
         // A class with no free slot degrades to the heap path below: the
-        // live set outgrew the class reservation, and an unpageable chunk
+        // resident set outgrew the class reservation, and an unpageable chunk
         // beats a dead replica. Warn once; the fallback counter tracks scale.
-        let class = class.and_then(|class| {
+        let slot = class.and_then(|class| {
             let index = inner.regions[class].alloc()?;
-            Some((class, index))
+            Some(Slot { class, index })
         });
-        if class.is_none() && len_bytes <= SIZE_CLASSES[SIZE_CLASSES.len() - 1] {
-            inner
-                .counters
-                .slot_exhausted_fallbacks
-                .fetch_add(1, Ordering::Relaxed);
-            static EXHAUSTED_ONCE: std::sync::Once = std::sync::Once::new();
-            EXHAUSTED_ONCE.call_once(|| {
-                tracing::warn!(
-                    len_bytes,
-                    "buffer pool size class exhausted; falling back to heap chunks \
-                     (raise PoolConfig::class_capacity_bytes)",
-                );
-            });
+        if slot.is_none() && class.is_some() {
+            inner.note_slot_exhausted(len_bytes);
         }
-        let meta = match class {
-            Some((class, index)) => {
-                let region = &inner.regions[class];
+        let meta = match slot {
+            Some(slot) => {
+                let region = &inner.regions[slot.class];
                 // SAFETY: the freshly allocated slot is at least `len_bytes`
                 // long (the class fits the payload) and is exclusively owned
                 // by this not-yet-shared chunk, so the mutable borrow is
@@ -349,7 +356,7 @@ impl Pool {
                 // no validity requirements beyond size, so exposing the
                 // unspecified prior contents through `&mut [u64]` is sound.
                 let dst = unsafe {
-                    std::slice::from_raw_parts_mut(region.slot_ptr(index).cast::<u64>(), len)
+                    std::slice::from_raw_parts_mut(region.slot_ptr(slot.index).cast::<u64>(), len)
                 };
                 fill(dst);
                 inner
@@ -359,12 +366,13 @@ impl Pool {
                 ChunkMeta {
                     pool: Arc::clone(inner),
                     len,
-                    slot: Some(Slot { class, index }),
+                    class,
                     state: Mutex::new(ChunkState {
                         residency: Residency::UnbackedResident,
                         pins: 0,
                         touched: false,
                         freed: false,
+                        slot: Some(slot),
                         extent: None,
                         oversize: None,
                     }),
@@ -384,12 +392,13 @@ impl Pool {
                 ChunkMeta {
                     pool: Arc::clone(inner),
                     len,
-                    slot: None,
+                    class: None,
                     state: Mutex::new(ChunkState {
                         residency: Residency::Oversize,
                         pins: 0,
                         touched: false,
                         freed: false,
+                        slot: None,
                         extent: None,
                         oversize: Some(payload),
                     }),
@@ -397,7 +406,7 @@ impl Pool {
             }
         };
         let meta = Arc::new(meta);
-        if meta.slot.is_some() {
+        if meta.class.is_some() {
             inner.live_slotted.fetch_add(1, Ordering::Relaxed);
             inner
                 .queue
@@ -542,28 +551,17 @@ impl Pool {
         meta.pool.evict_locked(meta, &mut state);
     }
 
-    /// Test hook: overwrites the chunk's slot bytes with `0xDE` if it has a
-    /// slot and is unpinned, regardless of residency state. Simulates the
-    /// kernel discarding `MADV_DONTNEED`ed pages — which macOS may not do —
-    /// so tests can prove that fault-in reads the extent rather than stale
-    /// slot memory.
+    /// Test hook: overwrites every free slot's bytes with `0xDE`. The free
+    /// list can hand a faulting chunk the very slot it occupied before
+    /// eviction, still holding its old bytes on platforms where
+    /// `MADV_DONTNEED` keeps contents (macOS); poisoning lets tests prove
+    /// that fault-in decompresses from the extent rather than passing stale
+    /// slot memory through.
     #[doc(hidden)]
-    pub fn poison_resident(&self, handle: &ChunkHandle) {
-        let state = handle.meta.state.lock().expect("chunk state poisoned");
-        let Some(slot) = handle.meta.slot else {
-            return;
-        };
-        if state.pins > 0 || state.freed || state.residency == Residency::WriteInFlight {
-            return;
+    pub fn poison_free_slots(&self) {
+        for region in &self.0.regions {
+            region.poison_free_slots();
         }
-        let region = &handle.meta.pool.regions[slot.class];
-        // SAFETY: the slot belongs to this live chunk and `pins == 0` under
-        // the state lock, so no `PinGuard` borrow into it exists; the write
-        // stays within the slot (`len_bytes` fits the class).
-        unsafe {
-            std::ptr::write_bytes(region.slot_ptr(slot.index), 0xDE, handle.meta.len_bytes());
-        }
-        drop(state);
     }
 }
 
@@ -649,7 +647,7 @@ impl PoolInner {
     }
 
     fn evict_locked(&self, meta: &ChunkMeta, state: &mut ChunkState) {
-        let Some(slot) = meta.slot else {
+        let Some(slot) = state.slot else {
             return;
         };
         if state.pins > 0 || state.freed {
@@ -686,16 +684,38 @@ impl PoolInner {
         }
         // SAFETY: the slot belongs to this live chunk with no pins (checked
         // above under the state lock), so no reference into it exists. The
-        // chunk transitions to `Evicted` below, and every path that reads the
-        // slot again first overwrites it in full from the extent, satisfying
-        // the contents-undefined contract of `dontneed`.
+        // slot returns to the free list below; its next occupant fully
+        // overwrites every byte it reads, satisfying the contents-undefined
+        // contract of `dontneed`.
         unsafe {
             region::dontneed(region.slot_ptr(slot.index), region.class_size());
         }
+        // Slots are scoped to residency: eviction releases the slot along
+        // with its physical pages, so slot demand tracks the resident set
+        // rather than the (potentially unbounded) live backlog. Fault-in
+        // allocates a fresh slot; addresses are stable only while resident.
+        region.free(slot.index);
+        state.slot = None;
         state.residency = Residency::Evicted;
         self.counters
             .resident_bytes
             .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+    }
+
+    /// Records and (once) warns about a size-class slot exhaustion forcing a
+    /// heap fallback.
+    fn note_slot_exhausted(&self, len_bytes: usize) {
+        self.counters
+            .slot_exhausted_fallbacks
+            .fetch_add(1, Ordering::Relaxed);
+        static EXHAUSTED_ONCE: std::sync::Once = std::sync::Once::new();
+        EXHAUSTED_ONCE.call_once(|| {
+            tracing::warn!(
+                len_bytes,
+                "buffer pool size class exhausted; falling back to heap chunks \
+                 (raise PoolConfig::class_capacity_bytes)",
+            );
+        });
     }
 
     /// Whether the next eviction should be handed to spill threads: enabled,
@@ -745,7 +765,11 @@ impl PoolInner {
     /// compression or the `pageout` reclaim, which are the multi-millisecond
     /// costs this path exists to keep off budget-enforcing threads.
     fn spill_process(&self, meta: &Arc<ChunkMeta>) {
-        // Validate under the lock, then release it for the I/O.
+        // Validate under the lock, then release it for the I/O. The slot is
+        // captured under the lock and remains owned by this chunk for the
+        // unlocked compression: in `WriteInFlight`, eviction skips the chunk
+        // and `ChunkHandle::drop` defers slot release to this thread.
+        let slot;
         {
             let mut state = meta.state.lock().expect("chunk state poisoned");
             if state.freed {
@@ -760,7 +784,7 @@ impl PoolInner {
                 self.counters
                     .resident_bytes
                     .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
-                self.release_slot_locked(meta, true);
+                self.release_slot_locked(&mut state, true);
                 return;
             }
             if state.residency != Residency::WriteInFlight {
@@ -776,8 +800,8 @@ impl PoolInner {
                     .fetch_add(1, Ordering::Relaxed);
                 return;
             }
+            slot = state.slot.expect("write-in-flight chunk has a slot");
         }
-        let slot = meta.slot.expect("write-in-flight chunk has a slot");
         let region = &self.regions[slot.class];
         // SAFETY: the chunk is live (the queue holds an `Arc`) and in
         // `WriteInFlight`, so the slot is not recycled (`ChunkHandle::drop`
@@ -802,7 +826,7 @@ impl PoolInner {
             self.counters
                 .resident_bytes
                 .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
-            self.release_slot_locked(meta, true);
+            self.release_slot_locked(&mut state, true);
             return;
         }
         self.counters
@@ -819,12 +843,14 @@ impl PoolInner {
             return;
         }
         // SAFETY: `pins == 0` under the state lock, so no reference into the
-        // slot exists; every later read first overwrites the slot in full
-        // from the extent, satisfying `dontneed`'s contents-undefined
-        // contract.
+        // slot exists; the slot returns to the free list below and its next
+        // occupant fully overwrites every byte it reads, satisfying
+        // `dontneed`'s contents-undefined contract.
         unsafe {
             region::dontneed(region.slot_ptr(slot.index), region.class_size());
         }
+        region.free(slot.index);
+        state.slot = None;
         state.residency = Residency::Evicted;
         self.counters
             .resident_bytes
@@ -835,8 +861,8 @@ impl PoolInner {
     /// list, for the deferred-cleanup paths where `ChunkHandle::drop`
     /// observed `WriteInFlight` and left slot ownership with the spill
     /// thread.
-    fn release_slot_locked(&self, meta: &ChunkMeta, resident: bool) {
-        let slot = meta.slot.expect("slotted chunk");
+    fn release_slot_locked(&self, state: &mut ChunkState, resident: bool) {
+        let slot = state.slot.take().expect("slotted chunk");
         let region = &self.regions[slot.class];
         if resident {
             // SAFETY: the handle is gone (`freed` observed under the state
@@ -894,29 +920,61 @@ impl ChunkHandle {
                 payload.as_ptr()
             }
             Residency::Evicted => {
-                let slot = meta.slot.expect("evicted chunk has a slot");
-                let region = &meta.pool.regions[slot.class];
-                let slot_ptr = region.slot_ptr(slot.index);
-                // SAFETY: the slot belongs to this live chunk, the state lock
-                // is held and `pins == 0` in the `Evicted` state, so no other
-                // reference into the slot exists; `len_bytes` fits the class.
-                let dst = unsafe { std::slice::from_raw_parts_mut(slot_ptr, meta.len_bytes()) };
-                state
-                    .extent
-                    .as_ref()
-                    .expect("evicted chunk has an extent")
-                    .read_into(dst);
-                state.residency = Residency::BackedResident;
+                // Fault-in allocates a fresh slot: slots are scoped to
+                // residency, so the chunk's address may differ from its last
+                // residence. If the class is exhausted, decompress to the
+                // heap instead and let the chunk live out its days as an
+                // oversize-style resident — degraded, never dead.
+                let class = meta.class.expect("evicted chunk has a size class");
                 faulted = true;
                 meta.pool.counters.faults.fetch_add(1, Ordering::Relaxed);
                 meta.pool
                     .counters
                     .resident_bytes
                     .fetch_add(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
-                slot_ptr.cast_const().cast::<u64>()
+                match meta.pool.regions[class].alloc() {
+                    Some(index) => {
+                        let slot = Slot { class, index };
+                        let region = &meta.pool.regions[class];
+                        let slot_ptr = region.slot_ptr(slot.index);
+                        // SAFETY: the freshly allocated slot is exclusively
+                        // owned by this chunk under the held state lock, so
+                        // no other reference into it exists; `len_bytes` fits
+                        // the class.
+                        let dst =
+                            unsafe { std::slice::from_raw_parts_mut(slot_ptr, meta.len_bytes()) };
+                        state
+                            .extent
+                            .as_ref()
+                            .expect("evicted chunk has an extent")
+                            .read_into(dst);
+                        state.slot = Some(slot);
+                        state.residency = Residency::BackedResident;
+                        slot_ptr.cast_const().cast::<u64>()
+                    }
+                    None => {
+                        meta.pool.note_slot_exhausted(meta.len_bytes());
+                        let mut payload = vec![0u64; meta.len];
+                        let dst: &mut [u8] = bytemuck::cast_slice_mut(payload.as_mut_slice());
+                        state
+                            .extent
+                            .as_ref()
+                            .expect("evicted chunk has an extent")
+                            .read_into(dst);
+                        state.extent = None;
+                        let ptr = payload.as_ptr();
+                        state.oversize = Some(payload);
+                        state.residency = Residency::Oversize;
+                        meta.pool
+                            .counters
+                            .oversize_bytes
+                            .fetch_add(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+                        ptr
+                    }
+                }
             }
             Residency::UnbackedResident | Residency::BackedResident | Residency::WriteInFlight => {
-                match meta.slot {
+                match state.slot {
                     Some(slot) => meta.pool.regions[slot.class]
                         .slot_ptr(slot.index)
                         .cast_const()
@@ -966,7 +1024,7 @@ impl ChunkHandle {
     /// empty and oversize chunks.
     #[cfg(test)]
     pub(crate) fn size_class_bytes(&self) -> Option<usize> {
-        self.meta.slot.map(|slot| SIZE_CLASSES[slot.class])
+        self.meta.class.map(|class| SIZE_CLASSES[class])
     }
 }
 
@@ -977,7 +1035,7 @@ impl Drop for ChunkHandle {
         debug_assert_eq!(state.pins, 0, "chunk freed while pinned");
         pool.counters.frees.fetch_add(1, Ordering::Relaxed);
         state.freed = true;
-        if self.meta.slot.is_some() {
+        if self.meta.class.is_some() {
             pool.live_slotted.fetch_sub(1, Ordering::Relaxed);
         }
         let len_bytes = u64::cast_from(self.meta.len_bytes());
@@ -1003,7 +1061,7 @@ impl Drop for ChunkHandle {
         };
         match state.residency {
             Residency::UnbackedResident => {
-                if let Some(slot) = self.meta.slot {
+                if let Some(slot) = state.slot.take() {
                     pool.counters.elided_frees.fetch_add(1, Ordering::Relaxed);
                     pool.counters
                         .resident_bytes
@@ -1012,7 +1070,7 @@ impl Drop for ChunkHandle {
                 }
             }
             Residency::BackedResident => {
-                let slot = self.meta.slot.expect("backed chunk has a slot");
+                let slot = state.slot.take().expect("backed chunk has a slot");
                 pool.counters
                     .resident_bytes
                     .fetch_sub(len_bytes, Ordering::Relaxed);
@@ -1020,9 +1078,8 @@ impl Drop for ChunkHandle {
                 state.extent = None;
             }
             Residency::Evicted => {
-                let slot = self.meta.slot.expect("evicted chunk has a slot");
-                // Eviction already released the slot's pages.
-                release_slot(slot, false);
+                // Eviction already released the slot.
+                debug_assert!(state.slot.is_none(), "evicted chunk holds no slot");
                 state.extent = None;
             }
             Residency::WriteInFlight => {
@@ -1050,10 +1107,11 @@ impl Deref for PinGuard<'_> {
     fn deref(&self) -> &[u64] {
         // SAFETY: `ptr`/`len` were captured under the chunk's state lock with
         // the pin count incremented. Eviction, poisoning, and freeing all
-        // check the pin count under that lock and skip pinned chunks, and
-        // chunks are immutable after insert, so the pointee is initialized,
-        // valid, and unaliased by writers for the guard's lifetime. Slot
-        // addresses are stable, and for the empty chunk `ptr` is a dangling
+        // check the pin count under that lock and skip pinned chunks, so the
+        // chunk's slot (or heap payload) cannot be released or relocated
+        // while this guard lives, and chunks are immutable after insert, so
+        // the pointee is initialized, valid, and unaliased by writers for the
+        // guard's lifetime. For the empty chunk `ptr` is a dangling
         // well-aligned pointer, which is valid for a zero-length slice.
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
@@ -1148,9 +1206,10 @@ mod tests {
         let orig = payload(SMALL, 3);
         let handle = pool.insert(&mut orig.clone());
         pool.evict(&handle);
-        // On macOS `MADV_DONTNEED` may leave the old bytes resident; poison
-        // the slot so a fault-in that read stale slot memory would fail.
-        pool.poison_resident(&handle);
+        // The free list can hand fault-in the chunk's previous slot, and on
+        // macOS `MADV_DONTNEED` may have left the old bytes in it; poison all
+        // free slots so a fault-in passing stale memory through would fail.
+        pool.poison_free_slots();
         let pin = handle.pin();
         assert_eq!(&*pin, orig.as_slice());
     }
@@ -1198,21 +1257,32 @@ mod tests {
         assert_eq!(handle.residency(), Residency::Evicted);
     }
 
+    /// Slots are scoped to residency: eviction releases the slot, so a
+    /// capacity holding exactly one chunk can serve any number of chunks one
+    /// at a time. (Addresses are deliberately NOT stable across evictions —
+    /// pointers are valid only under a pin.)
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
-    fn addresses_are_stable_across_eviction() {
-        let pool = test_pool(256 << 20);
-        let handle = pool.insert(&mut payload(SMALL, 6));
-        let before = {
-            let pin = handle.pin();
-            pin.as_ptr()
-        };
-        pool.evict(&handle);
-        let after = {
-            let pin = handle.pin();
-            pin.as_ptr()
-        };
-        assert_eq!(before, after, "fault-in must not move the chunk");
+    fn eviction_releases_the_slot() {
+        // One 64 KiB slot per class.
+        let pool = Pool::new(PoolConfig {
+            budget_bytes: usize::MAX,
+            class_capacity_bytes: 64 << 10,
+        })
+        .expect("pool creation");
+        let a = pool.insert(&mut payload(SMALL, 6));
+        pool.evict(&a);
+        // The class's only slot is free again: a second chunk fits without
+        // falling back to the heap.
+        let b = pool.insert(&mut payload(SMALL, 7));
+        assert_eq!(b.residency(), Residency::UnbackedResident);
+        assert_eq!(pool.stats().slot_exhausted_fallbacks, 0);
+        // Faulting `a` back in needs the slot `b` now holds: evict `b` first,
+        // then both round-trip through their extents.
+        pool.evict(&b);
+        assert_eq!(&*a.pin(), &payload(SMALL, 6)[..]);
+        drop(a);
+        assert_eq!(&*b.pin(), &payload(SMALL, 7)[..]);
     }
 
     #[mz_ore::test]
@@ -1525,14 +1595,13 @@ mod tests {
             let pin = h.pin();
             assert_eq!(&pin[..3], &payload(SMALL, 400)[..3]);
         }
-        // The pin set `touched` and a pin existed at processing time? No —
-        // the guard dropped, so processing commits the eviction.
+        // The guard dropped before processing, so the eviction commits.
         assert!(pool.spill_step());
         assert_eq!(h.residency(), Residency::Evicted);
         let stats = pool.stats();
         assert_eq!(stats.spill_scheduled, 1);
         assert_eq!(stats.evictions_compress, 1);
-        pool.poison_resident(&h);
+        pool.poison_free_slots();
         let pin = h.pin();
         assert_eq!(&*pin, &payload(SMALL, 400)[..]);
     }
