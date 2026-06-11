@@ -67,7 +67,21 @@ impl Region {
     pub(crate) fn new(class_size: usize, capacity_bytes: usize) -> io::Result<Region> {
         assert!(class_size > 0 && class_size % page_size() == 0);
         let capacity = capacity_bytes - capacity_bytes % class_size;
-        assert!(capacity > 0, "region capacity smaller than one slot");
+        if capacity == 0 {
+            // A capacity below one slot yields an empty region: `alloc`
+            // always answers `None` and the caller's exhaustion fallback
+            // carries the class. No mapping exists; drop has nothing to do.
+            return Ok(Region {
+                base: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+                capacity: 0,
+                class_size,
+                slots: Mutex::new(SlotAllocator {
+                    free: Vec::new(),
+                    high_water: 0,
+                    max_slots: 0,
+                }),
+            });
+        }
         let max_slots = u32::try_from(capacity / class_size).expect("slot count fits u32");
         #[cfg(target_os = "linux")]
         let flags = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE;
@@ -106,23 +120,21 @@ impl Region {
         self.class_size
     }
 
-    /// Allocates a slot index. Panics if the region is exhausted; the
-    /// prototype reserves enough virtual space that exhaustion indicates a
-    /// misconfigured `class_capacity_bytes`.
-    pub(crate) fn alloc(&self) -> u32 {
+    /// Allocates a slot index, or `None` if every slot of the class is live.
+    /// Slot demand scales with live chunks (an evicted chunk keeps its slot
+    /// for address stability), so exhaustion means the workload's live set
+    /// outgrew `class_capacity_bytes`; callers degrade rather than fail.
+    pub(crate) fn alloc(&self) -> Option<u32> {
         let mut slots = self.slots.lock().expect("region allocator poisoned");
         if let Some(slot) = slots.free.pop() {
-            return slot;
+            return Some(slot);
         }
         if slots.high_water == slots.max_slots {
-            panic!(
-                "buffer pool region exhausted: all {} slots of the {} byte class are live",
-                slots.max_slots, self.class_size,
-            );
+            return None;
         }
         let slot = slots.high_water;
         slots.high_water += 1;
-        slot
+        Some(slot)
     }
 
     /// Returns a slot to the free list. The caller must be freeing the chunk
@@ -146,6 +158,10 @@ impl Region {
 
 impl Drop for Region {
     fn drop(&mut self) {
+        // Empty regions never created a mapping.
+        if self.capacity == 0 {
+            return;
+        }
         // SAFETY: `base`/`capacity` describe exactly the mapping created in
         // `new`, and dropping the region means no chunk (and hence no
         // outstanding borrow) refers into it any longer.
@@ -243,32 +259,31 @@ mod tests {
     #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
     fn alloc_free_reuses_slots() {
         let region = Region::new(64 << 10, 1 << 20).expect("mmap");
-        let a = region.alloc();
-        let b = region.alloc();
+        let a = region.alloc().expect("slot");
+        let b = region.alloc().expect("slot");
         assert_ne!(a, b);
         assert_ne!(region.slot_ptr(a), region.slot_ptr(b));
         let ptr_a = region.slot_ptr(a);
         region.free(a);
-        let c = region.alloc();
+        let c = region.alloc().expect("slot");
         assert_eq!(c, a);
         assert_eq!(region.slot_ptr(c), ptr_a);
     }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
-    #[should_panic(expected = "buffer pool region exhausted")]
-    fn exhaustion_panics() {
+    fn exhaustion_returns_none() {
         let region = Region::new(64 << 10, 128 << 10).expect("mmap");
-        region.alloc();
-        region.alloc();
-        region.alloc();
+        assert!(region.alloc().is_some());
+        assert!(region.alloc().is_some());
+        assert!(region.alloc().is_none(), "third slot exceeds capacity");
     }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
     fn slots_are_writable_and_advice_is_accepted() {
         let region = Region::new(64 << 10, 1 << 20).expect("mmap");
-        let slot = region.alloc();
+        let slot = region.alloc().expect("slot");
         let ptr = region.slot_ptr(slot);
         // SAFETY: freshly allocated slot, exclusively owned by this test.
         unsafe {

@@ -53,7 +53,11 @@ pub struct PoolConfig {
     /// uncompressed bytes of resident chunks fall to this bound.
     pub budget_bytes: usize,
     /// Virtual reservation per size class. Purely virtual: physical memory
-    /// materializes only for slots in use.
+    /// materializes only for slots in use. Sizing rule: every live chunk
+    /// holds a slot for its lifetime (evicted chunks keep their virtual slot
+    /// for address stability), so this must exceed the largest plausible
+    /// live set per class — for backlog-shaped consumers like the upsert
+    /// stash, that is the whole un-drained backlog, not the resident budget.
     pub class_capacity_bytes: usize,
 }
 
@@ -61,7 +65,7 @@ impl Default for PoolConfig {
     fn default() -> Self {
         PoolConfig {
             budget_bytes: 256 << 20,
-            class_capacity_bytes: 4 << 30,
+            class_capacity_bytes: 1 << 40,
         }
     }
 }
@@ -113,6 +117,15 @@ pub struct PoolStats {
     pub spill_cancelled: u64,
     /// Entries currently queued for or being processed by spill threads.
     pub spill_in_flight: u64,
+    /// Inserts that fell back to the heap because their size class had no
+    /// free slot (the live set outgrew the class reservation). Heap-backed
+    /// chunks behave like oversize ones: always resident, never paged.
+    pub slot_exhausted_fallbacks: u64,
+    /// Live slotted chunks across all classes: every chunk holding a virtual
+    /// slot, whatever its residency. This is the quantity that exhausts a
+    /// class reservation — for backlog-shaped consumers it tracks the
+    /// un-drained backlog in chunks.
+    pub live_chunks: u64,
     /// Uncompressed bytes of currently resident chunks (including oversize).
     pub resident_bytes: u64,
     /// Uncompressed bytes of live oversize chunks.
@@ -124,6 +137,7 @@ struct Counters {
     inserts: AtomicU64,
     spill_scheduled: AtomicU64,
     spill_cancelled: AtomicU64,
+    slot_exhausted_fallbacks: AtomicU64,
     frees: AtomicU64,
     elided_frees: AtomicU64,
     evictions_compress: AtomicU64,
@@ -304,10 +318,30 @@ impl Pool {
             };
         }
         let class = SIZE_CLASSES.iter().position(|&c| c >= len_bytes);
+        // A class with no free slot degrades to the heap path below: the
+        // live set outgrew the class reservation, and an unpageable chunk
+        // beats a dead replica. Warn once; the fallback counter tracks scale.
+        let class = class.and_then(|class| {
+            let index = inner.regions[class].alloc()?;
+            Some((class, index))
+        });
+        if class.is_none() && len_bytes <= SIZE_CLASSES[SIZE_CLASSES.len() - 1] {
+            inner
+                .counters
+                .slot_exhausted_fallbacks
+                .fetch_add(1, Ordering::Relaxed);
+            static EXHAUSTED_ONCE: std::sync::Once = std::sync::Once::new();
+            EXHAUSTED_ONCE.call_once(|| {
+                tracing::warn!(
+                    len_bytes,
+                    "buffer pool size class exhausted; falling back to heap chunks \
+                     (raise PoolConfig::class_capacity_bytes)",
+                );
+            });
+        }
         let meta = match class {
-            Some(class) => {
+            Some((class, index)) => {
                 let region = &inner.regions[class];
-                let index = region.alloc();
                 // SAFETY: the freshly allocated slot is at least `len_bytes`
                 // long (the class fits the payload) and is exclusively owned
                 // by this not-yet-shared chunk, so the mutable borrow is
@@ -391,6 +425,8 @@ impl Pool {
             spill_scheduled: c.spill_scheduled.load(Ordering::Relaxed),
             spill_cancelled: c.spill_cancelled.load(Ordering::Relaxed),
             spill_in_flight: self.0.spill.in_flight.load(Ordering::Relaxed),
+            slot_exhausted_fallbacks: c.slot_exhausted_fallbacks.load(Ordering::Relaxed),
+            live_chunks: self.0.live_slotted.load(Ordering::Relaxed),
         }
     }
 
@@ -1577,5 +1613,34 @@ mod tests {
         let big = pool.insert_with(big_len, |dst| dst.fill(7));
         assert_eq!(big.residency(), Residency::Oversize);
         assert_eq!(big.pin().len(), big_len);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn slot_exhaustion_degrades_to_heap() {
+        // Two 64 KiB slots per class at this capacity; the third insert finds
+        // no slot and must fall back to the heap rather than panic.
+        let pool = Pool::new(PoolConfig {
+            budget_bytes: usize::MAX,
+            class_capacity_bytes: 128 << 10,
+        })
+        .expect("pool creation");
+        let a = pool.insert(&mut payload(SMALL, 700));
+        let b = pool.insert(&mut payload(SMALL, 701));
+        let c = pool.insert(&mut payload(SMALL, 702));
+        assert_eq!(a.residency(), Residency::UnbackedResident);
+        assert_eq!(b.residency(), Residency::UnbackedResident);
+        assert_eq!(
+            c.residency(),
+            Residency::Oversize,
+            "fallback is heap-backed"
+        );
+        assert_eq!(pool.stats().slot_exhausted_fallbacks, 1);
+        assert_eq!(&*c.pin(), &payload(SMALL, 702)[..]);
+        // Freeing a slotted chunk lets the next insert use the region again.
+        drop(a);
+        let d = pool.insert(&mut payload(SMALL, 703));
+        assert_eq!(d.residency(), Residency::UnbackedResident);
+        assert_eq!(&*d.pin(), &payload(SMALL, 703)[..]);
     }
 }
