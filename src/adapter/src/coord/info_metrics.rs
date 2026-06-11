@@ -63,7 +63,8 @@ pub(crate) struct CatalogInfoMetrics {
     object_info: UIntGaugeVec,
     cluster_info: UIntGaugeVec,
     replica_info: UIntGaugeVec,
-    storage_object_info: UIntGaugeVec,
+    source_info: UIntGaugeVec,
+    sink_info: UIntGaugeVec,
     /// Handles to all live series, held purely so that dropping them removes
     /// the series from the registry. Series are only ever created and dropped
     /// wholesale, by [CatalogInfoMetrics::populate].
@@ -94,11 +95,17 @@ impl CatalogInfoMetrics {
                 help: "Maps cluster replica IDs to the replica's name and size. Constant 1.",
                 var_labels: ["replica_id", "cluster_id", "name", "size"],
             )),
-            storage_object_info: registry.register(metric!(
-                name: "mz_storage_object_info",
-                help: "Maps user source and sink IDs to the object's type, envelope type, \
-                       and cluster. Constant 1.",
-                var_labels: ["id", "object_type", "envelope_type", "cluster_id"],
+            source_info: registry.register(metric!(
+                name: "mz_source_info",
+                help: "Maps user source IDs to the source's type, envelope type, and \
+                       cluster. Constant 1.",
+                var_labels: ["source_id", "type", "envelope_type", "cluster_id"],
+            )),
+            sink_info: registry.register(metric!(
+                name: "mz_sink_info",
+                help: "Maps user sink IDs to the sink's type, envelope type, and \
+                       cluster. Constant 1.",
+                var_labels: ["sink_id", "type", "envelope_type", "cluster_id"],
             )),
             series: Vec::new(),
             last_revision: None,
@@ -144,7 +151,7 @@ impl CatalogInfoMetrics {
         for entry in catalog.entries() {
             let full_name = catalog.resolve_full_name(entry.name(), entry.conn_id());
             self.insert_item(entry.id(), entry.item(), &full_name);
-            self.insert_storage_object(entry.id(), entry.item());
+            self.insert_source_or_sink(entry.id(), entry.item());
         }
         for cluster in catalog.clusters() {
             self.insert_cluster(cluster);
@@ -184,16 +191,10 @@ impl CatalogInfoMetrics {
         }
     }
 
-    /// Reports a `mz_storage_object_info` series for `item` if it is a user
-    /// source or sink, mirroring the `mz_storage_objects` metric served from
-    /// `/metrics/public`. Like that metric, progress sources and subsources
-    /// are not reported.
-    fn insert_storage_object(&mut self, id: CatalogItemId, item: &CatalogItem) {
-        if !id.is_user() {
-            return;
-        }
-
-        let (storage_object_type, envelope_type) = match item {
+    /// Reports an `mz_source_info` or `mz_sink_info` series for `item` if it
+    /// is a source or sink. Progress sources and subsources are not reported.
+    fn insert_source_or_sink(&mut self, id: CatalogItemId, item: &CatalogItem) {
+        let (info_vec, object_type, envelope_type) = match item {
             CatalogItem::Source(source) => {
                 match &source.data_source {
                     DataSourceDesc::Ingestion { .. }
@@ -204,17 +205,21 @@ impl CatalogInfoMetrics {
                     | DataSourceDesc::Introspection(_)
                     | DataSourceDesc::Catalog => return,
                 }
-                (source.source_type(), source.data_source.envelope())
+                (
+                    &self.source_info,
+                    source.source_type(),
+                    source.data_source.envelope(),
+                )
             }
-            CatalogItem::Sink(sink) => (sink.sink_type(), sink.envelope()),
+            CatalogItem::Sink(sink) => (&self.sink_info, sink.sink_type(), sink.envelope()),
             _ => return,
         };
 
         let series = new_series(
-            &self.storage_object_info,
+            info_vec,
             vec![
                 id.to_string(),
-                storage_object_type.to_string(),
+                object_type.to_string(),
                 envelope_type.map(|s| s.to_string()).unwrap_or_default(),
                 item.cluster_id()
                     .map(|id| id.to_string())
@@ -306,7 +311,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use mz_catalog::memory::objects::{
-        ClusterConfig, ClusterVariantManaged, Source, Table, TableDataSource,
+        ClusterConfig, ClusterVariantManaged, Sink, Source, Table, TableDataSource,
     };
     use mz_compute_types::config::ComputeReplicaConfig;
     use mz_controller::clusters::{
@@ -320,6 +325,10 @@ mod tests {
     use mz_sql::names::ResolvedIds;
     use mz_sql::plan::{WebhookBodyFormat, WebhookHeaders};
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_storage_types::sinks::{
+        KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
+        KafkaSinkFormatType, SinkEnvelope, StorageSinkConnection,
+    };
     use mz_storage_types::sources::Timeline;
 
     use super::*;
@@ -385,6 +394,41 @@ mod tests {
             resolved_ids: ResolvedIds::empty(),
             custom_logical_compaction_window: None,
             is_retained_metrics_object: false,
+        })
+    }
+
+    fn test_kafka_sink(gid: u64, cluster_id: ClusterId) -> CatalogItem {
+        CatalogItem::Sink(Sink {
+            create_sql: "CREATE SINK s FROM t INTO KAFKA CONNECTION c (TOPIC 'topic')".to_string(),
+            global_id: GlobalId::User(gid),
+            from: GlobalId::User(1),
+            connection: StorageSinkConnection::Kafka(KafkaSinkConnection {
+                connection_id: CatalogItemId::User(2),
+                connection: CatalogItemId::User(2),
+                format: KafkaSinkFormat {
+                    key_format: None,
+                    value_format: KafkaSinkFormatType::Json,
+                },
+                relation_key_indices: None,
+                key_desc_and_indices: None,
+                headers_index: None,
+                value_desc: RelationDesc::builder()
+                    .with_column("a", SqlScalarType::String.nullable(false))
+                    .finish(),
+                partition_by: None,
+                topic: "topic".to_string(),
+                topic_options: Default::default(),
+                compression_type: KafkaSinkCompressionType::None,
+                progress_group_id: KafkaIdStyle::Legacy,
+                transactional_id: KafkaIdStyle::Legacy,
+                topic_metadata_refresh_interval: Duration::from_secs(60),
+            }),
+            envelope: SinkEnvelope::Upsert,
+            with_snapshot: true,
+            version: 0,
+            resolved_ids: ResolvedIds::empty(),
+            cluster_id,
+            commit_interval: None,
         })
     }
 
@@ -514,20 +558,39 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn user_sources_get_storage_object_info_series() {
+    fn user_sources_get_source_info_series() {
         let registry = MetricsRegistry::new();
         let mut metrics = CatalogInfoMetrics::new(&registry);
 
         let cluster_id = ClusterId::user(9).expect("valid id");
-        metrics.insert_storage_object(CatalogItemId::User(4), &test_webhook_source(4, cluster_id));
+        metrics.insert_source_or_sink(CatalogItemId::User(4), &test_webhook_source(4, cluster_id));
 
         assert_eq!(
-            series(&registry, "mz_storage_object_info"),
+            series(&registry, "mz_source_info"),
             vec![labels(&[
-                ("id", "u4"),
-                ("object_type", "webhook"),
+                ("source_id", "u4"),
+                ("type", "webhook"),
                 // Webhook sources have no envelope.
                 ("envelope_type", ""),
+                ("cluster_id", "u9"),
+            ])]
+        );
+    }
+
+    #[mz_ore::test]
+    fn user_sinks_get_sink_info_series() {
+        let registry = MetricsRegistry::new();
+        let mut metrics = CatalogInfoMetrics::new(&registry);
+
+        let cluster_id = ClusterId::user(9).expect("valid id");
+        metrics.insert_source_or_sink(CatalogItemId::User(5), &test_kafka_sink(5, cluster_id));
+
+        assert_eq!(
+            series(&registry, "mz_sink_info"),
+            vec![labels(&[
+                ("sink_id", "u5"),
+                ("type", "kafka"),
+                ("envelope_type", "upsert"),
                 ("cluster_id", "u9"),
             ])]
         );
