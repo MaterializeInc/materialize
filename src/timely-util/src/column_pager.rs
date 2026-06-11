@@ -922,11 +922,11 @@ mod tests {
             panic!("expected Pooled");
         };
         assert_eq!(handle.len_bytes(), meta.len_bytes);
-        // Push the chunk out to its extent and poison the pool slot, so a
+        // Push the chunk out to its extent and poison the freed slots, so a
         // `take` that read stale slot memory (the macOS `MADV_DONTNEED`
-        // hazard) would fail the content check below.
+        // hazard via free-list reuse) would fail the content check below.
         pool.evict(handle);
-        pool.poison_resident(handle);
+        pool.poison_free_slots();
         let rt = cp.take(paged);
         assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
         let stats = pool.stats();

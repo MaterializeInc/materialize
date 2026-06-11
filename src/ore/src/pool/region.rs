@@ -145,7 +145,22 @@ impl Region {
         slots.free.push(slot);
     }
 
-    /// The stable base address of a slot.
+    /// Test hook: overwrites every free slot with `0xDE` so stale contents
+    /// cannot masquerade as correct data when a slot is reused.
+    pub(crate) fn poison_free_slots(&self) {
+        let slots = self.slots.lock().expect("region allocator poisoned");
+        for &slot in &slots.free {
+            let offset = usize::cast_from(slot) * self.class_size;
+            // SAFETY: the slot is on the free list and the allocator mutex is
+            // held, so no chunk owns it and no allocation can race; the write
+            // stays within the region's mapping.
+            unsafe {
+                std::ptr::write_bytes(self.base.add(offset), 0xDE, self.class_size);
+            }
+        }
+    }
+
+    /// The base address of a slot, fixed while its owning chunk is resident.
     pub(crate) fn slot_ptr(&self, slot: u32) -> *mut u8 {
         let offset = usize::cast_from(slot) * self.class_size;
         debug_assert!(offset + self.class_size <= self.capacity);

@@ -40,8 +40,9 @@
 //!
 //! Reads from pinned pool memory are zero-copy: the borrowed columnar view is
 //! reconstructed from the pinned `&[u64]` exactly as [`Column::borrow`] does
-//! for its serialized variants. This is sound because pool slot addresses are
-//! stable across evict/reload cycles and a pinned chunk is never evicted.
+//! for its serialized variants. This is sound because a pinned chunk is never
+//! evicted or relocated for the life of the borrow; views are re-derived from
+//! a fresh pin on every access and never cached across pins.
 
 use std::marker::PhantomData;
 
@@ -527,12 +528,11 @@ mod tests {
             "a scan re-evicts every page it consumed"
         );
 
-        // macOS `MADV_DONTNEED` may leave evicted slot contents intact, so a
-        // bug that read the slot of an `Evicted` chunk could pass by accident.
-        // Poison the slots to prove the reads come from the extents.
-        for chunk in &run.chunks {
-            pool.poison_resident(chunk);
-        }
+        // macOS `MADV_DONTNEED` may leave freed slot contents intact and the
+        // free list may hand a faulting chunk its previous slot, so a bug
+        // that skipped the extent read could pass by accident. Poison the
+        // free slots to prove the reads come from the extents.
+        pool.poison_free_slots();
         assert_eq!(run.iter().collect::<Vec<_>>(), expected);
         assert_eq!(run.seek(&100), vec![(0, 1), (1, 2), (2, 3), (3, 4)]);
     }
@@ -658,21 +658,19 @@ mod tests {
         assert_eq!(run.iter().count(), updates.len());
     }
 
+    /// Pages may relocate across evict/fault-in cycles (slots are scoped to
+    /// residency); correctness rests on pin-mediated access, so contents must
+    /// round-trip regardless of where a page lands.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
-    fn addresses_are_stable_across_eviction() {
+    fn pages_round_trip_across_eviction() {
         let pool = test_pool(256 << 20);
         let run = straddle_run(&pool);
-        let before = {
-            let pin = run.chunks[0].pin();
-            pin.as_ptr()
-        };
+        let before: Vec<u64> = run.chunks[0].pin().to_vec();
         pool.evict(&run.chunks[0]);
         assert_eq!(run.chunks[0].residency(), Residency::Evicted);
-        let after = {
-            let pin = run.chunks[0].pin();
-            pin.as_ptr()
-        };
-        assert_eq!(before, after, "fault-in must not move the page");
+        pool.poison_free_slots();
+        let pin = run.chunks[0].pin();
+        assert_eq!(&*pin, &before[..], "contents survive relocation");
     }
 }
