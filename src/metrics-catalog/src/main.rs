@@ -52,6 +52,7 @@ struct MetricDoc {
 struct MetricArgs {
     name: Option<Expr>,
     help: Option<Expr>,
+    subsystem: Option<Expr>,
 }
 
 impl Parse for MetricArgs {
@@ -59,6 +60,7 @@ impl Parse for MetricArgs {
         let mut args = MetricArgs {
             name: None,
             help: None,
+            subsystem: None,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -66,6 +68,7 @@ impl Parse for MetricArgs {
             match key.to_string().as_str() {
                 "name" => args.name = Some(input.parse()?),
                 "help" => args.help = Some(input.parse()?),
+                "subsystem" => args.subsystem = Some(input.parse()?),
                 // We don't care about const_labels, var_labels, or rules, but still need to parse
                 // them to stay in sync.
                 "const_labels" => {
@@ -100,15 +103,36 @@ impl Parse for MetricArgs {
 
 impl MetricArgs {
     fn into_doc(self, source: &str) -> MetricDoc {
+        let name = self
+            .name
+            .as_ref()
+            .map(expr_to_string)
+            .unwrap_or_else(|| "<unknown>".into());
+        // A `subsystem` prefixes the metric name, matching Prometheus'
+        // `fq_name` (`<subsystem>_<name>`). It is frequently a runtime value
+        // (e.g. `subsystem: component`), in which case we glob it to `*`.
+        let name = match &self.subsystem {
+            Some(subsystem) => format!("{}_{name}", subsystem_to_string(subsystem)),
+            None => name,
+        };
         MetricDoc {
-            name: self
-                .name
-                .as_ref()
-                .map(expr_to_string)
-                .unwrap_or_else(|| "<unknown>".into()),
+            name,
             help: self.help.as_ref().map(expr_to_string).unwrap_or_default(),
             source: source.to_owned(),
         }
+    }
+}
+
+/// Renders a `subsystem` for use as a metric-name prefix: a string literal is
+/// used verbatim, while anything else (a runtime value like `component`) globs
+/// to `*`, since its concrete value is only known at runtime.
+fn subsystem_to_string(e: &Expr) -> String {
+    match e {
+        Expr::Lit(lit) => match &lit.lit {
+            Lit::Str(s) => s.value(),
+            _ => "*".into(),
+        },
+        _ => "*".into(),
     }
 }
 
@@ -267,6 +291,18 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
+    // Some metrics are registered through `metric!`-wrapping macros whose names
+    // are assembled at macro-expansion time (e.g. `concat!(stringify!(...))`),
+    // so `syn` can't see them. Pull those directly from the crate that defines
+    // them. See `mz_metrics::describe_metrics`.
+    for (name, help, source) in mz_metrics::describe_metrics() {
+        entries.push(MetricDoc {
+            name,
+            help,
+            source: source.to_owned(),
+        });
+    }
+
     entries.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.source.cmp(&b.source)));
 
     let catalog = Catalog { metrics: entries };
@@ -363,12 +399,13 @@ mod tests {
     }
 
     /// Every optional field present, in canonical macro order, across multiple
-    /// lines — mirrors how real metrics are written in the tree.
+    /// lines — mirrors how real metrics are written in the tree. The literal
+    /// `subsystem` is prepended to the name (`<subsystem>_<name>`).
     #[mz_ore::test]
     fn parses_realistic_multiline_invocation() {
         let doc = parse_metric(
             r#"metric!(
-                name: "mz_timely_step_duration_seconds",
+                name: "step_duration_seconds",
                 help: "The time spent in each compute step_or_park call",
                 subsystem: "compute",
                 const_labels: {"cluster" => "compute"},
@@ -377,7 +414,7 @@ mod tests {
                 rules: [rule_a(), rule_b()],
             )"#,
         );
-        assert_eq!(doc.name, "mz_timely_step_duration_seconds");
+        assert_eq!(doc.name, "compute_step_duration_seconds");
         assert_eq!(doc.help, "The time spent in each compute step_or_park call");
     }
 
@@ -387,7 +424,6 @@ mod tests {
     #[mz_ore::test]
     fn parses_each_optional_field() {
         let optionals = [
-            r#"subsystem: "sub""#,
             r#"const_labels: {"cluster" => "compute"}"#,
             r#"var_labels: ["worker_id", "command_type"]"#,
             "buckets: histogram_seconds_buckets(0.1, 1.0)",
@@ -438,6 +474,23 @@ mod tests {
         let doc =
             parse_metric(r#"metric!(name: format!("mz_{0}_{kind}_total", a, kind), help: "h")"#);
         assert_eq!(doc.name, "mz_*_*_total");
+    }
+
+    /// A string-literal `subsystem` is prepended to the name, mirroring
+    /// Prometheus' `fq_name` (`<subsystem>_<name>`).
+    #[mz_ore::test]
+    fn prepends_literal_subsystem() {
+        let doc = parse_metric(r#"metric!(name: "requests_total", help: "h", subsystem: "http")"#);
+        assert_eq!(doc.name, "http_requests_total");
+    }
+
+    /// A runtime (non-literal) `subsystem` globs to `*`, since its concrete
+    /// value is only known at runtime (e.g. `subsystem: component`).
+    #[mz_ore::test]
+    fn globs_runtime_subsystem() {
+        let doc =
+            parse_metric(r#"metric!(name: "requests_total", help: "h", subsystem: component)"#);
+        assert_eq!(doc.name, "*_requests_total");
     }
 
     /// A non-literal, non-`format!` `name` falls back to

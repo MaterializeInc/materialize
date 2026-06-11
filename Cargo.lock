@@ -7165,6 +7165,7 @@ name = "mz-metrics-catalog"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-metrics",
  "mz-ore",
  "quote",
  "serde",

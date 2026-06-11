@@ -22,6 +22,15 @@ metrics:
 - name: '*_postgres_connpool_ttl_reconnections'
   help: times a connection was recycled due to ttl
   source: src/postgres-client/src/metrics.rs
+- name: '*_request_duration_seconds'
+  help: How long it takes for a request to complete in seconds.
+  source: src/environmentd/src/http/metrics.rs
+- name: '*_requests_active'
+  help: Number of currently active/open http requests.
+  source: src/environmentd/src/http/metrics.rs
+- name: '*_requests_total'
+  help: Total number of http requests received since process start.
+  source: src/environmentd/src/http/metrics.rs
 - name: environmentd_needs_update
   help: Count of organizations in this cluster which are running outdated pod templates
   source: src/orchestratord/src/metrics.rs
@@ -367,6 +376,102 @@ metrics:
 - name: mz_memory_limiter_vm_swap_bytes
   help: The current VmSwap metric.
   source: src/compute/src/memory_limiter.rs
+- name: mz_metrics_lgalloc_allocations_total
+  help: Number of region allocations in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_area_total_bytes
+  help: Number of bytes in all areas in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_areas_total
+  help: Number of areas backing size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_clean_regions_bytes_total
+  help: Number of clean regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_clean_regions_total
+  help: Number of clean regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_clear_eager_bytes_total
+  help: Number of thread regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_clear_eager_total
+  help: Number of thread regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_clear_slow_bytes_total
+  help: Number of thread regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_clear_slow_total
+  help: Number of thread regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_deallocations_total
+  help: Number of region deallocations for size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_file_allocated_size_bytes
+  help: Sum of allocated sizes in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_file_size_bytes
+  help: Sum of file sizes in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_free_regions_bytes_total
+  help: Number of free regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_free_regions_total
+  help: Number of free regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_global_regions_bytes_total
+  help: Number of global regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_global_regions_total
+  help: Number of global regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_refill_total
+  help: Number of area refills for size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_slow_path_total
+  help: Number of slow path region allocations for size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_thread_regions_bytes_total
+  help: Number of thread regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_thread_regions_total
+  help: Number of thread regions in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_vm_active_bytes
+  help: Sum of active sizes in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_vm_dirty_bytes
+  help: Sum of dirty sizes in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_lgalloc_vm_mapped_bytes
+  help: Sum of mapped sizes in size class
+  source: src/metrics/src/lgalloc.rs
+- name: mz_metrics_libc_ru_inblock_total
+  help: block input operations
+  source: src/metrics/src/rusage.rs
+- name: mz_metrics_libc_ru_majflt_total
+  help: page faults (hard page faults)
+  source: src/metrics/src/rusage.rs
+- name: mz_metrics_libc_ru_maxrss_bytes
+  help: maximum resident set size
+  source: src/metrics/src/rusage.rs
+- name: mz_metrics_libc_ru_minflt_total
+  help: page reclaims (soft page faults)
+  source: src/metrics/src/rusage.rs
+- name: mz_metrics_libc_ru_nivcsw_total
+  help: involuntary context switches
+  source: src/metrics/src/rusage.rs
+- name: mz_metrics_libc_ru_nvcsw_total
+  help: voluntary context switches
+  source: src/metrics/src/rusage.rs
+- name: mz_metrics_libc_ru_oublock_total
+  help: block output operations
+  source: src/metrics/src/rusage.rs
+- name: mz_metrics_libc_ru_stime_seconds_total
+  help: system CPU time used
+  source: src/metrics/src/rusage.rs
+- name: mz_metrics_libc_ru_utime_seconds_total
+  help: user CPU time used
+  source: src/metrics/src/rusage.rs
 - name: mz_metrics_update_duration
   help: The time it took to update lgalloc stats
   source: src/metrics/src/lib.rs
@@ -1591,15 +1696,6 @@ metrics:
 - name: outer_join_lowering_cases
   help: How many times the different outer join lowering cases happened.
   source: src/sql/src/optimizer_metrics.rs
-- name: request_duration_seconds
-  help: How long it takes for a request to complete in seconds.
-  source: src/environmentd/src/http/metrics.rs
-- name: requests_active
-  help: Number of currently active/open http requests.
-  source: src/environmentd/src/http/metrics.rs
-- name: requests_total
-  help: Total number of http requests received since process start.
-  source: src/environmentd/src/http/metrics.rs
 - name: test_counter
   help: a counter for testing
   source: src/ore/src/metrics/tests.rs
