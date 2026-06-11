@@ -279,6 +279,76 @@ mod tests {
         }
     }
 
+    /// Regression test for a dictionary-codec soundness bug in the safe-install
+    /// path (`new_safe`), reachable with the paged batcher enabled.
+    ///
+    /// A from-scratch container stores its pre-install rows *raw* while gathering
+    /// statistics, then installs a *safe* codec via `new_safe`. `new_safe` used to
+    /// discard the first-byte bitmap gathered over those raw rows. That bitmap is
+    /// soundness-critical: a later `new_from` merge consults it to decide which
+    /// one-byte tags are free to hand out as dictionary keys. With the bitmap
+    /// dropped, the merge could assign a dictionary tag equal to a raw datum's
+    /// first byte, after which `decode` resolves that literal datum to the
+    /// dictionary entry — returning the wrong value.
+    ///
+    /// We drive the lifecycle directly: observe short strings (first byte
+    /// `StringTiny`) into the pre-install statistics, install a safe codec, then
+    /// feed it many distinct *long* strings (first byte `StringShort`)
+    /// post-install so the merge has heavy hitters to compress. Merging via
+    /// `new_from` and re-encoding the short strings then exercises the raw
+    /// fall-through whose first byte the merge must not have claimed as a tag.
+    /// Before the fix the `StringTiny` tag was handed out and the round-trip
+    /// produced a long string (and tripped `encode`'s soundness `debug_assert`).
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts in row decoding are unsupported under miri
+    fn test_safe_codec_merge_bitmap_carryover() {
+        use crate::row_codec::ColumnsCodec;
+
+        // Short strings: length < 256, so they encode with the `StringTiny` tag.
+        // Unique, so MisraGries never makes them dictionary entries; they always
+        // fall through raw, exposing their first byte.
+        let short_rows: Vec<Row> = (0..256)
+            .map(|i| Row::pack_slice(&[Datum::String(&format!("s{i}"))]))
+            .collect();
+        // Long strings: length >= 256, so they encode with the `StringShort` tag —
+        // a *different* first byte than the short strings. Distinct values, each
+        // repeated, so the post-install codec accrues many heavy hitters and the
+        // merge assigns dictionary tags across the low byte range, reaching the
+        // short strings' `StringTiny` tag unless the bitmap reserves it.
+        let long_values: Vec<String> = (0..64).map(|i| format!("{i:0>300}")).collect();
+
+        // Pre-install statistics observe only the short strings' first bytes.
+        let mut stats = ColumnsCodec::default();
+        let mut scratch = Vec::new();
+        for row in &short_rows {
+            scratch.clear();
+            stats.encode(ColumnsCodec::borrow_row(row), &mut scratch);
+        }
+
+        // Install a safe codec, then feed it the long strings post-install so it
+        // accrues heavy hitters (and observes only the `StringShort` first byte).
+        let mut safe = stats.new_safe();
+        for _ in 0..8 {
+            for v in &long_values {
+                let row = Row::pack_slice(&[Datum::String(v)]);
+                scratch.clear();
+                safe.encode(ColumnsCodec::borrow_row(&row), &mut scratch);
+            }
+        }
+
+        // Merge, then round-trip the short strings. With the bitmap carried over,
+        // no dictionary tag collides with the short strings' first byte; without
+        // it, one does.
+        let mut merged = ColumnsCodec::new_from([&safe]);
+        for row in &short_rows {
+            let mut buf = Vec::new();
+            merged.encode(ColumnsCodec::borrow_row(row), &mut buf);
+            let decoded = merged.decode(&buf).collect::<Vec<_>>();
+            let expected = ColumnsCodec::borrow_row(row).collect::<Vec<_>>();
+            assert_eq!(decoded, expected, "round-trip mismatch for {row:?}");
+        }
+    }
+
     /// Confirms the structural assumption underpinning `SAFE_TAG_BASE`: every
     /// datum the row format produces encodes with a first byte strictly less
     /// than `SAFE_TAG_BASE`. If `mz_repr` ever introduces a tag that crosses
@@ -1753,9 +1823,18 @@ mod row_codec {
             /// These tags never collide with datum first-bytes, so the codec can be
             /// installed without observing all data first.
             pub(super) fn new_safe(stats: Self) -> Self {
-                let mut mg = stats
-                    .stats
-                    .0
+                // The container stores its pre-install rows raw, so the first-byte
+                // bitmap (`stats.1`) gathered while observing them must carry over to
+                // the installed codec. The bitmap is soundness-critical: a later
+                // `new_from` merge consults it to decide which one-byte tags are free
+                // to hand out as dictionary keys. If we dropped it here, the merge
+                // could assign a dictionary tag equal to a pre-install datum's first
+                // byte, after which `decode` would resolve that literal datum to the
+                // dictionary entry. The MisraGries summary (`stats.0`), by contrast,
+                // is consumed below to seed the dictionary and is reset, since the
+                // installed codec re-accumulates it from rows it sees post-install.
+                let (mg, observed_tags) = stats.stats;
+                let mut mg = mg
                     .done()
                     .into_iter()
                     .filter(|(next_bytes, count)| next_bytes.len() > 1 && count > &1);
@@ -1775,7 +1854,7 @@ mod row_codec {
                 Self {
                     encode,
                     decode,
-                    stats: (MisraGries::default(), [0u64; 4]),
+                    stats: (MisraGries::default(), observed_tags),
                 }
             }
         }
