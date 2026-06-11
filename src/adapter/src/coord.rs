@@ -229,6 +229,7 @@ mod command_handler;
 mod ddl;
 pub(crate) mod group_sync;
 mod indexes;
+mod info_metrics;
 mod introspection;
 mod message_handler;
 mod privatelink_status;
@@ -1978,6 +1979,10 @@ pub struct Coordinator {
     /// Only used during 0dt deployment, while in read-only mode.
     caught_up_check: Option<CaughtUpCheckContext>,
 
+    /// The metrics registry, handed to the catalog info-metrics background task
+    /// so it can register and own its `*_info` series.
+    catalog_info_metrics_registry: MetricsRegistry,
+
     /// Tracks the state associated with the currently installed watchsets.
     installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
 
@@ -3553,6 +3558,7 @@ impl Coordinator {
             self.schedule_arrangement_sizes_collection().await;
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
+            self.spawn_catalog_info_metrics_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
@@ -4726,6 +4732,7 @@ pub fn serve(
                     storage_usage_collection_interval,
                     segment_client,
                     metrics,
+                    catalog_info_metrics_registry: metrics_registry.clone(),
                     optimizer_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
