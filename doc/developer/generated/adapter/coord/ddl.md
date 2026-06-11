@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/ddl.rs
-revision: b1959edbc1
+revision: b5d02e9316
 ---
 
 # adapter::coord::ddl
@@ -12,4 +12,4 @@ Also provides `drop_compute_sinks`, `drop_vpc_endpoints_in_background`, and othe
 `catalog_transact_with_side_effects` supports DDL operations that need to run async side-effects (e.g. dropping persist shards) after the catalog transaction commits.
 The `Op::InjectAuditEvents` variant is recognized as a no-op for downstream implication processing.
 Storage usage updates bypass `catalog_transact_inner` entirely and are written directly via `builtin_table_update`.
-Connection limit checking recognizes `ConnectionDetails::GlueSchemaRegistry` alongside `Csr`, `Ssh`, `Aws`, and `IcebergCatalog` as connection types that do not count against per-type resource limits.
+Connection limit checking recognizes `ConnectionDetails::GlueSchemaRegistry` and `ConnectionDetails::Gcp` alongside `Csr`, `Ssh`, `Aws`, and `IcebergCatalog` as connection types that do not count against per-type resource limits.

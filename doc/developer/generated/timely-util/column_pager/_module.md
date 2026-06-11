@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/column_pager.rs
-revision: ab313cc471
+revision: 7615b242e2
 ---
 
 # timely-util::column_pager
@@ -49,7 +49,7 @@ A `LazyLock<RwLock<ColumnPager>>` named `GLOBAL_PAGER` holds the process-wide ac
 
 `tiered_policy()` returns a `&'static policy::TieredPolicy` reference to the singleton.
 
-`apply_tiered_config(enabled, total_budget, backend, codec)` calls `reconfigure` on the singleton policy and then either installs a `ColumnPager` backed by it (when `enabled`) or installs `ColumnPager::disabled`.
+`apply_tiered_config(enabled, total_budget, backend, codec, swap_pageout)` calls `reconfigure` on the singleton policy, stores `swap_pageout` in the process-global `SWAP_PAGEOUT` atomic, and then either installs a `ColumnPager` backed by the policy (when `enabled`) or installs `ColumnPager::disabled`. When `SWAP_PAGEOUT` is set and the lz4 + swap path is active, `ColumnPager::page` calls `pager::advise_pageout` over the compressed bytes to proactively evict them from RSS.
 
 `global_pager()` returns the current global pager by cloning the inner `Arc<dyn PagingPolicy>`.
 

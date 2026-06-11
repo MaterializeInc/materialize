@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: fc2aaf02e7
+revision: b5d02e9316
 ---
 
 # adapter::coord::sequencer::inner
@@ -11,5 +11,6 @@ The `inner` sub-modules split out the most complex individual statement types (p
 Also defines the `sequence_staged` generic driver and `Staged` / `StagedContext` traits used across all multi-stage sequencing pipelines.
 `validate_role_attributes` permits the `LOGIN` attribute even when password auth is disabled, restricting the unavailable-feature gate to `SUPERUSER` and `PASSWORD` attributes.
 `CREATE CONNECTION ... VALIDATE` and `ALTER CONNECTION ... VALIDATE` tasks are wrapped in `ore_catch_unwind` to convert panics (e.g., from malformed TLS material) into `AdapterError::Internal` rather than crashing the coordinator.
+`ConnectionDetails::Gcp` connections are validated by reading the credentials JSON secret and calling `GcpServiceAccountKeyTokenUri::validate_json` to verify the service account key's OAuth2 token URI before any external request is made.
 `await_real_time_recent_timestamp` and the private `real_time_recent_timestamp_error` helper convert `StorageError::RtrTimeout` and `StorageError::RtrDropFailure` to the dedicated `AdapterError::RtrTimeout` / `AdapterError::RtrDropFailure` variants (with humanized collection names) before propagating; these helpers are called from the RTR-awaiting tasks in `peek`, `explain_timestamp`, and `command_handler`.
 `sequence_side_effecting_func` handles `PgCancelBackend` with a `NULL` connection-id argument by returning `NULL` immediately (matching PostgreSQL semantics), before attempting to look up or cancel any connection.

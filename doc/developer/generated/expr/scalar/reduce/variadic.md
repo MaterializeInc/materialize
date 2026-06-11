@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/reduce/variadic.rs
-revision: 5d046b3ab6
+revision: ed05cf7584
 ---
 
 # mz-expr::scalar::reduce::variadic
@@ -34,6 +34,8 @@ If the function is `Coalesce`, control is handed off to `simplify_coalesce` and 
 
 Applied when the relevant arguments are literals:
 
+- `Greatest` / `Least` — calls `reduce_greatest_least`: deduplicates structurally equal operands (keeping the first occurrence), drops literal null operands (both functions ignore nulls), and collapses a single-operand call to the identity and a zero-operand call to a typed `NULL`.
+- `Substr` (two-argument form) with a literal start of `1` — the call keeps the entire string and is infallible at that start, so the call is replaced with the string operand.
 - `RegexpMatch` with literal pattern (and optional flags) — compiles the regex via `build_regex` and converts to `UnaryFunc::RegexpMatch(regex)`, or a literal error.
 - `RegexpReplace` with a literal pattern (and optional flags) — compiles the regex and reduces to a `CallBinary(RegexpReplace { regex, limit }, source, replacement)`. On a regex compilation error, produces an `if_then_else` that returns `NULL` when source or replacement is `NULL` and the error otherwise, preserving the SQL semantics that `NULL` input yields `NULL` output.
 - `RegexpSplitToArray` with a literal pattern (and optional flags) — compiles the regex and converts to `UnaryFunc::RegexpSplitToArray(regex)`.
