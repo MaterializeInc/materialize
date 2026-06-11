@@ -42,9 +42,10 @@
 //!    to learn which times have been committed. When the persist frontier
 //!    reaches the resume upper, rehydration is complete.
 //!
-//! 3. **Seal & drain.** Call `batcher.seal(input_upper)` to extract all
-//!    source-finalized entries as sorted, consolidated `Column` chunks. Each
-//!    entry is classified:
+//! 3. **Seal & drain.** Call `batcher.seal_paged(input_upper)` to extract all
+//!    source-finalized entries as sorted, consolidated `Column` chunks, kept
+//!    paged and rehydrated one chunk at a time by the drain. Each entry is
+//!    classified:
 //!    - **Eligible** (at the persist frontier): the persist trace has the
 //!      correct "before" state for this time. Look up the old value via a
 //!      cursor, emit a retraction if present, and emit the new value.
@@ -638,7 +639,12 @@ where
                 // Step 1 already consolidated `push_buffer` through the chunker
                 // (which readies a complete chunk per `push_into`), so the
                 // chunker holds nothing pending here and we can seal directly.
-                let (sealed, _description) = batcher.seal(input_upper.clone());
+                //
+                // `seal_paged` keeps the sealed chunks paged; the drain below
+                // rehydrates them one at a time, so a large drain (a frontier
+                // advance releasing a snapshot's worth of stash at once) holds
+                // at most one chunk resident rather than the whole backlog.
+                let (sealed, _description) = batcher.seal_paged(input_upper.clone());
                 // Frontier of data remaining in the batcher (ts >= input_upper).
                 let remaining_frontier = batcher.frontier().to_owned();
 
@@ -744,7 +750,7 @@ struct DrainStats {
 /// The sealed chunks are already sorted and consolidated by the MergeBatcher,
 /// so the trace cursor walks forward through keys in order — seeks amortize.
 async fn drain_sealed_input<T, O>(
-    sealed: Vec<Column<UpsertUpdate<T, O>>>,
+    sealed: impl Iterator<Item = Column<UpsertUpdate<T, O>>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
@@ -772,12 +778,13 @@ where
     //     `ts == persist_upper` can never again hold) and pin the operator's
     //     output frontier below the shard upper. This mirrors v1's
     //     `relevant = persist_upper.less_equal(ts)`.
-    // Walk the sealed chunks by reference rather than collecting the eligible
-    // set into an owned Vec. The chunks are globally sorted (the seal merges
-    // all chains into one run), so the cursor seeks still walk forward and
-    // amortize, and eligible values are emitted straight from the column's
-    // `RowRef` with no owned `UpsertDiff` copy. Only the re-stashed ineligible
-    // set is materialized.
+    // Pull sealed chunks from the iterator one at a time, dropping each
+    // before requesting the next, so at most one rehydrated chunk is resident
+    // regardless of drain size. The chunks are globally sorted (the seal
+    // merges all chains into one run), so the cursor seeks still walk forward
+    // and amortize, and eligible values are emitted straight from the
+    // column's `RowRef` with no owned `UpsertDiff` copy. Only the re-stashed
+    // ineligible set is materialized.
     let mut eligible_count: u64 = 0;
     let mut result_count: u64 = 0;
     let mut output_count: u64 = 0;
@@ -787,7 +794,7 @@ where
 
     let (mut cursor, storage) = trace.cursor();
 
-    for chunk in &sealed {
+    for chunk in sealed {
         for (key, ts, diff) in chunk.borrow().into_index_iter() {
             let ts = <T as columnar::Columnar>::into_owned(ts);
             if !persist_upper.less_equal(&ts) {
