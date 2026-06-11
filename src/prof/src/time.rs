@@ -29,6 +29,9 @@ pub async unsafe fn prof_time(
     sample_freq: u32,
     merge_threads: bool,
 ) -> anyhow::Result<StackProfile> {
+    if sample_freq == 0 {
+        bail!("Sampling frequency must be greater than zero.");
+    }
     if sample_freq > 1_000_000 {
         bail!("Sub-microsecond intervals are not supported.");
     }
