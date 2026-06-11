@@ -141,8 +141,8 @@ pub const COLUMN_PAGED_BATCHER_USE_POOL: Config<bool> = Config::new(
 /// rates. Thread spawning is once per process: raising the value later has
 /// no effect beyond re-enabling, and lowering it to zero falls back to
 /// inline eviction while spawned threads idle.
-pub const COLUMN_PAGED_BATCHER_POOL_SPILL_THREADS: Config<usize> = Config::new(
-    "column_paged_batcher_pool_spill_threads",
+pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT: Config<usize> = Config::new(
+    "column_paged_batcher_spill_worker_count",
     2,
     "Buffer-pool spill threads for off-worker eviction I/O; 0 evicts inline on the caller.",
 );
@@ -570,5 +570,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_LZ4)
         .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
         .add(&COLUMN_PAGED_BATCHER_USE_POOL)
-        .add(&COLUMN_PAGED_BATCHER_POOL_SPILL_THREADS)
+        .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
 }
