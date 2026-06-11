@@ -329,6 +329,20 @@ steps:
     agents:
       queue: hetzner-aarch64-16cpu-32gb
 
+  - id: catalog-server-explain
+    label: Catalog server EXPLAIN coverage
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs:
+      - test/catalog-server-explain
+      - test/sqllogictest/catalog_server_explain.slt
+      - src/catalog/src/builtin
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: catalog-server-explain
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
   - id: restarts
     label: Restart
     depends_on: build-aarch64
