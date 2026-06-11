@@ -57,7 +57,7 @@ use mz_sql_parser::ast::{
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
-use mz_storage_types::connections::gcp::GcpConnection;
+use mz_storage_types::connections::gcp::{GcpConnection, GcpServiceAccountKeyTokenUri};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
     AwsPrivatelinkConnection, CsrConnection, GlueSchemaRegistryConnection,
@@ -1713,6 +1713,31 @@ impl ConnectionDetails {
             ConnectionDetails::IcebergCatalog(c) => {
                 mz_storage_types::connections::Connection::IcebergCatalog(c.clone())
             }
+        }
+    }
+
+    /// Secrets whose *contents* this connection places requirements on, paired
+    /// with the check to apply. Callers must re-apply these checks whenever the
+    /// connection is created or altered, and whenever the contents of one of
+    /// the returned secrets change (e.g. `ALTER SECRET`).
+    ///
+    /// We rely on the caller to actually execute these checks because we don't know:
+    /// - which secrets the caller cares about
+    /// - which secrets require an async operation to fetch
+    ///
+    /// For example, the ALTER SECRET caller should only perform checks on its own secret,
+    /// while the ALTER CONNECTION caller fetches and checks every secret from its connection.
+    pub fn secret_content_guards(
+        &self,
+    ) -> Vec<(CatalogItemId, fn(&str) -> Result<(), anyhow::Error>)> {
+        match self {
+            // A service-account key defines its own OAuth2 token URI. We only
+            // want to send requests to the actual Google OAuth2 token API.
+            ConnectionDetails::Gcp(gcp) => vec![(
+                gcp.credentials_json,
+                GcpServiceAccountKeyTokenUri::validate_json,
+            )],
+            _ => vec![],
         }
     }
 }

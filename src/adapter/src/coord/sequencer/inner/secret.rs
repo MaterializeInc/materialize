@@ -282,6 +282,8 @@ impl Coordinator {
         let caching_secrets_reader = self.caching_secrets_reader.clone();
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut secret_as)?;
+        let contents = std::str::from_utf8(&payload).expect("validated as UTF-8 by extract_secret");
+        self.check_secret_content_guards_of_dependents(id, contents)?;
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
             || "alter secret ensure",
