@@ -17,15 +17,21 @@ Materialize's type system consists of two classes of types:
 
 ## Built-in types
 
-Type | Aliases | Use | Size (bytes) | Catalog name | Syntax
------|-------|-----|--------------|----------------|-----
+The following table lists Materialize's built-in types and details. In the
+table, the logical width is the nominal width of the type (similar to
+PostgreSQL's `pg_type.typlen`). The actual number of bytes written depends on
+the actual value. For example, a `bigint` value of `3` takes 2 bytes total (1
+payload byte plus 1 tag byte).
+
+| Type | Aliases | Description | Logical width (bytes) | Catalog name | Example |
+| -----|-------|-----|--------------|----------------|-----|
 [`bigint`](integer) | `int8` | Large signed integer | 8 | Named | `123`
 [`boolean`](boolean) | `bool` | State of `TRUE` or `FALSE` | 1 | Named | `TRUE`, `FALSE`
-[`bytea`](bytea) | `bytea` | Unicode string | Variable | Named | `'\xDEADBEEF'` or `'\\000'`
+[`bytea`](bytea) | | Binary data | Variable | Named | `'\xDEADBEEF'` or `'\\000'`
 [`date`](date) | | Date without a specified time | 4 | Named | `DATE '2007-02-01'`
 [`double precision`](float) | `float`, `float8`, `double` | Double precision floating-point number | 8 | Named | `1.23`
 [`integer`](integer) | `int`, `int4` | Signed integer | 4 | Named | `123`
-[`interval`](interval) | | Duration of time | 32 | Named | `INTERVAL '1-2 3 4:5:6.7'`
+[`interval`](interval) | | Duration of time | 16 | Named | `INTERVAL '1-2 3 4:5:6.7'`
 [`jsonb`](jsonb) | `json` | JSON | Variable | Named | `'{"1":2,"3":4}'::jsonb`
 [`map`](map) | | Map with [`text`](text) keys and a uniform value type | Variable | Anonymous | `'{a => 1, b => 2}'::map[text=>int]`
 [`list`](list) | | Multidimensional list | Variable | Anonymous | `LIST[[1,2],[3]]`
@@ -35,12 +41,12 @@ Type | Aliases | Use | Size (bytes) | Catalog name | Syntax
 [`record`](record) | | Tuple with arbitrary contents | Variable | Unnameable | `ROW($expr, ...)`
 [`smallint`](integer) | `int2` | Small signed integer | 2 | Named | `123`
 [`text`](text) | `string` | Unicode string | Variable | Named | `'foo'`
-[`time`](time) | | Time without date | 4 | Named | `TIME '01:23:45'`
+[`time`](time) | | Time without date | 8 | Named | `TIME '01:23:45'`
 [`uint2`](uint) | | Small unsigned integer | 2 | Named | `123`
 [`uint4`](uint) | | Unsigned integer | 4 | Named | `123`
 [`uint8`](uint) | | Large unsigned integer | 8 | Named | `123`
 [`timestamp`](timestamp) | | Date and time | 8 | Named | `TIMESTAMP '2007-02-01 15:04:05'`
-[`timestamp with time zone`](timestamp) | `timestamp with time zone` | Date and time with timezone | 8 | Named | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
+[`timestamp with time zone`](timestamp) | `timestamptz` | Date and time with timezone | 8 | Named | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
 [Arrays](array) (`[]`) | | Multidimensional array | Variable | Named | `ARRAY[...]`
 [`uuid`](uuid) | | UUID | 16 | Named | `UUID 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'`
 

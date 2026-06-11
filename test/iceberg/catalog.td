@@ -335,3 +335,37 @@ SELECT id, cardinality(props), list_sort(map_keys(props))::VARCHAR, list_sort(ma
 1 2 [a, b] [bar, foo]
 2 0 [] []
 3 1 [key] [value]
+
+# Test array columns
+# Materialize arrays are an arrow struct of {items: list, dimensions: uint8}.
+# Iceberg has no uint8, so the dimensions field widens to Iceberg int (Int32),
+# the same way smallint does above. The array Datum's ndims (a u8) must promote
+# into that Int32Builder, or the sink stalls converting the row to a recordbatch
+# with "Expected UInt8Builder for StructBuilder with Array datum".
+> CREATE TABLE arrays(id int, vals int[]);
+
+> INSERT INTO arrays VALUES
+    (1, '{1,2,3}'),
+    (2, '{}'),
+    (3, '{42}');
+
+> CREATE SINK array_demo
+    FROM arrays
+    INTO ICEBERG CATALOG CONNECTION polaris (
+        NAMESPACE 'default_namespace',
+        TABLE 'array_table'
+    )
+    USING AWS CONNECTION aws_conn
+    KEY (id) NOT ENFORCED
+    MODE UPSERT
+    WITH (COMMIT INTERVAL '1s');
+
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
+
+# The array lands as a struct {items: list, dimensions: int}. Verify the
+# elements and dimension count round-trip.
+$ duckdb-query name=iceberg
+SELECT id, vals.items::VARCHAR, vals.dimensions FROM iceberg_scan('s3://test-bucket/default_namespace/array_table') ORDER BY id
+1 [1, 2, 3] 1
+2 [] 0
+3 [42] 1

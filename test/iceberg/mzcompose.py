@@ -79,6 +79,22 @@ def workflow_smoke(c: Composition) -> None:
     )
 
 
+def workflow_gcp_connection_validation(c: Composition) -> None:
+    """Regression test for SS-69: an Iceberg REST catalog connection that
+    authenticates with a GCP connection must only target Google-operated catalog
+    hosts. A GCP access token is a reusable, broadly-scoped bearer credential
+    with no audience binding, so before this validation a principal with only
+    USAGE on a GCP connection could point the catalog URL at an attacker host and
+    exfiltrate the connection's service-account token. This exercises connection
+    planning only and needs no Iceberg backend."""
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "gcp-connection-validation.td",
+    )
+
+
 def workflow_mode_append(c: Composition) -> None:
     key = _setup(c)
 

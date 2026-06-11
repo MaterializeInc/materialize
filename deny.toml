@@ -209,6 +209,7 @@ wrappers = [
     "rdkafka",
     "reqsign",
     "reqwest",
+    "sqlparser",
     "tokio-postgres",
     "tokio-tungstenite",
     "tracing-log",
