@@ -152,7 +152,7 @@
        The **APP VERSION** will be the value that you will use for upgrading
        Materialize instances.
 
-- name: upgrade-materialize-instance
+- name: upgrade-materialize-instance-v1alpha1
   content: |
 
     **After** you have upgraded your Materialize Operator, upgrade your
@@ -166,7 +166,7 @@
     - Second, rolling out the changes via a `requestRollout` flag.
 
     1. Find the name of the Materialize instance to upgrade. The sample example
-    deployment using the unified Terraform module deploys the Materialie
+    deployment using the unified Terraform module deploys the Materialize
     instance in the`materialize-environment` namespace.
 
        ```shell
@@ -196,6 +196,42 @@
          -n materialize-environment \
          --type='merge' \
          -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
+       ```
+
+    1. Verify the upgrade by checking the `environmentd` events:
+
+       ```bash
+       kubectl -n materialize-environment describe pod -l app=environmentd
+       ```
+
+- name: upgrade-materialize-instance
+  content: |
+
+    **After** you have upgraded your Materialize Operator, upgrade your
+    Materialize instance(s) to the **APP Version** of the Operator.
+
+    1. Find the name of the Materialize instance to upgrade. The sample example
+    deployment using the unified Terraform module deploys the Materialize
+    instance in the`materialize-environment` namespace.
+
+       ```shell
+       kubectl get materialize -n  materialize-environment
+       ```
+
+       In the example deployment, the name of the instance is `main`.
+
+       ```none
+       NAME
+       main
+       ```
+
+    1. Apply the Materialize instance version upgrade.
+
+       ```shell
+       kubectl patch materialize main\
+         -n materialize-environment \
+         --type='merge' \
+         -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\"}}"
        ```
 
     1. Verify the upgrade by checking the `environmentd` events:
