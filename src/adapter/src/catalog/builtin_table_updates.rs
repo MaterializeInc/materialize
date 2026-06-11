@@ -35,9 +35,7 @@ use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterVariant, Connection, DataSourceDesc, Func, Index,
     MaterializedView, Sink, Table, TableDataSource, Type, View,
 };
-use mz_controller::clusters::{
-    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaLocation,
-};
+use mz_controller::clusters::{ManagedReplicaLocation, ReplicaLocation};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
@@ -335,32 +333,34 @@ impl CatalogState {
         let replica = cluster.replica(id).expect("Must exist");
 
         let (size, disk, az) = match &replica.config.location {
-            // TODO(guswynn): The column should be `availability_zones`, not
-            // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
-                availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
+                availability_zones,
                 allocation: _,
                 billed_as: _,
                 internal: _,
                 pending: _,
-            }) => (
-                Some(&**size),
-                Some(self.cluster_replica_size_has_disk(size)),
-                Some(az.as_str()),
-            ),
-            ReplicaLocation::Managed(ManagedReplicaLocation {
-                size,
-                availability_zones: _,
-                allocation: _,
-                billed_as: _,
-                internal: _,
-                pending: _,
-            }) => (
-                Some(&**size),
-                Some(self.cluster_replica_size_has_disk(size)),
-                None,
-            ),
+            }) => {
+                // `mz_cluster_replicas.availability_zone` is the single
+                // user-pinned AZ of an unmanaged cluster's replica; a managed
+                // cluster's replica reads NULL because its placement pool is
+                // the cluster's, exposed via `mz_clusters.availability_zones`.
+                //
+                // TODO(aljoscha): expose the full list as an
+                // `availability_zones` column, matching `mz_clusters`. That
+                // renames a stable `mz_catalog` column, so it's a user-facing
+                // change.
+                let az = if cluster.is_managed() {
+                    None
+                } else {
+                    availability_zones.first().map(String::as_str)
+                };
+                (
+                    Some(&**size),
+                    Some(self.cluster_replica_size_has_disk(size)),
+                    az,
+                )
+            }
             ReplicaLocation::Unmanaged(_) => (None, None, None),
         };
 

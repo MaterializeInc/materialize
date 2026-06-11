@@ -172,7 +172,7 @@ use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{OwnedMutexGuard, mpsc, oneshot, watch};
+use tokio::sync::{Notify, OwnedMutexGuard, mpsc, oneshot, watch};
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -211,6 +211,7 @@ use crate::{AdapterNotice, ReadHolds, flags};
 
 pub(crate) mod appends;
 pub(crate) mod catalog_serving;
+pub(crate) mod cluster_controller;
 pub(crate) mod cluster_scheduling;
 pub(crate) mod consistency;
 pub(crate) mod id_bundle;
@@ -418,6 +419,11 @@ pub enum Message {
     /// A cluster will be On if and only if there is at least one On decision for it.
     /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
     SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>),
+
+    /// One pull/apply call from the cluster controller task, to be answered from
+    /// the catalog and live controller signals on this loop. See
+    /// [`cluster_controller`].
+    ClusterControllerRequest(cluster_controller::ClusterControllerRequest),
 }
 
 impl Message {
@@ -513,6 +519,7 @@ impl Message {
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
             Message::CheckSchedulingPolicies => "check_scheduling_policies",
             Message::SchedulingDecisions { .. } => "scheduling_decision",
+            Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
     }
@@ -819,6 +826,10 @@ pub enum ClusterStage {
     Alter(AlterCluster),
     WaitForHydrated(AlterClusterWaitForHydrated),
     Finalize(AlterClusterFinalize),
+    /// The foreground wait-shim over a controller-driven background
+    /// reconfiguration: poll the durable `reconfiguration` record until it clears
+    /// (success) or its deadline passes (timeout).
+    AwaitReconfiguration(AlterClusterAwaitReconfiguration),
 }
 
 #[derive(Debug)]
@@ -843,6 +854,15 @@ pub struct AlterClusterFinalize {
     plan: plan::AlterClusterPlan,
     new_config: ClusterVariantManaged,
     workload_class: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterAwaitReconfiguration {
+    validity: PlanValidity,
+    cluster_id: ClusterId,
+    /// Whether the shim has already granted the one post-deadline grace
+    /// re-poll; see `await_reconfiguration_stage`.
+    past_deadline_grace_used: bool,
 }
 
 #[derive(Debug)]
@@ -1848,6 +1868,10 @@ pub struct Coordinator {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Notification that triggers a group commit.
     group_commit_tx: appends::GroupCommitNotifier,
+    /// Kicks the cluster controller task to reconcile immediately instead of
+    /// waiting out its tick interval. Notified after catalog transactions that
+    /// change durable cluster state.
+    cluster_controller_kick: Arc<Notify>,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
@@ -3553,6 +3577,7 @@ impl Coordinator {
             self.schedule_arrangement_sizes_collection().await;
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
+            self.spawn_cluster_controller_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
@@ -4588,10 +4613,31 @@ pub fn serve(
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| {
                 let mut exclude_collections: BTreeSet<GlobalId> =
-                    new_builtin_collections.into_iter().collect();
+                    new_builtin_collections.iter().copied().collect();
 
-                // Migrated MVs can't make progress in read-only mode. Exclude them and all their
-                // transitive dependents.
+                // A collection that can't advance its write frontier in read-only mode also
+                // stalls everything that transitively reads from it, so those dependents must be
+                // excluded from the caught-up check as well. Two kinds of source can't advance
+                // while read-only:
+                //
+                //   * Migrated MVs: their dataflows don't write in read-only mode.
+                //   * New builtin MVs: their freshly-created shard has no writer until this
+                //     deployment promotes, so the leader never advances it on our behalf.
+                //
+                // New builtin collections are themselves excluded above, but their dependents are
+                // not, so also seed the walk from new builtin MVs. This only bites when an
+                // already-existing, hydration-gating builtin (e.g. an indexed builtin view) is
+                // pointed at a new builtin MV in the same release.
+                //
+                // Excluding the dependents is intended steady-state behavior, with a known
+                // tradeoff: an excluded dependent is not guaranteed caught up at promotion, so a
+                // hydration-gating dependent (e.g. an indexed builtin view) can still be hydrating
+                // right after we cut over to read-write — a brief blip of unavailability for that
+                // view. We accept it because these builtin MVs are small: once we cut over the new
+                // MV gets a writer and the dependent hydrates quickly, so the blip is short and
+                // self-resolving. Staging the rollout — shipping a new builtin MV one release
+                // before anything depends on it, so the upgrade base already writes its shard —
+                // would avoid even the blip, but we prefer the exclusion as the simpler behavior.
                 //
                 // TODO: Consider sending `allow_writes` for the dataflows of migrated MVs, which
                 //       would allow them to make progress even in read-only mode. This doesn't
@@ -4599,12 +4645,15 @@ pub fn serve(
                 //       than v26.17, since before that version the catalog shard's frontier wasn't
                 //       kept up-to-date with the current time. So this workaround has to remain in
                 //       place upgrades from a version less than v26.17 are no longer supported.
+                let new_builtin_mvs = new_builtin_collections.iter().filter_map(|global_id| {
+                    let entry = catalog.state().try_get_entry_by_global_id(global_id)?;
+                    entry.is_materialized_view().then(|| entry.id())
+                });
                 let mut todo: Vec<_> = migrated_storage_collections_0dt
                     .iter()
-                    .filter(|id| {
-                        catalog.state().get_entry(id).is_materialized_view()
-                    })
                     .copied()
+                    .filter(|id| catalog.state().get_entry(id).is_materialized_view())
+                    .chain(new_builtin_mvs)
                     .collect();
                 while let Some(item_id) = todo.pop() {
                     let entry = catalog.state().get_entry(&item_id);
@@ -4701,6 +4750,7 @@ pub fn serve(
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,
+                    cluster_controller_kick: Arc::new(Notify::new()),
                     strict_serializable_reads_tx,
                     global_timelines: timestamp_oracles,
                     transient_id_gen: Arc::new(TransientIdGen::new()),

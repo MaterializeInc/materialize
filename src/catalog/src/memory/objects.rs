@@ -52,10 +52,10 @@ use mz_sql::names::{
     QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
-    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant, CreateSourcePlan,
-    HirRelationExpr, NetworkPolicyRule, PlanError, WebhookBodyFormat, WebhookHeaders,
-    WebhookValidation,
+    AutoScalingStrategy, ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant,
+    CreateSourcePlan, HirRelationExpr, NetworkPolicyRule, OnTimeoutAction, PlanError,
+    WebhookBodyFormat, WebhookHeaders, WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
@@ -414,6 +414,12 @@ impl Cluster {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
+                // The user-configured policy is surfaced in the create plan (so
+                // `SHOW CREATE CLUSTER` renders it). The in-flight runtime records
+                // are controller-managed and not part of the create statement.
+                auto_scaling_strategy,
+                reconfiguration: _,
+                burst: _,
             }) => {
                 let introspection = match logging {
                     ReplicaLogging {
@@ -436,6 +442,7 @@ impl Cluster {
                     compute,
                     optimizer_feature_overrides: optimizer_feature_overrides.clone(),
                     schedule: schedule.clone(),
+                    auto_scaling_strategy: auto_scaling_strategy.clone(),
                 })
             }
             ClusterVariant::Unmanaged => {
@@ -3290,6 +3297,13 @@ pub struct ClusterVariantManaged {
     pub replication_factor: u32,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
+    /// User-configured autoscaling policy, distinct from the in-flight runtime
+    /// records below. Shared with the durable layer, like [`ClusterSchedule`].
+    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
+    /// In-flight graceful reconfiguration the controller is converging on.
+    pub reconfiguration: Option<ReconfigurationState>,
+    /// In-flight hydration burst the controller is running.
+    pub burst: Option<BurstState>,
 }
 
 impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
@@ -3301,6 +3315,9 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             replication_factor: managed.replication_factor,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
             schedule: managed.schedule,
+            auto_scaling_strategy: managed.auto_scaling_strategy,
+            reconfiguration: managed.reconfiguration.map(Into::into),
+            burst: managed.burst.map(Into::into),
         }
     }
 }
@@ -3314,6 +3331,101 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             replication_factor: managed.replication_factor,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
             schedule: managed.schedule,
+            auto_scaling_strategy: managed.auto_scaling_strategy,
+            reconfiguration: managed.reconfiguration.map(Into::into),
+            burst: managed.burst.map(Into::into),
+        }
+    }
+}
+
+/// In-memory mirror of [`durable::ReconfigurationState`].
+///
+/// This runtime state lives only in the durable layer, so the memory layer
+/// carries its own `Serialize`/`Deserialize` mirror (to back the catalog
+/// `dump()`) and converts across the boundary, rather than embedding the
+/// durable-only type. The semantic contract lives on the durable type.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReconfigurationState {
+    pub target: ReconfigurationTarget,
+    pub deadline: Timestamp,
+    pub on_timeout: OnTimeoutAction,
+}
+
+impl From<ReconfigurationState> for durable::ReconfigurationState {
+    fn from(state: ReconfigurationState) -> Self {
+        Self {
+            target: state.target.into(),
+            deadline: state.deadline,
+            on_timeout: state.on_timeout,
+        }
+    }
+}
+
+impl From<durable::ReconfigurationState> for ReconfigurationState {
+    fn from(state: durable::ReconfigurationState) -> Self {
+        Self {
+            target: state.target.into(),
+            deadline: state.deadline,
+            on_timeout: state.on_timeout,
+        }
+    }
+}
+
+/// In-memory mirror of [`durable::ReconfigurationTarget`].
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReconfigurationTarget {
+    pub size: String,
+    pub replication_factor: u32,
+    pub availability_zones: Vec<String>,
+    pub logging: ReplicaLogging,
+}
+
+impl From<ReconfigurationTarget> for durable::ReconfigurationTarget {
+    fn from(target: ReconfigurationTarget) -> Self {
+        Self {
+            size: target.size,
+            replication_factor: target.replication_factor,
+            availability_zones: target.availability_zones,
+            logging: target.logging,
+        }
+    }
+}
+
+impl From<durable::ReconfigurationTarget> for ReconfigurationTarget {
+    fn from(target: durable::ReconfigurationTarget) -> Self {
+        Self {
+            size: target.size,
+            replication_factor: target.replication_factor,
+            availability_zones: target.availability_zones,
+            logging: target.logging,
+        }
+    }
+}
+
+/// In-memory mirror of [`durable::BurstState`].
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct BurstState {
+    pub burst_size: String,
+    pub linger_duration: Duration,
+    pub steady_hydrated_at: Option<Timestamp>,
+}
+
+impl From<BurstState> for durable::BurstState {
+    fn from(burst: BurstState) -> Self {
+        Self {
+            burst_size: burst.burst_size,
+            linger_duration: burst.linger_duration,
+            steady_hydrated_at: burst.steady_hydrated_at,
+        }
+    }
+}
+
+impl From<durable::BurstState> for BurstState {
+    fn from(burst: durable::BurstState) -> Self {
+        Self {
+            burst_size: burst.burst_size,
+            linger_duration: burst.linger_duration,
+            steady_hydrated_at: burst.steady_hydrated_at,
         }
     }
 }
@@ -3504,6 +3616,16 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     fn schedule(&self) -> Option<&ClusterSchedule> {
         match &self.config.variant {
             ClusterVariant::Managed(ClusterVariantManaged { schedule, .. }) => Some(schedule),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    fn auto_scaling_strategy(&self) -> Option<&AutoScalingStrategy> {
+        match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                auto_scaling_strategy,
+                ..
+            }) => auto_scaling_strategy.as_ref(),
             ClusterVariant::Unmanaged => None,
         }
     }

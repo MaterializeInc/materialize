@@ -19,7 +19,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = on;
 ----
 COMPLETE 0
 
-statement error Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found EOF
+statement error Expected one of AUTO or AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found EOF
 CREATE CLUSTER foo
 
 statement ok
@@ -420,7 +420,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE 'scale=1,workers=1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-299
+300
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -428,7 +428,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-267
+268
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize
@@ -865,6 +865,14 @@ COMPLETE 0
 
 mode standard
 
+# The controller reshapes a SIZE change in the background and advances the
+# realized (rendered) config only at cut-over. Drive the tick down and wait
+# below so the cut-over completes before SHOW CREATE reads the new size back.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
+----
+COMPLETE 0
+
 statement ok
 CREATE CLUSTER c1 (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)
 
@@ -876,6 +884,12 @@ CREATE CLUSTER "c1" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = I
 
 statement ok
 ALTER CLUSTER c1 SET (SIZE = 'scale=1,workers=2');
+
+# Wait for the controller to cut the realized config over to the new size. This
+# reshape replaces both replicas (REPLICATION FACTOR 2), so give it ample margin
+# over the provision-and-hydrate of the new shape before reading the size back.
+statement ok
+SELECT mz_unsafe.mz_sleep(10)
 
 query TT
 SHOW CREATE CLUSTER c1

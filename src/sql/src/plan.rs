@@ -587,6 +587,9 @@ pub struct CreateClusterManagedPlan {
     pub compute: ComputeReplicaConfig,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
+    /// The user-configured autoscaling policy, or `None` if autoscaling is
+    /// disabled for the cluster.
+    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
 }
 
 #[derive(Debug)]
@@ -651,6 +654,25 @@ impl Default for ClusterSchedule {
         // (Has to be consistent with `impl Default for ClusterScheduleOptionValue`.)
         ClusterSchedule::Manual
     }
+}
+
+/// The user-configured autoscaling policy of a managed cluster.
+///
+/// Extensible: future strategies are added as additional optional sub-policies,
+/// so the block as a whole can grow without changing existing ones.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct AutoScalingStrategy {
+    pub on_hydration: Option<OnHydration>,
+}
+
+/// The `ON HYDRATION` autoscaling sub-policy: while objects are un-hydrated, run
+/// an extra replica at `hydration_size` to accelerate hydration.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct OnHydration {
+    pub hydration_size: String,
+    /// How long the burst replica lingers after the steady-state replicas
+    /// hydrate. `None` falls back to the system default at the controller.
+    pub linger_duration: Option<Duration>,
 }
 
 #[derive(Debug)]
@@ -2033,6 +2055,9 @@ pub struct PlanClusterOption {
     pub size: AlterOptionParameter,
     pub schedule: AlterOptionParameter<ClusterSchedule>,
     pub workload_class: AlterOptionParameter<Option<String>>,
+    /// The autoscaling policy block. `Set(None)` disables autoscaling (an empty
+    /// `AUTO SCALING STRATEGY = ()` or `RESET (AUTO SCALING STRATEGY)`).
+    pub auto_scaling_strategy: AlterOptionParameter<Option<AutoScalingStrategy>>,
 }
 
 impl Default for PlanClusterOption {
@@ -2047,6 +2072,7 @@ impl Default for PlanClusterOption {
             size: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
             workload_class: AlterOptionParameter::Unchanged,
+            auto_scaling_strategy: AlterOptionParameter::Unchanged,
         }
     }
 }
@@ -2061,15 +2087,32 @@ pub enum AlterClusterPlanStrategy {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Serialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord
+)]
 pub enum OnTimeoutAction {
+    /// Cut over to the target shape even though it has not hydrated.
     Commit,
+    /// Drop the target replicas and keep the pre-reconfiguration set.
     Rollback,
 }
 
 impl Default for OnTimeoutAction {
     fn default() -> Self {
-        Self::Commit
+        // The safe, conservative default: a reconfiguration that times out
+        // un-hydrated reverts to its pre-reconfiguration shape rather than cutting
+        // over to a not-yet-hydrated target (which could induce downtime). Applied
+        // uniformly — the controller and the legacy foreground wait path both read
+        // this default when an `ALTER` omits `ON TIMEOUT`.
+        Self::Rollback
     }
 }
 

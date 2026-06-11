@@ -1,0 +1,561 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Boundary test for the cluster controller (PR 2): with the master gate forced
+# on and the tick interval driven down so the controller demonstrably reconciles
+# many times within the test window, the baseline-only controller must reconcile
+# a steady managed cluster to a no-op. With only the implicit baseline strategy
+# the desired replica set equals the realized one, so the controller never
+# creates, drops, or renames a replica no matter how often it ticks.
+
+mode cockroach
+
+reset-server
+
+# Force the gate on and drive the tick interval down to a few milliseconds, so
+# the controller ticks ~hundreds of times across the bounded wait below. The gate
+# is re-read each tick, so the flip takes effect without a restart.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_controller = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
+----
+COMPLETE 0
+
+# The graceful-reconfiguration cases below use the WITH (WAIT ...) surface, whose
+# planner acceptance is still gated on this flag even when the controller owns the
+# reconfiguration.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER cc_steady (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)
+
+# The baseline desires exactly the realized set: two replicas at the cluster
+# size. The controller, even with the gate on, leaves them untouched.
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_steady' ORDER BY 1, 2, 3
+----
+cc_steady  r1  scale=1,workers=1
+cc_steady  r2  scale=1,workers=1
+
+# Give the controller a window that spans many tick intervals (5ms) so the
+# reconcile loop runs against this cluster repeatedly. A baseline-only controller
+# must emit zero decisions every tick.
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+# After ~hundreds of ticks the replica set is still exactly the one CREATE
+# CLUSTER allocated: same names, same sizes, same count.
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_steady' ORDER BY 1, 2, 3
+----
+cc_steady  r1  scale=1,workers=1
+cc_steady  r2  scale=1,workers=1
+
+# A controller that churned a steady replica — dropped and recreated it, even
+# reusing the same name — would leave a dropped replica in the history. The
+# baseline controller must never drop a steady replica, so cc_steady has no
+# dropped replica recorded. (Materialize forbids copying these system rows into a
+# user table, so we assert no-drop directly rather than snapshotting ids into a
+# baseline table.) This distinguishes a correctly no-op controller from one that
+# silently recreates replicas; it is not satisfied by gate-off legacy behavior,
+# which never runs the reconcile loop at all.
+query I
+SELECT count(*) FROM mz_internal.mz_cluster_replica_history
+WHERE cluster_name = 'cc_steady' AND dropped_at IS NOT NULL
+----
+0
+
+# A replication-factor change is still a normal, immediate config update (PR 2
+# does not reshape ALTER); the controller then reconciles to the new steady set
+# without churn. Wait across many ticks again and assert the controller settled
+# on exactly one replica and did not keep churning.
+statement ok
+ALTER CLUSTER cc_steady SET (REPLICATION FACTOR 1)
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_steady' ORDER BY 1, 2, 3
+----
+cc_steady  r1  scale=1,workers=1
+
+statement ok
+DROP CLUSTER cc_steady
+
+# ----- Graceful background reconfiguration (PR 3) -----
+#
+# With the master gate on and background ALTER enabled, a config-shape ALTER
+# (SIZE change) writes a durable reconfiguration record and returns immediately;
+# the controller creates the target replicas, and once they hydrate (an empty
+# cluster hydrates promptly) cuts the realized size over to the target and drops
+# the old replicas.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_background_alter_cluster = true
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER cc_graceful (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+# Background ALTER returns immediately (no session-side wait).
+statement ok
+ALTER CLUSTER cc_graceful SET (SIZE 'scale=1,workers=2')
+
+# Give the controller time to spin up the target replica, hydrate it, cut over,
+# and drop the old replica.
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+# The realized config has cut over to the target size, and the cluster settled
+# back to exactly REPLICATION FACTOR replicas at the new size.
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_graceful'
+----
+scale=1,workers=2
+
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_graceful' ORDER BY 1, 2, 3
+----
+cc_graceful  r2  scale=1,workers=2
+
+# The in-flight reconfiguration record was cleared after cut-over, so a fresh
+# config-shape ALTER (to a third size) writes a new record and reshapes again
+# rather than folding onto a stale one. This genuinely exercises the
+# record-write/converge/cut-over path a second time (an identical no-op ALTER
+# would early-return before ever reaching the reshape branch and prove nothing).
+statement ok
+ALTER CLUSTER cc_graceful SET (SIZE 'scale=1,workers=1')
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_graceful'
+----
+scale=1,workers=1
+
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_graceful' ORDER BY 1, 2, 3
+----
+cc_graceful  r3  scale=1,workers=1
+
+statement ok
+DROP CLUSTER cc_graceful
+
+# ----- Per-ALTER timeout / ON TIMEOUT (PR 3) -----
+#
+# The deadline and the on-timeout action come from the existing WITH (WAIT ...)
+# surface and are written into the durable reconfiguration record, so the
+# controller (not the session) enforces them. These cases use a promptly-hydrating
+# (empty) cluster, so success precedence cuts over before any deadline matters;
+# they assert the three spellings are accepted under the gate and drive the record
+# to a successful cut-over. The ROLLBACK-vs-COMMIT behavior *at* a timeout (a
+# target that never hydrates) is asserted deterministically in the controller's
+# kernel unit tests, where hydration does not race the deadline.
+
+statement ok
+CREATE CLUSTER cc_timeout (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+# Omitting WITH (WAIT ...) entirely: the record takes the default deadline and
+# the default ON TIMEOUT action, which is now ROLLBACK. The target hydrates, so it
+# cuts over regardless.
+statement ok
+ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=2')
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+----
+scale=1,workers=2
+
+# Explicit ON TIMEOUT ROLLBACK with a generous deadline: success precedence still
+# cuts over.
+statement ok
+ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '60s', ON TIMEOUT 'ROLLBACK'))
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+----
+scale=1,workers=4
+
+# Explicit ON TIMEOUT COMMIT (and WAIT FOR, which desugars to ON TIMEOUT COMMIT):
+# both accepted under the gate and drive a cut-over.
+statement ok
+ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '60s', ON TIMEOUT 'COMMIT'))
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+----
+scale=1,workers=2
+
+statement ok
+ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=1') WITH (WAIT FOR '60s')
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+----
+scale=1,workers=1
+
+statement ok
+DROP CLUSTER cc_timeout
+
+# ----- Observability: introspection view + SHOW CLUSTERS (PR 4) -----
+#
+# mz_internal.mz_cluster_reconfigurations reports, per managed cluster, the
+# realized config and the in-flight reconfiguration target. In steady state (no
+# record in flight) the target columns mirror the current ones and the in-flight
+# flag is false. The records are written only by the (gated) controller, so for a
+# settled cluster the two shapes coincide.
+
+statement ok
+CREATE CLUSTER cc_obs (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+# Steady state: current == target, nothing in flight, no deadline, no burst.
+query TITIBBBB
+SELECT current_size, current_replication_factor, target_size, target_replication_factor,
+       reconfiguration_in_flight, reconfiguration_deadline IS NOT NULL, burst_size IS NOT NULL,
+       (current_size = target_size AND current_replication_factor = target_replication_factor)
+FROM mz_internal.mz_cluster_reconfigurations recon
+JOIN mz_clusters ON mz_clusters.id = recon.cluster_id
+WHERE mz_clusters.name = 'cc_obs'
+----
+scale=1,workers=1  2  scale=1,workers=1  2  false  false  false  true
+
+# SHOW CLUSTERS surfaces the realized (current) and target size and the in-flight
+# indicator. For a settled cluster current == target and reconfiguration is null.
+query TTTB
+SELECT name, current_size, target_size, reconfiguration_in_flight
+FROM (SHOW CLUSTERS) WHERE name = 'cc_obs'
+----
+cc_obs  scale=1,workers=1  scale=1,workers=1  false
+
+# A completed background reconfiguration advances both current and target to the
+# new size, and clears the in-flight record.
+statement ok
+ALTER CLUSTER cc_obs SET (SIZE 'scale=1,workers=2')
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query TTTB
+SELECT name, current_size, target_size, reconfiguration_in_flight
+FROM (SHOW CLUSTERS) WHERE name = 'cc_obs'
+----
+cc_obs  scale=1,workers=2  scale=1,workers=2  false
+
+# The audit log captured the reconfiguration lifecycle: a `started` event when the
+# record was written, and a `finalized` (or `timed-out`) event at cut-over. The
+# started event records the active deadline.
+query TB
+SELECT
+    details->>'transition',
+    details->>'deadline' IS NOT NULL
+FROM mz_catalog.mz_audit_events
+WHERE event_type = 'alter'
+  AND object_type = 'cluster'
+  AND details->>'cluster_name' = 'cc_obs'
+  AND details->>'transition' IS NOT NULL
+ORDER BY id
+----
+started  true
+finalized  false
+
+statement ok
+DROP CLUSTER cc_obs
+
+# An ALTER-back cancel: a reconfiguration is started and then re-targeted back to
+# the cluster's still-realized size before it cuts over. The lifecycle records a
+# `started`, then a `cancelled` at the ALTER-back (the in-flight target replicas
+# are dropped and the record converges), then a `finalized` as the now-trivial
+# (target == realized) reconfiguration clears.
+statement ok
+CREATE CLUSTER cc_cancel (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+statement ok
+ALTER CLUSTER cc_cancel SET (SIZE 'scale=1,workers=2')
+
+statement ok
+ALTER CLUSTER cc_cancel SET (SIZE 'scale=1,workers=1')
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+# The cluster is back at its original realized size and nothing is in flight.
+query TTTB
+SELECT name, current_size, target_size, reconfiguration_in_flight
+FROM (SHOW CLUSTERS) WHERE name = 'cc_cancel'
+----
+cc_cancel  scale=1,workers=1  scale=1,workers=1  false
+
+query T
+SELECT details->>'transition'
+FROM mz_catalog.mz_audit_events
+WHERE event_type = 'alter'
+  AND object_type = 'cluster'
+  AND details->>'cluster_name' = 'cc_cancel'
+  AND details->>'transition' IS NOT NULL
+ORDER BY id
+----
+started
+cancelled
+finalized
+
+statement ok
+DROP CLUSTER cc_cancel
+
+# ON REFRESH scheduling driven by the controller (PR 5). With the gate on, the
+# on-refresh strategy — not the legacy cluster_scheduling.rs tick — owns a
+# scheduled cluster's replica set: it normalizes the realized replication factor
+# to 0 and brings up a single replica while the cluster is inside a refresh
+# window. The behavior must match today's scheduler.
+
+# A scheduled cluster with no bound REFRESH MV is outside any refresh window, so
+# it has no replica and its replication factor reads 0. The large HYDRATION TIME
+# ESTIMATE below makes the window deterministically open once a fast-refreshing MV
+# is bound (the cluster must always be on to stay that far ahead of the next
+# refresh), so the in-window assertions don't race the refresh cadence.
+statement ok
+CREATE CLUSTER cc_sched (
+  SIZE 'scale=1,workers=1',
+  SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_sched'
+----
+0
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+----
+0
+
+# Bind a REFRESH EVERY materialized view: the cluster is now inside a refresh
+# window (it must rehydrate ahead of each refresh), so the controller brings up
+# exactly one replica at the cluster size. The replication factor still reads 0 —
+# it is the controller's domain for a scheduled cluster — and mz_cluster_replicas
+# is authoritative for what is actually running.
+statement ok
+CREATE TABLE sched_t (x int)
+
+statement ok
+CREATE MATERIALIZED VIEW cc_sched_mv IN CLUSTER cc_sched
+  WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM sched_t
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_sched'
+----
+0
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+----
+1
+
+# The replica runs at the cluster size, and the MV computes a result on it.
+query T
+SELECT r.size FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+----
+scale=1,workers=1
+
+query I
+SELECT count FROM cc_sched_mv
+----
+0
+
+statement ok
+DROP MATERIALIZED VIEW cc_sched_mv
+
+statement ok
+DROP TABLE sched_t
+
+statement ok
+DROP CLUSTER cc_sched
+
+# A MANUAL cluster is untouched by the on-refresh strategy: its replica set is the
+# user's replication factor, owned by the implicit baseline.
+statement ok
+CREATE CLUSTER cc_manual (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_manual'
+----
+1
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_manual'
+----
+1
+
+statement ok
+DROP CLUSTER cc_manual
+
+# ----- Hydration burst (PR 6): AUTO SCALING STRATEGY SQL surface. -----
+
+# SQL acceptance is gated by a feature flag (not a dyncfg) so stored CREATE CLUSTER
+# statements re-parse at rehydration regardless of the dyncfgs.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_auto_scaling_strategy = true
+----
+COMPLETE 0
+
+# These checks exercise the AUTO SCALING STRATEGY SQL surface (parse, render,
+# validation), not live burst arming — the controller's own tests cover arming, and
+# it is non-deterministic here (an arming burst races the steady replica's boot and
+# hydration, then lingers). Disable the break-glass burst strategy so the in-flight
+# burst state is deterministically empty.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_hydration_burst = false
+----
+COMPLETE 0
+
+# A managed cluster can carry an ON HYDRATION burst policy.
+statement ok
+CREATE CLUSTER cc_burst (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2', LINGER DURATION = '600s')))
+
+# SHOW CREATE CLUSTER renders the policy back, and the rendered statement re-parses
+# (the planner's create-roundtrip asserts unplan->parse->plan equality, so a faulty
+# render would already have failed the CREATE above). The rendered SQL mentions the
+# block.
+query T
+SELECT create_sql LIKE '%AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = ''scale=2,workers=2''%' FROM (SHOW CREATE CLUSTER cc_burst)
+----
+true
+
+# The cluster serves a steady replica set at its own size (the baseline).
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_burst'
+----
+1
+
+# SHOW CLUSTERS surfaces the burst column; with the burst strategy disabled no burst
+# is ever in flight, so it reads NULL.
+query TT
+SELECT name, burst_size FROM (SHOW CLUSTERS) WHERE name = 'cc_burst'
+----
+cc_burst  NULL
+
+# RESET disables autoscaling; SHOW CREATE no longer renders the block.
+statement ok
+ALTER CLUSTER cc_burst RESET (AUTO SCALING STRATEGY)
+
+query T
+SELECT create_sql LIKE '%AUTO SCALING STRATEGY%' FROM (SHOW CREATE CLUSTER cc_burst)
+----
+false
+
+# Setting it back via ALTER also works (omitting LINGER DURATION).
+statement ok
+ALTER CLUSTER cc_burst SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+query T
+SELECT create_sql LIKE '%AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = ''scale=2,workers=2''))%' FROM (SHOW CREATE CLUSTER cc_burst)
+----
+true
+
+statement ok
+DROP CLUSTER cc_burst
+
+# HYDRATION SIZE equal to the cluster SIZE is rejected (a burst at the same size
+# would not accelerate hydration).
+statement error HYDRATION SIZE must differ from the cluster SIZE
+CREATE CLUSTER cc_burst_bad (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=1,workers=1')))
+
+# AUTO SCALING STRATEGY combined with a non-MANUAL SCHEDULE is rejected.
+statement error AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL
+CREATE CLUSTER cc_burst_sched (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH, AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+# The two invariants are also enforced when an ALTER changes the *other* side of
+# the constraint on a cluster that already carries a strategy.
+statement ok
+CREATE CLUSTER cc_burst_alt (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+# Setting SIZE equal to the existing HYDRATION SIZE would make the burst a no-op.
+statement error HYDRATION SIZE must differ from the cluster SIZE
+ALTER CLUSTER cc_burst_alt SET (SIZE = 'scale=2,workers=2')
+
+# Setting a non-MANUAL SCHEDULE on a cluster that already has a strategy is rejected.
+statement error AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL
+ALTER CLUSTER cc_burst_alt SET (SCHEDULE = ON REFRESH)
+
+statement ok
+DROP CLUSTER cc_burst_alt
+
+# The invariants also fire when an ALTER *introduces* a strategy that conflicts with
+# the cluster's current config (the strategy-set side, validated against the
+# effective size and schedule).
+statement ok
+CREATE CLUSTER cc_burst_set (SIZE 'scale=1,workers=1')
+
+# A HYDRATION SIZE equal to the cluster's current SIZE is rejected.
+statement error HYDRATION SIZE must differ from the cluster SIZE
+ALTER CLUSTER cc_burst_set SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=1,workers=1')))
+
+statement ok
+DROP CLUSTER cc_burst_set
+
+# Adding a strategy to a cluster whose current SCHEDULE is non-MANUAL is rejected.
+statement ok
+CREATE CLUSTER cc_burst_onref (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH)
+
+statement error AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL
+ALTER CLUSTER cc_burst_onref SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+statement ok
+DROP CLUSTER cc_burst_onref
+
+# With SQL acceptance gated off, the option is rejected at plan time.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_auto_scaling_strategy = false
+----
+COMPLETE 0
+
+statement error AUTO SCALING STRATEGY. cluster option is not available
+CREATE CLUSTER cc_burst_gated (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+# Restore pristine server state (including the tick-interval override).
+reset-server

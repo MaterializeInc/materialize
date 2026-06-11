@@ -225,6 +225,8 @@ pub enum EventDetails {
     IdFullNameV1(IdFullNameV1),
     RenameClusterV1(RenameClusterV1),
     RenameClusterReplicaV1(RenameClusterReplicaV1),
+    AlterClusterReconfigurationV1(AlterClusterReconfigurationV1),
+    ClusterHydrationBurstV1(ClusterHydrationBurstV1),
     RenameItemV1(RenameItemV1),
     IdNameV1(IdNameV1),
     SchemaV1(SchemaV1),
@@ -329,6 +331,81 @@ pub struct IdNameV1 {
     pub name: String,
 }
 
+/// A transition in the lifecycle of a background cluster reconfiguration (a
+/// `reconfiguration` record on a managed cluster), recorded so an operator can
+/// trace a background `ALTER CLUSTER` from start to its resolution.
+///
+/// The replica creates and drops the reconfiguration induces are recorded
+/// separately, carrying [`CreateOrDropClusterReplicaReasonV1::Reconfiguration`];
+/// this event family records the cluster-level transitions those replica
+/// lifecycle events hang off of.
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReconfigurationLifecycleV1 {
+    /// A reconfiguration record was written or re-targeted: the cluster is now
+    /// converging onto a new target shape.
+    Started,
+    /// The realized config cut over to the target and the record was cleared by
+    /// a hydrated success: either under `ON TIMEOUT ROLLBACK` (the conservative
+    /// default), where the only way to clear the record is a successful cut-over
+    /// — including one that hydrated after the deadline, since success takes
+    /// precedence over the deadline — or under `ON TIMEOUT COMMIT` before the
+    /// deadline.
+    Finalized,
+    /// The realized config cut over to the target and the record was cleared
+    /// under an `ON TIMEOUT COMMIT` policy. This is the cut-over of a possibly
+    /// not-yet-hydrated target after the deadline. n.b. under `COMMIT` the
+    /// deadline alone cannot distinguish a target that hydrated late from one
+    /// the timeout committed un-hydrated: both clear the record past the
+    /// deadline, and the apply site sees no hydration signal, so a hydrated-late
+    /// success under `COMMIT` also surfaces here.
+    TimedOut,
+    /// An in-flight reconfiguration was cancelled by re-targeting the record
+    /// back to the cluster's still-realized shape (the ALTER-back cancel path);
+    /// the controller drops the in-flight target replicas and clears the record.
+    Cancelled,
+}
+
+/// A cluster-level transition in a background reconfiguration's lifecycle.
+///
+/// `deadline` is the reconfiguration's active deadline as a millisecond
+/// `mz_timestamp`, recorded whenever a record is present so an operator can
+/// correlate the transition with the originating `ALTER`: on `started` and
+/// `cancelled` (a record was written/re-targeted) and on `timed-out` (the record
+/// being cleared still carried its deadline). It is `None` on `finalized`, where
+/// the record (and its deadline) has just been cleared.
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct AlterClusterReconfigurationV1 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub transition: ReconfigurationLifecycleV1,
+    pub target_size: String,
+    pub target_replication_factor: u32,
+    pub deadline: Option<u64>,
+}
+
 #[derive(
     Clone,
     Debug,
@@ -345,6 +422,56 @@ pub struct CreateRoleV1 {
     pub id: String,
     pub name: String,
     pub auto_provision_source: Option<String>,
+}
+
+/// A transition in the lifecycle of a hydration burst (a `burst` record on a
+/// managed cluster), recorded so an operator can trace a controller-initiated
+/// burst from start to teardown.
+///
+/// The burst replica's create and drop are recorded separately, carrying
+/// [`CreateOrDropClusterReplicaReasonV1::HydrationBurst`]; this event family
+/// records the cluster-level transitions those replica lifecycle events hang off.
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum HydrationBurstLifecycleV1 {
+    /// A `burst` record was written: the controller is now running a burst
+    /// replica to accelerate hydration.
+    Started,
+    /// The `burst` record was cleared: the burst replica is torn down (its linger
+    /// elapsed after the steady set hydrated, or the burst is no longer warranted).
+    Finished,
+}
+
+/// A cluster-level transition in a hydration burst's lifecycle.
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct ClusterHydrationBurstV1 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub transition: HydrationBurstLifecycleV1,
+    /// The size of the burst replica the record runs.
+    pub burst_size: String,
 }
 
 #[derive(
@@ -586,6 +713,14 @@ pub enum CreateOrDropClusterReplicaReasonV1 {
     Manual,
     Schedule,
     System,
+    /// The cluster controller's graceful-reconfiguration strategy created or
+    /// dropped the replica while converging a cluster onto an in-flight
+    /// `reconfiguration` target (a background `ALTER CLUSTER`).
+    Reconfiguration,
+    /// The cluster controller's hydration-burst strategy created or dropped the
+    /// transient burst replica it runs while a cluster's objects are not yet
+    /// hydrated.
+    HydrationBurst,
 }
 
 /// The reason for the automated cluster scheduling to turn a cluster On or Off. Each existing
@@ -1198,6 +1333,12 @@ impl EventDetails {
             EventDetails::IdFullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::RenameClusterV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::RenameClusterReplicaV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::AlterClusterReconfigurationV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::ClusterHydrationBurstV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),

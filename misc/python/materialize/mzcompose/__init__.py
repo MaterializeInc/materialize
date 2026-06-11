@@ -96,6 +96,16 @@ def get_minimal_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
+        # The cluster controller and background ALTER CLUSTER land dark in
+        # production (the dyncfg defaults stay false); force them on for the test
+        # harness so CI exercises the controller owning the managed-cluster
+        # replica set. The real production default flip is a separate rollout.
+        "enable_cluster_controller": (
+            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
+        ),
+        "enable_background_alter_cluster": (
+            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
+        ),
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
@@ -671,6 +681,10 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mcp_developer",
     "mcp_max_response_size",
     "user_id_pool_batch_size",
+    "cluster_controller_tick_interval",
+    "default_cluster_reconfiguration_timeout",
+    "enable_hydration_burst",
+    "default_hydration_burst_linger",
 ]
 
 

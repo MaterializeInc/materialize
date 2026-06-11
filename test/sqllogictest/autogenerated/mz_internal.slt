@@ -123,6 +123,20 @@ type  text  `on-refresh`,␠or␠`manual`.␠Default:␠`manual`
 refresh_hydration_time_estimate  interval  The␠interval␠given␠in␠the␠`HYDRATION␠TIME␠ESTIMATE`␠option.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_reconfigurations' ORDER BY position
+----
+cluster_id  text  The␠ID␠of␠the␠cluster.␠Corresponds␠to␠`mz_clusters.id`.
+current_size  text  The␠realized␠size␠the␠cluster␠is␠currently␠serving,␠matching␠`mz_clusters.size`.
+current_replication_factor  uint4  The␠realized␠replication␠factor␠the␠cluster␠is␠currently␠serving.
+current_availability_zones  list  The␠realized␠availability-zone␠pool␠the␠cluster␠is␠currently␠serving.␠An␠unpinned␠pool␠is␠an␠empty␠list␠(not␠`NULL`,␠unlike␠`mz_clusters.availability_zones`).
+target_size  text  The␠size␠the␠cluster␠is␠reconfiguring␠to;␠equals␠`current_size`␠when␠no␠reconfiguration␠is␠in␠flight.
+target_replication_factor  uint4  The␠replication␠factor␠the␠cluster␠is␠reconfiguring␠to;␠equals␠`current_replication_factor`␠when␠no␠reconfiguration␠is␠in␠flight.
+target_availability_zones  list  The␠availability-zone␠pool␠the␠cluster␠is␠reconfiguring␠to;␠equals␠`current_availability_zones`␠when␠no␠reconfiguration␠is␠in␠flight.␠An␠unpinned␠pool␠is␠an␠empty␠list␠(not␠`NULL`).
+reconfiguration_in_flight  boolean  Whether␠a␠background␠reconfiguration␠is␠in␠progress␠(or␠has␠timed␠out␠and␠parked,␠in␠which␠case␠`reconfiguration_deadline`␠is␠in␠the␠past).
+reconfiguration_deadline  mz_timestamp  The␠deadline␠of␠the␠in-flight␠reconfiguration,␠after␠which␠the␠configured␠`ON␠TIMEOUT`␠action␠applies.␠`NULL`␠when␠no␠reconfiguration␠is␠in␠flight.
+burst_size  text  **Unstable**␠The␠size␠of␠the␠in-flight␠hydration-burst␠replica,␠if␠any.␠`NULL`␠when␠no␠burst␠is␠in␠flight.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
 ----
 replica_id  text  The␠ID␠of␠a␠cluster␠replica.
@@ -745,6 +759,7 @@ mz_builtin_materialized_views
 mz_builtin_sources
 mz_catalog_raw
 mz_cluster_deployment_lineage
+mz_cluster_reconfigurations
 mz_cluster_replica_history
 mz_cluster_replica_metrics
 mz_cluster_replica_metrics_history

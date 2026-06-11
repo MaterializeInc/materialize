@@ -659,6 +659,201 @@ pub static MZ_CLUSTER_SCHEDULES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     }),
 });
 
+pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_cluster_reconfigurations",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_RECONFIGURATIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            // The realized config the cluster is currently serving.
+            .with_column("current_size", SqlScalarType::String.nullable(false))
+            .with_column(
+                "current_replication_factor",
+                SqlScalarType::UInt32.nullable(false),
+            )
+            .with_column(
+                "current_availability_zones",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::String),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
+            // The in-flight reconfiguration target. While a reconfiguration is in
+            // flight these differ from the `current_*` columns; otherwise they
+            // mirror them. `NULL` only when the cluster's realized config is itself
+            // somehow absent, which does not occur for managed clusters.
+            .with_column("target_size", SqlScalarType::String.nullable(false))
+            .with_column(
+                "target_replication_factor",
+                SqlScalarType::UInt32.nullable(false),
+            )
+            .with_column(
+                "target_availability_zones",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::String),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
+            // Whether a `reconfiguration` record is present (a background `ALTER` is
+            // converging or has timed out and parked).
+            .with_column(
+                "reconfiguration_in_flight",
+                SqlScalarType::Bool.nullable(false),
+            )
+            // The active reconfiguration deadline, when a record is in flight. A
+            // deadline in the past with `reconfiguration_in_flight` still true is a
+            // timed-out reconfiguration parked as a tombstone.
+            .with_column(
+                "reconfiguration_deadline",
+                SqlScalarType::MzTimestamp.nullable(true),
+            )
+            // The size of the in-flight hydration-burst replica. Non-null only while
+            // a burst is active for the cluster; otherwise `NULL`.
+            .with_column("burst_size", SqlScalarType::String.nullable(true))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "cluster_id",
+                "The ID of the cluster. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "current_size",
+                "The realized size the cluster is currently serving, matching `mz_clusters.size`.",
+            ),
+            (
+                "current_replication_factor",
+                "The realized replication factor the cluster is currently serving.",
+            ),
+            (
+                "current_availability_zones",
+                "The realized availability-zone pool the cluster is currently serving. An unpinned pool is an empty list (not `NULL`, unlike `mz_clusters.availability_zones`).",
+            ),
+            (
+                "target_size",
+                "The size the cluster is reconfiguring to; equals `current_size` when no reconfiguration is in flight.",
+            ),
+            (
+                "target_replication_factor",
+                "The replication factor the cluster is reconfiguring to; equals `current_replication_factor` when no reconfiguration is in flight.",
+            ),
+            (
+                "target_availability_zones",
+                "The availability-zone pool the cluster is reconfiguring to; equals `current_availability_zones` when no reconfiguration is in flight. An unpinned pool is an empty list (not `NULL`).",
+            ),
+            (
+                "reconfiguration_in_flight",
+                "Whether a background reconfiguration is in progress (or has timed out and parked, in which case `reconfiguration_deadline` is in the past).",
+            ),
+            (
+                "reconfiguration_deadline",
+                "The deadline of the in-flight reconfiguration, after which the configured `ON TIMEOUT` action applies. `NULL` when no reconfiguration is in flight.",
+            ),
+            (
+                "burst_size",
+                "**Unstable** The size of the in-flight hydration-burst replica, if any. `NULL` when no burst is in flight.",
+            ),
+        ]),
+        // One row per managed cluster, read straight from the durable catalog.
+        // `config` is the managed variant's realized shape; `reconfiguration`
+        // (and `target`) is the in-flight record, present only while the
+        // (gated, default-off) controller is converging or has parked a
+        // timeout. An absent `Option` serializes to a JSON `null`, so presence
+        // is `!= 'null'`, not `IS NOT NULL`. The `target_*` columns coalesce
+        // onto the realized config when no record is in flight, so for an
+        // ordinary cluster the two shapes coincide and the in-flight flag is
+        // false. Availability-zone pools are rebuilt as ordered `text list`s
+        // from their JSON arrays; an unpinned pool is the empty list.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL current_size,
+    ASSERT NOT NULL current_replication_factor,
+    ASSERT NOT NULL current_availability_zones,
+    ASSERT NOT NULL target_size,
+    ASSERT NOT NULL target_replication_factor,
+    ASSERT NOT NULL target_availability_zones,
+    ASSERT NOT NULL reconfiguration_in_flight
+) AS
+WITH
+    managed AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'id') AS cluster_id,
+            data->'value'->'config'->'variant'->'Managed' AS config,
+            data->'value'->'config'->'variant'->'Managed'->'reconfiguration' AS reconfiguration,
+            data->'value'->'config'->'variant'->'Managed'->'burst' AS burst
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Cluster' AND
+            data->'value'->'config'->'variant'->'Managed' IS NOT NULL
+    ),
+    current_azs AS (
+        SELECT m.cluster_id, list_agg(az.value ORDER BY az.ordinality) AS azs
+        FROM managed m,
+            jsonb_array_elements_text(m.config->'availability_zones')
+                AS az WITH ORDINALITY
+        GROUP BY m.cluster_id
+    ),
+    target_azs AS (
+        SELECT m.cluster_id, list_agg(az.value ORDER BY az.ordinality) AS azs
+        FROM managed m,
+            jsonb_array_elements_text(m.reconfiguration->'target'->'availability_zones')
+                AS az WITH ORDINALITY
+        GROUP BY m.cluster_id
+    )
+SELECT
+    m.cluster_id,
+    m.config->>'size' AS current_size,
+    (m.config->>'replication_factor')::uint4 AS current_replication_factor,
+    COALESCE(ca.azs, '{}'::text list) AS current_availability_zones,
+    COALESCE(m.reconfiguration->'target'->>'size', m.config->>'size') AS target_size,
+    COALESCE(
+        (m.reconfiguration->'target'->>'replication_factor')::uint4,
+        (m.config->>'replication_factor')::uint4
+    ) AS target_replication_factor,
+    CASE
+        WHEN m.reconfiguration != 'null'
+            THEN COALESCE(ta.azs, '{}'::text list)
+        ELSE COALESCE(ca.azs, '{}'::text list)
+    END AS target_availability_zones,
+    m.reconfiguration != 'null' AS reconfiguration_in_flight,
+    (m.reconfiguration->>'deadline')::mz_timestamp AS reconfiguration_deadline,
+    m.burst->>'burst_size' AS burst_size
+FROM managed m
+LEFT JOIN current_azs ca ON m.cluster_id = ca.cluster_id
+LEFT JOIN target_azs ta ON m.cluster_id = ta.cluster_id",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "cluster_reconfiguration",
+            description: "In-flight cluster reconfiguration and autoscaling state",
+            links: &const {
+                [OntologyLink {
+                    // Exactly one row per managed cluster (unique key on
+                    // `cluster_id`), so the FK is one-to-one, not many-to-one.
+                    name: "belongs_to_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("cluster_id", SemanticType::ClusterId)],
+        }),
+    }
+});
+
+pub const MZ_CLUSTER_RECONFIGURATIONS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_reconfigurations_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_RECONFIGURATIONS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_reconfigurations (cluster_id)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_INTERNAL_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> =
     LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_internal_cluster_replicas",
@@ -4811,6 +5006,19 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
     desc: RelationDesc::builder()
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("replicas", SqlScalarType::String.nullable(true))
+        // The realized size the cluster is currently serving, and the size it is
+        // reconfiguring to (equal unless a background `ALTER` is in flight).
+        // `NULL` for unmanaged clusters.
+        .with_column("current_size", SqlScalarType::String.nullable(true))
+        .with_column("target_size", SqlScalarType::String.nullable(true))
+        // Whether a background reconfiguration is in flight (converging, or
+        // timed out and parked). The active deadline distinguishing the two is in
+        // `mz_internal.mz_cluster_reconfigurations`; this view is indexed, so it
+        // stays non-temporal and does not compare the deadline to `mz_now()`.
+        .with_column("reconfiguration_in_flight", SqlScalarType::Bool.nullable(true))
+        // The size of the in-flight hydration-burst replica, if any. `NULL` when
+        // no burst is running (or for unmanaged clusters); the size while one is.
+        .with_column("burst_size", SqlScalarType::String.nullable(true))
         .with_column("comment", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
@@ -4830,9 +5038,17 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
         FROM mz_internal.mz_comments
         WHERE object_type = 'cluster' AND object_sub_id IS NULL
     )
-    SELECT name, replicas, COALESCE(comment, '') as comment
+    SELECT
+        name,
+        replicas,
+        recon.current_size,
+        recon.target_size,
+        recon.reconfiguration_in_flight,
+        recon.burst_size,
+        COALESCE(comment, '') as comment
     FROM clusters
-    LEFT JOIN comments ON clusters.id = comments.id",
+    LEFT JOIN comments ON clusters.id = comments.id
+    LEFT JOIN mz_internal.mz_cluster_reconfigurations recon ON clusters.id = recon.cluster_id",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 }

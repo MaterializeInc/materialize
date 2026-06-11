@@ -1862,6 +1862,12 @@ class FlipFlagsAction(Action):
             "oidc_group_role_sync_strict",
             "console_oidc_client_id",
             "console_oidc_scopes",
+            "enable_cluster_controller",
+            "cluster_controller_tick_interval",
+            "enable_background_alter_cluster",
+            "default_cluster_reconfiguration_timeout",
+            "enable_hydration_burst",
+            "default_hydration_burst_linger",
         ]
 
     def run(self, exe: Executor) -> bool:
