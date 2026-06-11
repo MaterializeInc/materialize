@@ -25,7 +25,7 @@ use mz_repr::{GlobalId, Timestamp};
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
-use crate::plan::scalar::{LirScalarExpr, mfp_plan_mir_to_lir, try_lses_from_mses};
+use crate::plan::scalar::{LirScalarExpr, lses_from_mses, mfp_plan_mir_to_lir};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Plan, PlanNode};
@@ -105,7 +105,7 @@ impl Context {
             ..
         } in desc.index_imports.values()
         {
-            let key = try_lses_from_mses(&index_desc.key);
+            let key = lses_from_mses(&index_desc.key);
             // TODO[btv] - We should be told the permutation by
             // `index_desc`, and it should have been generated
             // at the same point the thinning logic was.
@@ -676,7 +676,7 @@ impl Context {
                         plan: PlanNode::FlatMap {
                             input_key,
                             input: Box::new(input),
-                            exprs: try_lses_from_mses(&exprs),
+                            exprs: lses_from_mses(&exprs),
                             func: func.clone(),
                             mfp_after: mfp_plan_mir_to_lir(
                                 mfp.into_plan().expect("MFP planning failed"),
@@ -745,7 +745,7 @@ impl Context {
                     }
                     Differential((start, start_arr, _start_characteristic), order) => {
                         let source_arrangement = start_arr.as_ref().and_then(|key| {
-                            let key = try_lses_from_mses(key);
+                            let key = lses_from_mses(key);
                             input_keys[*start]
                                 .arranged
                                 .iter()
@@ -1088,7 +1088,11 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     .iter()
                     .filter(|k1| {
                         !input_keys.arranged.iter().any(|(k2, _, _)| {
-                            *k1 == &k2.iter().map(MirScalarExpr::from).collect_vec()
+                            k1.len() == k2.len()
+                                && k1
+                                    .iter()
+                                    .zip_eq(k2)
+                                    .all(|(e1, e2)| *e1 == MirScalarExpr::from(e2))
                         })
                     })
                     .cloned()
@@ -1103,7 +1107,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     let mut new_keys = new_keys
                         .iter()
                         .map(|k| {
-                            let k = try_lses_from_mses(k);
+                            let k = lses_from_mses(k);
                             let (permutation, thinning) = permutation_for_arrangement(&k, arity);
                             (k, permutation, thinning)
                         })

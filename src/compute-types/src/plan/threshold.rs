@@ -79,11 +79,10 @@ impl ThresholdPlan {
             all_columns.push(LirScalarExpr::column(column));
         }
         let (permutation, thinning) = permutation_for_arrangement(&all_columns, arity);
-        let ensure_arrangement = (all_columns, permutation.clone(), thinning.clone());
+        let ensure_arrangement = (all_columns, permutation, thinning);
         let plan = ThresholdPlan::Basic(BasicThresholdPlan {
             ensure_arrangement: ensure_arrangement.clone(),
         });
-
         (plan, ensure_arrangement)
     }
 }

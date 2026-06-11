@@ -23,7 +23,7 @@ use timely::progress::Antichain;
 
 use crate::plan::Plan;
 use crate::plan::render_plan::RenderPlan;
-use crate::plan::scalar::{LirScalarExpr, try_lses_from_mses};
+use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
@@ -589,7 +589,7 @@ impl IndexDesc<MirScalarExpr> {
     /// Translate an index description from MIR to LIR.
     pub fn as_lir(&self) -> IndexDesc<LirScalarExpr> {
         let on_id = self.on_id.clone();
-        let key = try_lses_from_mses(&self.key);
+        let key = lses_from_mses(&self.key);
 
         IndexDesc { on_id, key }
     }

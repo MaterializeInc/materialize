@@ -1869,11 +1869,7 @@ pub mod plan {
 
             for lb in lower_bounds {
                 // mz_now() >= lb
-                let predicate = MirScalarExpr::CallBinary {
-                    func: crate::BinaryFunc::Gte(crate::func::Gte),
-                    expr1: Box::new(mz_now.clone()),
-                    expr2: Box::new(lb),
-                };
+                let predicate = mz_now.clone().call_binary(lb, crate::func::Gte);
                 let support = predicate
                     .support()
                     .into_iter()
@@ -1884,11 +1880,7 @@ pub mod plan {
             }
             for ub in upper_bounds {
                 // mz_now() < ub
-                let predicate = MirScalarExpr::CallBinary {
-                    func: crate::BinaryFunc::Lt(crate::func::Lt),
-                    expr1: Box::new(mz_now.clone()),
-                    expr2: Box::new(ub),
-                };
+                let predicate = mz_now.clone().call_binary(ub, crate::func::Lt);
                 let support = predicate
                     .support()
                     .into_iter()

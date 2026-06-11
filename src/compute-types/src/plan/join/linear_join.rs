@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan::AvailableCollections;
 use crate::plan::join::{JoinBuildState, JoinClosure};
-use crate::plan::scalar::{LirScalarExpr, try_lses_from_mses};
+use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 
 /// A plan for the execution of a linear join.
 ///
@@ -112,7 +112,7 @@ impl LinearJoinPlan {
         // Iterate through the join order instructions, assembling keys and
         // closures to use.
         for (lookup_relation, lookup_key, _characteristics) in join_order.iter() {
-            let lookup_key = try_lses_from_mses(lookup_key);
+            let lookup_key = lses_from_mses(lookup_key);
             let available = &available[*lookup_relation];
 
             let (lookup_permutation, lookup_thinning) = available

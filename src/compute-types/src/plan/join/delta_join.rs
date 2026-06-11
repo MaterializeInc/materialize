@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan::AvailableCollections;
 use crate::plan::join::{JoinBuildState, JoinClosure};
-use crate::plan::scalar::{LirScalarExpr, try_lses_from_mses};
+use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 
 /// A delta query is implemented by a set of paths, one for each input.
 ///
@@ -102,7 +102,7 @@ impl DeltaJoinPlan {
                     .map(|(lookup_relation, lookup_key, characteristics)| {
                         (
                             *lookup_relation,
-                            try_lses_from_mses(lookup_key),
+                            lses_from_mses(lookup_key),
                             characteristics,
                         )
                     })
