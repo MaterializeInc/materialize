@@ -1720,6 +1720,13 @@ impl ConnectionDetails {
     /// with the check to apply. Callers must re-apply these checks whenever the
     /// connection is created or altered, and whenever the contents of one of
     /// the returned secrets change (e.g. `ALTER SECRET`).
+    ///
+    /// We rely on the caller to actually execute these checks because we don't know:
+    /// - which secrets the caller cares about
+    /// - which secrets require an async operation to fetch
+    ///
+    /// For example, the ALTER SECRET caller should only perform checks on its own secret,
+    /// while the ALTER CONNECTION caller fetches and checks every secret from its connection.
     pub fn secret_content_guards(
         &self,
     ) -> Vec<(CatalogItemId, fn(&str) -> Result<(), anyhow::Error>)> {
