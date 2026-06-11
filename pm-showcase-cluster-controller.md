@@ -43,7 +43,7 @@ indexes: a cheap one (`order_totals_idx`) and the expensive
 
 ```
 ALTER CLUSTER prod_analytics SET (SIZE = 'scale=1,workers=2');
-Time: 105.401 ms
+Time: 104.202 ms
 ```
 
 That's it — no session to babysit. The reconfiguration now runs in the
@@ -73,9 +73,9 @@ SELECT c.name, r.current_size, r.target_size,
 FROM mz_internal.mz_cluster_reconfigurations r
 JOIN mz_clusters c ON c.id = r.cluster_id
 WHERE c.name = 'prod_analytics';
-      name      |   current_size    |    target_size    | in_flight |         deadline
-----------------+-------------------+-------------------+-----------+---------------------------
- prod_analytics | scale=1,workers=1 | scale=1,workers=2 | t         | 2026-06-11 18:18:58.44+00
+      name      |   current_size    |    target_size    | in_flight |          deadline
+----------------+-------------------+-------------------+-----------+----------------------------
+ prod_analytics | scale=1,workers=1 | scale=1,workers=2 | t         | 2026-06-11 23:58:22.012+00
 (1 row)
 ```
 
@@ -90,19 +90,19 @@ SELECT total FROM order_totals WHERE id = 42;
 -------
    100
 (1 row)
-Time: 12.114 ms
+Time: 11.176 ms
 
 SELECT fp FROM event_fingerprint;
                 fp
 ----------------------------------
  ffffebfcda3c1606012f242a4104711e
 (1 row)
-Time: 7.904 ms
+Time: 19.350 ms
 ```
 
 Note that `mz_clusters.size` still reports `scale=1,workers=1`: the catalog
 reports the *realized* configuration — what is actually serving — and the
-pending target is surfaced separately. About a minute later the new replica
+pending target is surfaced separately. Some 40 seconds later the new replica
 has hydrated, the controller cuts over, and everything reads the new size:
 
 ```
@@ -130,8 +130,8 @@ WHERE event_type = 'alter' AND object_type = 'cluster'
 ORDER BY id;
  transition |    target_size    |        occurred_at
 ------------+-------------------+----------------------------
- started    | scale=1,workers=2 | 2026-06-10 18:18:58.44+00
- finalized  | scale=1,workers=2 | 2026-06-10 18:19:55.686+00
+ started    | scale=1,workers=2 | 2026-06-10 23:58:22.013+00
+ finalized  | scale=1,workers=2 | 2026-06-10 23:59:05.21+00
 (2 rows)
 
 SELECT event_type, details->>'replica_name' AS replica,
@@ -191,30 +191,30 @@ can't hydrate in time, the cluster stays on its current shape and keeps
 serving.
 
 Here we try to *downsize* to a shape that cannot hydrate within a 10-second
-deadline:
+deadline. While the clock runs, both replica sets are up:
 
 ```
 ALTER CLUSTER prod_analytics SET (SIZE = 'scale=1,workers=1')
   WITH (WAIT UNTIL READY (TIMEOUT '10s', ON TIMEOUT 'ROLLBACK'));
 
--- 15 seconds later: the target replica is gone, the cluster still serves at
--- the old size, and the abandoned target stays visible as "asked for, but
--- not realized":
+SHOW CLUSTER REPLICAS WHERE cluster = 'prod_analytics';
+    cluster     | replica |       size        | ready | comment
+----------------+---------+-------------------+-------+---------
+ prod_analytics | r2      | scale=1,workers=2 | t     |
+ prod_analytics | r3      | scale=1,workers=1 | f     |
+(2 rows)
+```
+
+At the deadline the controller rolls back on its own: the not-yet-hydrated
+target replica is dropped, the realized configuration is untouched, and the
+cluster reads settled again — never having stopped serving:
+
+```
+-- 15 seconds later:
 SHOW CLUSTERS WHERE name = 'prod_analytics';
       name      |        replicas        |   current_size    |    target_size    | reconfiguration_in_flight | burst_size | comment
 ----------------+------------------------+-------------------+-------------------+---------------------------+------------+---------
- prod_analytics | r2 (scale=1,workers=2) | scale=1,workers=2 | scale=1,workers=1 | t                         |            |
-(1 row)
-
-SELECT c.name, r.current_size, r.target_size,
-       r.reconfiguration_in_flight AS in_flight,
-       to_timestamp(r.reconfiguration_deadline::text::numeric / 1000) < now() AS deadline_passed
-FROM mz_internal.mz_cluster_reconfigurations r
-JOIN mz_clusters c ON c.id = r.cluster_id
-WHERE c.name = 'prod_analytics';
-      name      |   current_size    |    target_size    | in_flight | deadline_passed
-----------------+-------------------+-------------------+-----------+-----------------
- prod_analytics | scale=1,workers=2 | scale=1,workers=1 | t         | t
+ prod_analytics | r2 (scale=1,workers=2) | scale=1,workers=2 | scale=1,workers=2 | f                         |            |
 (1 row)
 
 SELECT total FROM order_totals WHERE id = 42;
@@ -224,10 +224,26 @@ SELECT total FROM order_totals WHERE id = 42;
 (1 row)
 ```
 
-This parked state is stable — no retry loop — until the user re-issues an
-`ALTER`: retry with a fresh deadline, move to a different size, or confirm
-the current size to clear the record (which is what we do next, exactly the
-cancellation pattern above).
+The abandoned target isn't lost: the timeout is recorded as a durable
+`timed-out` transition in the audit log, carrying the deadline and the target
+that didn't make it. (`finalized` events carry the deadline too, so a late or
+forced cut-over is distinguishable from an in-time one.)
+
+```
+SELECT details->>'transition' AS transition,
+       details->>'target_size' AS target_size,
+       to_timestamp((details->>'deadline')::numeric / 1000) AS deadline
+FROM mz_catalog.mz_audit_events
+WHERE event_type = 'alter' AND object_type = 'cluster'
+  AND details->>'cluster_name' = 'prod_analytics'
+  AND details->>'transition' IS NOT NULL
+ORDER BY id DESC LIMIT 2;
+ transition |    target_size    |         deadline
+------------+-------------------+---------------------------
+ timed-out  | scale=1,workers=1 | 2026-06-10 23:59:23.09+00
+ started    | scale=1,workers=1 | 2026-06-10 23:59:23.09+00
+(2 rows)
+```
 
 ### Surviving a restart
 
@@ -244,14 +260,14 @@ SHOW CLUSTERS WHERE name = 'prod_analytics';
 ```
 
 — still in flight, same target, and it completes on its own. The audit trail
-shows one continuous operation spanning the crash (`started` at 18:20:23,
-kill at ~18:20:31, `finalized` at 18:21:38):
+shows one continuous operation spanning the crash (`started` at 23:59:29,
+kill at ~23:59:37, `finalized` at 00:00:43):
 
 ```
  transition |    target_size    |        occurred_at
 ------------+-------------------+----------------------------
- finalized  | scale=1,workers=1 | 2026-06-10 18:21:38.752+00
- started    | scale=1,workers=1 | 2026-06-10 18:20:23.082+00
+ finalized  | scale=1,workers=1 | 2026-06-11 00:00:43.893+00
+ started    | scale=1,workers=1 | 2026-06-10 23:59:29.301+00
 (2 rows)
 ```
 
@@ -274,6 +290,18 @@ SHOW CREATE CLUSTER fast_start;
  fast_start | CREATE CLUSTER "fast_start" (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=1,workers=8', LINGER DURATION = INTERVAL '00:00:15')), ..., REPLICATION FACTOR = 1, SIZE = 'scale=1,workers=1', SCHEDULE = MANUAL)
 ```
 
+The policy is armed existentially: a burst runs only while some object on the
+cluster is not yet hydrated. The freshly created cluster has no objects, so
+nothing bursts — just the steady replica:
+
+```
+SHOW CLUSTERS WHERE name = 'fast_start';
+    name    |        replicas        |   current_size    |    target_size    | reconfiguration_in_flight | burst_size | comment
+------------+------------------------+-------------------+-------------------+---------------------------+------------+---------
+ fast_start | r1 (scale=1,workers=1) | scale=1,workers=1 | scale=1,workers=1 | f                         |            |
+(1 row)
+```
+
 ### Burst fires when there is hydration work
 
 We attach an expensive index (~50s to hydrate at the cluster's steady size).
@@ -284,7 +312,7 @@ in the `burst_size` column:
 ```
 CREATE INDEX pageview_fingerprint_idx IN CLUSTER fast_start ON pageview_fingerprint (fp);
 
--- 4 seconds later:
+-- 4 seconds after attaching the index:
 SHOW CLUSTERS WHERE name = 'fast_start';
     name    |                    replicas                    |   current_size    |    target_size    | reconfiguration_in_flight |    burst_size     | comment
 ------------+------------------------------------------------+-------------------+-------------------+---------------------------+-------------------+---------
@@ -316,7 +344,7 @@ SELECT fp FROM pageview_fingerprint;
 ----------------------------------
  ffffebfcda3c1606012f242a4104711e
 (1 row)
-Time: 14.968 ms
+Time: 15.738 ms
 ```
 
 Without the burst, this query would have waited ~50 seconds for the steady
@@ -343,26 +371,17 @@ drops with reason `retired`:
 ```
  transition |    burst_size     |        occurred_at
 ------------+-------------------+----------------------------
- started    | scale=1,workers=8 | 2026-06-10 18:21:39.686+00
- finished   | scale=1,workers=8 | 2026-06-10 18:21:55.881+00
- started    | scale=1,workers=8 | 2026-06-10 18:22:05.99+00
- finished   | scale=1,workers=8 | 2026-06-10 18:23:23.308+00
-(4 rows)
+ started    | scale=1,workers=8 | 2026-06-11 00:01:00.728+00
+ finished   | scale=1,workers=8 | 2026-06-11 00:02:17.058+00
+(2 rows)
 
  event_type | replica |       size        |     reason
 ------------+---------+-------------------+-----------------
  create     | r1      | scale=1,workers=1 | manual
  create     | r2      | scale=1,workers=8 | hydration-burst
  drop       | r2      |                   | retired
- create     | r2      | scale=1,workers=8 | hydration-burst
- drop       | r2      |                   | retired
-(5 rows)
+(3 rows)
 ```
-
-(The first `started`/`finished` pair is a short burst at cluster creation:
-in the moment before the brand-new steady replica comes online and reports
-in, the controller sees no hydrated steady replica and arms a burst. It tears
-down after the linger. See "Known rough edges" below.)
 
 ### Managing the policy, and guardrails
 
@@ -522,38 +541,6 @@ belong in release notes and docs.
    sets, a burst bills the `HYDRATION SIZE` replica while it runs. Not a new
    rule, but these replicas now appear without a user creating them
    explicitly.
-
----
-
-## Rough edges found during this run — since fixed
-
-The original demo run surfaced three rough edges. All three were fixed on
-this branch immediately afterwards (plan-doc "PR 8") and verified by
-re-running this document's full replay; where a transcript above shows the
-old behavior, the note below says what a current build prints instead.
-
-- **Controller-initiated replica drops were audited `manual`.** Now they
-  carry a dedicated reason, `retired` — "the cluster's configuration no
-  longer calls for this replica" — covering cut-over, rollback/cancel, burst
-  teardown, refresh-window close, and replication-factor decreases. The audit
-  transcripts above that show `drop … manual` print `drop … retired` on a
-  current build (creates are unchanged). On-refresh window-open creates also
-  read `schedule` again instead of `manual`.
-- **A `ROLLBACK`-at-deadline emitted no audit event.** The timeout is now a
-  durable transition: the controller clears the record at the deadline
-  (realized config untouched) and the history reads `started` → `timed-out`,
-  the latter carrying the deadline and the abandoned target; `finalized`
-  always carries the deadline so a late or forced cut-over is
-  distinguishable. This supersedes the parked-tombstone transcript above: on
-  a current build the rolled-back cluster reads settled in `SHOW CLUSTERS`
-  and the introspection view (`in_flight = f`, target back to the realized
-  size), there is no confirm-`ALTER` step to clear, and the audit event is
-  where the abandoned target lives.
-- **A short burst fired at cluster creation.** Burst arming is now
-  existential — a burst runs only when some object on the cluster is not yet
-  hydrated — so a cluster with zero objects never bursts. The burst audit
-  trail in Scenario 2 shows a single `started`/`finished` pair on a current
-  build, not the two pairs captured above.
 
 ---
 
