@@ -51,34 +51,60 @@ unsafe impl Send for SwapExtent {}
 impl SwapExtent {
     /// Compresses `data` into a fresh extent and hints the kernel to push the
     /// extent's pages to the swap device.
+    ///
+    /// Compression goes through a reused thread-local scratch buffer so the
+    /// extent allocation can be sized to the *actual* compressed payload
+    /// (rounded to the page granule) rather than lz4's worst case. Worst-case
+    /// sizing costs ~5.6× on compressible data — in swap capacity, in swap
+    /// write bandwidth per eviction (the whole allocation is paged out), and
+    /// in `alloc_zeroed` memset traffic on recycled allocations — which at
+    /// hydration eviction rates backs up device writeback and bloats the
+    /// working set with swap-cache pages.
     pub(crate) fn write(data: &[u64]) -> SwapExtent {
+        thread_local! {
+            static SCRATCH: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
         let bytes: &[u8] = bytemuck::cast_slice(data);
-        let max_out = lz4_flex::block::get_maximum_output_size(bytes.len());
-        let size = (SIZE_PREFIX + max_out).next_multiple_of(EXTENT_ALIGN);
-        let layout = Layout::from_size_align(size, EXTENT_ALIGN).expect("valid extent layout");
-        // SAFETY: `layout` has nonzero size (`size` is at least one granule).
-        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-        if ptr.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        // SAFETY: `ptr` is a fresh zeroed allocation of `size` bytes
-        // exclusively owned here, so every byte is initialized and no other
-        // reference to it exists yet. Zeroing is required for this slice to
-        // be valid: only a prefix is overwritten below, and `read_into`
-        // borrows the allocation again later.
-        let buf = unsafe { std::slice::from_raw_parts_mut(ptr, size) };
-        let uncompressed_len =
-            u32::try_from(bytes.len()).expect("chunk payloads are bounded by the size classes");
-        buf[..SIZE_PREFIX].copy_from_slice(&uncompressed_len.to_le_bytes());
-        let compressed = lz4_flex::block::compress_into(bytes, &mut buf[SIZE_PREFIX..])
-            .expect("output sized by get_maximum_output_size");
-        let comp_len = SIZE_PREFIX + compressed;
-        region::pageout(ptr, size);
-        SwapExtent {
-            ptr,
-            layout,
-            comp_len,
-        }
+        SCRATCH.with(|scratch| {
+            let mut scratch = scratch.borrow_mut();
+            let max_out = lz4_flex::block::get_maximum_output_size(bytes.len());
+            scratch.resize(SIZE_PREFIX + max_out, 0);
+            let uncompressed_len =
+                u32::try_from(bytes.len()).expect("chunk payloads are bounded by the size classes");
+            scratch[..SIZE_PREFIX].copy_from_slice(&uncompressed_len.to_le_bytes());
+            let compressed = lz4_flex::block::compress_into(bytes, &mut scratch[SIZE_PREFIX..])
+                .expect("output sized by get_maximum_output_size");
+            let comp_len = SIZE_PREFIX + compressed;
+
+            let size = comp_len.next_multiple_of(EXTENT_ALIGN);
+            let layout = Layout::from_size_align(size, EXTENT_ALIGN).expect("valid extent layout");
+            // SAFETY: `layout` has nonzero size (`size` is at least one granule).
+            let ptr = unsafe { std::alloc::alloc(layout) };
+            if ptr.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            // SAFETY: `ptr` is a fresh allocation of `size >= comp_len` bytes
+            // exclusively owned here; the copy plus the tail zeroing below
+            // initialize every byte, so later borrows of the allocation (in
+            // `read_into`) see initialized memory. The source is the scratch
+            // buffer, which cannot alias the fresh allocation.
+            unsafe {
+                std::ptr::copy_nonoverlapping(scratch.as_ptr(), ptr, comp_len);
+                std::ptr::write_bytes(ptr.add(comp_len), 0, size - comp_len);
+            }
+            region::pageout(ptr, size);
+            SwapExtent {
+                ptr,
+                layout,
+                comp_len,
+            }
+        })
+    }
+
+    /// Test-only: the byte size of the extent's allocation.
+    #[cfg(test)]
+    pub(crate) fn alloc_size(&self) -> usize {
+        self.layout.size()
     }
 
     /// Compressed size in bytes, including the size prefix.
@@ -146,6 +172,24 @@ mod tests {
         let mut out = vec![0u64; data.len()];
         extent.read_into(bytemuck::cast_slice_mut(&mut out));
         assert_eq!(out, data);
+    }
+
+    /// The allocation is sized to the compressed payload, not lz4's worst
+    /// case: extents must cost swap capacity and write bandwidth in
+    /// proportion to what they store.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // madvise is a foreign call
+    fn allocation_is_sized_to_payload() {
+        let data = vec![7u64; 100_000];
+        let extent = SwapExtent::write(&data);
+        assert_eq!(
+            extent.alloc_size(),
+            extent.comp_len().next_multiple_of(EXTENT_ALIGN),
+        );
+        assert!(
+            extent.alloc_size() < data.len() * 8 / 8,
+            "compressible data must not be stored at worst-case size",
+        );
     }
 
     #[mz_ore::test]
