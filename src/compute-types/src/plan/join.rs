@@ -39,7 +39,7 @@ pub mod linear_join;
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
-use crate::plan::scalar::{LirScalarExpr, try_lses_from_mses};
+use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 
 /// A complete enumeration of possible join plans to render.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
@@ -294,7 +294,7 @@ impl JoinBuildState {
         mz_expr::canonicalize::canonicalize_equivalence_classes(&mut equivalences);
         let equivalences = equivalences
             .into_iter()
-            .map(|equiv| try_lses_from_mses(&equiv))
+            .map(|equiv| lses_from_mses(&equiv))
             .collect();
         Self {
             column_map,

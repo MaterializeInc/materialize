@@ -660,7 +660,7 @@ impl TryFrom<&MirScalarExpr> for LirScalarExpr {
 ///
 /// Panics if any expression contains unmaterializable functions.
 pub fn mfp_mir_to_lir(mfp: MapFilterProject<MirScalarExpr>) -> MapFilterProject<LirScalarExpr> {
-    let expressions = try_lses_from_mses(&mfp.expressions);
+    let expressions = lses_from_mses(&mfp.expressions);
     let predicates = mfp
         .predicates
         .iter()
@@ -695,8 +695,8 @@ pub fn mfp_plan_mir_to_lir(plan: MfpPlan<MirScalarExpr>) -> MfpPlan<LirScalarExp
     let (safe, lower, upper) = plan.into_parts();
     MfpPlan::from_parts(
         safe_mfp_mir_to_lir(safe),
-        try_lses_from_mses(&lower),
-        try_lses_from_mses(&upper),
+        lses_from_mses(&lower),
+        lses_from_mses(&upper),
     )
 }
 
@@ -725,8 +725,11 @@ pub fn mfp_plan_lir_to_mir(plan: MfpPlan<LirScalarExpr>) -> MfpPlan<MirScalarExp
 
 /// Translates a `&Vec<MirScalarExpr>` (or similar) to a `Vec<LirScalarExpr>`.
 ///
-/// Panics when it encounters unmaterializable functions.
-pub(crate) fn try_lses_from_mses<'a>(
+/// LIR-level expressions never contain unmaterializable functions, so this
+/// conversion is total in practice. The function follows the convention that
+/// the non-`try_` variant panics on failure: a panic here indicates a lowering
+/// bug, not a recoverable condition.
+pub(crate) fn lses_from_mses<'a>(
     exprs: impl IntoIterator<Item = &'a MirScalarExpr>,
 ) -> Vec<LirScalarExpr> {
     match exprs
