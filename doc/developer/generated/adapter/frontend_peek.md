@@ -6,7 +6,7 @@ revision: 87e6694432
 # adapter::frontend_peek
 
 Implements the "frontend peek" sequencing path, where SELECT query optimization and fast-path execution are performed in the pgwire connection task rather than the coordinator's main loop.
-`PeekClient::try_frontend_peek` is the main entry point; it verifies the portal, delegates statement logging setup to `PeekClient::begin_statement_logging` (which returns a `StatementLoggingGuard`), immediately defuses the guard, and then calls `try_frontend_peek_inner`.
+`PeekClient::try_frontend_peek` is the main entry point; it verifies the portal, delegates statement logging setup to `PeekClient::begin_statement_logging` (which returns a `StatementLoggingGuard` owning end-of-execution logging), threads the guard through `try_frontend_peek_inner` — dispatch sites that hand a statement to the coordinator for asynchronous completion defuse it — and retires any still-armed guard with the execution's outcome.
 `try_frontend_peek_inner` sequences the full pipeline — name resolution, planning, cluster selection, RBAC checks, timeline context determination, timestamp determination with read-hold acquisition, optimization (in a `spawn_blocking` task), and finally execution — handling `SELECT`, `EXPLAIN` (plan and pushdown), `COPY TO S3`, and `SUBSCRIBE` statement types.
 Fast-path peeks (constant, arrangement, or persist) are executed directly via `implement_fast_path_peek_plan`; slow-path dataflow plans are dispatched to the coordinator via `Command::ExecuteSlowPathPeek`.
 SUBSCRIBE statements are dispatched via `Command::ExecuteSubscribe`; COPY TO S3 performs an S3 preflight check via `Command::CopyToPreflight` before dispatching `Command::ExecuteCopyTo`.

@@ -694,6 +694,15 @@ impl FastPathPlan {
 
 impl crate::coord::Coordinator {
     /// Implements a peek plan produced by `create_plan` above.
+    ///
+    /// On success this takes the contents of `ctx_extra`, the
+    /// statement-logging guard: a constant peek is retired immediately, and a
+    /// streaming peek moves them into `pending_peeks` for
+    /// `handle_peek_notification` to retire. On an error return the contents
+    /// are left intact and the caller must take ownership of them: `retire`
+    /// if the caller is the sole end-logger, `defuse` if something else logs
+    /// the error end. Dropping the guard armed emits a spurious `Aborted`,
+    /// double-ending the statement.
     #[mz_ore::instrument(level = "debug")]
     pub async fn implement_peek_plan(
         &mut self,
@@ -1374,20 +1383,29 @@ impl crate::coord::Coordinator {
             source_ids,
         };
 
-        // Call the old peek sequencing's implement_peek_plan for now.
         // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
         // relevant parts of the old `implement_peek_plan` into this method, and remove the old
         // `implement_peek_plan`.
-        self.implement_peek_plan(
-            &mut ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone()),
-            planned_peek,
-            finishing,
-            compute_instance,
-            target_replica,
-            max_result_size,
-            max_query_result_size,
-        )
-        .await
+        let mut ctx_guard =
+            ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone());
+        let result = self
+            .implement_peek_plan(
+                &mut ctx_guard,
+                planned_peek,
+                finishing,
+                compute_instance,
+                target_replica,
+                max_result_size,
+                max_query_result_size,
+            )
+            .await;
+        // On error `implement_peek_plan` left the guard's contents intact (see
+        // its doc comment) and the frontend logs the error end, so we defuse
+        // rather than let the guard's `Drop` emit a spurious `Aborted`.
+        if result.is_err() {
+            let _ = ctx_guard.defuse();
+        }
+        result
     }
 
     /// Implements a `COPY TO` command by installing peek watch sets,

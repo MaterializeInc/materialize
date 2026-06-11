@@ -223,7 +223,14 @@ impl PeekClient {
     /// Note: `input_read_holds` has holds for all inputs. For fast-path peeks, this includes the
     /// peek target. For slow-path peeks (to be implemented later), we'll need to additionally call
     /// into the Controller to acquire a hold on the peek target after we create the dataflow.
-    pub async fn implement_fast_path_peek_plan(
+    ///
+    /// `logging_guard` owns end-of-execution logging for this statement. For a
+    /// constant peek it stays armed and the caller logs the end from the
+    /// returned result. For a `PeekExisting`/`PeekPersist` peek, successful
+    /// registration with the coordinator hands ownership of the end to the
+    /// coordinator and the guard is defused here. That holds even when the
+    /// subsequent `client.peek()` fails to issue.
+    pub(crate) async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
         timestamp: Timestamp,
@@ -240,6 +247,7 @@ impl PeekClient {
         conn_id: mz_adapter_types::connection::ConnectionId,
         depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
         watch_set: Option<WatchSetCreation>,
+        logging_guard: &mut StatementLoggingGuard,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
@@ -371,6 +379,19 @@ impl PeekClient {
         })
         .await?;
 
+        // The peek is registered: the coordinator's `pending_peeks` entry now
+        // owns end-of-execution logging. It logs the end on peek completion,
+        // cancellation, concurrent teardown (e.g. a DROP CLUSTER), or the
+        // unregistration below. We defuse the guard so the frontend doesn't
+        // also log the end.
+        logging_guard.defuse();
+
+        // Test-only synchronization point: parks a peek between registration
+        // and issue, so a test can land a concurrent DROP CLUSTER in this
+        // window. Used by
+        // workflow_test_drop_cluster_during_registered_peeks_fast_path.
+        fail::fail_point!("peek_after_register_before_issue");
+
         let finishing_for_instance = finishing.clone();
         let peek_result = client
             .peek(
@@ -388,16 +409,24 @@ impl PeekClient {
             .await;
 
         if let Err(err) = peek_result {
-            // Clean up the registered peek since the peek failed to issue.
-            // The frontend will handle statement logging for the error.
-            self.call_coordinator(|tx| Command::UnregisterFrontendPeek { uuid, tx })
-                .await;
-            return Err(
-                AdapterError::concurrent_dependency_drop_from_instance_peek_error(
-                    err,
-                    compute_instance,
-                ),
+            let err = AdapterError::concurrent_dependency_drop_from_instance_peek_error(
+                err,
+                compute_instance,
             );
+            // The peek failed to issue, so no peek response will ever arrive.
+            // The coordinator owns end-of-execution logging (see above), so we
+            // ask it to unregister the peek and retire it with this error. If
+            // a concurrent teardown already retired the peek, the end is
+            // already logged and the unregistration is a no-op.
+            self.call_coordinator(|tx| Command::UnregisterFrontendPeek {
+                uuid,
+                reason: statement_logging::StatementEndedExecutionReason::Errored {
+                    error: err.to_string(),
+                },
+                tx,
+            })
+            .await;
+            return Err(err);
         }
 
         let peek_response_stream = Coordinator::create_peek_response_stream(
@@ -424,11 +453,12 @@ impl PeekClient {
     /// entry. If `outer_ctx_extra` is `Some` (e.g. EXECUTE/FETCH), reuses and
     /// retires the existing logging context.
     ///
-    /// Returns a [`StatementLoggingGuard`]. Callers must
-    /// [`defuse`](StatementLoggingGuard::defuse) the guard when handing off
-    /// logging responsibility (or, in future, retire it explicitly on a
-    /// terminal outcome). Dropping the guard without retiring it emits an
-    /// `Aborted` end-execution event.
+    /// Returns a [`StatementLoggingGuard`]. Callers must either
+    /// [`retire`](StatementLoggingGuard::retire) the guard on the execution's
+    /// terminal outcome, or [`defuse`](StatementLoggingGuard::defuse) it at
+    /// the point where end-of-execution logging is handed off to another
+    /// component. Dropping the guard without retiring it emits an `Aborted`
+    /// end-execution event.
     pub(crate) fn begin_statement_logging(
         &self,
         session: &mut Session,
@@ -541,9 +571,10 @@ impl PeekClient {
     }
 
     /// Emit a `FrontendStatementLoggingEvent::EndedExecution` for the given
-    /// logging id. Used by callers that manage the statement-logging
-    /// lifecycle explicitly (see `try_frontend_peek`), rather than via the
-    /// RAII [`StatementLoggingGuard`].
+    /// logging id. Used by the few callers that hold a bare
+    /// [`StatementLoggingId`] rather than a [`StatementLoggingGuard`], e.g.
+    /// error paths of the EXECUTE unrolling where the id is not wrapped in a
+    /// guard.
     pub(crate) fn log_ended_execution(
         &self,
         id: StatementLoggingId,
@@ -592,10 +623,16 @@ impl StatementLoggingGuard {
         self.id
     }
 
+    /// Retires the guard with an explicit end-execution reason.
+    /// A no-op if the guard was defused or the statement is not sampled.
+    pub(crate) fn retire(mut self, reason: statement_logging::StatementEndedExecutionReason) {
+        self.emit(reason);
+    }
+
     /// Hands off logging responsibility without emitting an end-execution
-    /// event. Use when another component (e.g. the coordinator, for streaming
-    /// peek / subscribe responses) will log the end asynchronously.
-    pub(crate) fn defuse(mut self) {
+    /// event. Call this at the point where another component takes over
+    /// end-of-execution logging. Afterwards the guard is inert.
+    pub(crate) fn defuse(&mut self) {
         self.id = None;
     }
 
