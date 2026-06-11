@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::bail;
+use k8s_controller::TraceMetadata;
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy, RollingUpdateDeployment},
@@ -554,6 +555,7 @@ impl k8s_controller::Context for Context {
         &self,
         client: Client,
         balancer: &Self::Resource,
+        _metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         if balancer.status.is_none() {
             let balancer_api: Api<Balancer> =
