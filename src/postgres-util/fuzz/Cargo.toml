@@ -1,0 +1,37 @@
+# Fuzz crate for mz-postgres-util desc proto round-trip. `PostgresTableDesc`
+# describes external-database schemas — a decoder bug here is reachable from
+# a compromised upstream Postgres or from on-disk catalog bytes.
+
+[package]
+name = "mz-postgres-util-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# `schemas` (a default feature) is what gates `desc` + its proptest `Arbitrary`
+# impls; make the dependency explicit so the structured arm always builds.
+mz-postgres-util = { path = "..", features = ["schemas"] }
+mz-proto = { path = "../../proto" }
+proptest = "1"
+prost = "0.14.3"
+
+[[bin]]
+name = "postgres_table_desc_proto_roundtrip"
+path = "fuzz_targets/postgres_table_desc_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[patch.crates-io]
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }

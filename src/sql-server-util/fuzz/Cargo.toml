@@ -1,0 +1,36 @@
+# Fuzz crate for mz-sql-server-util desc proto round-trip.
+# `SqlServerTableDesc` describes external-database schemas — a decoder bug
+# here is reachable from a compromised upstream SQL Server or from on-disk
+# catalog bytes.
+
+[package]
+name = "mz-sql-server-util-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-sql-server-util = { path = "..", features = ["proptest"] }
+mz-proto = { path = "../../proto" }
+prost = "0.14.3"
+proptest = { version = "1.11.0", default-features = false, features = ["std"] }
+
+[[bin]]
+name = "sql_server_table_desc_proto_roundtrip"
+path = "fuzz_targets/sql_server_table_desc_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[patch.crates-io]
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev = "64ca594cc22ed67d072c2d0110455da50539e1cd" }

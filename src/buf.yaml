@@ -27,3 +27,25 @@ build:
     # external code
     - testdrive/ci/protobuf-bin
     - testdrive/ci/protobuf-include
+    # Fuzz crates have their own `[workspace]` (required for nightly +
+    # libFuzzer) so each maintains its own `target/`. Build-script deps
+    # like `protobuf-native` extract `.proto` files into that tree —
+    # don't scan it. This list is auto-generated from `src/*/fuzz` by
+    # generate-buf-config.py, so new fuzz crates are covered automatically.
+    - avro/fuzz/target
+    - catalog-protos/fuzz/target
+    - expr/fuzz/target
+    - interchange/fuzz/target
+    - mysql-util/fuzz/target
+    - persist-client/fuzz/target
+    - pgcopy/fuzz/target
+    - pgrepr/fuzz/target
+    - pgtz/fuzz/target
+    - pgwire/fuzz/target
+    - postgres-util/fuzz/target
+    - repr/fuzz/target
+    - sql-parser/fuzz/target
+    - sql-server-util/fuzz/target
+    - storage-types/fuzz/target
+    - storage/fuzz/target
+    - transform/fuzz/target

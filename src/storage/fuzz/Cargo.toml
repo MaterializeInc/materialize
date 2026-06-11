@@ -1,0 +1,72 @@
+# Fuzz crate for mz-storage: exercise the upsert state machine's value
+# consolidation/encoding over untrusted source values. Excluded from the main
+# workspace because libFuzzer requires nightly Rust.
+
+[package]
+name = "mz-storage-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-storage = { path = "..", features = ["fuzzing"] }
+mz-repr = { path = "../../repr" }
+mz-storage-types = { path = "../../storage-types" }
+mz-row-spine = { path = "../../row-spine" }
+differential-dataflow = "0.24.0"
+timely = "0.30.0"
+tokio = { version = "1", features = ["rt"] }
+chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
+uuid = "1.19.0"
+
+[[bin]]
+name = "upsert_consolidate"
+path = "fuzz_targets/upsert_consolidate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "upsert_value_roundtrip_v2"
+path = "fuzz_targets/upsert_value_roundtrip_v2.rs"
+test = false
+doc = false
+bench = false
+
+[patch.crates-io]
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
+serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "3e0a0b98b09a2970f292577a07e1c9382b65b5da" }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc22ed67d072c2d0110455da50539e1cd" }
+async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
+duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", rev = "752c7efe2582" }
+
+[[bin]]
+name = "upsert_state_consolidate"
+path = "fuzz_targets/upsert_state_consolidate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "upsert_runtime"
+path = "fuzz_targets/upsert_runtime.rs"
+test = false
+doc = false
+bench = false

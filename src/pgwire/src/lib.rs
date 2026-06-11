@@ -33,3 +33,12 @@ mod server;
 pub use metrics::MetricsConfig;
 pub use protocol::match_handshake;
 pub use server::{Config, Server};
+
+/// Internal types re-exported under `cfg(feature = "fuzz")` so the fuzz
+/// crate can drive the frontend-message decoder directly. Not for
+/// production use.
+#[cfg(feature = "fuzz")]
+pub mod fuzz_exports {
+    pub use crate::codec::Codec;
+    pub use mz_pgwire_common::FrontendMessage;
+}

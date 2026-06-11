@@ -55,7 +55,7 @@ use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::operators::{CapabilitySet, Inspect, Leave};
+use timely::dataflow::operators::{CapabilitySet, InspectCore, Leave};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -381,9 +381,20 @@ where
     // Broadcasting does more work than necessary, which would be to exchange the probes to the
     // worker that will be the one minting the bindings but we'd have to thread this information
     // through and couple the two functions enough that it's not worth the optimization (I think).
-    probe_stream.broadcast().inspect(move |probe| {
-        // We don't care if the receiver is gone
-        let _ = probed_upper_tx.send(Some(probe.clone()));
+    // Use `InspectCore::inspect_container` instead of `Inspect::inspect`.
+    // `Inspect` carries a `where for<'a> &'a C: IntoIterator` bound, and on
+    // macOS the solver can satisfy that bound by chasing objc2's
+    // `&Retained<T>: IntoIterator` blanket impl into an endless
+    // `Retained<Retained<…>>` chain, overflowing the recursion limit.
+    // `InspectCore` has no such bound, so the cascade never starts. We
+    // iterate the container by hand to recover the per-item callback.
+    probe_stream.broadcast().inspect_container(move |event| {
+        if let Ok((_, data)) = event {
+            for probe in data {
+                // We don't care if the receiver is gone
+                let _ = probed_upper_tx.send(Some(probe.clone()));
+            }
+        }
     });
 
     (

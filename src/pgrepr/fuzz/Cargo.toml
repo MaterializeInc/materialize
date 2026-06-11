@@ -1,0 +1,42 @@
+# Fuzz crate for mz-pgrepr: decode untrusted Postgres wire values. Bind
+# parameters arrive from clients in text or binary format and are decoded
+# per-type. The binary decoders (numeric base-10000, mz_acl_item, interval,
+# unsigned ints) and the strconv-backed text decoders are hand-written
+# byte/text parsers sitting at the client trust boundary, so any panic
+# reachable from a parameter value is an availability bug.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+
+[package]
+name = "mz-pgrepr-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-pgrepr = { path = ".." }
+
+[[bin]]
+name = "value_decode_binary"
+path = "fuzz_targets/value_decode_binary.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "value_decode_text"
+path = "fuzz_targets/value_decode_text.rs"
+test = false
+doc = false
+bench = false
+
+[patch.crates-io]
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }

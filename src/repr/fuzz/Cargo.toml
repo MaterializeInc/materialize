@@ -1,0 +1,204 @@
+# Fuzz crate for mz-repr proto round-trip properties. `Row` is the core
+# value representation in Materialize, serialized via prost as `ProtoRow`.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+# Run via the repo-wide runner: `bin/ci-builder run nightly ci/test/cargo-fuzz.sh`,
+# or locally:
+#     cd src/repr/fuzz
+#     cargo +nightly fuzz run row_proto_roundtrip -- -max_total_time=60
+
+[package]
+name = "mz-repr-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-persist-types = { path = "../../persist-types" }
+mz-proto = { path = "../../proto" }
+mz-repr = { path = "..", features = ["proptest"] }
+chrono = { version = "0.4", default-features = false }
+dec = "0.4.9"
+prost = "0.14.3"
+proptest = "1"
+
+[[bin]]
+name = "row_proto_roundtrip"
+path = "fuzz_targets/row_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "row_codec_roundtrip"
+path = "fuzz_targets/row_codec_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scalar_type_proto_roundtrip"
+path = "fuzz_targets/scalar_type_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "column_type_proto_roundtrip"
+path = "fuzz_targets/column_type_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "relation_desc_proto_roundtrip"
+path = "fuzz_targets/relation_desc_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "interval_proto_roundtrip"
+path = "fuzz_targets/interval_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mz_acl_item_proto_roundtrip"
+path = "fuzz_targets/mz_acl_item_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "acl_item_proto_roundtrip"
+path = "fuzz_targets/acl_item_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_array"
+path = "fuzz_targets/strconv_parse_array.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_list"
+path = "fuzz_targets/strconv_parse_list.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_map"
+path = "fuzz_targets/strconv_parse_map.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_range"
+path = "fuzz_targets/strconv_parse_range.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_numeric"
+path = "fuzz_targets/strconv_parse_numeric.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_interval"
+path = "fuzz_targets/strconv_parse_interval.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jsonb_from_slice"
+path = "fuzz_targets/jsonb_from_slice.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_timestamp"
+path = "fuzz_targets/strconv_parse_timestamp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_timestamptz"
+path = "fuzz_targets/strconv_parse_timestamptz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_date"
+path = "fuzz_targets/strconv_parse_date.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_time"
+path = "fuzz_targets/strconv_parse_time.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "interval_arith"
+path = "fuzz_targets/interval_arith.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "numeric_arith"
+path = "fuzz_targets/numeric_arith.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "range_ops"
+path = "fuzz_targets/range_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "row_arrow_roundtrip"
+path = "fuzz_targets/row_arrow_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_bytes"
+path = "fuzz_targets/strconv_parse_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strconv_parse_uuid"
+path = "fuzz_targets/strconv_parse_uuid.rs"
+test = false
+doc = false
+bench = false

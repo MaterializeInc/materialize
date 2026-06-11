@@ -1,0 +1,56 @@
+# Fuzz crate for mz-transform optimizer transforms (shape/`typ` preservation).
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+# Run via the repo-wide runner; or locally:
+#     cd src/transform/fuzz
+#     cargo +nightly fuzz run mir_relation_fold_constants -- -max_total_time=60
+
+[package]
+name = "mz-transform-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-expr = { path = "../../expr" }
+mz-repr = { path = "../../repr" }
+mz-transform = { path = ".." }
+
+[[bin]]
+name = "mir_relation_transforms"
+path = "fuzz_targets/mir_relation_transforms.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "full_optimizer_equiv"
+path = "fuzz_targets/full_optimizer_equiv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "optimizer_symbolic_equiv"
+path = "fuzz_targets/optimizer_symbolic_equiv.rs"
+test = false
+doc = false
+bench = false
+
+[patch.crates-io]
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc22ed67d072c2d0110455da50539e1cd" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
