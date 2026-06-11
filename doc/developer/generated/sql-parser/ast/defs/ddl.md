@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/ddl.rs
-revision: b1959edbc1
+revision: 5173c50671
 ---
 
 # mz-sql-parser::ast::defs::ddl
@@ -8,4 +8,6 @@ revision: b1959edbc1
 Defines AST types specific to DDL statements: option name/value enums for CREATE and ALTER statements (sources, sinks, connections, materialized views, etc.), column definitions, table constraints, format specifiers, envelope types, and other DDL-specific constructs.
 These types are used as fields within the statement structs defined in `statement.rs`.
 `IcebergSinkMode` has two variants: `Upsert` and `Append`.
-`CreateConnectionType` includes a `GlueSchemaRegistry` variant whose `as_str()` returns `"glue-schema-registry"` and whose `AstDisplay` prints `AWS GLUE SCHEMA REGISTRY`. The full set of `as_str()` identifiers: `"kafka"`, `"confluent-schema-registry"`, `"postgres"`, `"aws"`, `"aws-privatelink"`, `"glue-schema-registry"`, `"ssh-tunnel"`, `"mysql"`, `"sql-server"`, `"iceberg-catalog"`.
+`ConnectionOptionName` includes `GcpConnection` (prints `"GCP CONNECTION"`) and `ServiceAccountKey` (prints `"SERVICE ACCOUNT KEY"`).
+`CreateConnectionType` includes a `Gcp` variant whose `as_str()` returns `"gcp"` and whose `AstDisplay` prints `GCP`, and a `GlueSchemaRegistry` variant whose `as_str()` returns `"glue-schema-registry"` and whose `AstDisplay` prints `AWS GLUE SCHEMA REGISTRY`. The full set of `as_str()` identifiers: `"kafka"`, `"confluent-schema-registry"`, `"postgres"`, `"aws"`, `"aws-privatelink"`, `"glue-schema-registry"`, `"gcp"`, `"ssh-tunnel"`, `"mysql"`, `"sql-server"`, `"iceberg-catalog"`.
+`CreateSinkConnection::Iceberg` uses field `catalog_connection: T::ItemName` for the catalog connection, and `aws_connection: Option<T::ItemName>` for the optional AWS storage credentials; the `AstDisplay` implementation omits the `USING AWS CONNECTION` clause when `aws_connection` is `None`.

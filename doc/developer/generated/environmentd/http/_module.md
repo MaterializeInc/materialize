@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http.rs
-revision: 0d7f7746c4
+revision: 8917b109ff
 ---
 
 # environmentd::http
@@ -10,6 +10,7 @@ Supports multiple authentication modes (`None`, `Password`, `Frontegg`, `Oidc`) 
 Key types include `HttpServer`, `HttpConfig`, `AuthedClient`, `Metrics`, and `InternalRouteConfig`.
 `HttpConfig` carries `allowed_origin` (the `AllowOrigin` predicate for the CORS layer), `allowed_origin_list` (the raw `Vec<HeaderValue>` injected as an Axum `Extension` into the MCP router for server-side origin validation against DNS rebinding attacks), `mcp_metrics` (a `McpMetrics` handle injected as an Axum `Extension` into the MCP router for Prometheus metrics tracking), and `oauth_metadata_metrics` (an `OauthMetadataMetrics` handle for Prometheus metrics on OAuth metadata endpoints). The MCP CORS layer restricts allowed methods to POST and allowed headers to `Authorization` and `Content-Type`.
 `AuthError` enumerates authentication failure modes; the `OidcFailed(String)` variant carries the sanitized `OidcError` display string, which is forwarded to the client so the console can surface OIDC sign-in failures on the login page.
+`group_claim_for` (which resolves the group claim via a coordinator `Command::GetSystemVars` round-trip) is called only when the authenticator is `Frontegg`; for `None`, `Password`, and `OIDC` paths the call is skipped so liveness and readiness probes are not coupled to coordinator health.
 
 Submodules:
 
