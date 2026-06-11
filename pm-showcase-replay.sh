@@ -147,7 +147,7 @@ ORDER BY id;
 EOF
 
 ############################################################################
-log "S1d: timeout + ON TIMEOUT ROLLBACK (parked state)"
+log "S1d: timeout + ON TIMEOUT ROLLBACK"
 cap 05-timeout-rollback.txt <<'EOF'
 ALTER CLUSTER prod_analytics SET (SIZE = 'scale=1,workers=1')
   WITH (WAIT UNTIL READY (TIMEOUT '10s', ON TIMEOUT 'ROLLBACK'));
@@ -155,20 +155,20 @@ SHOW CLUSTER REPLICAS WHERE cluster = 'prod_analytics';
 SELECT mz_unsafe.mz_sleep(15);
 SHOW CLUSTERS WHERE name = 'prod_analytics';
 SELECT c.name, r.current_size, r.target_size,
-       r.reconfiguration_in_flight AS in_flight,
-       to_timestamp(r.reconfiguration_deadline::text::numeric / 1000) < now() AS deadline_passed
+       r.reconfiguration_in_flight AS in_flight
 FROM mz_internal.mz_cluster_reconfigurations r
 JOIN mz_clusters c ON c.id = r.cluster_id
 WHERE c.name = 'prod_analytics';
 SHOW CLUSTER REPLICAS WHERE cluster = 'prod_analytics';
 SELECT total FROM order_totals WHERE id = 42;
-EOF
-
-log "S1e: clear parked record via ALTER-back"
-cap 06-clear-tombstone.txt <<'EOF'
-ALTER CLUSTER prod_analytics SET (SIZE = 'scale=1,workers=2');
-SELECT mz_unsafe.mz_sleep(3);
-SHOW CLUSTERS WHERE name = 'prod_analytics';
+SELECT details->>'transition' AS transition,
+       details->>'target_size' AS target_size,
+       to_timestamp((details->>'deadline')::numeric / 1000) AS deadline
+FROM mz_catalog.mz_audit_events
+WHERE event_type = 'alter' AND object_type = 'cluster'
+  AND details->>'cluster_name' = 'prod_analytics'
+  AND details->>'transition' IS NOT NULL
+ORDER BY id DESC LIMIT 2;
 EOF
 
 ############################################################################
@@ -215,11 +215,11 @@ CREATE CLUSTER fast_start (
 SHOW CREATE CLUSTER fast_start;
 EOF
 
-# Let the transient at-creation burst settle before the real demo.
-poll "at-creation burst settled" "SELECT coalesce(burst_size, 'none') FROM mz_internal.mz_cluster_reconfigurations r JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'fast_start'" "none" 120
-
+# Burst arming is existential: a cluster with no objects must not burst.
 cap 11-burst-steady.txt <<'EOF'
+SELECT mz_unsafe.mz_sleep(5);
 SHOW CLUSTERS WHERE name = 'fast_start';
+SHOW CLUSTER REPLICAS WHERE cluster = 'fast_start';
 EOF
 
 log "S2: load fresh data for the burst demo (uncaptured prep)"
