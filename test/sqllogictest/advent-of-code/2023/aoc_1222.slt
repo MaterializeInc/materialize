@@ -286,7 +286,7 @@ Explained Query:
               Negate // { arity: 4 }
                 Get l16 // { arity: 4 }
           Project (#0..=#2, #6) // { arity: 4 }
-            Map (case when #5{any} then #3{z} else (#3{z} - 1) end) // { arity: 7 }
+            Map (case when #5{"any"} then #3{z} else (#3{z} - 1) end) // { arity: 7 }
               Join on=(#0 = #4) type=differential // { arity: 6 }
                 implementation
                   %0:l9[#0]K » %1[#0]K
