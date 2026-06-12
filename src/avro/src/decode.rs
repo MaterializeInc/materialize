@@ -156,6 +156,32 @@ mod tests {
             )
         );
     }
+
+    #[mz_ore::test]
+    fn array_block_len_bounded_by_remaining_input() {
+        // A tiny body claiming a huge array block must error, not allocate. A
+        // small (or hostile) message used to drive an unbounded `Vec<Value>` by
+        // claiming a multi-million-element block whose items decode from ~no
+        // input (e.g. an empty record). Regression for an OOM found by fuzzing.
+        use std::str::FromStr;
+
+        use super::{AvroDeserializer, GeneralDeserializer};
+        use crate::util::zig_i64;
+        use crate::{Schema, ValueDecoder};
+
+        let schema = Schema::from_str(r#"{"type": "array", "items": "long"}"#).unwrap();
+        let mut body = Vec::new();
+        zig_i64(8_000_000, &mut body); // block count dwarfs the (here, empty) element data
+        let dsr = GeneralDeserializer {
+            schema: schema.top_node(),
+        };
+        let mut reader: &[u8] = &body;
+        let res = dsr.deserialize(&mut reader, ValueDecoder);
+        assert!(
+            res.is_err(),
+            "an array block longer than the remaining input must be rejected, not allocated"
+        );
+    }
 }
 
 /// A convenience function to build timestamp values from underlying longs.
@@ -211,6 +237,17 @@ pub trait Skip: Read {
         }
         Ok(())
     }
+
+    /// An upper bound, if cheaply known, on the number of bytes still readable
+    /// from this source. Used to reject an array/map block that claims more
+    /// elements than the input could possibly contain: each element consumes at
+    /// least zero bytes, so a block longer than the remaining input only happens
+    /// when a small (or hostile) message claims a huge count, which would
+    /// otherwise drive an unbounded `Vec` allocation (length amplification).
+    /// Streaming sources that can't answer cheaply return `None`.
+    fn remaining_input(&self) -> Option<usize> {
+        None
+    }
 }
 
 impl Skip for File {
@@ -226,11 +263,19 @@ impl Skip for &[u8] {
         *self = &self[len..];
         Ok(())
     }
+
+    fn remaining_input(&self) -> Option<usize> {
+        Some(self.len())
+    }
 }
 
 impl<S: Skip + ?Sized> Skip for Box<S> {
     fn skip(&mut self, len: usize) -> Result<(), io::Error> {
         self.as_mut().skip(len)
+    }
+
+    fn remaining_input(&self) -> Option<usize> {
+        self.as_ref().remaining_input()
     }
 }
 
@@ -238,6 +283,11 @@ impl<T: AsRef<[u8]>> Skip for Cursor<T> {
     fn skip(&mut self, len: usize) -> Result<(), io::Error> {
         self.seek(SeekFrom::Current(len as i64))?;
         Ok(())
+    }
+
+    fn remaining_input(&self) -> Option<usize> {
+        let total = self.get_ref().as_ref().len();
+        Some(total.saturating_sub(usize::try_from(self.position()).unwrap_or(usize::MAX)))
     }
 }
 
@@ -497,6 +547,24 @@ impl<'a, R: AvroRead> AvroMapAccess for SimpleMapAccess<'a, R> {
                 }
                 _ => unreachable!(),
             };
+            // See `SimpleArrayAccess::decode_next` — same `MAX_BLOCK_LEN`
+            // bound applies; a wire-claimed block length above the cap
+            // would let the decode loop OOM / overflow allocation.
+            if len > MAX_BLOCK_LEN {
+                return Err(AvroError::Decode(DecodeError::Custom(format!(
+                    "Avro map block length {len} exceeds limit {MAX_BLOCK_LEN}"
+                ))));
+            }
+            // A block can't hold more entries than there are bytes left to
+            // decode them from; reject a count that claims otherwise rather than
+            // letting it drive an unbounded allocation (see `Skip::remaining_input`).
+            if let Some(remaining) = self.r.remaining_input() {
+                if len > remaining {
+                    return Err(AvroError::Decode(DecodeError::Custom(format!(
+                        "Avro map block length {len} exceeds remaining input ({remaining} bytes)"
+                    ))));
+                }
+            }
             self.remaining = len;
         }
         assert!(self.remaining > 0);
@@ -560,6 +628,12 @@ impl<'a> AvroArrayAccess for ValueArrayAccess<'a> {
     }
 }
 
+/// Sanity cap on the per-block element count an Avro array/map can claim
+/// from the wire. Without it, a malicious or corrupt file can claim up
+/// to `i64::MAX` items and the generic array/map decode loop will run
+/// until it eventually OOMs or hits `Vec` capacity-overflow.
+const MAX_BLOCK_LEN: usize = 1 << 24;
+
 impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
     fn decode_next<D: AvroDecode>(&mut self, d: D) -> Result<Option<D::Out>, AvroError> {
         if self.done {
@@ -576,6 +650,21 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
                 }
                 _ => unreachable!(),
             };
+            if len > MAX_BLOCK_LEN {
+                return Err(AvroError::Decode(DecodeError::Custom(format!(
+                    "Avro array block length {len} exceeds limit {MAX_BLOCK_LEN}"
+                ))));
+            }
+            // A block can't hold more items than there are bytes left to decode
+            // them from; reject a count that claims otherwise rather than letting
+            // it drive an unbounded allocation (see `Skip::remaining_input`).
+            if let Some(remaining) = self.r.remaining_input() {
+                if len > remaining {
+                    return Err(AvroError::Decode(DecodeError::Custom(format!(
+                        "Avro array block length {len} exceeds remaining input ({remaining} bytes)"
+                    ))));
+                }
+            }
             self.remaining = len;
         }
         assert!(self.remaining > 0);
@@ -1328,8 +1417,40 @@ pub struct GeneralDeserializer<'a> {
     pub schema: SchemaNode<'a>,
 }
 
+/// Cap on recursive `GeneralDeserializer::deserialize` calls. Avro records
+/// may reference themselves (`{"name":"X","type":"record","fields":[
+/// {"name":"x","type":"X"}]}`), so a malicious file plus matching wire
+/// bytes can recurse forever and overflow the stack.
+const MAX_DECODE_DEPTH: usize = 128;
+
+thread_local! {
+    static DECODE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct DecodeDepthGuard;
+impl DecodeDepthGuard {
+    fn enter() -> Result<Self, AvroError> {
+        DECODE_DEPTH.with(|d| {
+            let new = d.get() + 1;
+            if new > MAX_DECODE_DEPTH {
+                return Err(AvroError::Decode(DecodeError::Custom(format!(
+                    "Avro decode depth exceeds limit {MAX_DECODE_DEPTH}"
+                ))));
+            }
+            d.set(new);
+            Ok(DecodeDepthGuard)
+        })
+    }
+}
+impl Drop for DecodeDepthGuard {
+    fn drop(&mut self) {
+        DECODE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
 impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
     fn deserialize<R: AvroRead, D: AvroDecode>(self, r: &mut R, d: D) -> Result<D::Out, AvroError> {
+        let _guard = DecodeDepthGuard::enter()?;
         use ValueOrReader::Reader;
         match self.schema.inner {
             SchemaPiece::Null => d.scalar(Scalar::Null),

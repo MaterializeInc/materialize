@@ -313,6 +313,43 @@ fn test_no_default_value() -> Result<(), String> {
 }
 
 #[mz_ore::test]
+fn test_resolve_named_against_union_does_not_panic() {
+    // Regression: resolving a named type against a union in which it doesn't
+    // appear used to look the name up in the *other* schema's `named` table and
+    // index it out of bounds. Both directions must resolve to an error, not
+    // panic. (Found by the schema_resolve fuzz target.)
+    let enum_schema =
+        Schema::from_str(r#"{"type":"enum","name":"N1","symbols":["A","B","C"]}"#).unwrap();
+    let union_schema = Schema::from_str(r#"["null",{"type":"map","values":"null"}]"#).unwrap();
+    assert!(resolve_schemas(&enum_schema, &union_schema).is_err());
+    assert!(resolve_schemas(&union_schema, &enum_schema).is_err());
+}
+
+#[mz_ore::test]
+fn test_resolve_failed_nested_named_rolls_back() {
+    // Regression: when a record resolution fails *after* a nested named type was
+    // already resolved, the cleanup popped the wrong slot and orphaned a `None`
+    // placeholder that a later `Option::unwrap` panicked on. The reader's extra
+    // no-default fields make the inner resolution fail, and the surrounding union
+    // stores (rather than propagates) that error, so the orphan would survive.
+    // Must not panic. (Found by the schema_resolve fuzz target.)
+    let writer = Schema::from_str(
+        r#"["null",{"type":"record","name":"N1","fields":[
+            {"name":"f0","type":{"type":"record","name":"N2","fields":[{"name":"f0","type":"double"}]}}]}]"#,
+    )
+    .unwrap();
+    let reader = Schema::from_str(
+        r#"["null",{"type":"record","name":"N1","fields":[
+            {"name":"f0","type":{"type":"record","name":"N2","fields":[]}},
+            {"name":"f1","type":"null"},
+            {"name":"f2","type":"null"}]}]"#,
+    )
+    .unwrap();
+    let _ = resolve_schemas(&writer, &reader);
+    let _ = resolve_schemas(&reader, &writer);
+}
+
+#[mz_ore::test]
 fn test_union_default() {
     let reader_schema = Schema::from_str(
         r#"{
