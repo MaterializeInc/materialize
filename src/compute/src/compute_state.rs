@@ -345,12 +345,15 @@ impl ComputeState {
             const MIB: usize = 1024 * 1024;
             const DEFAULT_RAM: usize = 4 * 1024 * MIB;
             let ram = mz_ore::memory::physical_memory_bytes().unwrap_or(DEFAULT_RAM);
-            let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
-            let total = usize::cast_lossy(f64::cast_lossy(ram) * fraction).max(128 * MIB);
-            let target_fraction = COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION
-                .get(config)
-                .max(0.0);
-            let rss_target = usize::cast_lossy(f64::cast_lossy(ram) * target_fraction);
+            let of_ram =
+                |fraction: f64| usize::cast_lossy(f64::cast_lossy(ram) * fraction.max(0.0));
+            let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config);
+            let total = of_ram(fraction).max(128 * MIB);
+            // No ordering is enforced between the target and the budget: a
+            // target at or below budget + warm cap leaves no compressed-tier
+            // headroom, which legally collapses the tier — every backing
+            // write pages out immediately, the pre-tier behavior.
+            let rss_target = of_ram(COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION.get(config));
 
             let backend = if self.context.scratch_directory.is_some() {
                 Backend::File

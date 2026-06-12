@@ -426,11 +426,12 @@ mod tests {
 
     /// Pool with a small virtual reservation per class, suitable for tests.
     fn test_pool(budget_bytes: usize) -> Pool {
-        Pool::new(PoolConfig {
-            budget_bytes,
+        let pool = Pool::new(PoolConfig {
             class_capacity_bytes: 64 << 20,
         })
-        .expect("pool creation")
+        .expect("pool creation");
+        pool.set_budget(budget_bytes);
+        pool
     }
 
     fn column(updates: &[Update]) -> Column<Update> {

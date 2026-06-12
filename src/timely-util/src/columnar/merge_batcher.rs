@@ -398,8 +398,8 @@ where
     /// [`MIN_PAGED_CHAIN_LEN`]), and the rebalance that follows consumes it
     /// almost immediately; it reaches the pager once it lands in a chain
     /// long enough to survive a few rounds.
-    fn push_into(&mut self, mut chunk: Column<(D, T, R)>) {
-        let paged = ColumnPager::disabled().page(&mut chunk);
+    fn push_into(&mut self, chunk: Column<(D, T, R)>) {
+        let paged = PagedColumn::resident_untracked(chunk);
         self.insert_chain(VecDeque::from([paged]));
     }
 }
@@ -1267,10 +1267,10 @@ mod tests {
         // soon as it lands, so the merge / seal path must fault everything
         // back in from extents rather than reading pool slots.
         let pool = mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig {
-            budget_bytes: 0,
             class_capacity_bytes: 64 << 20,
         })
         .expect("pool creation");
+        pool.set_budget(0);
 
         let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
             differential_dataflow::trace::Batcher::new(None, 0);

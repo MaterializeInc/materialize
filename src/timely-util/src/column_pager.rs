@@ -208,9 +208,31 @@ pub struct ResidentTicket {
 
 impl Drop for ResidentTicket {
     fn drop(&mut self) {
+        // Zero-byte tickets were never charged (see
+        // `PagedColumn::resident_untracked`); releasing them would only add
+        // metric noise.
+        if self.bytes == 0 {
+            return;
+        }
         metrics::observe_resident_released(self.bytes);
         self.policy
             .record(PageEvent::ResidentReleased { bytes: self.bytes });
+    }
+}
+
+impl<C: Columnar> PagedColumn<C> {
+    /// Wraps `col` as a resident paged column without consulting any policy
+    /// or charging any budget; the ticket is inert. For callers that keep a
+    /// column resident by construction — deciding before any pager is
+    /// involved — rather than by a policy's grant.
+    pub fn resident_untracked(col: Column<C>) -> Self {
+        static INERT: LazyLock<Arc<dyn PagingPolicy>> =
+            LazyLock::new(|| Arc::new(AlwaysResidentPolicy));
+        let ticket = ResidentTicket {
+            bytes: 0,
+            policy: Arc::clone(&INERT),
+        };
+        PagedColumn::Resident(col, ticket)
     }
 }
 
@@ -960,11 +982,12 @@ mod tests {
 
     /// Builds a small pool with a modest virtual reservation per size class.
     fn test_pool(budget_bytes: usize) -> mz_ore::pool::Pool {
-        mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig {
-            budget_bytes,
+        let pool = mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig {
             class_capacity_bytes: 64 << 20,
         })
-        .expect("pool creation")
+        .expect("pool creation");
+        pool.set_budget(budget_bytes);
+        pool
     }
 
     #[mz_ore::test]
