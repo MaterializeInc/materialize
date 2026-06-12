@@ -110,6 +110,9 @@ ERROR_RE = re.compile(
     | source-table-migration\ issue
     # sql logic tests
     | Rewrite\ SLT\ files\ locally\ with:\ [\s\S]*? ^EOF$
+    # catalog_server_explain.slt coverage check (test/sqllogictest/mzcompose.py).
+    # Raised as a UIError, so it never reaches a junit file; match the log text.
+    | is\ out\ of\ date\ with\ the\ objects\ on\ mz_catalog_server\.[\s\S]*?catalog-server-explain\ --rewrite
     | ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s+thread\ '.*?'\ panicked\ at\ .*\n.*
     # rdkafka assertions
     | Assertion\ `.*'\ failed\.
