@@ -143,6 +143,15 @@ skip = [
     { name = "untrusted", version = "0.7.1" },
     # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
     { name = "spin", version = "0.5.2" },
+
+    # Pulled by launchdarkly-server-sdk 3.x via launchdarkly-sdk-transport /
+    # eventsource-client (proxy/timeout/rustls stack and the SDK's RNG path).
+    { name = "tower", version = "0.4.13" },
+    { name = "rustls-native-certs", version = "0.7.3" },
+    { name = "rand", version = "0.10.1" },
+    { name = "rand_core", version = "0.10.1" },
+    { name = "getrandom", version = "0.4.2" },
+    { name = "cpufeatures", version = "0.3.0" },
 ]
 
 [[bans.deny]]
@@ -199,6 +208,7 @@ wrappers = [
     "globset",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
+    "launchdarkly-sdk-transport",
     "native-tls",
     "opendal",
     "os_info",
