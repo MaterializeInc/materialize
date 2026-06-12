@@ -19,7 +19,7 @@ use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastInto;
-use mz_ore::{assert_none, halt, soft_panic_or_log};
+use mz_ore::{halt, soft_panic_or_log};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
@@ -295,6 +295,13 @@ pub(crate) fn parse_id(id_prefix: &str, id_type: &str, encoded: &str) -> Result<
         Some(x) => x,
         None => return Err(format!("invalid {} {}: incorrect prefix", id_type, encoded)),
     };
+    // `Uuid::parse_str` panics (rather than erroring) while building its parse
+    // error for some malformed inputs — e.g. non-ASCII bytes make it slice the
+    // input on a non-char boundary. Reject anything that can't be a UUID first:
+    // the shortest valid form is 32 hex digits, all ASCII.
+    if uuid_encoded.len() < 32 || !uuid_encoded.is_ascii() {
+        return Err(format!("invalid {} {}: malformed UUID", id_type, encoded));
+    }
     let uuid = Uuid::parse_str(uuid_encoded)
         .map_err(|err| format!("invalid {} {}: {}", id_type, encoded, err))?;
     Ok(*uuid.as_bytes())
@@ -512,7 +519,13 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             proto.latest_rollup_key.into_rust()?,
         );
         if let Some(field_diffs) = proto.field_diffs {
-            debug_assert_eq!(field_diffs.validate(), Ok(()));
+            // `field_diffs` is decoded from an untrusted blob, so validate it and
+            // return a decode error on a malformed/crafted diff rather than a
+            // `debug_assert` (which panics under debug assertions / fuzzing and
+            // is compiled out in release, where the bad data flowed through).
+            field_diffs
+                .validate()
+                .map_err(TryFromProtoError::InvalidPersistState)?;
             for field_diff in field_diffs.iter() {
                 let (field, diff) = field_diff?;
                 match field {
@@ -1091,6 +1104,16 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
 
         let diffs: Option<InlinedDiffs> = x.diffs.map(|diffs| diffs.into_rust()).transpose()?;
         if let Some(diffs) = &diffs {
+            // The diff bounds are validated against the latest rollup, which
+            // `State::latest_rollup` `.expect()`s to exist. A proto that carries
+            // diffs but no rollups is malformed, so reject it here rather than
+            // panicking. (A rollup-less state with no diffs — e.g. a freshly
+            // initialized state — is fine and must still decode.)
+            if state.collections.rollups.is_empty() {
+                return Err(TryFromProtoError::InvalidPersistState(
+                    "rollup state has diffs but no rollups".into(),
+                ));
+            }
             if diffs.lower != state.latest_rollup().0.next() {
                 return Err(TryFromProtoError::InvalidPersistState(format!(
                     "diffs lower ({}) should match latest rollup's successor: ({})",
@@ -1657,10 +1680,21 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
-                assert_eq!(proto.encoded_size_bytes, 0);
-                assert_eq!(proto.key_lower.len(), 0);
-                assert_none!(proto.key_stats);
-                assert_none!(proto.diffs_sum);
+                // An inline part carries its data in `kind`; the hollow-only
+                // fields must be unset. These are decoded from an untrusted
+                // blob, so validate and return a decode error rather than
+                // asserting (which panicked, even in release, on a
+                // malformed/crafted part). Found by the rollup_proto_roundtrip
+                // cargo-fuzz target.
+                if proto.encoded_size_bytes != 0
+                    || !proto.key_lower.is_empty()
+                    || proto.key_stats.is_some()
+                    || proto.diffs_sum.is_some()
+                {
+                    return Err(TryFromProtoError::InvalidPersistState(
+                        "inline ProtoHollowBatchPart has hollow-part fields set".into(),
+                    ));
+                }
                 let updates = LazyInlineBatchPart(x.into_rust()?);
                 Ok(BatchPart::Inline {
                     updates,
@@ -1896,8 +1930,17 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Description> for Description<T> {
     }
 
     fn from_proto(proto: ProtoU64Description) -> Result<Self, TryFromProtoError> {
+        let lower: Antichain<T> = proto.lower.into_rust_if_some("lower")?;
+        // `Description::new` asserts a non-empty lower frontier. `lower` is
+        // decoded from an untrusted blob, so validate it here and return a
+        // decode error rather than panicking on a crafted/corrupted batch.
+        if lower.elements().is_empty() {
+            return Err(TryFromProtoError::InvalidPersistState(
+                "ProtoU64Description has an empty lower frontier".into(),
+            ));
+        }
         Ok(Description::new(
-            proto.lower.into_rust_if_some("lower")?,
+            lower,
             proto.upper.into_rust_if_some("upper")?,
             proto.since.into_rust_if_some("since")?,
         ))
@@ -1927,10 +1970,13 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_none;
+
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::assert_err;
+    use mz_ore::cast::CastFrom;
     use mz_persist::location::SeqNo;
     use proptest::prelude::*;
 
@@ -1942,6 +1988,58 @@ mod tests {
     use crate::tests::new_test_client_cache;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn parse_id_rejects_malformed_uuid_without_panicking() {
+        // `Uuid::parse_str` panics (rather than erroring) while building its
+        // parse error for some malformed inputs — e.g. non-ASCII bytes make it
+        // slice the input on a non-char boundary. `parse_id` must turn these
+        // into clean errors. Regression for the rollup_proto_roundtrip finding.
+        let nonascii = "é".repeat(40);
+        let weird = format!("w{nonascii}");
+        for encoded in ["w", "wnotauuid", "w{}", weird.as_str()] {
+            assert!(
+                parse_id("w", "WriterId", encoded).is_err(),
+                "{encoded:?} should error, not panic",
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn rollup_inline_batch_part_with_hollow_fields_is_error() {
+        // An inline `ProtoHollowBatchPart` carrying hollow-only fields (here a
+        // non-zero encoded_size_bytes) must decode to an error, not panic — it
+        // used to `assert!`, which fired even in release on a crafted/corrupted
+        // blob. Regression for the rollup_proto_roundtrip cargo-fuzz finding.
+        use mz_proto::ProtoType;
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x3a, 0x12, 0x0a, 0x00, 0x12, 0x0a, 0x22, 0x06, 0x5a, 0x00, 0x10, 0x02, 0x2a, 0x00,
+            0x22, 0x00, 0x22, 0x00, 0x22, 0x00,
+        ];
+        let proto = crate::internal::state::ProtoRollup::decode(bytes)
+            .expect("crash input decodes as a proto");
+        let result: Result<Rollup<u64>, _> = proto.into_rust();
+        assert_err!(result);
+    }
+
+    #[mz_ore::test]
+    fn rollup_batch_with_empty_lower_frontier_is_error() {
+        // A `ProtoU64Description` with an empty lower frontier must decode to an
+        // error: `Description::new` asserts a non-empty lower, so a crafted batch
+        // used to panic. Regression for the rollup_proto_roundtrip cargo-fuzz
+        // finding.
+        use mz_proto::ProtoType;
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x3a, 0x12, 0x0a, 0x00, 0x12, 0x0a, 0x0a, 0x06, 0x0a, 0x00, 0x12, 0x00, 0x1a, 0x00,
+            0x12, 0x00, 0x32, 0x00, 0x22, 0x00,
+        ];
+        let proto = crate::internal::state::ProtoRollup::decode(bytes)
+            .expect("crash input decodes as a proto");
+        let result: Result<Rollup<u64>, _> = proto.into_rust();
+        assert_err!(result);
+    }
 
     #[mz_ore::test]
     fn metadata_map() {
@@ -2166,6 +2264,205 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected
         );
+    }
+
+    /// A rollup proto that carries diffs but whose state has no rollups is
+    /// malformed: the diff bounds are validated against the latest rollup, which
+    /// `latest_rollup` `.expect()`s to exist. Decoding it must return an error
+    /// rather than panicking. (A rollup-less state *without* diffs is legitimate
+    /// — see `applier_version_state` — and must still decode.) Regression for a
+    /// rollup_proto_roundtrip fuzz crash.
+    #[mz_ore::test]
+    fn rollup_proto_with_diffs_but_no_rollups_is_rejected() {
+        let shard_id = ShardId::new();
+        let mut state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            shard_id,
+            "host".to_owned(),
+            0,
+        );
+        // Anchor a rollup at the state's seqno so `Rollup::from` accepts the
+        // (empty) diff range, producing a proto that does carry diffs.
+        let seqno = state.state.seqno;
+        state.state.collections.rollups.insert(
+            seqno,
+            HollowRollup {
+                key: PartialRollupKey("foo".to_owned()),
+                encoded_size_bytes: None,
+            },
+        );
+        let mut proto = Rollup::from(state.into(), Vec::new()).into_proto();
+
+        // Strip every rollup, leaving a proto that has diffs but no rollups.
+        proto.rollups.clear();
+        proto.deprecated_rollups.clear();
+
+        let result: Result<Rollup<u64>, _> = proto.into_rust();
+        assert!(
+            result.is_err(),
+            "a rollup proto with diffs but no rollups must error, not panic"
+        );
+    }
+
+    /// Returns a valid rollup proto whose trace was mutated by `update_trace`.
+    fn rollup_proto_with_trace(update_trace: impl FnOnce(&mut ProtoTrace)) -> ProtoRollup {
+        let state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "host".to_owned(),
+            0,
+        );
+        let mut proto = Rollup::from_untyped_state_without_diffs(state.into()).into_proto();
+        update_trace(proto.trace.as_mut().expect("fresh state has a trace"));
+        proto
+    }
+
+    fn u64_desc_proto(lower: u64, upper: u64, since: u64) -> ProtoU64Description {
+        Description::new(
+            Antichain::from_elem(lower),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(since),
+        )
+        .into_proto()
+    }
+
+    fn legacy_batch_proto(lower: u64, upper: u64, since: u64) -> ProtoHollowBatch {
+        ProtoHollowBatch {
+            desc: Some(u64_desc_proto(lower, upper, since)),
+            ..Default::default()
+        }
+    }
+
+    fn rollup_decode_err(proto: ProtoRollup) -> String {
+        let result: Result<Rollup<u64>, _> = proto.into_rust();
+        match result {
+            Ok(_) => panic!("crafted rollup proto must fail to decode"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    /// The trace in a rollup proto is decoded from an untrusted blob, and
+    /// `Trace::unflatten` re-inserts structureless legacy batches into a
+    /// spine whose (always-on) asserts require them to tile the timeline
+    /// contiguously from the minimum frontier. A batch that doesn't must fail
+    /// decoding instead. Regression for a rollup_proto_roundtrip fuzz crash
+    /// (crash-8603829ee2a3b9c28ee988a14136050d1afe984c).
+    #[mz_ore::test]
+    fn rollup_proto_with_noncontiguous_legacy_batches_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.legacy_batches.push(legacy_batch_proto(39, 40, 0));
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("legacy batch lower"), "{err}");
+    }
+
+    /// Like [rollup_proto_with_noncontiguous_legacy_batches_is_rejected], but
+    /// for `Spine::insert`'s other assert: a legacy batch with an empty time
+    /// range.
+    #[mz_ore::test]
+    fn rollup_proto_with_empty_range_legacy_batch_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.legacy_batches.push(legacy_batch_proto(0, 0, 0));
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("empty time range"), "{err}");
+    }
+
+    /// A batch whose since is past the trace's since reconstructs without
+    /// tripping any spine assert but violates `Trace::validate`, which used
+    /// to run only under `debug_assert` (a panic in cargo-fuzz builds, silent
+    /// acceptance of corrupted state in release builds). It must be a decode
+    /// error.
+    #[mz_ore::test]
+    fn rollup_proto_with_batch_since_past_trace_since_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.legacy_batches.push(legacy_batch_proto(0, 1, 5));
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("past the spine since"), "{err}");
+    }
+
+    /// An absurd batch len overflows the spine's maintenance arithmetic
+    /// (`len.next_power_of_two()`, summing lens of merged batches), which
+    /// panics in builds with overflow checks. It must be a decode error.
+    #[mz_ore::test]
+    fn rollup_proto_with_absurd_batch_len_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.legacy_batches.push(ProtoHollowBatch {
+                desc: Some(u64_desc_proto(0, 1, 0)),
+                len: u64::MAX,
+                ..Default::default()
+            });
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("maximum trace size"), "{err}");
+    }
+
+    /// An absurd spine batch level previously overflowed `level + 1` (a panic
+    /// in builds with overflow checks) and sized a `vec![]` allocation (an
+    /// abort). It must be a decode error.
+    #[mz_ore::test]
+    fn rollup_proto_with_absurd_spine_level_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.spine_batches.push(ProtoIdSpineBatch {
+                id: Some(SpineId(0, 1).into_proto()),
+                batch: Some(ProtoSpineBatch {
+                    level: u64::MAX,
+                    desc: Some(u64_desc_proto(0, 1, 0)),
+                    parts: vec![],
+                    descs: vec![],
+                }),
+            });
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("exceeds the maximum"), "{err}");
+    }
+
+    /// A spine batch whose parts don't tile its id range (here: no parts at
+    /// all) previously tripped the `debug_assert`s in `SpineBatch::id`. It
+    /// must be a decode error.
+    #[mz_ore::test]
+    fn rollup_proto_with_partless_spine_batch_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.spine_batches.push(ProtoIdSpineBatch {
+                id: Some(SpineId(0, 1).into_proto()),
+                batch: Some(ProtoSpineBatch {
+                    level: 0,
+                    desc: Some(u64_desc_proto(0, 1, 0)),
+                    parts: vec![],
+                    descs: vec![],
+                }),
+            });
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("do not cover"), "{err}");
+    }
+
+    /// Three spine batches at one level overflow the two-batch layer, which
+    /// `MergeState::push_batch` previously `expect`ed against. It must be a
+    /// decode error.
+    #[mz_ore::test]
+    fn rollup_proto_with_overfull_spine_level_is_rejected() {
+        let proto = rollup_proto_with_trace(|trace| {
+            for i in 0..3u64 {
+                let id = SpineId(usize::cast_from(i), usize::cast_from(i + 1));
+                trace.spine_batches.push(ProtoIdSpineBatch {
+                    id: Some(id.into_proto()),
+                    batch: Some(ProtoSpineBatch {
+                        level: 0,
+                        desc: Some(u64_desc_proto(i, i + 1, 0)),
+                        parts: vec![id.into_proto()],
+                        descs: vec![],
+                    }),
+                });
+                trace.hollow_batches.push(ProtoIdHollowBatch {
+                    id: Some(id.into_proto()),
+                    batch: Some(legacy_batch_proto(i, i + 1, 0)),
+                });
+            }
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("full layer"), "{err}");
     }
 
     #[mz_persist_proc::test(tokio::test)]

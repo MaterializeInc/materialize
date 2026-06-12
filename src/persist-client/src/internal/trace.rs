@@ -287,6 +287,25 @@ impl<T: Timestamp + Lattice> Trace<T> {
         // we know to preserve the structure for this trace.
         let roundtrip_structure = !spine_batches.is_empty() || legacy_batches.is_empty();
 
+        // The flattened trace is decoded from an untrusted blob: any invariant
+        // a crafted or corrupted value can violate must surface as a decode
+        // error here, never as a panic in the spine code below.
+        //
+        // Bound the total logical len of all batches. The spine's maintenance
+        // arithmetic (`len.next_power_of_two()`, summing lens of merged
+        // batches) overflows on absurd lens, and no real trace has anywhere
+        // near this many updates.
+        const MAX_TOTAL_LEN: usize = usize::MAX >> 3;
+        let mut total_len = 0usize;
+        for batch in legacy_batches.keys().chain(hollow_batches.values()) {
+            total_len = total_len
+                .checked_add(batch.len)
+                .filter(|len| *len <= MAX_TOTAL_LEN)
+                .ok_or_else(|| {
+                    format!("total len of batches exceeds the maximum trace size: {batch:?}")
+                })?;
+        }
+
         // We need to look up legacy batches somehow, but we don't have a spine id for them.
         // Instead, we rely on the fact that the spine must store them in antichain order.
         // Our timestamp type may not be totally ordered, so we need to implement our own comparator
@@ -304,101 +323,123 @@ impl<T: Timestamp + Lattice> Trace<T> {
         let mut legacy_batches: Vec<_> = legacy_batches.into_iter().map(|(k, _)| k).collect();
         legacy_batches.sort_by(|a, b| compare_chains(a.desc.lower(), b.desc.lower()).reverse());
 
-        let mut pop_batch =
-            |id: SpineId, expected_desc: Option<&Description<T>>| -> Result<_, String> {
-                if let Some(batch) = hollow_batches.remove(&id) {
-                    if let Some(desc) = expected_desc {
-                        // We don't expect the desc's upper and lower to change for a given spine id.
-                        assert_eq!(desc.lower(), batch.desc.lower());
-                        assert_eq!(desc.upper(), batch.desc.upper());
-                        // Due to the way thin spine batches are diffed, the sinces can be out of sync.
-                        // This should be rare, and hopefully impossible once we change how diffs work.
-                        if desc.since() != batch.desc.since() {
-                            warn!(
-                                "unexpected since out of sync for spine batch: {:?} != {:?}",
-                                desc.since().elements(),
-                                batch.desc.since().elements()
-                            );
-                        }
+        let mut pop_batch = |id: SpineId,
+                             expected_desc: Option<&Description<T>>|
+         -> Result<_, String> {
+            if let Some(batch) = hollow_batches.remove(&id) {
+                if let Some(desc) = expected_desc {
+                    // We don't expect the desc's upper and lower to change for a given spine id.
+                    if desc.lower() != batch.desc.lower() || desc.upper() != batch.desc.upper() {
+                        return Err(format!(
+                            "hollow batch desc {:?} did not match the spine batch desc {:?} for {id:?}",
+                            batch.desc, desc
+                        ));
                     }
-                    return Ok(IdHollowBatch { id, batch });
-                }
-                let mut batch = legacy_batches
-                    .pop()
-                    .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
-
-                let Some(expected_desc) = expected_desc else {
-                    return Ok(IdHollowBatch { id, batch });
-                };
-
-                if expected_desc.lower() != batch.desc.lower() {
-                    return Err(format!(
-                        "hollow batch lower {:?} did not match expected lower {:?}",
-                        batch.desc.lower().elements(),
-                        expected_desc.lower().elements()
-                    ));
-                }
-
-                // Empty legacy batches are not deterministic: different nodes may split them up
-                // in different ways. For now, we rearrange them such to match the spine data.
-                if batch.parts.is_empty() && batch.run_splits.is_empty() && batch.len == 0 {
-                    let mut new_upper = batch.desc.upper().clone();
-
-                    // While our current batch is too small, and there's another empty batch
-                    // in the list, roll it in.
-                    while PartialOrder::less_than(&new_upper, expected_desc.upper()) {
-                        let Some(next_batch) = legacy_batches.pop() else {
-                            break;
-                        };
-                        if next_batch.is_empty() {
-                            new_upper.clone_from(next_batch.desc.upper());
-                        } else {
-                            legacy_batches.push(next_batch);
-                            break;
-                        }
+                    // Due to the way thin spine batches are diffed, the sinces can be out of sync.
+                    // This should be rare, and hopefully impossible once we change how diffs work.
+                    if desc.since() != batch.desc.since() {
+                        warn!(
+                            "unexpected since out of sync for spine batch: {:?} != {:?}",
+                            desc.since().elements(),
+                            batch.desc.since().elements()
+                        );
                     }
-
-                    // If our current batch is too large, split it by the expected upper
-                    // and preserve the remainder.
-                    if PartialOrder::less_than(expected_desc.upper(), &new_upper) {
-                        legacy_batches.push(Arc::new(HollowBatch::empty(Description::new(
-                            expected_desc.upper().clone(),
-                            new_upper.clone(),
-                            batch.desc.since().clone(),
-                        ))));
-                        new_upper.clone_from(expected_desc.upper());
-                    }
-                    batch = Arc::new(HollowBatch::empty(Description::new(
-                        batch.desc.lower().clone(),
-                        new_upper,
-                        batch.desc.since().clone(),
-                    )))
                 }
+                return Ok(IdHollowBatch { id, batch });
+            }
+            let mut batch = legacy_batches
+                .pop()
+                .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
 
-                if expected_desc.upper() != batch.desc.upper() {
-                    return Err(format!(
-                        "hollow batch upper {:?} did not match expected upper {:?}",
-                        batch.desc.upper().elements(),
-                        expected_desc.upper().elements()
-                    ));
-                }
-
-                Ok(IdHollowBatch { id, batch })
+            let Some(expected_desc) = expected_desc else {
+                return Ok(IdHollowBatch { id, batch });
             };
+
+            if expected_desc.lower() != batch.desc.lower() {
+                return Err(format!(
+                    "hollow batch lower {:?} did not match expected lower {:?}",
+                    batch.desc.lower().elements(),
+                    expected_desc.lower().elements()
+                ));
+            }
+
+            // Empty legacy batches are not deterministic: different nodes may split them up
+            // in different ways. For now, we rearrange them such to match the spine data.
+            if batch.parts.is_empty() && batch.run_splits.is_empty() && batch.len == 0 {
+                let mut new_upper = batch.desc.upper().clone();
+
+                // While our current batch is too small, and there's another empty batch
+                // in the list, roll it in.
+                while PartialOrder::less_than(&new_upper, expected_desc.upper()) {
+                    let Some(next_batch) = legacy_batches.pop() else {
+                        break;
+                    };
+                    if next_batch.is_empty() {
+                        new_upper.clone_from(next_batch.desc.upper());
+                    } else {
+                        legacy_batches.push(next_batch);
+                        break;
+                    }
+                }
+
+                // If our current batch is too large, split it by the expected upper
+                // and preserve the remainder.
+                if PartialOrder::less_than(expected_desc.upper(), &new_upper) {
+                    legacy_batches.push(Arc::new(HollowBatch::empty(Description::new(
+                        expected_desc.upper().clone(),
+                        new_upper.clone(),
+                        batch.desc.since().clone(),
+                    ))));
+                    new_upper.clone_from(expected_desc.upper());
+                }
+                batch = Arc::new(HollowBatch::empty(Description::new(
+                    batch.desc.lower().clone(),
+                    new_upper,
+                    batch.desc.since().clone(),
+                )))
+            }
+
+            if expected_desc.upper() != batch.desc.upper() {
+                return Err(format!(
+                    "hollow batch upper {:?} did not match expected upper {:?}",
+                    batch.desc.upper().elements(),
+                    expected_desc.upper().elements()
+                ));
+            }
+
+            Ok(IdHollowBatch { id, batch })
+        };
 
         let (upper, next_id) = if let Some((id, batch)) = spine_batches.last_key_value() {
             (batch.desc.upper().clone(), id.1)
         } else {
             (Antichain::from_elem(T::minimum()), 0)
         };
+        // Real spine levels are logarithmic in the total len of the trace, so
+        // this bound is far above any legitimate level while keeping the
+        // allocation below trivial.
+        const MAX_LEVELS: usize = 256;
         let levels = spine_batches
             .first_key_value()
-            .map(|(_, batch)| batch.level + 1)
+            .map(|(_, batch)| batch.level.saturating_add(1))
             .unwrap_or(0);
+        if levels > MAX_LEVELS {
+            return Err(format!(
+                "spine level {} exceeds the maximum {MAX_LEVELS}",
+                levels - 1
+            ));
+        }
         let mut merging = vec![MergeState::default(); levels];
         for (id, batch) in spine_batches {
             let level = batch.level;
 
+            if batch.descs.len() > batch.parts.len() {
+                return Err(format!(
+                    "spine batch {id:?} has more descs ({}) than parts ({})",
+                    batch.descs.len(),
+                    batch.parts.len()
+                ));
+            }
             let descs = batch.descs.iter().map(Some).chain(std::iter::repeat_n(
                 None,
                 batch.parts.len() - batch.descs.len(),
@@ -409,6 +450,16 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 .zip_eq(descs)
                 .map(|(id, desc)| pop_batch(id, desc))
                 .collect::<Result<Vec<_>, _>>()?;
+            // A spine batch's parts tile its id range (`SpineBatch::id`
+            // `debug_assert`s this). Real batches always have at least one
+            // part: an empty batch still carries an empty hollow batch.
+            if parts.first().map(|x| x.id.0) != Some(id.0)
+                || parts.last().map(|x| x.id.1) != Some(id.1)
+            {
+                return Err(format!(
+                    "spine batch {id:?} parts do not cover the batch's id range"
+                ));
+            }
             let len = parts.iter().map(|p| (*p).batch.len).sum();
             let active_compaction = merges.remove(&id).and_then(|m| m.active_compaction);
             let batch = SpineBatch {
@@ -419,9 +470,11 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 len,
             };
 
-            let state = &mut merging[level];
+            let state = merging.get_mut(level).ok_or_else(|| {
+                format!("spine batch {id:?} level {level} out of bounds ({levels} levels)")
+            })?;
 
-            state.push_batch(batch);
+            state.try_push_batch(batch)?;
             if let Some(id) = state.id() {
                 if let Some(merge) = merges.remove(&id) {
                     state.merge = Some(IdFuelingMerge {
@@ -459,13 +512,36 @@ impl<T: Timestamp + Lattice> Trace<T> {
         } else {
             // If the structure wasn't actually serialized, we may have legacy batches left over.
             for batch in legacy_batches.into_iter().rev() {
+                // `Spine::insert` asserts that pushed batches are non-empty
+                // and contiguous; check this here so that a corrupted batch
+                // results in a decode error instead of a panic.
+                if batch.desc.lower() == batch.desc.upper() {
+                    return Err(format!(
+                        "legacy batch has an empty time range: {:?}",
+                        batch.desc
+                    ));
+                }
+                if batch.desc.lower() != trace.upper() {
+                    return Err(format!(
+                        "legacy batch lower {:?} does not match the trace upper {:?}",
+                        batch.desc.lower().elements(),
+                        trace.upper().elements()
+                    ));
+                }
                 trace.push_batch_no_merge_reqs(Arc::unwrap_or_clone(batch));
             }
         }
         check_empty("hollow batches", hollow_batches.len())?;
         check_empty("merges", merges.len())?;
 
-        debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
+        // The same check that's `debug_assert`ed when mutating a trace we
+        // built ourselves; for a trace reconstructed from untrusted data it
+        // must be a hard error, both to keep corrupted state from being used
+        // and because the write side would panic on it anyway (e.g. `Spine`'s
+        // batch invariants and the full-level/merge correspondence).
+        trace
+            .validate()
+            .map_err(|err| format!("reconstructed trace failed validation: {err}"))?;
 
         Ok(trace)
     }
@@ -2170,19 +2246,41 @@ impl<T: Timestamp + Lattice> MergeState<T> {
 
     /// Push a new batch at this level, checking invariants.
     fn push_batch(&mut self, batch: SpineBatch<T>) {
+        self.try_push_batch(batch)
+            .unwrap_or_else(|err| panic!("invalid batch push: {err}"));
+    }
+
+    /// Fallible version of [Self::push_batch], for [Trace::unflatten], where
+    /// the batches were decoded from an untrusted blob and a violated
+    /// invariant must be a decode error rather than a panic.
+    fn try_push_batch(&mut self, batch: SpineBatch<T>) -> Result<(), String> {
         if let Some(last) = self.batches.last() {
-            assert_eq!(last.id().1, batch.id().0);
-            assert_eq!(last.upper(), batch.lower());
+            if last.id().1 != batch.id().0 {
+                return Err(format!(
+                    "batch id {:?} does not chain with the previous id {:?}",
+                    batch.id(),
+                    last.id()
+                ));
+            }
+            if last.upper() != batch.lower() {
+                return Err(format!(
+                    "batch lower {:?} does not match the previous upper {:?}",
+                    batch.lower(),
+                    last.upper()
+                ));
+            }
         }
-        assert!(
-            self.merge.is_none(),
-            "Attempted to insert batch into incomplete merge! (batch={:?}, batch_count={})",
-            batch.id,
-            self.batches.len(),
-        );
-        self.batches
-            .try_push(batch)
-            .expect("Attempted to insert batch into full layer!");
+        if self.merge.is_some() {
+            return Err(format!(
+                "attempted to insert batch into incomplete merge! (batch={:?}, batch_count={})",
+                batch.id,
+                self.batches.len(),
+            ));
+        }
+        if self.batches.try_push(batch).is_err() {
+            return Err("attempted to insert batch into full layer!".to_string());
+        }
+        Ok(())
     }
 
     /// The number of actual updates contained in the level.
