@@ -50,6 +50,7 @@ pub mod hint;
 pub mod id_gen;
 pub mod iter;
 pub mod lex;
+pub mod memory;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
 #[cfg(feature = "metrics")]
 pub mod metrics;

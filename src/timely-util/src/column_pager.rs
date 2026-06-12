@@ -408,21 +408,37 @@ pub fn global_pool_peek() -> Option<mz_ore::pool::Pool> {
 /// resolves to it when `enabled`, and per-consumer opt-ins via
 /// [`shared_pager`] reach it either way — and the pool's resident budget is
 /// retuned in place so live handles stay coherent.
-pub fn apply_pool_config(
-    enabled: bool,
-    budget_bytes: usize,
-    spill_threads: usize,
-    eager_backing: bool,
-) -> bool {
+pub fn apply_pool_config(cfg: PoolPagerConfig) -> bool {
     let Some(pool) = global_pool() else {
         return false;
     };
-    pool.set_budget(budget_bytes);
-    pool.set_spill_threads(spill_threads);
-    pool.set_eager_backing(eager_backing);
+    pool.set_budget(cfg.budget_bytes);
+    pool.set_rss_target(cfg.rss_target_bytes);
+    pool.set_spill_threads(cfg.spill_threads);
+    pool.set_eager_backing(cfg.eager_backing);
     POOL_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
-    COMPUTE_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    COMPUTE_ENABLED.store(cfg.enabled, std::sync::atomic::Ordering::Relaxed);
     true
+}
+
+/// Inputs to [`apply_pool_config`]. All sizes are absolute bytes; fractions
+/// are resolved by the caller against *physical RAM* (see
+/// `mz_ore::memory::physical_memory_bytes`), never against an announced
+/// limit that may include swap.
+#[derive(Clone, Copy, Debug)]
+pub struct PoolPagerConfig {
+    /// Whether compute's own batchers page through the pool.
+    pub enabled: bool,
+    /// Resident-bytes budget for uncompressed slots.
+    pub budget_bytes: usize,
+    /// Spill threads for off-worker eviction I/O (spawn-once).
+    pub spill_threads: usize,
+    /// Whether idle spill threads eagerly compress chunks to
+    /// `BackedResident` ahead of pressure.
+    pub eager_backing: bool,
+    /// Ceiling on the pool's total RSS; the compressed-resident tier is the
+    /// headroom above the budget and warm cap. Zero collapses the tier.
+    pub rss_target_bytes: usize,
 }
 
 /// The pager for compute's own batchers: [`shared_pager`] resolved against
@@ -1024,7 +1040,13 @@ mod tests {
     fn pool_mode_routing() {
         let _guard = global_config_lock();
         // Pool mode on: the global pager and shared pager both go pooled.
-        let ok = apply_pool_config(true, 1 << 30, 0, false);
+        let ok = apply_pool_config(PoolPagerConfig {
+            enabled: true,
+            budget_bytes: 1 << 30,
+            spill_threads: 0,
+            eager_backing: false,
+            rss_target_bytes: 0,
+        });
         assert!(ok, "pool reservation expected to succeed in tests");
         let mut col = sample_typed();
         let paged = global_pager().page(&mut col);

@@ -17,10 +17,13 @@
 //! whole disk is provisioned as swap.
 //!
 //! An extent is a page-aligned anonymous allocation holding the lz4-compressed
-//! bytes of one chunk. "Write" compresses into the allocation and issues
-//! `MADV_PAGEOUT`, pushing the pages to the swap device; "read" issues
-//! `MADV_WILLNEED` ahead of the decompress; "free" is a plain deallocation,
-//! with any swapped copy discarded for free.
+//! bytes of one chunk. "Write" compresses into the allocation, which stays
+//! resident — the compressed-but-resident middle tier of the pool's ladder —
+//! until the pool's RSS target forces [`SwapExtent::pageout`], which pushes
+//! the pages to the swap device with `MADV_PAGEOUT`. "Read" issues
+//! `MADV_WILLNEED` ahead of the decompress (and makes the pages resident
+//! again); "free" is a plain deallocation, with any swapped copy discarded
+//! for free. Nothing is ever both uncompressed and on the device.
 
 use std::alloc::Layout;
 
@@ -41,6 +44,11 @@ pub(crate) struct SwapExtent {
     ptr: *mut u8,
     layout: Layout,
     comp_len: usize,
+    /// Whether the extent's pages are (engine-)resident: set at write and by
+    /// [`SwapExtent::read_into`], cleared by [`SwapExtent::pageout`]. Drives
+    /// the pool's `extent_resident_bytes` accounting; mutated only under the
+    /// owning chunk's state mutex.
+    resident: bool,
 }
 
 // SAFETY: the extent exclusively owns its allocation; nothing else holds a
@@ -49,8 +57,9 @@ pub(crate) struct SwapExtent {
 unsafe impl Send for SwapExtent {}
 
 impl SwapExtent {
-    /// Compresses `data` into a fresh extent and hints the kernel to push the
-    /// extent's pages to the swap device.
+    /// Compresses `data` into a fresh extent. The pages stay resident; the
+    /// pool's RSS-target enforcement decides when [`SwapExtent::pageout`]
+    /// pushes them to the device.
     ///
     /// Compression goes through a reused thread-local scratch buffer so the
     /// extent allocation can be sized to the *actual* compressed payload
@@ -93,19 +102,34 @@ impl SwapExtent {
                 std::ptr::copy_nonoverlapping(scratch.as_ptr(), ptr, comp_len);
                 std::ptr::write_bytes(ptr.add(comp_len), 0, size - comp_len);
             }
-            region::pageout(ptr, size);
             SwapExtent {
                 ptr,
                 layout,
                 comp_len,
+                resident: true,
             }
         })
     }
 
-    /// Test-only: the byte size of the extent's allocation.
-    #[cfg(test)]
+    /// The byte size of the extent's allocation: the granule the resident
+    /// accounting and the pageout operate on.
     pub(crate) fn alloc_size(&self) -> usize {
         self.layout.size()
+    }
+
+    /// Whether the extent's pages are engine-resident (not pushed to the
+    /// device since the last write or read).
+    pub(crate) fn is_resident(&self) -> bool {
+        self.resident
+    }
+
+    /// Hints the kernel to push the extent's pages to the swap device and
+    /// marks the extent non-resident. Cheap: the compression is already
+    /// paid, the madvise is microseconds, and the device write happens on
+    /// the kernel's asynchronous writeback path.
+    pub(crate) fn pageout(&mut self) {
+        region::pageout(self.ptr, self.layout.size());
+        self.resident = false;
     }
 
     /// Compressed size in bytes, including the size prefix.
@@ -119,8 +143,11 @@ impl SwapExtent {
     }
 
     /// Decompresses the extent into `dst`, which must be exactly the chunk's
-    /// uncompressed length.
-    pub(crate) fn read_into(&self, dst: &mut [u8]) {
+    /// uncompressed length. Reading faults the pages back in, so the extent
+    /// is resident again afterwards; the caller owns the accounting for that
+    /// transition (the pool re-counts and re-enqueues it for the RSS target).
+    pub(crate) fn read_into(&mut self, dst: &mut [u8]) {
+        self.resident = true;
         self.prefetch();
         // SAFETY: the extent exclusively owns `[ptr, ptr + layout.size())`
         // and `comp_len <= layout.size()` by construction in `write`.
@@ -156,7 +183,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // madvise is a foreign call
     fn round_trip() {
         let data: Vec<u64> = (0..10_000).map(|i| i * 37).collect();
-        let extent = SwapExtent::write(&data);
+        let mut extent = SwapExtent::write(&data);
         assert!(extent.comp_len() > SIZE_PREFIX);
         extent.prefetch();
         let mut out = vec![0u64; data.len()];
@@ -168,7 +195,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // madvise is a foreign call
     fn compressible_data_shrinks() {
         let data = vec![42u64; 100_000];
-        let extent = SwapExtent::write(&data);
+        let mut extent = SwapExtent::write(&data);
         assert!(extent.comp_len() < data.len() * 8 / 4);
         let mut out = vec![0u64; data.len()];
         extent.read_into(bytemuck::cast_slice_mut(&mut out));
@@ -198,7 +225,7 @@ mod tests {
     #[should_panic(expected = "destination must match")]
     fn wrong_destination_length_panics() {
         let data = vec![1u64; 16];
-        let extent = SwapExtent::write(&data);
+        let mut extent = SwapExtent::write(&data);
         let mut out = vec![0u64; 8];
         extent.read_into(bytemuck::cast_slice_mut(&mut out));
     }

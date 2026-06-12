@@ -150,6 +150,12 @@ pub struct PoolStats {
     /// (write-behind): still readable in their slots, with eviction
     /// pre-paid.
     pub eager_backs: u64,
+    /// Allocation bytes of compressed extents currently resident — the
+    /// compressed-but-resident middle tier. Bounded by the RSS target;
+    /// exceeding it pages the oldest extents out to the swap device.
+    pub extent_resident_bytes: u64,
+    /// Extents pushed to the swap device by RSS-target enforcement.
+    pub extent_pageouts: u64,
 }
 
 #[derive(Debug, Default)]
@@ -169,6 +175,8 @@ struct Counters {
     warm_bytes: AtomicU64,
     warm_reuses: AtomicU64,
     eager_backs: AtomicU64,
+    extent_resident_bytes: AtomicU64,
+    extent_pageouts: AtomicU64,
 }
 
 /// A buffer pool over swap-backed extents. Cheap to clone; all clones share
@@ -182,11 +190,21 @@ struct PoolInner {
     /// place (operator-driven budget changes) without orphaning live
     /// handles, which share this value through their `Arc<PoolInner>`.
     budget_bytes: AtomicU64,
+    /// Ceiling on the pool's *total* RSS: slots (the budget) plus warm free
+    /// slots plus compressed-resident extents. The compressed tier's
+    /// capacity derives as `rss_target - budget - warm cap`; zero (the
+    /// default) collapses the tier, paging every extent out as soon as it
+    /// is written.
+    rss_target_bytes: AtomicU64,
     /// One region per entry of [`SIZE_CLASSES`], same order.
     regions: Vec<Region>,
     /// Second-chance FIFO of eviction candidates. Entries for freed chunks
     /// go stale in place and are dropped by [`PoolInner::prune_queue`].
     queue: Mutex<VecDeque<Weak<ChunkMeta>>>,
+    /// FIFO of chunks whose extents are resident, oldest first — the
+    /// RSS-target enforcement's victim queue. Entries go stale when an
+    /// extent pages out, is dropped, or its chunk dies; visits drop them.
+    extent_queue: Mutex<VecDeque<Weak<ChunkMeta>>>,
     /// Number of live size-classed chunks (whatever their residency), which
     /// is the number of non-stale queue entries; [`PoolInner::prune_queue`]
     /// compacts the queue against it.
@@ -328,8 +346,10 @@ impl Pool {
             .collect::<std::io::Result<Vec<_>>>()?;
         Ok(Pool(Arc::new(PoolInner {
             budget_bytes: AtomicU64::new(u64::cast_from(cfg.budget_bytes)),
+            rss_target_bytes: AtomicU64::new(0),
             regions,
             queue: Mutex::new(VecDeque::new()),
+            extent_queue: Mutex::new(VecDeque::new()),
             live_chunks: AtomicU64::new(0),
             enforcing: Mutex::new(()),
             counters: Counters::default(),
@@ -486,6 +506,8 @@ impl Pool {
             warm_bytes: c.warm_bytes.load(Ordering::Relaxed),
             warm_reuses: c.warm_reuses.load(Ordering::Relaxed),
             eager_backs: c.eager_backs.load(Ordering::Relaxed),
+            extent_resident_bytes: c.extent_resident_bytes.load(Ordering::Relaxed),
+            extent_pageouts: c.extent_pageouts.load(Ordering::Relaxed),
             spill_scheduled: c.spill_scheduled.load(Ordering::Relaxed),
             spill_cancelled: c.spill_cancelled.load(Ordering::Relaxed),
             spill_in_flight: self.0.spill.in_flight.load(Ordering::Relaxed),
@@ -601,6 +623,19 @@ impl Pool {
         }
     }
 
+    /// Retunes the ceiling on the pool's total RSS — slots plus warm slots
+    /// plus compressed-resident extents. The compressed tier's capacity is
+    /// the gap above the budget and warm cap; zero (the default) collapses
+    /// the tier, paging extents out as soon as they are written. A shrink
+    /// takes effect by paging out the oldest extents on this call.
+    pub fn set_rss_target(&self, target_bytes: usize) {
+        let new = u64::cast_from(target_bytes);
+        let prev = self.0.rss_target_bytes.swap(new, Ordering::Relaxed);
+        if new < prev {
+            self.0.enforce_rss_target();
+        }
+    }
+
     /// Test-only: the number of entries in the second-chance queue, live and
     /// stale.
     #[cfg(test)]
@@ -618,6 +653,8 @@ impl Pool {
         if !meta.pool.spill_handoff(meta, &mut state) {
             meta.pool.evict_locked(meta, &mut state);
         }
+        drop(state);
+        meta.pool.enforce_or_defer_rss_target();
     }
 
     /// Test hook: overwrites every free slot's bytes with `0xDE`. The free
@@ -657,12 +694,15 @@ impl PoolInner {
         // skipped callers rely on the in-progress pass. A poisoned claim
         // means a prior pass panicked; recover and keep enforcing rather
         // than silently disabling the budget for the process's lifetime.
-        let _guard = match self.enforcing.try_lock() {
+        let guard = match self.enforcing.try_lock() {
             Ok(guard) => guard,
             Err(std::sync::TryLockError::WouldBlock) => return,
             Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
         };
         self.enforce_budget_inner();
+        drop(guard);
+        // Inline evictions above may have grown the compressed tier.
+        self.enforce_or_defer_rss_target();
     }
 
     fn enforce_budget_inner(&self) {
@@ -740,7 +780,7 @@ impl PoolInner {
         }
     }
 
-    fn evict_locked(&self, meta: &ChunkMeta, state: &mut ChunkState) {
+    fn evict_locked(&self, meta: &Arc<ChunkMeta>, state: &mut ChunkState) {
         let Some(slot) = state.slot else {
             return;
         };
@@ -767,6 +807,7 @@ impl PoolInner {
                 self.counters
                     .evictions_compress
                     .fetch_add(1, Ordering::Relaxed);
+                self.note_extent_resident(meta, extent.alloc_size());
                 state.extent = Some(extent);
             }
             Residency::BackedResident => {
@@ -829,16 +870,26 @@ impl PoolInner {
     /// everything reachable is backed.
     fn spill_worker(self: Arc<Self>) {
         loop {
+            // Tier-2 pageouts ride the spill threads: every pass through the
+            // loop (job completion, condvar wakeup, park timeout) trims the
+            // compressed tier if needed. A single atomic load when under cap.
+            self.enforce_rss_target();
             let meta = {
                 let mut queue = self.spill.queue.lock().expect("spill queue poisoned");
-                loop {
-                    if let Some(meta) = queue.pop_front() {
-                        break Some(meta);
-                    }
-                    if self.spill.eager.load(Ordering::Relaxed) {
-                        break None;
-                    }
-                    queue = self.spill.cv.wait(queue).expect("spill queue poisoned");
+                if let Some(meta) = queue.pop_front() {
+                    Some(meta)
+                } else if self.spill.eager.load(Ordering::Relaxed) {
+                    None
+                } else {
+                    // Park until a hand-off or an enforcement wakeup; the
+                    // timeout backstops a lost notify. Loop back through the
+                    // tier check before re-examining the queue.
+                    let _ = self
+                        .spill
+                        .cv
+                        .wait_timeout(queue, std::time::Duration::from_millis(100))
+                        .expect("spill queue poisoned");
+                    continue;
                 }
             };
             match meta {
@@ -849,8 +900,9 @@ impl PoolInner {
                 None => {
                     if !self.back_one() {
                         // Nothing left to back: park briefly. Eviction
-                        // hand-offs notify the condvar; fresh inserts are
-                        // picked up by the timeout.
+                        // hand-offs and enforcement wakeups notify the
+                        // condvar; fresh inserts are picked up by the
+                        // timeout.
                         let queue = self.spill.queue.lock().expect("spill queue poisoned");
                         if queue.is_empty() {
                             let _ = self
@@ -990,12 +1042,15 @@ impl PoolInner {
         self.counters
             .extent_bytes_written
             .fetch_add(u64::cast_from(extent.comp_len()), Ordering::Relaxed);
+        self.note_extent_resident(meta, extent.alloc_size());
         state.extent = Some(extent);
         if kind == SpillKind::Back {
             // Write-behind: the chunk stays readable in its slot; the extent
             // makes any later budget-driven eviction a pure page release.
             self.counters.eager_backs.fetch_add(1, Ordering::Relaxed);
             state.residency = Residency::BackedResident;
+            drop(state);
+            self.enforce_rss_target();
             return;
         }
         self.counters
@@ -1005,12 +1060,16 @@ impl PoolInner {
             // Pinned during compression: keep the slot resident; the extent
             // makes any later eviction cheap.
             state.residency = Residency::BackedResident;
+            drop(state);
+            self.enforce_rss_target();
             return;
         }
         // `release_slot`'s precondition holds: `pins == 0` and `!freed`,
         // both observed under the held state lock.
         self.release_slot(meta, &mut state);
         state.residency = Residency::Evicted;
+        drop(state);
+        self.enforce_rss_target();
     }
 
     /// Releases `state`'s slot — slot returned to the region free list,
@@ -1047,12 +1106,20 @@ impl PoolInner {
             .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
     }
 
+    /// The warm pool's byte ceiling: an eighth of the budget, clamped at an
+    /// absolute maximum. The fraction sizes fault amortization at small
+    /// budgets; the clamp keeps large budgets from parking gigabytes of idle
+    /// warm slots no fault rate could justify.
+    fn warm_cap(&self) -> u64 {
+        (self.budget_bytes.load(Ordering::Relaxed) / 8).min(1 << 30)
+    }
+
     /// Claims warm-pool capacity for a slot of `class_size` bytes, returning
-    /// whether the slot may keep its pages. The warm pool is capped at an
-    /// eighth of the budget, so the RSS overshoot it introduces scales with
-    /// the dial and is visible as the `warm_bytes` stat.
+    /// whether the slot may keep its pages. The RSS overshoot the warm pool
+    /// introduces is bounded by [`PoolInner::warm_cap`] and visible as the
+    /// `warm_bytes` stat.
     fn try_keep_warm(&self, class_size: usize) -> bool {
-        let cap = self.budget_bytes.load(Ordering::Relaxed) / 8;
+        let cap = self.warm_cap();
         let class_bytes = u64::cast_from(class_size);
         self.counters
             .warm_bytes
@@ -1069,6 +1136,132 @@ impl PoolInner {
             .warm_bytes
             .fetch_sub(u64::cast_from(class_size), Ordering::Relaxed);
         self.counters.warm_reuses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Capacity of the compressed-resident tier: the RSS target's headroom
+    /// above the slot budget and the warm cap. Zero when no target is set —
+    /// extents then page out as soon as written, today's pre-tier behavior.
+    fn compressed_cap(&self) -> u64 {
+        let target = self.rss_target_bytes.load(Ordering::Relaxed);
+        let floor = self
+            .budget_bytes
+            .load(Ordering::Relaxed)
+            .saturating_add(self.warm_cap());
+        target.saturating_sub(floor)
+    }
+
+    /// Counts a newly resident extent (written or faulted back in) against
+    /// the compressed tier and enqueues its chunk for RSS-target
+    /// enforcement. Callers hold the chunk's state lock with the extent
+    /// present and resident, and follow up with
+    /// [`PoolInner::enforce_rss_target`] once the lock is released.
+    fn note_extent_resident(&self, meta: &Arc<ChunkMeta>, extent_alloc: usize) {
+        self.counters
+            .extent_resident_bytes
+            .fetch_add(u64::cast_from(extent_alloc), Ordering::Relaxed);
+        self.extent_queue
+            .lock()
+            .expect("extent queue poisoned")
+            .push_back(Arc::downgrade(meta));
+    }
+
+    /// Uncounts a resident extent that is being dropped (chunk freed or
+    /// degraded). Its queue entry goes stale and is dropped on visit.
+    fn note_extent_released(&self, extent: &SwapExtent) {
+        if extent.is_resident() {
+            self.counters
+                .extent_resident_bytes
+                .fetch_sub(u64::cast_from(extent.alloc_size()), Ordering::Relaxed);
+        }
+    }
+
+    /// Routes RSS-target enforcement off latency-sensitive threads: with
+    /// spill threads running, wakes one to perform the pageouts
+    /// (`MADV_PAGEOUT` is synchronous reclaim — page-table walks, TLB
+    /// shootdowns, writeback submission — bounded per compressed extent but
+    /// not free at chunk rates); without them, enforces inline as the only
+    /// option.
+    ///
+    /// Deferral makes the target eventually-enforced with bounded lag (a
+    /// notify with every spill thread mid-job is absorbed; the next loop
+    /// pass catches up). The backstop below turns that into a bound by
+    /// construction: a caller finding the tier at double its capacity
+    /// enforces inline regardless, so sustained creation can never outrun
+    /// trimming by more than one capacity's worth.
+    fn enforce_or_defer_rss_target(&self) {
+        if self.spill.enabled.load(Ordering::Relaxed)
+            && self.spill.threads.load(Ordering::Relaxed) > 0
+        {
+            let resident = self.counters.extent_resident_bytes.load(Ordering::Relaxed);
+            if resident > self.compressed_cap().saturating_mul(2) {
+                self.enforce_rss_target();
+            } else {
+                self.spill.cv.notify_one();
+            }
+        } else {
+            self.enforce_rss_target();
+        }
+    }
+
+    /// Pages out the oldest resident extents until the compressed tier falls
+    /// to its capacity. The compression is already paid and the device write
+    /// is the kernel's async writeback, so each pageout is one bounded
+    /// madvise; spill threads run this between jobs, and other threads only
+    /// when no spill threads exist (see
+    /// [`PoolInner::enforce_or_defer_rss_target`]). Not single-flighted:
+    /// concurrent passes pop disjoint victims. Visits are bounded by the
+    /// queue's length at entry; stale entries (extent paged out, dropped, or
+    /// chunk dead) are dropped.
+    fn enforce_rss_target(&self) {
+        let cap = self.compressed_cap();
+        let resident = |c: &Counters| c.extent_resident_bytes.load(Ordering::Relaxed);
+        // Under-cap is the common case: answer it with one atomic load and
+        // no queue lock, so frequent callers (the spill loop) stay cheap.
+        if resident(&self.counters) <= cap {
+            return;
+        }
+        let mut remaining = self
+            .extent_queue
+            .lock()
+            .expect("extent queue poisoned")
+            .len();
+        while remaining > 0 && resident(&self.counters) > cap {
+            remaining -= 1;
+            let popped = self
+                .extent_queue
+                .lock()
+                .expect("extent queue poisoned")
+                .pop_front();
+            let Some(weak) = popped else {
+                break;
+            };
+            let Some(meta) = weak.upgrade() else {
+                continue;
+            };
+            // `try_lock`: a chunk mid-fault or mid-compression holds its lock
+            // for milliseconds; requeue rather than convoy behind it.
+            let Ok(mut state) = meta.state.try_lock() else {
+                self.extent_queue
+                    .lock()
+                    .expect("extent queue poisoned")
+                    .push_back(weak);
+                continue;
+            };
+            match &mut state.extent {
+                Some(extent) if extent.is_resident() => {
+                    extent.pageout();
+                    self.counters
+                        .extent_resident_bytes
+                        .fetch_sub(u64::cast_from(extent.alloc_size()), Ordering::Relaxed);
+                    self.counters
+                        .extent_pageouts
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                // Paged out already, dropped, or the chunk degraded: the
+                // entry is stale. A later resident event re-enqueues.
+                _ => {}
+            }
+        }
     }
 
     /// If the chunk is an unpinned, live `UnbackedResident` and the spill
@@ -1170,11 +1363,15 @@ impl ChunkHandle {
                         // the class.
                         let dst =
                             unsafe { std::slice::from_raw_parts_mut(slot_ptr, meta.len_bytes()) };
-                        state
-                            .extent
-                            .as_ref()
-                            .expect("evicted chunk has an extent")
-                            .read_into(dst);
+                        let extent = state.extent.as_mut().expect("evicted chunk has an extent");
+                        // Reading faults the extent's pages back in; re-count
+                        // it against the compressed tier and re-enqueue.
+                        let was_resident = extent.is_resident();
+                        extent.read_into(dst);
+                        if !was_resident {
+                            let alloc = extent.alloc_size();
+                            meta.pool.note_extent_resident(&self.meta, alloc);
+                        }
                         state.slot = Some(slot);
                         state.residency = Residency::BackedResident;
                         slot_ptr.cast_const().cast::<u64>()
@@ -1183,11 +1380,18 @@ impl ChunkHandle {
                         meta.pool.note_slot_exhausted(meta.len_bytes());
                         let mut payload = vec![0u64; meta.len];
                         let dst: &mut [u8] = bytemuck::cast_slice_mut(payload.as_mut_slice());
-                        state
-                            .extent
-                            .as_ref()
-                            .expect("evicted chunk has an extent")
-                            .read_into(dst);
+                        let extent = state.extent.as_mut().expect("evicted chunk has an extent");
+                        // The extent is dropped below; only uncount it if it
+                        // was counted (resident) before this read revived it.
+                        let was_resident = extent.is_resident();
+                        extent.read_into(dst);
+                        if was_resident {
+                            let alloc = u64::cast_from(extent.alloc_size());
+                            meta.pool
+                                .counters
+                                .extent_resident_bytes
+                                .fetch_sub(alloc, Ordering::Relaxed);
+                        }
                         state.extent = None;
                         let ptr = payload.as_ptr();
                         state.oversize = Some(payload);
@@ -1227,9 +1431,11 @@ impl ChunkHandle {
         }
         // Enforce after releasing the state lock: the enforcer locks chunk
         // states itself, and the pin count already shields this chunk from
-        // being chosen as a victim.
+        // being chosen as a victim. The fault also revived the extent's
+        // pages, so the compressed tier may need trimming too.
         if faulted {
             meta.pool.enforce_budget();
+            meta.pool.enforce_or_defer_rss_target();
         }
         PinGuard {
             meta,
@@ -1291,11 +1497,17 @@ impl Drop for ChunkHandle {
             }
             Residency::BackedResident => {
                 pool.release_slot(&self.meta, &mut state);
+                if let Some(extent) = &state.extent {
+                    pool.note_extent_released(extent);
+                }
                 state.extent = None;
             }
             Residency::Evicted => {
                 // Eviction already released the slot.
                 debug_assert!(state.slot.is_none(), "evicted chunk holds no slot");
+                if let Some(extent) = &state.extent {
+                    pool.note_extent_released(extent);
+                }
                 state.extent = None;
             }
             Residency::WriteInFlight => {
@@ -1371,6 +1583,62 @@ mod tests {
         fn check<T: Send + Sync>() {}
         check::<Pool>();
         check::<ChunkHandle>();
+    }
+
+    /// With an RSS target set, evicted chunks keep their extents resident
+    /// (the compressed tier); shrinking the target pages the oldest extents
+    /// out; reads revive them and re-count them.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn compressed_tier_round_trip() {
+        let pool = test_pool(256 << 20);
+        pool.set_rss_target(1 << 30);
+        let orig = payload(SMALL, 21);
+        let handle = pool.insert(&mut orig.clone());
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        let stats = pool.stats();
+        assert!(
+            stats.extent_resident_bytes > 0,
+            "under the target, the extent stays resident",
+        );
+        assert_eq!(stats.extent_pageouts, 0);
+
+        // Shrinking the target to zero pages the extent out.
+        pool.set_rss_target(0);
+        let stats = pool.stats();
+        assert_eq!(stats.extent_resident_bytes, 0, "tier collapsed");
+        assert_eq!(stats.extent_pageouts, 1);
+
+        // Reading revives the extent: contents round-trip, and with the
+        // target restored the revived extent is counted again.
+        pool.set_rss_target(1 << 30);
+        pool.poison_free_slots();
+        {
+            let pin = handle.pin();
+            assert_eq!(&*pin, orig.as_slice());
+        }
+        assert!(
+            pool.stats().extent_resident_bytes > 0,
+            "revived and counted"
+        );
+
+        // Dropping the handle uncounts the resident extent.
+        drop(handle);
+        assert_eq!(pool.stats().extent_resident_bytes, 0);
+    }
+
+    /// With no RSS target (the default), extents page out as soon as they
+    /// are written — the pre-tier behavior.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn default_target_pages_extents_immediately() {
+        let pool = test_pool(256 << 20);
+        let handle = pool.insert(&mut payload(SMALL, 22));
+        pool.evict(&handle);
+        let stats = pool.stats();
+        assert_eq!(stats.extent_resident_bytes, 0);
+        assert_eq!(stats.extent_pageouts, 1);
     }
 
     /// Eager backing compresses a chunk to `BackedResident` while it stays
