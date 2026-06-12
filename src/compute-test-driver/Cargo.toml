@@ -6,10 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
-[[bin]]
-name = "headless-driver"
-path = "src/bin/headless-driver.rs"
-
 [lints]
 workspace = true
 
@@ -18,10 +14,10 @@ anyhow.workspace = true
 async-trait.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true
-mz-build-info = { path = "../build-info", features = ["semver"] }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
+mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["async", "tracing", "metrics", "test"] }
 mz-persist-client = { path = "../persist-client" }

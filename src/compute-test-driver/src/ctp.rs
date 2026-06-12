@@ -12,8 +12,10 @@
 
 use std::time::Duration;
 
-use mz_compute_client::protocol::command::{ComputeCommand, InstanceConfig};
+use mz_compute_client::protocol::command::{ComputeCommand, ComputeParameters, InstanceConfig};
 use mz_compute_client::protocol::response::ComputeResponse;
+use mz_compute_types::dyncfgs::ENABLE_PEEK_RESPONSE_STASH;
+use mz_dyncfg::ConfigUpdates;
 use mz_persist_types::PersistLocation;
 use mz_service::client::GenericClient;
 use mz_service::transport::{Client, NoopMetrics};
@@ -27,7 +29,10 @@ pub async fn connect_and_handshake(
     compute_addr: &str,
     peek_stash_persist_location: PersistLocation,
 ) -> anyhow::Result<ComputeCtpClient> {
-    let version = mz_build_info::build_info!().semver_version();
+    // Use persist-client's BUILD_INFO: it is release-versioned (synced by
+    // bin/bump-version), so it matches the clusterd we connect to. Our own
+    // crate is `0.0.0`, which would fail the handshake's version check.
+    let version = mz_persist_client::BUILD_INFO.semver_version();
     let mut client = Client::<ComputeCommand, ComputeResponse>::connect(
         compute_addr,
         version,
@@ -50,6 +55,21 @@ pub async fn connect_and_handshake(
             arrangement_dictionary_compression: false,
         })))
         .await?;
+
+    // Disable the peek response stash so peeks return their rows inline rather
+    // than writing them to persist. The driver's `peek` reads inline `Rows`;
+    // stashing would require reading the results back out of persist.
+    let mut dyncfg_updates = ConfigUpdates::default();
+    dyncfg_updates.add(&ENABLE_PEEK_RESPONSE_STASH, false);
+    client
+        .send(ComputeCommand::UpdateConfiguration(Box::new(
+            ComputeParameters {
+                dyncfg_updates,
+                ..Default::default()
+            },
+        )))
+        .await?;
+
     client.send(ComputeCommand::InitializationComplete).await?;
     Ok(client)
 }

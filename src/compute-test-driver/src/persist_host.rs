@@ -38,7 +38,7 @@ impl PersistHost {
     pub async fn start_on(bind: SocketAddr, location: PersistLocation) -> anyhow::Result<Self> {
         let registry = MetricsRegistry::new();
         let persist_cfg = PersistConfig::new_default_configs(
-            &mz_build_info::build_info!(),
+            &mz_persist_client::BUILD_INFO,
             mz_ore::now::SYSTEM_TIME.clone(),
         );
 
