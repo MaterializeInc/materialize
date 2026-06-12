@@ -4146,7 +4146,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (13 rows)
+        →Constant (15 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -4190,6 +4190,95 @@ mz_catalog.mz_role_members:
 
 Source mz_internal.mz_catalog_raw
   filter=(("Role" = (#0{data} ->> "kind")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_role_parameters";
+----
+mz_catalog.mz_role_parameters:
+  →With
+    cte l0 =
+      →Fused with Child Map/Filter/Project
+        Project: #1..=#3
+        Map: parse_catalog_id(((#0{data} -> "key") -> "id")), (#1{value} ->> "key")
+          →Table Function jsonb_array_elements((((#0{data} -> "value") -> "vars") -> "entries"))
+            →Read mz_internal.mz_catalog_raw
+    cte l1 =
+      →Fused with Child Map/Filter/Project
+        Filter: ((#3) IS NULL OR (false = (#3 ? "Flat")))
+        Map: (#0{value} -> "val")
+          →Read l0
+    cte l2 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #0
+            →Read l1
+    cte l3 =
+      →Non-incremental GroupAggregate
+        Aggregation: string_agg[order_by=[#0 asc nulls_last]](row(row(#1{elem}, ", "), #2{ord}))
+        Key:
+          Project: #0
+        →Table Function jsonb_array_elements_text[with_ordinality](((#0{value} -> "val") -> "SqlSet"))
+          →Arranged l2
+    cte l4 =
+      →Union
+        →Unarranged Raw Stream
+          →Arranged l3
+        →Map/Filter/Project
+          Project: #0, #1
+          Map: null
+            →Consolidating Union
+              →Negate Diffs
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Arranged l3
+                      Key: (#0)
+              →Unarranged Raw Stream
+                →Arranged l2
+  →Return
+    →Union
+      →Fused with Child Map/Filter/Project
+        Project: #1, #2, #4
+        Filter: (#3 ? "Flat")
+        Map: (#0{value} -> "val"), (#3 ->> "Flat")
+          →Read l0
+      →Differential Join %1[#0] » %0:l1[#0]
+        →Arrange (#0)
+          →Stream l1
+        →Arrange (#0)
+          →Union
+            →Stream l4
+            →Map/Filter/Project
+              Project: #0, #1
+              Map: null
+                →Consolidating Union
+                  →Negate Diffs
+                    →Fused with Child Map/Filter/Project
+                      Project: #0
+                        →Read l4
+                  →Unarranged Raw Stream
+                    →Arranged l2
+
+Source mz_internal.mz_catalog_raw
+  filter=(("Role" = (#0{data} ->> "kind")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_roles";
+----
+mz_catalog.mz_roles:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2, #4, #5, #7..=#9)
+  filter=(("Role" = (#0{data} ->> "kind")) AND ("Public" != #1) AND (#1 != "Public"))
+  map=(((#0{data} -> "key") -> "id"), parse_catalog_id(#1), (#0{data} -> "value"), text_to_oid((#3 ->> "oid")), (#3 ->> "name"), (#3 -> "attributes"), text_to_boolean((#6 ->> "inherit")), coalesce(text_to_boolean((#6 ->> "login")), ((#5 = "mz_system") OR (#5 = "mz_support"))), coalesce(text_to_boolean((#6 ->> "superuser")), (null OR ((((#5 = "mz_system") OR (#5 = "mz_support"))) IS NOT NULL AND ((#5 = "mz_system") OR (#5 = "mz_support"))))))
 
 Target cluster: mz_catalog_server
 
@@ -6623,7 +6712,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (13 rows)
+  →Constant (15 rows)
 
 Target cluster: mz_catalog_server
 
