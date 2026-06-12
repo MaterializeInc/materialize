@@ -141,6 +141,7 @@ The reusable part is none of those; it is the *mechanism*, which is the MIR-to-L
 * `export_index(index_id, on_id, key_cols)` exports an index, deriving the `on_type` from the referenced object rather than taking it as an argument.
 * `as_of(t)` and `until(t)` set the temporal bounds.
 * `finish()` runs the lowering and augment and returns the `DataflowDescription<RenderPlan, CollectionMetadata>` the protocol expects.
+  It is fallible: lowering and `RenderPlan` conversion failures return errors rather than panicking, so a caller driving the builder from external input — notably the script reader — surfaces a clean failure instead of crashing the process.
 
 The contract is deliberately narrow: the caller supplies MIR, and the builder lowers it faithfully and attaches persist wiring.
 Optimization, including fusion, predicate pushdown, and join-implementation selection, stays the caller's responsibility, which matches the original `index_dataflow` behavior of lowering hand-built minimal MIR without optimizing.
@@ -188,7 +189,7 @@ Use cases are tests and examples built on the mechanism, kept out of the core cr
   Drive the side-effecting commands the controller normally issues automatically, on the test's own schedule: when `Schedule` fires, when and how far `AllowCompaction` advances `since`, and when `UpdateConfiguration` changes parameters.
   This lets a test hold a frontier, delay compaction, or reconfigure mid-flight to observe the replica's response deterministically.
 
-These scenarios, and the motivating one above, are implemented as JSON command scripts under `test/clusterd-test-driver/scripts/` (`index.jsonl`, `deep_history.jsonl`, `side_effects.jsonl`, `multi_dataflow.jsonl`) and run by the driver's script reader, not as compiled Rust scenarios.
+These scenarios, and the motivating one above, are implemented as JSON command scripts under `test/clusterd-test-driver/scripts/` (`index.jsonl`, `deep_history.jsonl`, `side_effects.jsonl`, `multi_dataflow.jsonl`, `reconciliation.jsonl`, `error_behavior.jsonl`; `custom_schema.jsonl` demonstrates `define_schema`) and run by the driver's script reader, not as compiled Rust scenarios.
 The scripting layer below is the mechanism they share.
 
 ### RenderPlan assembly for the index (resolved)
@@ -245,44 +246,44 @@ The script builds with the `optimized` cargo profile by default (release-like bu
   This risk is confined to the direct-write use case; the dataflow-write strategy produces correctly encoded data by construction.
 * Bypassing txn-wal means a directly written shard has no transactional coordination, which is acceptable for synthetic single-writer tests but must not be presented as production-faithful storage behavior.
 
-## Future work
+## Scripting via JSON
 
-### Scripting via JSON
-
-Encoding interactions in Rust is the first step, but the goal is something easier to iterate on than recompiling a test.
-The natural script format is JSON, authored directly rather than through a Python or fluent client, because an agent can write the JSON form of a query plan and MIR already derives a JSON serialization.
+Encoding interactions in Rust was the first step, but the goal is something easier to iterate on than recompiling a test.
+The script format is JSON, authored directly rather than through a Python or fluent client, because an agent can write the JSON form of a query plan and MIR already derives a JSON serialization.
 This removes the layer a conventional DSL would need: there is no curated relational or scalar sub-language to maintain, since the serde tags of `MirRelationExpr`, `MirScalarExpr`, and the function enums are themselves the vocabulary, read straight from the source.
 
-The driver becomes a persistent command reader instead of a one-shot `SCENARIO` binary: it reads JSON-line commands, executes them against `clusterd`, and streams responses back, reusing the existing response pump for the return path.
+The driver is solely a script reader (the `script` module), not a one-shot scenario binary: it reads JSON-line commands from the file named by `DRIVER_SCRIPT` (or stdin), executes each against `clusterd`, and writes one JSON response per line, returning non-zero if any command failed.
 The command set is the serialized `Driver` and `DataflowBuilder` surface.
-Orchestration commands are coarse and map almost directly: `write`, `define`, `schedule`, `allow_compaction`, `await_frontier`, and `peek`.
-A `define` command carries the builder's inputs, namely the imports with their persist metadata, the objects as MIR expressions, the index exports as an `on_id` plus key, and the temporal bounds.
-Authoring happens at the MIR level, so the impossible-to-hand-build `RenderPlan` is produced by the lowering exactly as today, and the dual relation-type footgun stays inside the builder.
-
-One caveat is load bearing.
-`Row` derives its serde over a packed byte buffer, so a `Literal` or `Constant` serializes the internal datum encoding as an opaque byte array, which is not hand-authorable.
-The fix is surgical: the `define` schema accepts native MIR serde everywhere except at literal payloads, where it takes a friendly datum form (for example `{"Int64": 5}`) plus a `ColumnType` and packs it to a `Row` server-side via a `RowPacker`, reusing an existing datum parser if one exists.
-Everything else stays native serde, so the function-variant explosion never reaches the schema.
-
-The build order is incremental and each step stands alone.
-First, `DataflowBuilder` as the semantic core, with `index_dataflow` refactored onto it.
-Second, the persistent command-reader driver.
-Third, the full-MIR `define` schema with the literal shim.
-Joins and the opt-in `optimize()` verb remain the single open decision, deferred to the step that needs them.
-
-Steps one and two are implemented, and the literal shim from step three is built early because schema and row authoring need it.
-The driver is now solely a script reader (the `script` module): it reads JSON-line commands from the file named by `DRIVER_SCRIPT` (or stdin), executes each against `clusterd`, and writes one JSON response per line, returning non-zero if any command failed.
 The four original Rust scenarios are fully replaced by scripts; nothing scenario-specific remains in the binary.
-The orchestration verbs (`write_single_ts`, `write_spread`, `write_rows`, `schedule`, `allow_compaction`, `await_frontier`, `peek_count`, `expect_count`, `reconnect`, `initialization_complete`, `expect_error`) map directly to `Driver` calls; shards are named by a string alias allocated on first use, and object ids are raw `u64`s.
+The orchestration verbs (`define_schema`, `write_single_ts`, `write_spread`, `write_rows`, `define_index`, `schedule`, `allow_compaction`, `await_frontier`, `peek_count`, `expect_count`, `reconnect`, `initialization_complete`, `expect_error`) map directly to `Driver` calls; shards are named by a string alias allocated on first use, and object ids are raw `u64`s.
 `expect_count` asserts a peek's row count (failing the run on mismatch) — the scripted form of a scenario's count assertion — while `await_frontier` takes an `allow_timeout` flag so a reproduction like `multi_dataflow` can report a non-hydrating dataflow without failing the run.
 Synthetic writes take a `start` offset so successive batches use disjoint id ranges that accumulate rather than consolidate, which the `index` tick phase relies on.
 `reconnect` drops the connection and re-handshakes but stops before `initialization_complete`, opening the reconciliation window: the script replays the dataflows the replica should keep, then `initialization_complete` closes it, so `reconciliation.jsonl` exercises reconcile-and-keep rather than rehydrate.
-`expect_error` runs a nested command and asserts it fails, so `error_behavior.jsonl` can cover bad input (unknown schema, wrong arity or type) and replica behavior (an unscheduled dataflow's frontier never advancing) as passing assertions.
+`expect_error` runs a nested command and asserts it fails, so `error_behavior.jsonl` can cover bad input (unknown schema, wrong arity or type, out-of-range index key) and replica behavior (an unscheduled dataflow's frontier never advancing) as passing assertions.
+To make those failures catchable, the builder's `finish`/`augment` path returns errors instead of panicking on malformed input (see `DataflowBuilder` above), and `define_index` validates key columns against the schema's arity up front.
 
 A script declares relations with `define_schema { name, columns: [{name, type, nullable}] }`, building a `RelationDesc` stored under a name; the other commands reference it by `schema` (defaulting to the built-in `(bigint, text)` sample relation).
 The type vocabulary is intentionally small — `int16`/`int32`/`int64`, `bool`, `string`, `bytes`, with SQL aliases — and extends alongside the matching `Cell` cases.
 Rows come two ways against that schema: `write_single_ts`/`write_spread` take a `count` and generate synthetic rows by type, while `write_rows` takes explicit JSON values.
-The explicit path runs through `cell_from_json`, the `JSON value + ColumnType -> Datum` mapping that is exactly the literal shim the full-MIR `define` will reuse for literal constants — so the load-bearing `Row` caveat above is already resolved.
 
-`define_index` covers the common single-index shape via the `index_dataflow` sugar; generalizing it to a full-MIR `define` (reusing `cell_from_json` for literals) is the remaining step three.
-Sample scripts live at `test/clusterd-test-driver/scripts/` (`index.jsonl`, `custom_schema.jsonl`), run locally with `SCENARIO=script SCRIPT=<path> bin/pyactivate test/clusterd-test-driver/run-local.py`.
+One caveat was load bearing.
+`Row` derives its serde over a packed byte buffer, so a `Literal` or `Constant` serializes the internal datum encoding as an opaque byte array, which is not hand-authorable.
+The fix is surgical: explicit values take a friendly JSON form plus a `ColumnType` and are packed to a `Row` server-side via `cell_from_json`, the `JSON value + ColumnType -> Datum` mapping.
+The full-MIR `define` below accepts native MIR serde everywhere except at literal payloads, where it reuses `cell_from_json`, so the function-variant explosion never reaches the schema and the `Row` caveat is already resolved.
+
+Scripts live at `test/clusterd-test-driver/scripts/`; run one locally with `SCRIPT=<path> bin/pyactivate test/clusterd-test-driver/run-local.py`.
+
+## Future work
+
+The build order was incremental and each step stands alone.
+First, `DataflowBuilder` as the semantic core, with `index_dataflow` refactored onto it.
+Second, the persistent command-reader driver.
+Third, the full-MIR `define` schema with the literal shim.
+Steps one and two are implemented, and the literal shim from step three is built early because schema and row authoring need it.
+What remains:
+
+* Generalize `define_index` (the `index_dataflow` sugar) to a full-MIR `define` command carrying the builder's inputs: the imports with their persist metadata, the objects as MIR expressions, the index exports as an `on_id` plus key, and the temporal bounds.
+  Authoring happens at the MIR level, so the impossible-to-hand-build `RenderPlan` is produced by the lowering exactly as today, and the dual relation-type footgun stays inside the builder.
+  Literal constants reuse `cell_from_json`.
+* Joins and the opt-in `optimize()` verb remain the single open decision, deferred to the step that needs them.
+* The storage CTP channel, structurally the same as compute, added when a use case needs it.
