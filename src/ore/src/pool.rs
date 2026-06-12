@@ -874,52 +874,40 @@ impl PoolInner {
             // loop (job completion, condvar wakeup, park timeout) trims the
             // compressed tier if needed. A single atomic load when under cap.
             self.enforce_rss_target();
-            let meta = {
-                let mut queue = self.spill.queue.lock().expect("spill queue poisoned");
-                if let Some(meta) = queue.pop_front() {
-                    Some(meta)
-                } else if self.spill.eager.load(Ordering::Relaxed) {
-                    None
-                } else {
-                    // Park until a hand-off or an enforcement wakeup; the
-                    // timeout backstops a lost notify. Loop back through the
-                    // tier check before re-examining the queue.
-                    let _ = self
-                        .spill
-                        .cv
-                        .wait_timeout(queue, std::time::Duration::from_millis(100))
-                        .expect("spill queue poisoned");
-                    continue;
-                }
-            };
-            match meta {
-                Some(meta) => {
-                    self.spill_process(&meta, SpillKind::Evict);
-                    self.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
-                }
-                None => {
-                    if !self.back_one() {
-                        // Nothing left to back: park briefly. Eviction
-                        // hand-offs and enforcement wakeups notify the
-                        // condvar; fresh inserts are picked up by the
-                        // timeout.
-                        let queue = self.spill.queue.lock().expect("spill queue poisoned");
-                        if queue.is_empty() {
-                            let _ = self
-                                .spill
-                                .cv
-                                .wait_timeout(queue, std::time::Duration::from_millis(100))
-                                .expect("spill queue poisoned");
-                        }
-                    }
-                }
+            let popped = self
+                .spill
+                .queue
+                .lock()
+                .expect("spill queue poisoned")
+                .pop_front();
+            if let Some(meta) = popped {
+                self.spill_process(&meta, SpillKind::Evict);
+                self.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
+                continue;
+            }
+            if self.spill.eager.load(Ordering::Relaxed) && self.back_one() {
+                continue;
+            }
+            // Nothing to evict or back: park. Re-checking emptiness under
+            // the queue lock closes the lost-wakeup window (hand-offs push
+            // under this lock before notifying); the timeout backstops
+            // everything else (fresh inserts, tier growth, lost notifies).
+            let queue = self.spill.queue.lock().expect("spill queue poisoned");
+            if queue.is_empty() {
+                let _ = self
+                    .spill
+                    .cv
+                    .wait_timeout(queue, std::time::Duration::from_millis(100))
+                    .expect("spill queue poisoned");
             }
         }
     }
 
     /// Eagerly compresses one unbacked chunk from the eviction queue into
-    /// `BackedResident`, returning whether any progress was made (work done
-    /// or candidates remaining). Bounded scan; non-actionable entries are
+    /// `BackedResident`, returning whether a chunk was backed — `false`
+    /// means nothing was actionable (queue empty, or a bounded scan found
+    /// only already-backed, in-flight, contended, or stale entries) and the
+    /// caller should park rather than rescan. Non-actionable entries are
     /// requeued or dropped per the same rules budget enforcement uses,
     /// except that the second-chance `touched` bit is left alone — backing
     /// is not an eviction and must not consume a chunk's reprieve.
@@ -971,7 +959,7 @@ impl PoolInner {
                 .push_back(weak);
             return true;
         }
-        true
+        false
     }
 
     /// Performs (or cancels) one scheduled compression. Lock discipline: the
@@ -1675,6 +1663,22 @@ mod tests {
         pool.poison_free_slots();
         let pin = handle.pin();
         assert_eq!(&*pin, orig.as_slice());
+    }
+
+    /// Once everything reachable is backed, the backing scan reports no
+    /// progress so spill threads park instead of rescanning a fully-backed
+    /// queue forever.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn backing_reports_no_progress_when_all_backed() {
+        let pool = test_pool(256 << 20);
+        let _handle = pool.insert(&mut payload(SMALL, 31));
+        assert!(pool.back_step(), "one unbacked chunk is actionable");
+        assert!(
+            !pool.back_step(),
+            "a fully-backed queue is not progress; callers must park",
+        );
+        assert_eq!(pool.stats().eager_backs, 1);
     }
 
     /// Backing proceeds while the chunk is pinned: reads of the immutable
