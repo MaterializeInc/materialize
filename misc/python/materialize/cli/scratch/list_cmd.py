@@ -25,4 +25,9 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 def run(args: argparse.Namespace) -> None:
     instances = list_all_instances(owners=args.owner or None, all=args.all)
-    print_instances(instances, args.output_format)
+    # Show the owner column only when listing instances beyond your own.
+    print_instances(
+        instances,
+        args.output_format,
+        show_launched_by=args.all or bool(args.owner),
+    )
