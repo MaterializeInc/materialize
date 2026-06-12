@@ -33,7 +33,9 @@ CONSENSUS_URL=${PERSIST_CONSENSUS_URL:-postgres://root@127.0.0.1:${COCKROACH_POR
 BLOB_DIR=${BLOB_DIR:-/tmp/clusterd-test-driver-blob}
 SCRATCH_DIR=${SCRATCH_DIR:-/tmp/clusterd-test-driver-scratch}
 SECRETS_DIR=${SECRETS_DIR:-/tmp/clusterd-test-driver-secrets}
-TARGET_BYTES=${TARGET_BYTES:-1000000}
+# Approximate data size. This is the main knob for how long a run takes; the
+# default is large enough to be worth profiling. Lower it for a quick smoke run.
+TARGET_BYTES=${TARGET_BYTES:-2147483648} # 2 GiB
 SCENARIO=${SCENARIO:-index}
 N_TIMESTAMPS=${N_TIMESTAMPS:-64}
 RUN_CLUSTERD=${RUN_CLUSTERD:-1}
@@ -46,6 +48,15 @@ WRAPPER=${WRAPPER:-}
 # with PROFILE=dev for a quicker unoptimized build.
 PROFILE=${PROFILE:-optimized}
 PROFILE_DIR=$([[ "$PROFILE" == "dev" ]] && echo debug || echo "$PROFILE")
+# heaptrack hooks the system allocator, which jemalloc bypasses, so it sees
+# nothing unless clusterd is built without jemalloc. clusterd's `mz-alloc-default`
+# default feature pulls in jemalloc, so build with --no-default-features when
+# profiling with heaptrack. Auto-detected from WRAPPER; force with
+# CLUSTERD_NO_DEFAULT_FEATURES=1.
+clusterd_build_args=()
+if [[ "$WRAPPER" == *heaptrack* || -n "${CLUSTERD_NO_DEFAULT_FEATURES:-}" ]]; then
+    clusterd_build_args+=(--no-default-features)
+fi
 ENVIRONMENT_ID="mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0"
 
 mkdir -p "$BLOB_DIR" "$SCRATCH_DIR" "$SECRETS_DIR"
@@ -97,8 +108,8 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "$RUN_CLUSTERD" == "1" ]]; then
-    echo "Building clusterd (profile: ${PROFILE})..."
-    cargo build --profile "$PROFILE" --bin clusterd
+    echo "Building clusterd (profile: ${PROFILE}${clusterd_build_args[*]:+ ${clusterd_build_args[*]}})..."
+    cargo build --profile "$PROFILE" "${clusterd_build_args[@]}" --bin clusterd
     echo "clusterd command:"
     echo "  PERSIST_PUBSUB_URL=http://127.0.0.1:${PUBSUB_PORT} \\"
     echo "  ${WRAPPER} target/${PROFILE_DIR}/clusterd \\"
