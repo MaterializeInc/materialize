@@ -56,6 +56,18 @@ COMMIT;
   WITH (TEXT COLUMNS = (event_date));
 > COMMIT
 
+# Block until the snapshot is fully ingested before issuing the
+# post-snapshot inserts, so those rows go through the binlog decode
+# path rather than being absorbed into the snapshot.
+> SELECT id, event_date FROM events ORDER BY id;
+1 "2024-04-03"
+2 "0000-00-00"
+3 <null>
+4 "1000-01-01"
+5 "9999-12-31"
+11 "2024-00-01"
+12 "2024-01-00"
+
 # Post-snapshot rows exercise the replication / binlog decode path.
 $ mysql-execute name=mysql
 USE public;
@@ -136,6 +148,9 @@ INSERT INTO reports VALUES (1, '2024-04-03');
 > CREATE TABLE reports FROM SOURCE da (REFERENCE public.reports);
 > COMMIT
 
+# Block until the snapshot lands before issuing the binlog-path insert,
+# so the zero-date below is decoded as a replication event, not a
+# snapshot row.
 > SELECT * FROM reports;
 1 "2024-04-03"
 
