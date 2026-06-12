@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/skip_if.rs
-revision: e757b4d11b
+revision: 12fbe31d24
 ---
 
 # testdrive::action::skip_if

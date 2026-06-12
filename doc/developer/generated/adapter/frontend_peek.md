@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/frontend_peek.rs
-revision: 87e6694432
+revision: 208bf3b953
 ---
 
 # adapter::frontend_peek
@@ -12,4 +12,4 @@ Fast-path peeks (constant, arrangement, or persist) are executed directly via `i
 SUBSCRIBE statements are dispatched via `Command::ExecuteSubscribe`; COPY TO S3 performs an S3 preflight check via `Command::CopyToPreflight` before dispatching `Command::ExecuteCopyTo`.
 The `ENABLE_FRONTEND_SUBSCRIBES` dyncfg gates the SUBSCRIBE frontend path specifically; the overall frontend peek sequencing is enabled by the `ENABLE_FRONTEND_PEEK_SEQUENCING` session/system variable checked at connection startup.
 The private `Execution` enum branches the post-optimization flow among `Peek`, `Subscribe`, `CopyToS3`, `ExplainPlan`, and `ExplainPushdown` variants.
-`frontend_determine_timestamp` mirrors the coordinator's `determine_timestamp`, acquiring read holds and computing a `TimestampDetermination` entirely within the session task.
+`frontend_determine_timestamp` mirrors the coordinator's `determine_timestamp`, acquiring read holds and computing a `TimestampDetermination` entirely within the session task. For bounded-staleness queries that do not respond immediately, it also records a `timestamp_difference_for_bounded_staleness_ms` session metric comparing the chosen timestamp against what serializable would have produced.
