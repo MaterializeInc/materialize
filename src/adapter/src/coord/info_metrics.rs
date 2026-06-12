@@ -628,6 +628,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn replicas_of_unmanaged_clusters_report_their_size() {
         let registry = MetricsRegistry::new();
         let mut metrics = CatalogInfoMetrics::new(&registry);

@@ -188,6 +188,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     0dt_deployment_hydration_check_interval
     arrangement_exert_proportionality
     arrangement_size_history_retention_period
+    catalog_info_metrics_reconcile_interval
     cluster_alter_check_ready_interval
     cluster_check_scheduling_policies_interval
     cluster_enable_topology_spread
@@ -225,8 +226,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_0dt_caught_up_replica_status_check
     enable_0dt_deployment_panic_after_timeout
     enable_alter_table_add_column
-    enable_arrangement_dictionary_compression_alpha
     enable_binary_date_bin
+    enable_bounded_staleness_isolation
     enable_coalesce_case_transform
     enable_compute_half_join2
     enable_compute_render_fueled_as_specific_collection
@@ -427,6 +428,8 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     balancerd_log_filter
     cluster_always_use_disk
     clusterd_malloc_conf
+    column_paged_batcher_spill_worker_count
+    column_paged_batcher_use_pool
     constraint_based_timestamp_selection
     enable_0dt_deployment
     enable_aws_msk_iam_auth
@@ -468,21 +471,18 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
 INTENTIONAL_LD_OVERRIDES: set[str] = {
     # Cloud replica expiration (confirmed cloud-only behavior).
     "compute_replica_expiration_offset",
-    "enable_compute_replica_expiration",
     # Cloud resource quotas / available replica sizes.
     "allowed_cluster_replica_sizes",
     "max_clusters",
-    "max_connections",
     "max_credit_consumption_rate",
     "max_aws_privatelink_connections",
-    "max_materialized_views",
-    "max_sources",
     "max_tables",
     # Cloud-only infrastructure / performance tuning.
     "arrangement_size_history_collection_interval",
     "cluster_topology_spread_min_domains",
     "column_paged_batcher_budget_fraction",
     "compute_logical_backpressure_inflight_slack",
+    "compute_prometheus_introspection_scrape_interval",
     "enable_lgalloc",
     "enable_timely_zero_copy_lgalloc",
     "enable_zero_downtime_cluster_reconfiguration",
@@ -504,7 +504,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "compute_subscribe_snapshot_optimization",
     "enable_cast_elimination",
     "enable_compute_correction_v2",
-    "enable_compute_sync_mv_sink",
+    "enable_compute_temporal_bucketing",
     "enable_create_table_from_source",
     "enable_new_outer_join_lowering",
     "enable_variadic_left_join_lowering",
@@ -526,7 +526,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     compute_subscribe_snapshot_optimization
     enable_cluster_schedule_refresh
     enable_compute_correction_v2
-    enable_compute_sync_mv_sink
     enable_create_table_from_source
     enable_eager_delta_joins
     enable_index_options

@@ -2474,9 +2474,17 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     ):
         c.up(*node_names)
 
-        # Increase resource limits
+        # Increase resource limits. CI lowers grpc_client_http2_keep_alive_timeout
+        # to 5s, but this workflow oversubscribes the host CPU with
+        # clusters*replicas*nodes clusterd containers, so a single missed
+        # keep-alive pong on a slow host kills the connection and the resulting
+        # rehydration cascades into a permanent controller reconnect storm that
+        # backs up the coordinator until the test times out. Restore the product
+        # default before creating the replicas; disconnect detection latency is
+        # not what this test is about.
         c.testdrive(dedent(f"""
                 $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER SYSTEM SET grpc_client_http2_keep_alive_timeout = '60s'
                 ALTER SYSTEM SET max_clusters = {args.clusters * 10}
                 ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
 
