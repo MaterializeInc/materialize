@@ -1384,6 +1384,42 @@ def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) 
         assert_idempotent_after_update("connection-updates/change-secret")
 
 
+def get_object_id(c: Composition, catalog: str, schema: str, name: str) -> str:
+    """Look up a catalog ID by schema-qualified name in the app database.
+
+    ``catalog`` is the mz_catalog relation to search (e.g. ``mz_sinks``,
+    ``mz_materialized_views``, ``mz_views``)."""
+    rows = c.sql_query(
+        f"SELECT o.id FROM {catalog} o "
+        "JOIN mz_schemas sc ON o.schema_id = sc.id "
+        f"WHERE o.name = '{name}' AND sc.name = '{schema}'",
+        database="app",
+    )
+    assert len(rows) == 1, f"Expected one {schema}.{name} in {catalog}, got {rows}"
+    return rows[0][0]
+
+
+def wait_for_sink_running(
+    c: Composition, sink_name: str, timeout_secs: int = 120
+) -> None:
+    """Poll mz_sink_statuses until the sink is running (proving it reached
+    the broker), failing fast on stalled/failed."""
+    deadline = time.time() + timeout_secs
+    status = None
+    while time.time() < deadline:
+        rows = c.sql_query(
+            "SELECT status FROM mz_internal.mz_sink_statuses "
+            f"WHERE name = '{sink_name}'",
+            database="app",
+        )
+        status = rows[0][0] if rows else None
+        if status == "running":
+            return
+        assert status not in ("stalled", "failed"), f"sink status: {status}"
+        time.sleep(2)
+    raise AssertionError(f"sink never reached 'running', last status: {status}")
+
+
 def workflow_sinks(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Exercise the sink deployment lifecycle.
 
@@ -1402,40 +1438,10 @@ def workflow_sinks(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("redpanda")
 
     def sink_id() -> str:
-        rows = c.sql_query(
-            "SELECT s.id FROM mz_sinks s "
-            "JOIN mz_schemas sc ON s.schema_id = sc.id "
-            "WHERE s.name = 'event_sink' AND sc.name = 'egress'",
-            database="app",
-        )
-        assert len(rows) == 1, f"Expected sink event_sink in egress, got {rows}"
-        return rows[0][0]
+        return get_object_id(c, "mz_sinks", "egress", "event_sink")
 
     def mv_id() -> str:
-        rows = c.sql_query(
-            "SELECT mv.id FROM mz_materialized_views mv "
-            "JOIN mz_schemas sc ON mv.schema_id = sc.id "
-            "WHERE mv.name = 'event_totals' AND sc.name = 'core'",
-            database="app",
-        )
-        assert len(rows) == 1, f"Expected MV event_totals in core, got {rows}"
-        return rows[0][0]
-
-    def wait_for_sink_running(timeout_secs: int = 120) -> None:
-        deadline = time.time() + timeout_secs
-        status = None
-        while time.time() < deadline:
-            rows = c.sql_query(
-                "SELECT status FROM mz_internal.mz_sink_statuses "
-                "WHERE name = 'event_sink'",
-                database="app",
-            )
-            status = rows[0][0] if rows else None
-            if status == "running":
-                return
-            assert status not in ("stalled", "failed"), f"sink status: {status}"
-            time.sleep(2)
-        raise AssertionError(f"sink never reached 'running', last status: {status}")
+        return get_object_id(c, "mz_materialized_views", "core", "event_totals")
 
     # ── 1. Apply infrastructure ──────────────────────────────────────────
     # Creates clusters, the app database, the Kafka connection, and the
@@ -1511,7 +1517,7 @@ def workflow_sinks(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert len(rows) == 1, f"Expected event_sink on egress cluster, got {rows}"
 
         # And it actually connects to the broker and starts producing.
-        wait_for_sink_running()
+        wait_for_sink_running(c, "event_sink")
 
     with c.test_case("sink-repoint-on-mv-update"):
         sink_id_before = sink_id()
@@ -1567,4 +1573,255 @@ def workflow_sinks(c: Composition, parser: WorkflowArgumentParser) -> None:
             mv_id()
         ], f"Sink should depend on the new MV {mv_id()}, got {rows}"
 
-        wait_for_sink_running()
+        wait_for_sink_running(c, "event_sink")
+
+
+def workflow_replacement_mvs(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Exercise ``SET api = stable`` replacement semantics.
+
+    A changed materialized view in a stable-API schema is updated in place
+    via ``ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT`` instead of a
+    schema swap, so its catalog identity is preserved and downstream
+    consumers — views and sinks — are never redeployed or repointed.
+    """
+    setup_base(c)
+    c.up("redpanda")
+
+    def mv_id() -> str:
+        return get_object_id(c, "mz_materialized_views", "stable", "event_totals")
+
+    def view_id() -> str:
+        return get_object_id(c, "mz_views", "ops", "event_report")
+
+    def sink_id() -> str:
+        return get_object_id(c, "mz_sinks", "egress", "event_sink")
+
+    def report_categories() -> list[str]:
+        rows = c.sql_query(
+            "SELECT category FROM app.ops.event_report ORDER BY category",
+            database="app",
+            user="deploy_user",
+        )
+        return [r[0] for r in rows]
+
+    result = run_mz_deploy(c, "replacement/v1", "apply")
+    assert result.returncode == 0, f"apply failed: {result.stderr}"
+
+    c.sql(
+        "INSERT INTO app.public.events VALUES "
+        "(1, 'signup', 10.0), (2, 'signup', 5.0), (3, 'purchase', NULL)",
+        database="app",
+        user="deploy_user",
+    )
+
+    # ── 1. Initial deploy: everything is new, deployed via normal swap ────
+    result = run_mz_deploy(
+        c, "replacement/v1", "stage", "--deploy-id", "r1", "--allow-dirty"
+    )
+    assert result.returncode == 0, f"stage r1 failed: {result.stderr}"
+    result = run_mz_deploy(
+        c, "replacement/v1", "wait", "r1", "--timeout", "300", "--allowed-lag", "86400"
+    )
+    assert result.returncode == 0, f"wait r1 failed: {result.stderr}"
+    result = run_mz_deploy(c, "replacement/v1", "promote", "r1", "--no-ready-check")
+    assert result.returncode == 0, f"promote r1 failed: {result.stderr}"
+
+    assert report_categories() == ["purchase", "signup"]
+    wait_for_sink_running(c, "event_sink")
+
+    with c.test_case("replacement-mv-updated-in-place"):
+        mv_id_before = mv_id()
+        view_id_before = view_id()
+        sink_id_before = sink_id()
+
+        # ── 2. Stage v2: only the stable MV changed ──────────────────────
+        result = run_mz_deploy(
+            c, "replacement/v2", "stage", "--deploy-id", "r2", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage r2 failed: {result.stderr}"
+
+        # Replacement MVs do not propagate dirtiness: the downstream ops
+        # schema is not staged.
+        rows = c.sql_query(
+            "SELECT name FROM mz_schemas WHERE name = 'ops_r2'", database="app"
+        )
+        assert len(rows) == 0, f"ops must not be staged, got {rows}"
+
+        result = run_mz_deploy(
+            c,
+            "replacement/v2",
+            "wait",
+            "r2",
+            "--timeout",
+            "300",
+            "--allowed-lag",
+            "86400",
+        )
+        assert result.returncode == 0, f"wait r2 failed: {result.stderr}"
+
+        # ── 3. Promote v2: APPLY REPLACEMENT, no swap, no repoint ────────
+        result = run_mz_deploy(
+            c,
+            "replacement/v2",
+            "promote",
+            "r2",
+            "--no-ready-check",
+            "--dry-run",
+            "--output",
+            "json",
+        )
+        plan = json.loads(result.stdout)
+        replacements = plan["replacement_mvs"]
+        assert len(replacements) == 1, f"Expected 1 replacement MV: {plan}"
+        assert replacements[0]["target_schema"] == "stable", f"got {plan}"
+        assert replacements[0]["target_name"] == "event_totals", f"got {plan}"
+        assert plan["schema_swaps"] == [], f"Expected no schema swaps: {plan}"
+        assert plan["sinks_to_repoint"] == [], f"Expected no repoints: {plan}"
+
+        result = run_mz_deploy(c, "replacement/v2", "promote", "r2", "--no-ready-check")
+        assert result.returncode == 0, f"promote r2 failed: {result.stderr}"
+
+        # APPLY REPLACEMENT moves the target MV onto the replacement's
+        # catalog ID while keeping its name and versioned collections, so
+        # consumers stay valid without being recreated: the downstream
+        # view and sink keep their IDs.
+        assert mv_id() != mv_id_before, "MV adopts the replacement's catalog ID"
+        assert view_id() == view_id_before, "Downstream view must not be redeployed"
+        assert sink_id() == sink_id_before, "Downstream sink must not be recreated"
+
+        # The replacement definition is live: the NULL-amount purchase row
+        # is now filtered out.
+        assert report_categories() == ["signup"]
+        wait_for_sink_running(c, "event_sink")
+
+
+def workflow_concurrent_deploys(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Exercise concurrent non-overlapping deployments.
+
+    Two staging deployments that touch disjoint schemas and clusters run
+    side by side, and both promote independently without tripping conflict
+    detection (no ``--force`` anywhere).
+    """
+    setup_base(c)
+
+    def mv_count(schema: str, name: str) -> int:
+        rows = c.sql_query(
+            f"SELECT n FROM app.{schema}.{name}",
+            database="app",
+            user="deploy_user",
+        )
+        return int(rows[0][0])
+
+    result = run_mz_deploy(c, "concurrent/v1", "apply")
+    assert result.returncode == 0, f"apply failed: {result.stderr}"
+
+    c.sql(
+        "INSERT INTO app.public.events VALUES "
+        "(1, 'signup', 10.0), (2, 'signup', NULL), "
+        "(3, 'purchase', 7.0), (4, 'purchase', NULL)",
+        database="app",
+        user="deploy_user",
+    )
+
+    # ── 1. Baseline: deploy v1 so subsequent stages diff against it ──────
+    result = run_mz_deploy(
+        c, "concurrent/v1", "stage", "--deploy-id", "c0", "--allow-dirty"
+    )
+    assert result.returncode == 0, f"stage c0 failed: {result.stderr}"
+    result = run_mz_deploy(
+        c, "concurrent/v1", "wait", "c0", "--timeout", "300", "--allowed-lag", "86400"
+    )
+    assert result.returncode == 0, f"wait c0 failed: {result.stderr}"
+    result = run_mz_deploy(c, "concurrent/v1", "promote", "c0", "--no-ready-check")
+    assert result.returncode == 0, f"promote c0 failed: {result.stderr}"
+
+    assert mv_count("alpha", "signups") == 2
+    assert mv_count("beta", "purchases") == 2
+
+    with c.test_case("concurrent-stage-disjoint"):
+        # ── 2. Stage both deployments side by side ───────────────────────
+        # ca changes only alpha.signups; cb changes only beta.purchases.
+        result = run_mz_deploy(
+            c, "concurrent/va", "stage", "--deploy-id", "ca", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage ca failed: {result.stderr}"
+        result = run_mz_deploy(
+            c, "concurrent/vb", "stage", "--deploy-id", "cb", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage cb failed: {result.stderr}"
+
+        # Both staging environments coexist, each confined to its own
+        # schema and cluster.
+        rows = c.sql_query(
+            "SELECT name FROM mz_schemas "
+            "WHERE name IN ('alpha_ca', 'beta_cb', 'alpha_cb', 'beta_ca') "
+            "ORDER BY name",
+            database="app",
+        )
+        assert [r[0] for r in rows] == [
+            "alpha_ca",
+            "beta_cb",
+        ], f"Each deployment must stage only its own schema, got {rows}"
+
+        rows = c.sql_query(
+            "SELECT name FROM mz_clusters "
+            "WHERE name IN ('alpha_ca', 'beta_cb', 'alpha_cb', 'beta_ca') "
+            "ORDER BY name"
+        )
+        assert [r[0] for r in rows] == [
+            "alpha_ca",
+            "beta_cb",
+        ], f"Each deployment must stage only its own cluster, got {rows}"
+
+    with c.test_case("concurrent-promote-independently"):
+        # ── 3. Promote ca, then cb — no conflicts, no --force ────────────
+        result = run_mz_deploy(
+            c,
+            "concurrent/va",
+            "wait",
+            "ca",
+            "--timeout",
+            "300",
+            "--allowed-lag",
+            "86400",
+        )
+        assert result.returncode == 0, f"wait ca failed: {result.stderr}"
+        result = run_mz_deploy(c, "concurrent/va", "promote", "ca", "--no-ready-check")
+        assert result.returncode == 0, f"promote ca failed: {result.stderr}"
+
+        # Alpha is updated; beta production and beta's staging are intact.
+        assert mv_count("alpha", "signups") == 1
+        assert mv_count("beta", "purchases") == 2
+
+        # cb was staged before ca promoted, but they are disjoint, so
+        # conflict detection must let it through.
+        result = run_mz_deploy(
+            c,
+            "concurrent/vb",
+            "wait",
+            "cb",
+            "--timeout",
+            "300",
+            "--allowed-lag",
+            "86400",
+        )
+        assert result.returncode == 0, f"wait cb failed: {result.stderr}"
+        result = run_mz_deploy(c, "concurrent/vb", "promote", "cb", "--no-ready-check")
+        assert result.returncode == 0, (
+            f"promote cb must succeed without --force on a disjoint "
+            f"deployment: {result.stderr}"
+        )
+
+        assert mv_count("alpha", "signups") == 1
+        assert mv_count("beta", "purchases") == 1
+
+        # No staging debris left behind by either promotion.
+        rows = c.sql_query(
+            "SELECT name FROM mz_schemas WHERE name LIKE '%\\_ca' OR name LIKE '%\\_cb'",
+            database="app",
+        )
+        assert len(rows) == 0, f"Expected no staging schemas, got {rows}"
+        rows = c.sql_query(
+            "SELECT name FROM mz_clusters WHERE name LIKE '%\\_ca' OR name LIKE '%\\_cb'"
+        )
+        assert len(rows) == 0, f"Expected no staging clusters, got {rows}"
