@@ -13,7 +13,7 @@ use mz_ore::{
     metric,
     metrics::{
         DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec, IntCounterVec,
-        UIntGaugeVec,
+        MetricVisibility, UIntGaugeVec,
     },
     stats::histogram_seconds_buckets,
 };
@@ -51,12 +51,14 @@ impl IcebergSinkMetricDefs {
             data_files_written: registry.register(metric!(
                 name: "mz_sink_iceberg_data_files_written",
                 help: "Number of data files written by the iceberg sink",
-                var_labels: ["sink_id", "worker_id"]
+                var_labels: ["sink_id", "worker_id"],
+                visibility: MetricVisibility::Public,
             )),
             delete_files_written: registry.register(metric!(
                 name: "mz_sink_iceberg_delete_files_written",
                 help: "Number of delete files written by the iceberg sink",
-                var_labels: ["sink_id", "worker_id"]
+                var_labels: ["sink_id", "worker_id"],
+                visibility: MetricVisibility::Public,
             )),
             stashed_rows: registry.register(metric!(
                 name: "mz_sink_iceberg_stashed_rows",
@@ -66,23 +68,27 @@ impl IcebergSinkMetricDefs {
             snapshots_committed: registry.register(metric!(
                 name: "mz_sink_iceberg_snapshots_committed",
                 help: "Number of snapshots committed by the iceberg sink",
-                var_labels: ["sink_id", "worker_id"]
+                var_labels: ["sink_id", "worker_id"],
+                visibility: MetricVisibility::Public,
             )),
             commit_failures: registry.register(metric!(
                 name: "mz_sink_iceberg_commit_failures",
                 help: "Number of commit failures in the iceberg sink",
-                var_labels: ["sink_id", "worker_id"]
+                var_labels: ["sink_id", "worker_id"],
+                visibility: MetricVisibility::Public,
             )),
             commit_conflicts: registry.register(metric!(
                 name: "mz_sink_iceberg_commit_conflicts",
                 help: "Number of commit conflicts in the iceberg sink",
-                var_labels: ["sink_id", "worker_id"]
+                var_labels: ["sink_id", "worker_id"],
+                visibility: MetricVisibility::Public,
             )),
             commit_duration_seconds: registry.register(metric!(
                 name: "mz_sink_iceberg_commit_duration_seconds",
                 help: "Time spent committing batches to Iceberg in seconds",
                 var_labels: ["sink_id", "worker_id"],
                 buckets: histogram_seconds_buckets(0.001, 32.0),
+                visibility: MetricVisibility::Public,
             )),
             writer_close_duration_seconds: registry.register(metric!(
                 name: "mz_sink_iceberg_writer_close_duration_seconds",

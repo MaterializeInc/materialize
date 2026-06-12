@@ -3,7 +3,15 @@
   `bin/gen-metrics-catalog`) as a reference table of Metric / Description. A `*`
   in a metric name denotes a parameterized family whose concrete name is
   substituted at runtime.
+
+  Accepts an optional `visibility` parameter to list only metrics with that
+  visibility, e.g. `{{< metrics-table visibility="public" >}}`. Omit it to list
+  every metric.
 */}}
+{{- $metrics := $.Site.Data.metrics.metrics }}
+{{- with .Get "visibility" }}
+  {{- $metrics = where $metrics "visibility" . }}
+{{- end }}
 <table>
   <thead>
     <tr>
@@ -12,7 +20,7 @@
     </tr>
   </thead>
   <tbody>
-  {{- range $.Site.Data.metrics.metrics }}
+  {{- range $metrics }}
     <tr>
       <td><code>{{ .name }}</code></td>
       <td>{{ .help }}</td>
