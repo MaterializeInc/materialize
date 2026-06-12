@@ -139,6 +139,13 @@ pub struct PoolStats {
     pub resident_bytes: u64,
     /// Uncompressed bytes of live oversize chunks.
     pub oversize_bytes: u64,
+    /// Class bytes of free slots currently kept warm (pages resident for
+    /// fault-free reuse). Bounded by a fraction of the budget; RSS exceeds
+    /// `resident_bytes` by up to this amount.
+    pub warm_bytes: u64,
+    /// Slot allocations served from the warm list: reuses that faulted no
+    /// pages and skipped the kernel's page zeroing.
+    pub warm_reuses: u64,
 }
 
 #[derive(Debug, Default)]
@@ -155,6 +162,8 @@ struct Counters {
     extent_bytes_written: AtomicU64,
     resident_bytes: AtomicU64,
     oversize_bytes: AtomicU64,
+    warm_bytes: AtomicU64,
+    warm_reuses: AtomicU64,
 }
 
 /// A buffer pool over swap-backed extents. Cheap to clone; all clones share
@@ -353,7 +362,10 @@ impl Pool {
         // resident set outgrew the class reservation, and an unpageable chunk
         // beats a dead replica. Warn once; the fallback counter tracks scale.
         let slot = class.and_then(|class| {
-            let index = inner.regions[class].alloc()?;
+            let (index, warm) = inner.regions[class].alloc()?;
+            if warm {
+                inner.note_warm_reuse(inner.regions[class].class_size());
+            }
             Some(Slot { class, index })
         });
         if slot.is_none() && class.is_some() {
@@ -446,6 +458,8 @@ impl Pool {
             extent_bytes_written: c.extent_bytes_written.load(Ordering::Relaxed),
             resident_bytes: c.resident_bytes.load(Ordering::Relaxed),
             oversize_bytes: c.oversize_bytes.load(Ordering::Relaxed),
+            warm_bytes: c.warm_bytes.load(Ordering::Relaxed),
+            warm_reuses: c.warm_reuses.load(Ordering::Relaxed),
             spill_scheduled: c.spill_scheduled.load(Ordering::Relaxed),
             spill_cancelled: c.spill_cancelled.load(Ordering::Relaxed),
             spill_in_flight: self.0.spill.in_flight.load(Ordering::Relaxed),
@@ -864,32 +878,62 @@ impl PoolInner {
         state.residency = Residency::Evicted;
     }
 
-    /// Releases `state`'s slot — physical pages discarded, slot returned to
-    /// the region free list — and decrements resident bytes. Releasing the
-    /// pages is what keeps RSS aligned with the `resident_bytes` gauge the
-    /// budget enforcer trusts; a pure free-list push would leave warm pages
-    /// in the free slot, invisible to the enforcer. Slots are scoped to
-    /// residency: fault-in allocates a fresh slot, so a chunk's address is
-    /// stable only between a fault-in and the next eviction.
+    /// Releases `state`'s slot — slot returned to the region free list,
+    /// physical pages discarded unless the slot joins the bounded warm pool —
+    /// and decrements resident bytes. Releasing pages beyond the warm pool is
+    /// what keeps RSS aligned with the `resident_bytes` gauge the budget
+    /// enforcer trusts; the warm pool relaxes that alignment by an explicit,
+    /// bounded amount (`warm_bytes`, capped at a fraction of the budget) so
+    /// slot reuse faults no pages and skips the kernel's page zeroing. Slots
+    /// are scoped to residency: fault-in allocates a fresh slot, so a chunk's
+    /// address is stable only between a fault-in and the next eviction.
     ///
     /// Precondition, established by every caller under the held state lock:
     /// no reference into the slot exists — either `pins == 0`, or the handle
     /// is gone (`freed` set) so no `PinGuard` can be created and none
-    /// survives. This is what makes the `dontneed` below sound: the slot's
-    /// next occupant fully overwrites every byte it reads, satisfying the
-    /// contents-undefined contract.
+    /// survives. This is what makes the `dontneed` below sound, and what
+    /// makes keeping a warm slot's stale contents safe: the slot's next
+    /// occupant fully overwrites every byte it reads, satisfying the
+    /// contents-undefined contract either way.
     fn release_slot(&self, meta: &ChunkMeta, state: &mut ChunkState) {
         let slot = state.slot.take().expect("slotted chunk");
         let region = &self.regions[slot.class];
-        // SAFETY: no reference into the slot exists (the function-level
-        // precondition, established under the held state lock).
-        unsafe {
-            region::dontneed(region.slot_ptr(slot.index), region.class_size());
+        let warm = self.try_keep_warm(region.class_size());
+        if !warm {
+            // SAFETY: no reference into the slot exists (the function-level
+            // precondition, established under the held state lock).
+            unsafe {
+                region::dontneed(region.slot_ptr(slot.index), region.class_size());
+            }
         }
-        region.free(slot.index);
+        region.free(slot.index, warm);
         self.counters
             .resident_bytes
             .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+    }
+
+    /// Claims warm-pool capacity for a slot of `class_size` bytes, returning
+    /// whether the slot may keep its pages. The warm pool is capped at an
+    /// eighth of the budget, so the RSS overshoot it introduces scales with
+    /// the dial and is visible as the `warm_bytes` stat.
+    fn try_keep_warm(&self, class_size: usize) -> bool {
+        let cap = self.budget_bytes.load(Ordering::Relaxed) / 8;
+        let class_bytes = u64::cast_from(class_size);
+        self.counters
+            .warm_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                (cur + class_bytes <= cap).then_some(cur + class_bytes)
+            })
+            .is_ok()
+    }
+
+    /// Records a warm slot reuse: the allocation faulted no pages, and its
+    /// bytes leave the warm pool.
+    fn note_warm_reuse(&self, class_size: usize) {
+        self.counters
+            .warm_bytes
+            .fetch_sub(u64::cast_from(class_size), Ordering::Relaxed);
+        self.counters.warm_reuses.fetch_add(1, Ordering::Relaxed);
     }
 
     /// If the chunk is an unpinned, live `UnbackedResident` and the spill
@@ -978,9 +1022,12 @@ impl ChunkHandle {
                     .resident_bytes
                     .fetch_add(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
                 match meta.pool.regions[class].alloc() {
-                    Some(index) => {
+                    Some((index, warm)) => {
                         let slot = Slot { class, index };
                         let region = &meta.pool.regions[class];
+                        if warm {
+                            meta.pool.note_warm_reuse(region.class_size());
+                        }
                         let slot_ptr = region.slot_ptr(slot.index);
                         // SAFETY: the freshly allocated slot is exclusively
                         // owned by this chunk under the held state lock, so
@@ -1189,6 +1236,48 @@ mod tests {
         fn check<T: Send + Sync>() {}
         check::<Pool>();
         check::<ChunkHandle>();
+    }
+
+    /// Freeing under the warm cap parks the slot warm; the next insert of the
+    /// same class reuses it fault-free and the accounting balances.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn warm_slot_reuse() {
+        // Budget 8 MiB: warm cap = 1 MiB, so a 64 KiB slot fits warm.
+        let pool = test_pool(8 << 20);
+        let orig = payload(SMALL, 7);
+        let handle = pool.insert(&mut orig.clone());
+        drop(handle);
+        let after_free = pool.stats();
+        assert_eq!(after_free.warm_bytes, 64 << 10, "freed slot parks warm");
+        assert_eq!(after_free.warm_reuses, 0);
+
+        let handle = pool.insert(&mut orig.clone());
+        let after_reuse = pool.stats();
+        assert_eq!(after_reuse.warm_reuses, 1, "second insert reuses warm slot");
+        assert_eq!(after_reuse.warm_bytes, 0, "reuse drains the warm pool");
+        // Contents are correct despite the skipped page release.
+        let pin = handle.pin();
+        assert_eq!(&*pin, orig.as_slice());
+    }
+
+    /// The warm pool is capped at an eighth of the budget; frees beyond the
+    /// cap release their pages and park cold.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn warm_pool_respects_cap() {
+        // Budget 1 MiB: warm cap = 128 KiB = two 64 KiB slots.
+        let pool = test_pool(1 << 20);
+        let handles: Vec<_> = (0..4)
+            .map(|seed| pool.insert(&mut payload(SMALL, seed)))
+            .collect();
+        drop(handles);
+        let stats = pool.stats();
+        assert_eq!(
+            stats.warm_bytes,
+            128 << 10,
+            "warm pool stops at the budget/8 cap",
+        );
     }
 
     #[mz_ore::test]
