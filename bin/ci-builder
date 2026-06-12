@@ -188,6 +188,13 @@ case "$cmd" in
         ;;
     push)
         docker login ghcr.io -u materialize-bot --password "$GITHUB_GHCR_TOKEN"
+        for sleep_time in 5 10 20 40 60; do
+            if build --push "$@"; then
+                exit 0
+            fi
+            echo "docker push failed, retrying in ${sleep_time}s" >&2
+            sleep "$sleep_time"
+        done
         build --push "$@"
         ;;
     run)

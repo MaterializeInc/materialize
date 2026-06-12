@@ -1010,21 +1010,25 @@ class ResolvedImage:
             # Push to both registries in parallel. With the docker driver,
             # the image is already in the local daemon after --load, so
             # docker push is the same mechanism buildx --push uses internally.
-            procs = []
-            for tag in [docker_tag, ghcr_tag]:
-                procs.append(
+            pending = [docker_tag, ghcr_tag]
+            for sleep_time in [5, 10, 20, 40, 60, None]:
+                procs = [
                     subprocess.Popen(
                         ["docker", "push", tag],
                         stdout=sys.stderr,
                         stderr=sys.stderr,
                     )
-                )
-            failures = []
-            for proc in procs:
-                if proc.wait() != 0:
-                    failures.append(proc.args)
-            if failures:
-                raise subprocess.CalledProcessError(1, failures[0])
+                    for tag in pending
+                ]
+                pending = [tag for tag, proc in zip(pending, procs) if proc.wait() != 0]
+                if not pending:
+                    break
+                if sleep_time is None:
+                    raise subprocess.CalledProcessError(
+                        1, ["docker", "push", pending[0]]
+                    )
+                print(f"docker push failed for {pending}, retrying in {sleep_time}s")
+                time.sleep(sleep_time)
 
     def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
