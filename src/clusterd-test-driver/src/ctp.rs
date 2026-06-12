@@ -23,9 +23,17 @@ use uuid::Uuid;
 
 pub type ComputeCtpClient = Client<ComputeCommand, ComputeResponse>;
 
-/// Connects to a clusterd compute controller address and completes the
-/// `Hello` -> `CreateInstance` -> `InitializationComplete` handshake.
-pub async fn connect_and_handshake(
+/// Connects to a clusterd compute controller address and sends the pre-init part
+/// of the handshake: `Hello` -> `CreateInstance` -> `UpdateConfiguration`, but
+/// *not* `InitializationComplete`.
+///
+/// Leaving the connection before `InitializationComplete` is the reconciliation
+/// window: a controller replays the dataflows it expects the replica to be
+/// running, and the replica reconciles them against its live dataflows on
+/// `InitializationComplete`, keeping the matching ones rather than rehydrating.
+/// The initial connect (see [`connect_and_handshake`]) sends an empty window; a
+/// reconnect replays the running dataflows before completing.
+pub async fn connect_and_hello(
     compute_addr: &str,
     peek_stash_persist_location: PersistLocation,
 ) -> anyhow::Result<ComputeCtpClient> {
@@ -70,6 +78,17 @@ pub async fn connect_and_handshake(
         )))
         .await?;
 
+    Ok(client)
+}
+
+/// Connects and completes the full `Hello` -> `CreateInstance` ->
+/// `UpdateConfiguration` -> `InitializationComplete` handshake, leaving the
+/// reconciliation window empty.
+pub async fn connect_and_handshake(
+    compute_addr: &str,
+    peek_stash_persist_location: PersistLocation,
+) -> anyhow::Result<ComputeCtpClient> {
+    let mut client = connect_and_hello(compute_addr, peek_stash_persist_location).await?;
     client.send(ComputeCommand::InitializationComplete).await?;
     Ok(client)
 }

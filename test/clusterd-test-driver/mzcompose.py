@@ -56,12 +56,14 @@ SERVICES = [
 
 # The scenarios, each a JSON command script under scripts/. `multi_dataflow`
 # reproduces a current limitation and exits 0 by design (tolerant awaits); the
-# others assert via expect_count and fail the run on mismatch.
+# others assert via expect_count/expect_error and fail the run on mismatch.
 SCRIPTS = [
     "index.jsonl",
     "deep_history.jsonl",
     "side_effects.jsonl",
     "multi_dataflow.jsonl",
+    "reconciliation.jsonl",
+    "error_behavior.jsonl",
 ]
 
 

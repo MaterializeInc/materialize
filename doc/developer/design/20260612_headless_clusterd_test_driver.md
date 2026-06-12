@@ -212,7 +212,7 @@ A composition runs CockroachDB for consensus, an object store for blob, a real `
 ## Testing
 
 * The driver never spawns `clusterd`; `mzcompose` brings up the full stack (CockroachDB, an object store, `clusterd`, and the driver image) and is the faithful end-to-end path that CI runs.
-  `workflow_default` runs every scenario script in turn, restarting `clusterd` between them for a clean compute state: `index.jsonl`, `deep_history.jsonl`, and `side_effects.jsonl` assert via `expect_count` and fail the run on mismatch; `multi_dataflow.jsonl` reproduces a current limitation and exits 0 by design (its awaits set `allow_timeout`).
+  `workflow_default` runs every scenario script in turn, restarting `clusterd` between them for a clean compute state: `index.jsonl`, `deep_history.jsonl`, `side_effects.jsonl`, and `reconciliation.jsonl` assert via `expect_count` and fail the run on mismatch; `error_behavior.jsonl` asserts a set of failures via `expect_error`; `multi_dataflow.jsonl` reproduces a current limitation and exits 0 by design (its awaits set `allow_timeout`).
 * Crate-level `cargo test` covers the infra-free units (direct persist write round-trip via `mem://`, spread-timestamp write, response demux merge, dataflow structure).
   The end-to-end integration test (`tests/index_smoke.rs`) skips unless `CLUSTERD_COMPUTE_ADDR` is set, so `cargo test` stays green without a running stack.
 
@@ -273,9 +273,11 @@ Joins and the opt-in `optimize()` verb remain the single open decision, deferred
 Steps one and two are implemented, and the literal shim from step three is built early because schema and row authoring need it.
 The driver is now solely a script reader (the `script` module): it reads JSON-line commands from the file named by `DRIVER_SCRIPT` (or stdin), executes each against `clusterd`, and writes one JSON response per line, returning non-zero if any command failed.
 The four original Rust scenarios are fully replaced by scripts; nothing scenario-specific remains in the binary.
-The orchestration verbs (`write_single_ts`, `write_spread`, `write_rows`, `schedule`, `allow_compaction`, `await_frontier`, `peek_count`, `expect_count`) map directly to `Driver` calls; shards are named by a string alias allocated on first use, and object ids are raw `u64`s.
+The orchestration verbs (`write_single_ts`, `write_spread`, `write_rows`, `schedule`, `allow_compaction`, `await_frontier`, `peek_count`, `expect_count`, `reconnect`, `initialization_complete`, `expect_error`) map directly to `Driver` calls; shards are named by a string alias allocated on first use, and object ids are raw `u64`s.
 `expect_count` asserts a peek's row count (failing the run on mismatch) — the scripted form of a scenario's count assertion — while `await_frontier` takes an `allow_timeout` flag so a reproduction like `multi_dataflow` can report a non-hydrating dataflow without failing the run.
 Synthetic writes take a `start` offset so successive batches use disjoint id ranges that accumulate rather than consolidate, which the `index` tick phase relies on.
+`reconnect` drops the connection and re-handshakes but stops before `initialization_complete`, opening the reconciliation window: the script replays the dataflows the replica should keep, then `initialization_complete` closes it, so `reconciliation.jsonl` exercises reconcile-and-keep rather than rehydrate.
+`expect_error` runs a nested command and asserts it fails, so `error_behavior.jsonl` can cover bad input (unknown schema, wrong arity or type) and replica behavior (an unscheduled dataflow's frontier never advancing) as passing assertions.
 
 A script declares relations with `define_schema { name, columns: [{name, type, nullable}] }`, building a `RelationDesc` stored under a name; the other commands reference it by `schema` (defaulting to the built-in `(bigint, text)` sample relation).
 The type vocabulary is intentionally small — `int16`/`int32`/`int64`, `bool`, `string`, `bytes`, with SQL aliases — and extends alongside the matching `Cell` cases.

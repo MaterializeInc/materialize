@@ -295,6 +295,20 @@ pub enum Command {
         /// The expected row count.
         count: u64,
     },
+    /// Drop the current connection and reconnect, stopping in the reconciliation
+    /// window (before `initialization_complete`). Replay the dataflows the replica
+    /// should keep, then send `initialization_complete`.
+    Reconnect,
+    /// Send `InitializationComplete`, closing the reconciliation window opened by
+    /// `reconnect`.
+    InitializationComplete,
+    /// Run `command` and assert it fails; the run passes when it does and fails if
+    /// the command unexpectedly succeeds. Covers error behavior (bad schema, arity
+    /// or type mismatch, peek below `since`, …).
+    ExpectError {
+        /// The command expected to fail.
+        command: Box<Command>,
+    },
 }
 
 /// A response written for each command. Tagged on `"status"`, snake_case.
@@ -316,6 +330,11 @@ pub enum Response {
     /// An `await_frontier` with `allow_timeout` timed out without reaching the
     /// target. Reported, not a failure.
     Timeout,
+    /// An `expect_error` caught the failure it expected; reports the message.
+    CaughtError {
+        /// The caught failure's message.
+        message: String,
+    },
     /// A command failed.
     Error {
         /// Human-readable failure description.
@@ -501,6 +520,25 @@ impl ScriptState {
                 );
                 Ok(Response::Count { count: actual })
             }
+            Command::Reconnect => {
+                self.driver.reconnect().await?;
+                Ok(Response::Ok)
+            }
+            Command::InitializationComplete => {
+                self.driver.send(ComputeCommand::InitializationComplete)?;
+                Ok(Response::Ok)
+            }
+            Command::ExpectError { command } => {
+                // Box::pin because `execute` recurses here (async fn recursion).
+                match Box::pin(self.execute(*command)).await {
+                    Err(e) => Ok(Response::CaughtError {
+                        message: e.to_string(),
+                    }),
+                    Ok(resp) => {
+                        anyhow::bail!("expected command to fail, but it succeeded: {resp:?}")
+                    }
+                }
+            }
         }
     }
 }
@@ -660,6 +698,33 @@ mod tests {
         assert_eq!(rows.len(), 4);
 
         assert!(scalar_type_from_str("nope").is_err());
+    }
+
+    /// The control commands deserialize, including the nested `expect_error`.
+    #[mz_ore::test]
+    fn control_commands_serde() {
+        assert_eq!(
+            serde_json::from_str::<Command>(r#"{"cmd":"reconnect"}"#).unwrap(),
+            Command::Reconnect
+        );
+        assert_eq!(
+            serde_json::from_str::<Command>(r#"{"cmd":"initialization_complete"}"#).unwrap(),
+            Command::InitializationComplete
+        );
+        let cmd: Command = serde_json::from_str(
+            r#"{"cmd":"expect_error","command":{"cmd":"peek_count","id":1001,"ts":0}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::ExpectError {
+                command: Box::new(Command::PeekCount {
+                    id: 1001,
+                    schema: None,
+                    ts: 0,
+                }),
+            }
+        );
     }
 
     /// JSON values parse into the right `Cell`s, and `null` is rejected for

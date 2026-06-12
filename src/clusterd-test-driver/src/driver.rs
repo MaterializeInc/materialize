@@ -21,13 +21,14 @@ use mz_repr::{GlobalId, IntoRowIterator, RelationDesc, Row, RowIterator, Timesta
 use mz_storage_types::controller::CollectionMetadata;
 use timely::progress::Antichain;
 
-use crate::ctp::connect_and_handshake;
+use crate::ctp::{connect_and_handshake, connect_and_hello};
 use crate::persist_host::PersistHost;
 use crate::responses::{ComputeSender, Responses};
 
 /// Headless frontend to a clusterd replica.
 pub struct Driver {
     pub host: PersistHost,
+    compute_addr: String,
     sender: ComputeSender,
     responses: Responses,
 }
@@ -40,9 +41,27 @@ impl Driver {
         let (responses, sender) = Responses::spawn(client);
         Ok(Driver {
             host,
+            compute_addr: compute_addr.to_string(),
             sender,
             responses,
         })
+    }
+
+    /// Drops the current connection and opens a new one, stopping before
+    /// `InitializationComplete` so the caller can replay the dataflows it expects
+    /// the replica to be running (the reconciliation window).
+    ///
+    /// Replacing `sender` drops the previous [`ComputeSender`]; with no other
+    /// clones, the old pump task's command channel closes and the pump exits,
+    /// dropping the old CTP client and closing the old connection. The caller must
+    /// send [`ComputeCommand::InitializationComplete`] (via [`Self::send`]) once the
+    /// reconciliation set has been replayed.
+    pub async fn reconnect(&mut self) -> anyhow::Result<()> {
+        let client = connect_and_hello(&self.compute_addr, self.host.location().clone()).await?;
+        let (responses, sender) = Responses::spawn(client);
+        self.responses = responses;
+        self.sender = sender;
+        Ok(())
     }
 
     /// Sends a raw `ComputeCommand`. The primitive behind every interaction;
