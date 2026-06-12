@@ -590,14 +590,22 @@ impl Coordinator {
             || "group_commit_apply",
             async move {
                 // Wait for the writes to complete.
-                match append_fut
+                let write_result = match append_fut
                     .instrument(debug_span!("group_commit_apply::append_fut"))
                     .await
                 {
                     Ok(append_result) => {
-                        append_result.unwrap_or_terminate("cannot fail to apply appends")
+                        append_result.unwrap_or_terminate("cannot fail to apply appends");
+                        Ok(())
                     }
-                    Err(_) => warn!("Writer terminated with writes in indefinite state"),
+                    // The writer's oneshot channel was dropped before it sent a
+                    // result, so the writes are in an indefinite state. We must
+                    // not report success to clients, since their writes may not
+                    // have been durably persisted.
+                    Err(_) => {
+                        warn!("Writer terminated with writes in indefinite state");
+                        Err(())
+                    }
                 };
 
                 // Apply the write by marking the timestamp as complete on the timeline.
@@ -609,6 +617,17 @@ impl Coordinator {
                 for response in responses {
                     let (mut ctx, result) = response.finalize();
                     ctx.session_mut().apply_write(timestamp);
+                    // If the writer terminated with the writes in an indefinite
+                    // state, report an error rather than telling the client a
+                    // success that we cannot guarantee.
+                    let result = match write_result {
+                        Ok(()) => result,
+                        Err(()) => Err(AdapterError::Internal(
+                            "table write failed: writer terminated with writes in \
+                             an indefinite state"
+                                .to_string(),
+                        )),
+                    };
                     ctx.retire(result);
                 }
 
