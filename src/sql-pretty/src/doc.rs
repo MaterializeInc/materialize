@@ -521,7 +521,16 @@ impl Pretty {
         }
 
         if let Some(name) = &v.name {
-            docs.push(nest_title(title, self.doc_display_pass(name)));
+            // A bare `in` index name re-lexes as the start of the optional
+            // `IN CLUSTER` clause, so force it quoted (matching the
+            // `CreateIndexStatement` AstDisplay impl). `in` is fine bare in a
+            // required-name position, so this isn't a `can_be_printed_bare` case.
+            let name_doc = if name.as_str().eq_ignore_ascii_case("in") {
+                RcDoc::text(format!("\"{}\"", name.as_str()))
+            } else {
+                self.doc_display_pass(name)
+            };
+            docs.push(nest_title(title, name_doc));
         } else {
             docs.push(RcDoc::text(title));
         }
@@ -627,8 +636,14 @@ impl Pretty {
         v: &'a SubscribeStatement<T>,
     ) -> RcDoc<'a> {
         let doc = match &v.relation {
-            SubscribeRelation::Name(name) => nest_title("SUBSCRIBE", self.doc_display_pass(name)),
-            SubscribeRelation::Query(query) => bracket("SUBSCRIBE (", self.doc_query(query), ")"),
+            // Always emit the optional `TO` keyword so a relation named with the
+            // bare keyword `to` round-trips (see `SubscribeStatement` display).
+            SubscribeRelation::Name(name) => {
+                nest_title("SUBSCRIBE TO", self.doc_display_pass(name))
+            }
+            SubscribeRelation::Query(query) => {
+                bracket("SUBSCRIBE TO (", self.doc_query(query), ")")
+            }
         };
         let mut docs = vec![doc];
         if !v.options.is_empty() {
@@ -822,6 +837,31 @@ impl Pretty {
         }
     }
 
+    /// `DECLARE <name> CURSOR FOR <stmt>`. The inner statement is printed via the
+    /// recursive doc printer (not the redacting AstDisplay fallback) so a secret
+    /// it carries — e.g. `CURSOR FOR ALTER ROLE r PASSWORD '…'` — survives the
+    /// round trip instead of becoming `'<REDACTED>'`.
+    pub(crate) fn doc_declare<'a, T: AstInfo<NestedStatement = Statement<Raw>>>(
+        &'a self,
+        v: &'a DeclareStatement<T>,
+    ) -> RcDoc<'a> {
+        RcDoc::text(format!(
+            "DECLARE {} CURSOR FOR ",
+            v.name.to_ast_string_simple()
+        ))
+        .append(self.to_doc(&v.stmt))
+    }
+
+    /// `PREPARE <name> AS <stmt>`. Recurses into the inner statement for the same
+    /// reason as [`Self::doc_declare`].
+    pub(crate) fn doc_prepare<'a, T: AstInfo<NestedStatement = Statement<Raw>>>(
+        &'a self,
+        v: &'a PrepareStatement<T>,
+    ) -> RcDoc<'a> {
+        RcDoc::text(format!("PREPARE {} AS ", v.name.to_ast_string_simple()))
+            .append(self.to_doc(&v.stmt))
+    }
+
     fn doc_view_definition<'a, T: AstInfo>(&'a self, v: &'a ViewDefinition<T>) -> RcDoc<'a> {
         let mut docs = vec![RcDoc::text(v.name.to_string())];
         if !v.columns.is_empty() {
@@ -868,7 +908,16 @@ impl Pretty {
         &'a self,
         v: &'a SelectStatement<T>,
     ) -> RcDoc<'a> {
-        let mut doc = self.doc_query(&v.query);
+        let query = self.doc_query(&v.query);
+        // A query whose rendering begins with `SHOW` (a bare `SHOW` body or a
+        // set operation whose leftmost operand is one) only reparses when
+        // parenthesized — a top-level leading `SHOW` is dispatched directly and
+        // terminates the statement. Mirror `AstDisplay for SelectStatement`.
+        let mut doc = if v.query.body.starts_with_show() {
+            bracket("(", query, ")")
+        } else {
+            query
+        };
         if let Some(as_of) = &v.as_of {
             doc = intersperse_line_nest([doc, self.doc_as_of(as_of)]);
         }
@@ -1164,7 +1213,54 @@ impl Pretty {
                         self.doc_expr(expr2).nest(TAB),
                     ])
                 } else {
-                    RcDoc::concat([RcDoc::text(format!("{} ", op)), self.doc_expr(expr1)])
+                    // See the AstDisplay `Expr::Op` comment (`prefix_operand_needs_parens`):
+                    // a prefix op binds tighter than `COLLATE`/the binary ops but
+                    // looser than the postfix `::`/`[…]`, and `- <number>` folds, so
+                    // peel the tight postfixes and parenthesize when the chain
+                    // bottoms out at a numeric literal or a non-self-delimiting /
+                    // `COLLATE` operand.
+                    let needs_parens = {
+                        let mut e = expr1.as_ref();
+                        let mut saw_postfix = false;
+                        loop {
+                            match e {
+                                Expr::Cast { expr, .. } | Expr::Subscript { expr, .. } => {
+                                    saw_postfix = true;
+                                    e = expr.as_ref();
+                                }
+                                Expr::Value(Value::Number(_)) => break saw_postfix,
+                                // Another prefix operator stacks directly (no
+                                // re-association, no `- <number>` fold) — safe,
+                                // and avoids exploding deep unary chains.
+                                Expr::Op { expr2: None, .. } | Expr::Not { .. } => break false,
+                                Expr::Value(_)
+                                | Expr::Identifier(_)
+                                | Expr::QualifiedWildcard(_)
+                                | Expr::Parameter(_)
+                                | Expr::Function(_)
+                                | Expr::HomogenizingFunction { .. }
+                                | Expr::NullIf { .. }
+                                | Expr::Subquery(_)
+                                | Expr::Exists(_)
+                                | Expr::Nested(_)
+                                | Expr::Array(_)
+                                | Expr::ArraySubquery(_)
+                                | Expr::List(_)
+                                | Expr::ListSubquery(_)
+                                | Expr::Map(_)
+                                | Expr::MapSubquery(_)
+                                | Expr::Case { .. }
+                                | Expr::Row { .. } => break false,
+                                _ => break true,
+                            }
+                        }
+                    };
+                    let operand = if needs_parens {
+                        bracket("(", self.doc_expr(expr1), ")")
+                    } else {
+                        self.doc_expr(expr1)
+                    };
+                    RcDoc::concat([RcDoc::text(format!("{} ", op)), operand])
                 }
             }
             Expr::Case {
@@ -1307,7 +1403,8 @@ impl Pretty {
                 if v.filter.is_some() || v.over.is_some() || !order_by.is_empty() {
                     return self.doc_display(v, "function filter or over or order by");
                 }
-                let special = match v.name.to_ast_string_stable().as_str() {
+                let name_stable = v.name.to_ast_string_stable();
+                let special = match name_stable.as_str() {
                     r#""extract""# if v.args.len() == Some(2) => true,
                     r#""position""# if v.args.len() == Some(2) => true,
                     _ => false,
@@ -1315,9 +1412,39 @@ impl Pretty {
                 if special {
                     return self.doc_display(v, "special function");
                 }
+                // Mirror the same carve-out as the `AstDisplay for Function`
+                // impl: function names that clash with a keyword having its
+                // own special-grammar parser form (`(Kw, LParen)` dispatch in
+                // parse_prefix) must be quoted on emit, or the reparse goes
+                // through the special grammar instead of a regular call. (The
+                // `ANY`/`ALL`/`SOME` quantifier keywords are handled more
+                // generally by `can_be_printed_bare`, since they're also unsafe
+                // as bare identifiers.)
+                let needs_quote = matches!(
+                    name_stable.as_str(),
+                    r#""array""#
+                        | r#""coalesce""#
+                        | r#""exists""#
+                        | r#""extract""#
+                        | r#""greatest""#
+                        | r#""least""#
+                        | r#""list""#
+                        | r#""map""#
+                        | r#""normalize""#
+                        | r#""nullif""#
+                        | r#""position""#
+                        | r#""row""#
+                        | r#""substring""#
+                        | r#""trim""#
+                );
+                let printed_name = if needs_quote {
+                    name_stable
+                } else {
+                    v.name.to_ast_string_simple()
+                };
                 let name = format!(
                     "{}({}",
-                    v.name.to_ast_string_simple(),
+                    printed_name,
                     if v.distinct { "DISTINCT " } else { "" }
                 );
                 bracket(name, comma_separate(|e| self.doc_expr(e), args), ")")

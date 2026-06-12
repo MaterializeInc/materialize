@@ -19,7 +19,7 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::Keyword;
+use mz_sql_lexer::keywords::{ALL, ANY, AS, Keyword, LIST, PREPARE, SOME, WHEN};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -296,7 +296,41 @@ impl Ident {
             && chars.all(|ch| matches!(ch, 'a'..='z' | '0'..='9' | '_'))
             && !self
                 .as_keyword()
-                .map(Keyword::is_sometimes_reserved)
+                .map(|kw| {
+                    kw.is_sometimes_reserved()
+                        || kw.begins_query_body()
+                        // `AS` at the start of a SELECT item is consumed as the
+                        // `AS OF` timestamp keyword (an empty projection), so a
+                        // bare `as` identifier/function name fails to reparse.
+                        || kw == AS
+                        // `ANY`/`ALL`/`SOME` after a comparison operator start a
+                        // quantified-comparison (`x op ANY (...)`), so a bare such
+                        // identifier — e.g. `0 # some` — reparses as the start of a
+                        // quantifier rather than an identifier. (`ALL` is already
+                        // always-reserved; the others are not.)
+                        || matches!(kw, ANY | ALL | SOME)
+                        // `LIST` followed by `[` re-lexes as a `LIST[...]` literal
+                        // (`list[1]` is a valid one-element list), so a bare `list`
+                        // identifier that gets subscripted — `"list"[1]` — would
+                        // reparse as a list literal instead of a subscript. (`ARRAY`
+                        // is reserved-in-scalar-expression and so already quoted;
+                        // `MAP[...]` requires `=>`, so `map[1]` is unambiguously a
+                        // subscript.)
+                        || kw == LIST
+                        // `DEALLOCATE [PREPARE] <name>` accepts an optional
+                        // `PREPARE` keyword before the name, so a bare `prepare`
+                        // name is consumed as that keyword on reparse, leaving no
+                        // name (`DEALLOCATE prepare` -> `DEALLOCATE` + the optional
+                        // keyword + a missing name).
+                        || kw == PREPARE
+                        // `CASE` treats a leading `WHEN` as the start of the
+                        // first arm (a searched `CASE` with no operand), so a
+                        // bare `when` identifier used as the `CASE` operand —
+                        // `CASE when.a WHEN ...` — reparses as `CASE WHEN .a ...`
+                        // ("expected an expression, found dot"). Quoting it keeps
+                        // the operand an identifier.
+                        || kw == WHEN
+                })
                 .unwrap_or(false)
     }
 

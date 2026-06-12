@@ -342,7 +342,7 @@ materialize
 query T
 SELECT quote_ident('table');
 ----
-table
+"table"
 
 simple
 SELECT quote_ident('this ident is too long and will return an error 🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎')
@@ -359,7 +359,7 @@ SELECT quote_ident('true'), quote_ident('false'), quote_ident('null'), quote_ide
 "false"
 "null"
 "array"
-list
+"list"
 map
 "case"
 "cast"

@@ -112,7 +112,19 @@ impl AstDisplay for RawItemName {
         match self {
             RawItemName::Name(o) => f.write_node(o),
             RawItemName::Id(id, o, v) => {
-                f.write_str(format!("[{} AS ", id));
+                // `id` is parsed from an identifier token (`[<id> AS …]`), so a
+                // crafted id with spaces/keywords must be quoted to reparse as a
+                // single identifier. A normal global id like `u1` is printed
+                // bare in every mode — including the stable mode `pg_get_viewdef`
+                // renders in, which would otherwise force-quote it.
+                f.write_str("[");
+                let id = Ident::new_unchecked(id.clone());
+                if id.can_be_printed_bare() {
+                    f.write_str(id.as_str());
+                } else {
+                    f.write_node(&id);
+                }
+                f.write_str(" AS ");
                 f.write_node(o);
                 if let Some(v) = v {
                     f.write_str(" VERSION ");
@@ -245,7 +257,51 @@ impl AstDisplay for RawDataType {
                 f.write_str("]");
             }
             RawDataType::Other { name, typ_mod } => {
-                f.write_node(name);
+                // If the first component of the type name clashes with a
+                // keyword that `parse_data_type` either dispatches into a
+                // special grammar (`map[...]`) or canonicalizes to a
+                // different spelling (`string` → `text`, `bigint` → `int8`,
+                // …), an unquoted emit would reparse to a different AST —
+                // either the canonicalizing branch fires and replaces the
+                // name outright, or (for a qualified name) the dispatch
+                // consumes the first part before the rest reaches the
+                // type-name parser. Force the always-quoted stable form in
+                // those cases. Keywords whose canonicalized name matches
+                // the keyword text itself (`bpchar`, `varchar`, `time`,
+                // `timestamp`, `timestamptz`) round-trip unquoted via the
+                // keyword path, so they're omitted here.
+                let first_ident_clashes = name
+                    .name()
+                    .0
+                    .first()
+                    .and_then(|id| id.as_keyword())
+                    .map(|kw| {
+                        use mz_sql_lexer::keywords::*;
+                        matches!(
+                            kw,
+                            MAP | STRING
+                                | BIGINT
+                                | SMALLINT
+                                | DEC
+                                | DECIMAL
+                                | DOUBLE
+                                | FLOAT
+                                | INT
+                                | INTEGER
+                                | REAL
+                                | BOOLEAN
+                                | BYTES
+                                | JSON
+                                | CHAR
+                                | CHARACTER
+                        )
+                    })
+                    .unwrap_or(false);
+                if first_ident_clashes {
+                    f.write_str(&name.to_ast_string_stable());
+                } else {
+                    f.write_node(name);
+                }
                 if typ_mod.len() > 0 {
                     f.write_str("(");
                     f.write_node(&display::comma_separated(typ_mod));

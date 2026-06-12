@@ -8014,6 +8014,7 @@ dependencies = [
  "datadriven",
  "itertools 0.14.0",
  "mz-ore",
+ "mz-sql-lexer",
  "mz-sql-parser",
  "pretty",
  "thiserror 2.0.18",

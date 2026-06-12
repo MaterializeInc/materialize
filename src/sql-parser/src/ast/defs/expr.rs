@@ -209,12 +209,12 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(".*");
             }
             Expr::FieldAccess { expr, field } => {
-                f.write_node(expr);
+                write_dot_receiver(f, expr);
                 f.write_str(".");
                 f.write_node(field);
             }
             Expr::WildcardAccess(expr) => {
-                f.write_node(expr);
+                write_dot_receiver(f, expr);
                 f.write_str(".*");
             }
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
@@ -319,7 +319,18 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 } else {
                     f.write_str(op);
                     f.write_str(" ");
-                    f.write_node(&expr1);
+                    // A prefix operator binds tighter than `COLLATE` and the
+                    // binary operators but looser than the postfix `::`/`[…]`
+                    // forms, and `- <number>` lexes as a negative literal, so a
+                    // low-precedence or numeric-leftmost operand must be
+                    // parenthesized to keep the prefix operator's scope.
+                    if prefix_operand_needs_parens(expr1.as_ref()) {
+                        f.write_str("(");
+                        f.write_node(&expr1);
+                        f.write_str(")");
+                    } else {
+                        f.write_node(&expr1);
+                    }
                 }
             }
             Expr::Cast { expr, data_type } => {
@@ -328,7 +339,18 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_node(data_type);
             }
             Expr::Collate { expr, collation } => {
-                f.write_node(&expr);
+                // `COLLATE` binds very tightly (`PostfixCollateAt`), so a
+                // low-precedence operand must be parenthesized or the collation
+                // re-associates onto its rightmost sub-operand — `a + b COLLATE c`
+                // would reparse as `a + (b COLLATE c)`. (Round-trip parens are
+                // stripped by `normalize`, so the printer must re-add them.)
+                if prints_self_delimiting(expr) {
+                    f.write_node(&expr);
+                } else {
+                    f.write_str("(");
+                    f.write_node(&expr);
+                    f.write_str(")");
+                }
                 f.write_str(" COLLATE ");
                 f.write_node(&collation);
             }
@@ -394,7 +416,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AnySubquery { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ANY (");
@@ -402,7 +424,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AnyExpr { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ANY (");
@@ -410,7 +432,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AllSubquery { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ALL (");
@@ -418,7 +440,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AllExpr { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ALL (");
@@ -456,7 +478,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::Subscript { expr, positions } => {
-                f.write_node(&expr);
+                write_subscript_receiver(f, expr);
                 f.write_str("[");
 
                 let mut first = true;
@@ -476,6 +498,186 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
     }
 }
 impl_display_t!(Expr);
+
+/// Write `expr` as the receiver of a `.` operator (used by `FieldAccess` and
+/// `WildcardAccess`), parenthesizing when the receiver could re-bind the
+/// trailing dot on reparse. The `.` token has very high precedence and both
+/// the lexer and parser greedily extend adjacent tokens: `1.x` tokenizes the
+/// number `1.` and leaves `x` as an alias, and `'a'::T.x` consumes `T.x` as a
+/// qualified type name. The whitelist below covers receivers that print as
+/// self-terminating syntax (identifiers, parenthesized exprs, function calls,
+/// bracketed collections, etc.); anything else gets explicit parens.
+fn write_dot_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
+    let safe = matches!(
+        expr,
+        Expr::Identifier(_)
+            | Expr::QualifiedWildcard(_)
+            | Expr::FieldAccess { .. }
+            | Expr::WildcardAccess(_)
+            | Expr::Parameter(_)
+            | Expr::Nested(_)
+            | Expr::Row { .. }
+            | Expr::Function(_)
+            | Expr::Case { .. }
+            | Expr::Exists(_)
+            | Expr::Subquery(_)
+            | Expr::AnySubquery { .. }
+            | Expr::AllSubquery { .. }
+            | Expr::Array(_)
+            | Expr::ArraySubquery(_)
+            | Expr::List(_)
+            | Expr::ListSubquery(_)
+            | Expr::Map(_)
+            | Expr::MapSubquery(_)
+            | Expr::Subscript { .. }
+            | Expr::HomogenizingFunction { .. }
+            | Expr::NullIf { .. }
+            | Expr::Value(
+                Value::String(_)
+                    | Value::Boolean(_)
+                    | Value::Null
+                    | Value::HexString(_)
+                    | Value::Interval(_)
+            )
+    );
+    if safe {
+        f.write_node(expr);
+    } else {
+        f.write_str("(");
+        f.write_node(expr);
+        f.write_str(")");
+    }
+}
+
+/// Write `left` as the LHS of `<left> <op> ANY/ALL (...)`. The operator on
+/// the right is a binary infix op whose precedence will reach inside an
+/// already-low-precedence lhs (`Like`, `In*`, `Between`, `Is*`, `And`,
+/// `Or`, `Not`, nested `AnyExpr`/`AllExpr`) and reparse it as part of the
+/// quantified expression's left rather than as a wrapper around it.
+/// Parenthesize those; let normal infix `Op` use its existing precedence
+/// to print without parens.
+fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
+    let needs_parens = matches!(
+        expr,
+        Expr::Like { .. }
+            | Expr::Between { .. }
+            | Expr::IsExpr { .. }
+            | Expr::InList { .. }
+            | Expr::InSubquery { .. }
+            | Expr::And { .. }
+            | Expr::Or { .. }
+            | Expr::Not { .. }
+            | Expr::AnyExpr { .. }
+            | Expr::AllExpr { .. }
+            | Expr::AnySubquery { .. }
+            | Expr::AllSubquery { .. }
+    );
+    if needs_parens {
+        f.write_str("(");
+        f.write_node(expr);
+        f.write_str(")");
+    } else {
+        f.write_node(expr);
+    }
+}
+
+/// Whether `expr` prints in a *self-delimiting* form — atomic, or wrapped in its
+/// own brackets/parens (`name(...)`, `(…)`, `ARRAY[…]`, `CASE … END`, …) — so it
+/// is safe to print immediately to the left of a tight postfix operator (`::`,
+/// `COLLATE`, or the `IN` delimiter of the `position(<needle> IN …)` special
+/// form) without the operator re-associating into the expression's spine.
+///
+/// Anything with an exposed operator spine is *not* self-delimiting: a tight
+/// postfix would bind to its rightmost sub-operand (`a + b COLLATE c` parses as
+/// `a + (b COLLATE c)`), and the `position` `IN` delimiter would split on an
+/// inner `IN`/comparison (`a IN (q) ->> b`). Callers must parenthesize / fall
+/// back for those. Postfix forms (`::`/`COLLATE`/`[…]`) are self-delimiting only
+/// when their own inner operand is.
+fn prints_self_delimiting<T: AstInfo>(expr: &Expr<T>) -> bool {
+    match expr {
+        Expr::Value(_)
+        | Expr::Identifier(_)
+        | Expr::QualifiedWildcard(_)
+        | Expr::Parameter(_)
+        | Expr::Function(_)
+        | Expr::HomogenizingFunction { .. }
+        | Expr::NullIf { .. }
+        | Expr::Subquery(_)
+        | Expr::Exists(_)
+        | Expr::Nested(_)
+        | Expr::Array(_)
+        | Expr::ArraySubquery(_)
+        | Expr::List(_)
+        | Expr::ListSubquery(_)
+        | Expr::Map(_)
+        | Expr::MapSubquery(_)
+        | Expr::Case { .. }
+        | Expr::Row { .. } => true,
+        // The postfix `::` / `COLLATE` / `[…]` forms print as `<inner><suffix>`,
+        // so they are safe only when their inner operand is.
+        Expr::Cast { expr, .. } | Expr::Collate { expr, .. } | Expr::Subscript { expr, .. } => {
+            prints_self_delimiting(expr)
+        }
+        _ => false,
+    }
+}
+
+/// Whether the operand of a prefix operator (`-`/`+`/`~`) must be parenthesized
+/// to round-trip. A prefix op binds *tighter* than `COLLATE`/`AT TIME ZONE` and
+/// the binary/comparison operators, but *looser* than the postfix `::`/`[…]`
+/// forms — and `- <number>` additionally lexes as a negative literal. So peel
+/// the tight postfixes (`::`/`[…]`); if the chain bottoms out at a numeric
+/// literal the sign would fold into it, and if it bottoms out at anything other
+/// than a self-delimiting non-`COLLATE` primary (a `COLLATE`, a binary op, …) the
+/// prefix op would re-associate — both need parens. (`a + b COLLATE c` reparses
+/// as `a + (b COLLATE c)`; `- x COLLATE c` as `(- x) COLLATE c`.)
+fn prefix_operand_needs_parens<T: AstInfo>(operand: &Expr<T>) -> bool {
+    let mut e = operand;
+    let mut saw_postfix = false;
+    loop {
+        match e {
+            Expr::Cast { expr, .. } | Expr::Subscript { expr, .. } => {
+                saw_postfix = true;
+                e = expr.as_ref();
+            }
+            Expr::Value(Value::Number(_)) => return saw_postfix,
+            // Another prefix operator (`+ + x`, `- ~ x`, `NOT NOT x`) stacks
+            // directly: prefix operators don't re-associate, and the inner
+            // operator symbol sits between the outer one and any digit so there
+            // is no `- <number>` fold. Always safe — and crucially, NOT adding
+            // parens here keeps deep unary chains from exploding the nesting
+            // depth (and overflowing the stack) on reparse.
+            Expr::Op { expr2: None, .. } | Expr::Not { .. } => return false,
+            // Self-delimiting, but a top-level `COLLATE` binds looser than the
+            // prefix op, so it (unlike `::`/`[…]`) is not safe here.
+            _ => return !(prints_self_delimiting(e) && !matches!(e, Expr::Collate { .. })),
+        }
+    }
+}
+
+/// Write `expr` as the receiver of a `[…]` subscript. An unparenthesized
+/// `Identifier(["map"])` reparses as `Token::Keyword(MAP)` followed by `[`,
+/// which dispatches to `parse_map` (the map-literal grammar) instead of a
+/// regular subscript. Parenthesize identifiers whose last component is a
+/// context-sensitive keyword so the round trip stays an identifier subscript.
+fn write_subscript_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
+    let needs_parens = if let Expr::Identifier(idents) = expr {
+        idents
+            .last()
+            .and_then(|id| id.as_keyword())
+            .map(|kw| kw.is_context_sensitive_keyword())
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    if needs_parens {
+        f.write_str("(");
+        f.write_node(expr);
+        f.write_str(")");
+    } else {
+        f.write_node(expr);
+    }
+}
 
 impl<T: AstInfo> Expr<T> {
     pub fn null() -> Expr<T> {
@@ -814,16 +1016,59 @@ pub struct Function<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for Function<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        self.fmt_call(f, true);
+    }
+}
+
+impl<T: AstInfo> Function<T> {
+    /// Render this call in table-function position (`FROM f(...)`, `ROWS FROM
+    /// (f(...))`), where the `extract(a FROM b)` / `position(a IN b)` special
+    /// forms are *not* valid syntax — only the scalar-expression parser
+    /// dispatches to them. Forces the plain comma form (with the name quoted
+    /// to dodge the special grammar) so the round trip stays stable.
+    pub(crate) fn fmt_table_call<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        self.fmt_call(f, false);
+    }
+
+    fn fmt_call<W: fmt::Write>(&self, f: &mut AstFormatter<W>, allow_special_form: bool) {
         // This block handles printing function calls that have special parsing. In stable mode, the
         // name is quoted and so won't get the special parsing. We only need to print the special
         // formats in non-stable mode.
-        if !f.stable() {
+        //
+        // The special forms (`position(a IN b)`, `extract(field FROM source)`)
+        // have no syntax for `DISTINCT`, a within-group `ORDER BY`, a `FILTER`,
+        // or an `OVER` window. A call literally named `"position"`/`"extract"`
+        // that carries any of those modifiers (only reachable via the quoted
+        // name — the real special grammar doesn't accept them) must therefore
+        // fall through to the plain quoted-call form, or the special form
+        // silently drops them on display.
+        let has_call_modifiers = self.distinct
+            || self.filter.is_some()
+            || self.over.is_some()
+            || matches!(&self.args, FunctionArgs::Args { order_by, .. } if !order_by.is_empty());
+        if allow_special_form && !f.stable() && !has_call_modifiers {
             let special: Option<(&str, &[Option<Keyword>])> =
                 match self.name.to_ast_string_stable().as_str() {
-                    r#""extract""# if self.args.len() == Some(2) => {
+                    // `extract(field FROM source)` parses `field` into a string
+                    // literal, so the special form only round-trips when arg0 is
+                    // a string. A generic `"extract"(a, b)` with a non-string
+                    // first arg must use the plain (quoted) call form.
+                    r#""extract""#
+                        if self.args.len() == Some(2)
+                            && matches!(self.args.first(), Some(Expr::Value(Value::String(_)))) =>
+                    {
                         Some(("extract", &[None, Some(FROM)]))
                     }
-                    r#""position""# if self.args.len() == Some(2) => {
+                    // `position(<needle> IN <haystack>)` parses the needle at
+                    // `Precedence::Like`, so a low-precedence needle (`NOT`, a
+                    // comparison, `IS`, a boolean connective, a quantified
+                    // comparison, ...) printed bare before the `IN` would swallow
+                    // or stop short of the delimiter. Only use the special form
+                    // with a needle that's safe to sit left of `IN`.
+                    r#""position""#
+                        if self.args.len() == Some(2)
+                            && self.args.first().is_some_and(prints_self_delimiting) =>
+                    {
                         Some(("position", &[None, Some(IN)]))
                     }
 
@@ -841,7 +1086,38 @@ impl<T: AstInfo> AstDisplay for Function<T> {
             }
         }
 
-        f.write_node(&self.name);
+        // If the function name clashes with a keyword that has its own special
+        // parser form, an unquoted name on reparse would trigger the
+        // special-grammar parser instead of a regular function call. Emit the
+        // always-quoted stable form so the regular function-call path is
+        // preserved. The list tracks the `(Token::Keyword(KW), Some(Token::LParen))`
+        // dispatch in `parse_prefix` (array, coalesce, ...); add a new entry
+        // whenever a keyword grows special-grammar parens. (The `ANY`/`ALL`/`SOME`
+        // quantifier keywords are handled more generally by `can_be_printed_bare`,
+        // since they're also unsafe as bare identifiers, e.g. `0 # some`.)
+        let name_stable = self.name.to_ast_string_stable();
+        let needs_quote_to_disambiguate = matches!(
+            name_stable.as_str(),
+            r#""array""#
+                | r#""coalesce""#
+                | r#""exists""#
+                | r#""extract""#
+                | r#""greatest""#
+                | r#""least""#
+                | r#""list""#
+                | r#""map""#
+                | r#""normalize""#
+                | r#""nullif""#
+                | r#""position""#
+                | r#""row""#
+                | r#""substring""#
+                | r#""trim""#
+        );
+        if needs_quote_to_disambiguate {
+            f.write_str(&name_stable);
+        } else {
+            f.write_node(&self.name);
+        }
         f.write_str("(");
         if self.distinct {
             f.write_str("DISTINCT ")
@@ -877,6 +1153,14 @@ impl<T: AstInfo> FunctionArgs<T> {
         Self::Args {
             args,
             order_by: vec![],
+        }
+    }
+
+    /// The first positional argument, if any (the `*` form has none).
+    pub fn first(&self) -> Option<&Expr<T>> {
+        match self {
+            FunctionArgs::Star => None,
+            FunctionArgs::Args { args, .. } => args.first(),
         }
     }
 

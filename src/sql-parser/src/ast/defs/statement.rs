@@ -290,7 +290,20 @@ pub struct SelectStatement<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for SelectStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        // A query whose rendering begins with `SHOW` (a bare `SHOW` body, or a
+        // set operation whose leftmost operand is one) only reparses as a query
+        // when parenthesized: a top-level leading `SHOW` is dispatched as a
+        // `Statement::Show`, which terminates and would reject a following set
+        // operator or ORDER BY/LIMIT/OFFSET. The parser unwraps the redundant
+        // outer parens (see `parse_query_tail`), so wrapping round-trips.
+        let parenthesize_show = self.query.body.starts_with_show();
+        if parenthesize_show {
+            f.write_str("(");
+        }
         f.write_node(&self.query);
+        if parenthesize_show {
+            f.write_str(")");
+        }
         if let Some(as_of) = &self.as_of {
             f.write_str(" ");
             f.write_node(as_of);
@@ -1589,7 +1602,9 @@ impl<T: AstInfo> AstDisplay for CreateTableStatement<T> {
         f.write_str(" (");
         f.write_node(&display::comma_separated(columns));
         if !self.constraints.is_empty() {
-            f.write_str(", ");
+            if !columns.is_empty() {
+                f.write_str(", ");
+            }
             f.write_node(&display::comma_separated(constraints));
         }
         f.write_str(")");
@@ -1831,7 +1846,19 @@ impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         if let Some(name) = &self.name {
-            f.write_node(name);
+            // A bare `in` index name re-lexes as the start of the optional
+            // `IN CLUSTER` clause below (`CREATE INDEX in ON …` fails to reparse
+            // with "Expected ON, found IN"), so force it quoted. `in` is
+            // legitimately bare in other name positions — e.g. a required
+            // `CREATE SINK` name — so this is local to the optional-name +
+            // `IN CLUSTER` ambiguity, not a `can_be_printed_bare` case.
+            if name.as_str().eq_ignore_ascii_case("in") {
+                f.write_str("\"");
+                f.write_str(name.as_str());
+                f.write_str("\"");
+            } else {
+                f.write_node(name);
+            }
             f.write_str(" ");
         }
         if let Some(cluster) = &self.in_cluster {
@@ -1951,7 +1978,13 @@ impl AstDisplay for RoleAttribute {
             RoleAttribute::NoCreateDB => f.write_str("NOCREATEDB"),
             RoleAttribute::CreateRole => f.write_str("CREATEROLE"),
             RoleAttribute::NoCreateRole => f.write_str("NOCREATEROLE"),
-            RoleAttribute::Password(_) => f.write_str("PASSWORD"),
+            // `PASSWORD NULL` removes the password and carries no secret, so
+            // print it verbatim. A `PASSWORD '<secret>'` is always redacted (in
+            // every mode, matching the prior behavior) — but as a *parseable*
+            // placeholder string, not a bare `PASSWORD`, which fails to reparse
+            // (the grammar requires `NULL` or a string literal after `PASSWORD`).
+            RoleAttribute::Password(None) => f.write_str("PASSWORD NULL"),
+            RoleAttribute::Password(Some(_)) => f.write_str("PASSWORD '<REDACTED>'"),
         }
     }
 }
@@ -3888,7 +3921,11 @@ pub struct SubscribeStatement<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SUBSCRIBE ");
+        // Always emit the optional `TO` keyword. Without it, a relation whose
+        // name is the bare keyword `to` (e.g. `SUBSCRIBE TO to`) would display
+        // as `SUBSCRIBE to`, which re-parses with `to` consumed as the optional
+        // keyword, dropping the relation name.
+        f.write_str("SUBSCRIBE TO ");
         f.write_node(&self.relation);
         if !self.options.is_empty() {
             f.write_str(" WITH (");
@@ -4990,7 +5027,14 @@ impl<T: AstInfo> AstDisplay for FetchStatement<T> {
         if let Some(ref count) = self.count {
             f.write_str(format!("{} ", count));
         }
-        f.write_node(&self.name);
+        // `FETCH` consumes an optional leading `FORWARD` keyword, so a cursor
+        // literally named `forward` printed bare with no preceding count would
+        // be swallowed on reparse, leaving no cursor name. Force it to quote.
+        if self.count.is_none() && self.name.as_str().eq_ignore_ascii_case("forward") {
+            f.write_str(self.name.to_ast_string_stable());
+        } else {
+            f.write_node(&self.name);
+        }
         if !self.options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.options));
@@ -5399,6 +5443,24 @@ impl<T: AstInfo> GrantTargetAllSpecification<T> {
     }
 }
 
+/// Writes the plural keyword for `object_type` as `GRANT`/`REVOKE ... ON ALL`
+/// expects it. Most object types just take a trailing `S` (`TABLES`, `SECRETS`,
+/// ...), but `NETWORK POLICY` pluralizes to the `POLICIES` keyword the parser
+/// accepts — naively appending `S` would emit `NETWORK POLICYS`, which fails to
+/// reparse.
+fn write_grant_object_type_plural<W: fmt::Write>(
+    f: &mut AstFormatter<W>,
+    object_type: &ObjectType,
+) {
+    match object_type {
+        ObjectType::NetworkPolicy => f.write_str("POLICIES"),
+        other => {
+            f.write_node(other);
+            f.write_str("S");
+        }
+    }
+}
+
 impl<T: AstInfo> AstDisplay for GrantTargetSpecification<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
@@ -5409,19 +5471,18 @@ impl<T: AstInfo> AstDisplay for GrantTargetSpecification<T> {
                 GrantTargetSpecificationInner::All(all_spec) => match all_spec {
                     GrantTargetAllSpecification::All => {
                         f.write_str("ALL ");
-                        f.write_node(object_type);
-                        f.write_str("S");
+                        write_grant_object_type_plural(f, object_type);
                     }
                     GrantTargetAllSpecification::AllDatabases { databases } => {
                         f.write_str("ALL ");
-                        f.write_node(object_type);
-                        f.write_str("S IN DATABASE ");
+                        write_grant_object_type_plural(f, object_type);
+                        f.write_str(" IN DATABASE ");
                         f.write_node(&display::comma_separated(databases));
                     }
                     GrantTargetAllSpecification::AllSchemas { schemas } => {
                         f.write_str("ALL ");
-                        f.write_node(object_type);
-                        f.write_str("S IN SCHEMA ");
+                        write_grant_object_type_plural(f, object_type);
+                        f.write_str(" IN SCHEMA ");
                         f.write_node(&display::comma_separated(schemas));
                     }
                 },

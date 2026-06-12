@@ -23,7 +23,7 @@ Declare(DeclareStatement { name: Ident("c"), stmt: Select(SelectStatement { quer
 parse-statement
 DECLARE c CURSOR FOR SUBSCRIBE t
 ----
-DECLARE c CURSOR FOR SUBSCRIBE t
+DECLARE c CURSOR FOR SUBSCRIBE TO t
 =>
 Declare(DeclareStatement { name: Ident("c"), stmt: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }), sql: "SUBSCRIBE t" })
 

@@ -720,8 +720,8 @@ With
             Get l6 // { arity: 2 }
   cte l8 =
     Project (#0{x}..=#16{dim01_d05}) // { arity: 17 }
-      Filter ((((#3{dim01_k01} + #0{x}) = (#11{dim01_k01} + #1{y})) AND (#7{facts_d02} = 42)) AND #17{any}) // { arity: 18 }
-        Project (#0{x}..=#16{dim01_d05}, #18{any}) // { arity: 18 }
+      Filter ((((#3{dim01_k01} + #0{x}) = (#11{dim01_k01} + #1{y})) AND (#7{facts_d02} = 42)) AND #17{"any"}) // { arity: 18 }
+        Project (#0{x}..=#16{dim01_d05}, #18{"any"}) // { arity: 18 }
           Join on=(#12{dim01_d01} = #17{dim01_d01}) // { arity: 19 }
             Get l3 // { arity: 17 }
             Union // { arity: 2 }
