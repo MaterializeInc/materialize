@@ -30,19 +30,18 @@
 #   1. Refresh the *list of queries* (after adding/removing a builtin object
 #      on mz_catalog_server, or a system-schema view):
 #
-#        bin/mzcompose --find catalog-server-explain run default --rewrite
+#        bin/mzcompose --find sqllogictest run catalog-server-explain --rewrite
 #
 #   2. Refresh the *expected plans* (after the list is up to date, or after a
 #      plan changes):
 #
-#        bin/sqllogictest --rewrite-results \
-#          --postgres-url <url> test/sqllogictest/catalog_server_explain.slt
+#        bin/sqllogictest -- --rewrite-results \
+#          test/sqllogictest/catalog_server_explain.slt
 #
-#   CI runs `bin/mzcompose --find catalog-server-explain run default` (without
-#   --rewrite) to assert that every mz_catalog_server object has a matching
-#   EXPLAIN query here, so newly added builtins cannot silently escape
-#   coverage, and this file is part of the normal sqllogictest run so any plan
-#   change shows up as a diff.
+#   The `sqllogictest` SLT run asserts (on one CI shard) that every
+#   mz_catalog_server object has a matching EXPLAIN query here, so newly added
+#   builtins cannot silently escape coverage, and this file is part of the
+#   normal sqllogictest run so any plan change shows up as a diff.
 #
 #   The validator and the embedded server that fills these plans both derive
 #   their system parameters from `get_default_system_parameters()`, so they
@@ -66,7 +65,7 @@ replace (> )\d{13}  ${1}<TIMESTAMP>
 statement ok
 SET cluster = mz_catalog_server
 
-# BEGIN AUTO-GENERATED QUERIES (regenerate with: bin/mzcompose --find catalog-server-explain run default --rewrite)
+# BEGIN AUTO-GENERATED QUERIES (regenerate with: bin/mzcompose --find sqllogictest run catalog-server-explain --rewrite)
 
 query T multiline
 EXPLAIN INDEX "mz_catalog"."mz_cluster_replica_frontiers_ind";

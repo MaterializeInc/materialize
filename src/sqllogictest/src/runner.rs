@@ -2195,6 +2195,9 @@ pub async fn run_string(
     input: &str,
 ) -> Result<Outcomes, anyhow::Error> {
     runner.reset_database().await?;
+    // `replace` directives are scoped to a single file; clear any registered by
+    // a previous file so they do not leak into this one.
+    runner.replacements.clear();
 
     let mut outcomes = Outcomes::default();
     let mut parser = crate::parser::Parser::new(source, input);
@@ -2272,6 +2275,9 @@ pub async fn run_file(runner: &mut Runner<'_>, filename: &Path) -> Result<Outcom
 
 pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<(), anyhow::Error> {
     runner.reset_database().await?;
+    // `replace` directives are scoped to a single file; clear any registered by
+    // a previous file so they do not leak into this one.
+    runner.replacements.clear();
 
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
