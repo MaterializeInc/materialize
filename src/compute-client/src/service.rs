@@ -27,8 +27,8 @@ use uuid::Uuid;
 
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StashedPeekResponse,
-    SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse,
+    StashedPeekResponse, SubscribeBatch, SubscribeResponse,
 };
 
 /// A client to a compute server.
@@ -588,7 +588,7 @@ fn merge_peek_responses(
             "total result exceeds max size of {}",
             ByteSize::b(max_result_size)
         );
-        return Error(err);
+        return Error(PeekError::internal(err));
     }
 
     match (resp1, resp2) {
@@ -625,14 +625,14 @@ fn merge_peek_responses(
                     "shard IDs of stashed responses do not match: \
                              {shard_id1} != {shard_id2}"
                 );
-                return Error("internal error".into());
+                return Error(PeekError::internal("internal error"));
             }
             if relation_desc1 != relation_desc2 {
                 soft_panic_or_log!(
                     "relation descs of stashed responses do not match: \
                              {relation_desc1:?} != {relation_desc2:?}"
                 );
-                return Error("internal error".into());
+                return Error(PeekError::internal("internal error"));
             }
 
             batches1.append(&mut batches2);

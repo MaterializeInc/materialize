@@ -2408,6 +2408,65 @@ fn test_parse_error_codes() {
 
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
+fn test_dataflow_error_codes() {
+    // Evaluation errors that occur while reading a collection (rather than
+    // during constant folding) must report the same data-exception (class 22)
+    // SQLSTATEs as their constant-folded counterparts, instead of the catch-all
+    // XX000 (INTERNAL_ERROR). Regression test for SQL-347.
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Referencing a table column keeps the optimizer from constant-folding the
+    // failing expression, so the error is produced during dataflow execution.
+    // Run the DDL and DML separately: a multi-statement batch forms an implicit
+    // transaction block, and `CREATE TABLE` cannot run inside one.
+    client
+        .batch_execute("CREATE TABLE t (a int4, b int4)")
+        .unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1, 0)").unwrap();
+
+    let cases: &[(&str, &SqlState)] = &[
+        // Division by zero over a collection -> division_by_zero (22012).
+        ("SELECT a / b FROM t", &SqlState::DIVISION_BY_ZERO),
+        // Integer overflow over a collection -> numeric_value_out_of_range
+        // (22003).
+        (
+            "SELECT (2147483647 + a) FROM t",
+            &SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+        ),
+    ];
+
+    for (query, expected) in cases {
+        let err = client.query_one(*query, &[]).unwrap_err().unwrap_db_error();
+        assert_eq!(
+            err.code(),
+            *expected,
+            "unexpected SQLSTATE {} for query `{query}`: {}",
+            err.code().code(),
+            err.message(),
+        );
+    }
+
+    // The same applies to errors surfaced from an indexed/materialized
+    // collection's error stream, which travels the error-trace path.
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a / b AS x FROM t;")
+        .unwrap();
+    let err = client
+        .query_one("SELECT * FROM mv", &[])
+        .unwrap_err()
+        .unwrap_db_error();
+    assert_eq!(
+        err.code(),
+        &SqlState::DIVISION_BY_ZERO,
+        "unexpected SQLSTATE {} reading from materialized view: {}",
+        err.code().code(),
+        err.message(),
+    );
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_emit_timestamp_notice() {
     let server = test_util::TestHarness::default().start_blocking();
 

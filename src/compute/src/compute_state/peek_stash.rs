@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_compute_client::protocol::command::Peek;
-use mz_compute_client::protocol::response::{PeekResponse, StashedPeekResponse};
+use mz_compute_client::protocol::response::{PeekError, PeekResponse, StashedPeekResponse};
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::AbortOnDropHandle;
@@ -45,7 +45,7 @@ pub struct StashingPeek {
     /// We can't give a PeekResultIterator to our async upload task because the
     /// underlying trace reader is not Send/Sync. So we need to use a channel to
     /// send result rows from the worker thread to the async background task.
-    rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, NonZeroI64)>, String>>>,
+    rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, NonZeroI64)>, PeekError>>>,
     /// The result of the background task, eventually.
     pub result: oneshot::Receiver<(PeekResponse, Duration)>,
     /// The `tracing::Span` tracking this peek's operation
@@ -102,7 +102,7 @@ impl StashingPeek {
 
                 let result = match result {
                     Ok(peek_response) => peek_response,
-                    Err(e) => PeekResponse::Error(e.to_string()),
+                    Err(e) => PeekResponse::Error(PeekError::internal(e.to_string())),
                 };
                 match result_tx.send((result, start.elapsed())) {
                     Ok(()) => {}
@@ -130,7 +130,7 @@ impl StashingPeek {
         peek_uuid: Uuid,
         relation_desc: RelationDesc,
         max_rows: Option<usize>, // The number of rows needed by the RowSetFinishing's offset + limit
-        mut rows_rx: tokio::sync::mpsc::Receiver<Result<Vec<(Row, NonZeroI64)>, String>>,
+        mut rows_rx: tokio::sync::mpsc::Receiver<Result<Vec<(Row, NonZeroI64)>, PeekError>>,
     ) -> Result<PeekResponse, String> {
         let client = persist_clients
             .open(persist_location)

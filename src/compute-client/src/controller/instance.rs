@@ -1221,7 +1221,9 @@ impl Instance {
             self.deliver_response(response);
         }
         for uuid in to_drop {
-            let response = PeekResponse::Error(ERROR_TARGET_REPLICA_FAILED.into());
+            let response = PeekResponse::Error(crate::protocol::response::PeekError::internal(
+                ERROR_TARGET_REPLICA_FAILED,
+            ));
             self.finish_peek(uuid, response);
         }
 

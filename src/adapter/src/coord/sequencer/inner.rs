@@ -2952,7 +2952,7 @@ impl Coordinator {
                                 }
                                 PeekResponseUnary::Canceled => break Err(AdapterError::Canceled),
                                 PeekResponseUnary::Error(e) => {
-                                    break Err(AdapterError::Unstructured(anyhow!(e)));
+                                    break Err(e);
                                 }
                                 PeekResponseUnary::DependencyDropped(dep) => {
                                     break Err(dep.to_concurrent_dependency_drop());

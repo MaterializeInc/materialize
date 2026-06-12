@@ -11,7 +11,7 @@ use std::ops::Range;
 
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, TraceReader};
-use mz_ore::result::ResultExt;
+use mz_compute_client::protocol::response::PeekError;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
@@ -157,7 +157,7 @@ where
             DiffGat<'a> = &'a Diff,
         >,
 {
-    type Item = Result<(Row, NonZeroI64), String>;
+    type Item = Result<(Row, NonZeroI64), PeekError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let result = loop {
@@ -205,7 +205,7 @@ where
     /// Extracts and returns the row currently pointed at by our cursor. Returns
     /// `Ok(None)` if our MapFilterProject evaluates to `None`. Also returns any
     /// errors that arise from evaluating the MapFilterProject.
-    fn extract_current_row(&mut self) -> Result<Option<(Row, NonZeroI64)>, String> {
+    fn extract_current_row(&mut self) -> Result<Option<(Row, NonZeroI64)>, PeekError> {
         // TODO: This arena could be maintained and reused for longer,
         // but it wasn't clear at what interval we should flush
         // it to ensure we don't accidentally spike our memory use.
@@ -235,7 +235,7 @@ where
             .map_filter_project
             .evaluate_into(&mut borrow, &arena, &mut self.row_builder)
             .map(|row| row.cloned())
-            .map_err_to_string_with_causes()?
+            .map_err(PeekError::from)?
         {
             let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
@@ -249,11 +249,11 @@ where
                     target = %self.target_id, diff = %copies, ?row,
                     "index peek encountered negative multiplicities in ok trace",
                 );
-                return Err(format!(
+                return Err(PeekError::internal(format!(
                     "Invalid data in source, \
                              saw retractions ({}) for row that does not exist: {:?}",
                     -copies, row,
-                ));
+                )));
             } else {
                 copies.into_inner()
             };
