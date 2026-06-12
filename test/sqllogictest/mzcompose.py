@@ -411,6 +411,18 @@ def run_sqllogictest(
                     os.remove(junit_report_path)
             except CommandFailureCausedUIError as e:
                 print(f"STDERR:\n{e.stderr}")
+                if (
+                    junit_report_path
+                    and junit_report_path.exists()
+                    and junit_report_path.stat().st_size > 0
+                ):
+                    # sqllogictest wrote a junit report with the failure
+                    # details; signal that the mzcompose-level junit should be
+                    # skipped to avoid duplicate annotations. Workflow failures
+                    # outside the sqllogictest run (or crashes that leave no
+                    # report behind) still get the mzcompose-level junit, so
+                    # ci-annotate-errors can annotate them.
+                    c.has_sqllogictest_junit = True
                 if not rewrite_results:
                     failed_files.append((step, file))
                     if ui.env_is_truthy("CI"):

@@ -133,6 +133,7 @@ class Composition:
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
         self.has_testdrive_junit: bool = False
+        self.has_sqllogictest_junit: bool = False
         # Per-thread cached YAML file is held in self._tls.file_and_gen.
         # When self.compose is mutated, _invalidate_compose_files() bumps
         # self._compose_gen so each thread regenerates on its next invoke.
