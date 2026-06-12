@@ -114,6 +114,10 @@ struct Args {
 async fn main() -> ExitCode {
     mz_ore::panic::install_enhanced_handler();
 
+    // Both the aws-lc-rs and ring rustls backends are linked, so rustls can't
+    // auto-select a provider and panics on first TLS use unless one is installed.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_"),
         enable_version_flag: false,

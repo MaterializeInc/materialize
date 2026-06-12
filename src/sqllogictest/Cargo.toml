@@ -46,6 +46,7 @@ mz-tracing = { path = "../tracing" }
 postgres-protocol.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 shell-words.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
