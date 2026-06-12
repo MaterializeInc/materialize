@@ -1,0 +1,10 @@
+# deep-history scenario: hydrate an index over a shard with many distinct
+# timestamps. Rows are spread across 32 timestamps in a single append, and the
+# index is built with as_of 0, so hydration must replay all 32 timestamps rather
+# than read a single compacted snapshot.
+{"cmd":"write_spread","shard":"dh","count":5000,"n_ts":32}
+{"cmd":"define_index","source_id":1000,"index_id":1001,"shard":"dh","key":[0],"as_of":0,"upper":32}
+{"cmd":"schedule","id":1001}
+{"cmd":"await_frontier","id":1001,"ts":32}
+# Peek at the last written timestamp (31); all 5000 rows must be present.
+{"cmd":"expect_count","id":1001,"ts":31,"count":5000}

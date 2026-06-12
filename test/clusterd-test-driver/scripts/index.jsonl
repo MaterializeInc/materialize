@@ -1,13 +1,23 @@
-# Reproduce the `index` scenario via the JSON command reader.
-# One command per line; `#`/`//` lines and blanks are ignored.
-# Run locally: SCENARIO=script SCRIPT=test/clusterd-test-driver/scripts/index.jsonl \
-#   bin/pyactivate test/clusterd-test-driver/run-local.py
-#
-# Load phase: write 5000 rows at ts 0, build an index keyed by column 0, hydrate.
+# index scenario: load at ts 0 and hydrate, then tick the frontier forward with
+# incremental appends at advancing timestamps, and assert the final count.
 # No `schema` field, so the built-in (bigint, text) sample schema is used.
+#
+# Load phase: 5000 rows at ts 0, index keyed by column 0, hydrate to ts 1.
 {"cmd":"write_single_ts","shard":"data","ts":0,"count":5000}
 {"cmd":"define_index","source_id":1000,"index_id":1001,"shard":"data","key":[0],"as_of":0,"upper":1}
 {"cmd":"schedule","id":1001}
 {"cmd":"await_frontier","id":1001,"ts":1}
-# Confirm all loaded rows are present.
-{"cmd":"peek_count","id":1001,"ts":0}
+# Tick phase: 5 batches of 1000 rows at ts 1..5. Each uses a disjoint id range
+# (start = 5000 + (t-1)*1000) so rows never consolidate and the count accumulates.
+{"cmd":"write_single_ts","shard":"data","ts":1,"start":5000,"count":1000}
+{"cmd":"await_frontier","id":1001,"ts":2}
+{"cmd":"write_single_ts","shard":"data","ts":2,"start":6000,"count":1000}
+{"cmd":"await_frontier","id":1001,"ts":3}
+{"cmd":"write_single_ts","shard":"data","ts":3,"start":7000,"count":1000}
+{"cmd":"await_frontier","id":1001,"ts":4}
+{"cmd":"write_single_ts","shard":"data","ts":4,"start":8000,"count":1000}
+{"cmd":"await_frontier","id":1001,"ts":5}
+{"cmd":"write_single_ts","shard":"data","ts":5,"start":9000,"count":1000}
+{"cmd":"await_frontier","id":1001,"ts":6}
+# 5000 loaded + 5 * 1000 ticked = 10000.
+{"cmd":"expect_count","id":1001,"ts":5,"count":10000}

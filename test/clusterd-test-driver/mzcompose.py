@@ -20,6 +20,10 @@ from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 CONSENSUS_URI = "postgres://root@cockroach:26257?options=--search_path=consensus"
 
 
+# Where the mounted scripts land inside the driver container.
+SCRIPTS_DIR = "/workdir/scripts"
+
+
 class HeadlessDriver(Service):
     def __init__(self, name: str = "headless-driver") -> None:
         super().__init__(
@@ -31,9 +35,11 @@ class HeadlessDriver(Service):
                     f"PERSIST_BLOB_URL={minio_blob_uri()}",
                     f"PERSIST_CONSENSUS_URL={CONSENSUS_URI}",
                     "DRIVER_PUBSUB_BIND=0.0.0.0:6879",
-                    # Small shard for the smoke run; raise to stress hydration.
-                    "TARGET_BYTES=1000000",
                 ],
+                # Mount the composition dir so scripts are readable at
+                # /workdir/scripts (the convention testdrive uses for its files);
+                # the driver reads the file named by DRIVER_SCRIPT.
+                "volumes": [".:/workdir"],
                 "ports": [6879],
             },
         )
@@ -48,21 +54,22 @@ SERVICES = [
 ]
 
 
-# Each entry is (scenario, extra env). `multi-dataflow` reproduces a current
-# limitation and exits 0 by design; the others assert and fail the run on error.
-SCENARIOS = [
-    ("index", {}),
-    ("deep-history", {"N_TIMESTAMPS": "32"}),
-    ("side-effects", {}),
-    ("multi-dataflow", {}),
+# The scenarios, each a JSON command script under scripts/. `multi_dataflow`
+# reproduces a current limitation and exits 0 by design (tolerant awaits); the
+# others assert via expect_count and fail the run on mismatch.
+SCRIPTS = [
+    "index.jsonl",
+    "deep_history.jsonl",
+    "side_effects.jsonl",
+    "multi_dataflow.jsonl",
 ]
 
 
 def workflow_default(c: Composition) -> None:
     c.up("cockroach", "minio")
-    for i, (scenario, extra) in enumerate(SCENARIOS):
+    for i, script in enumerate(SCRIPTS):
         # Restart clusterd between scenarios for a clean compute state; the
-        # scenarios reuse GlobalIds and would otherwise collide.
+        # scripts reuse GlobalIds and would otherwise collide.
         if i > 0:
             c.kill("clusterd")
         c.up("clusterd")
@@ -71,6 +78,6 @@ def workflow_default(c: Composition) -> None:
         # alias so clusterd can reach the PubSub server it hosts.
         c.run(
             "headless-driver",
-            env_extra={"SCENARIO": scenario, **extra},
+            env_extra={"DRIVER_SCRIPT": f"{SCRIPTS_DIR}/{script}"},
             use_aliases=True,
         )

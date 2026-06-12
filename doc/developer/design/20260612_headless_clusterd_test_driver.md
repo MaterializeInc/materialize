@@ -188,6 +188,9 @@ Use cases are tests and examples built on the mechanism, kept out of the core cr
   Drive the side-effecting commands the controller normally issues automatically, on the test's own schedule: when `Schedule` fires, when and how far `AllowCompaction` advances `since`, and when `UpdateConfiguration` changes parameters.
   This lets a test hold a frontier, delay compaction, or reconfigure mid-flight to observe the replica's response deterministically.
 
+These scenarios, and the motivating one above, are implemented as JSON command scripts under `test/clusterd-test-driver/scripts/` (`index.jsonl`, `deep_history.jsonl`, `side_effects.jsonl`, `multi_dataflow.jsonl`) and run by the driver's script reader, not as compiled Rust scenarios.
+The scripting layer below is the mechanism they share.
+
 ### RenderPlan assembly for the index (resolved)
 
 * Hand-building a `RenderPlan` from outside `mz-compute-types` is impossible: `LirId` has a private constructor and `LetFreePlan`'s `nodes`/`root`/`topological_order` fields are private.
@@ -202,13 +205,14 @@ Use cases are tests and examples built on the mechanism, kept out of the core cr
 A composition runs CockroachDB for consensus, an object store for blob, a real `clusterd`, and the driver binary as a workflow.
 
 * `clusterd` is configured with the compute controller listen address on `:2101` and the driver's PubSub URL.
-* The driver binary connects to `:2101`, hosts PubSub, runs a scripted use case, and exits non-zero on assertion failure.
+* The driver binary connects to `:2101`, hosts PubSub, runs a JSON command script, and exits non-zero on assertion failure.
+* The composition directory is mounted at `/workdir` (the convention `testdrive` uses), so the scripts under `scripts/` are readable in the container; each run is pointed at one via `DRIVER_SCRIPT`.
 * Without `environmentd`, the driver is the sole PubSub host, so the replica's persist notifications flow through it.
 
 ## Testing
 
 * The driver never spawns `clusterd`; `mzcompose` brings up the full stack (CockroachDB, an object store, `clusterd`, and the driver image) and is the faithful end-to-end path that CI runs.
-  `workflow_default` runs every scenario in turn, restarting `clusterd` between them for a clean compute state: `index`, `deep-history`, and `side-effects` assert and fail the run on error; `multi-dataflow` reproduces a current limitation and exits 0 by design.
+  `workflow_default` runs every scenario script in turn, restarting `clusterd` between them for a clean compute state: `index.jsonl`, `deep_history.jsonl`, and `side_effects.jsonl` assert via `expect_count` and fail the run on mismatch; `multi_dataflow.jsonl` reproduces a current limitation and exits 0 by design (its awaits set `allow_timeout`).
 * Crate-level `cargo test` covers the infra-free units (direct persist write round-trip via `mem://`, spread-timestamp write, response demux merge, dataflow structure).
   The end-to-end integration test (`tests/index_smoke.rs`) skips unless `CLUSTERD_COMPUTE_ADDR` is set, so `cargo test` stays green without a running stack.
 
@@ -217,9 +221,9 @@ A composition runs CockroachDB for consensus, an object store for blob, a real `
 `bin/pyactivate test/clusterd-test-driver/run-local.py` runs the whole thing on the host without docker images.
 It reuses or starts a CockroachDB container for consensus, uses a `file://` blob directory, builds and launches a local `clusterd`, and runs the `headless-driver` against it.
 Because every process is on localhost, one PubSub address (`127.0.0.1:6879`) and one persist location serve both the driver and `clusterd`, so none of the container-networking caveats apply.
-It is a Python script so it can reuse Materialize's mzcompose helpers; in particular it builds the timely config via the same `timely_config` and `DEFAULT_*_EXERT_PROPORTIONALITY` constants as the `Clusterd` service, so the arrangement merge effort stays in sync with CI defaults. Configuration is via environment variables (`TARGET_BYTES`, `SCENARIO`, `WRAPPER`, `PROFILE`, …).
+It is a Python script so it can reuse Materialize's mzcompose helpers; in particular it builds the timely config via the same `timely_config` and `DEFAULT_*_EXERT_PROPORTIONALITY` constants as the `Clusterd` service, so the arrangement merge effort stays in sync with CI defaults. Configuration is via environment variables (`SCRIPT`, `WRAPPER`, `PROFILE`, …).
 
-`TARGET_BYTES` controls how much data is written and is the main knob for run duration; the default is large enough to be worth profiling, lower it for a quick smoke run.
+`SCRIPT` selects the JSON command script to run (default `scripts/index.jsonl`), passed to the driver via `DRIVER_SCRIPT`. Run duration is governed by the row counts in the script; for a heavier profiling run, point `SCRIPT` at a script with larger `count`s.
 
 To profile `clusterd` (heaptrack, perf, samply), set `WRAPPER` to a command the runner prepends to the `clusterd` invocation, e.g. `WRAPPER="heaptrack" bin/pyactivate test/clusterd-test-driver/run-local.py` or `WRAPPER="perf record -g --" …`.
 On exit the script terminates the inner `clusterd` rather than the wrapper, so the profiler observes its child exit and flushes its output before exiting on its own.
@@ -267,8 +271,11 @@ Third, the full-MIR `define` schema with the literal shim.
 Joins and the opt-in `optimize()` verb remain the single open decision, deferred to the step that needs them.
 
 Steps one and two are implemented, and the literal shim from step three is built early because schema and row authoring need it.
-`SCENARIO=script` runs the reader (the `script` module): it reads JSON-line commands from stdin, executes each against `clusterd`, and writes one JSON response per line, returning non-zero if any command failed.
-The orchestration verbs (`write_single_ts`, `write_spread`, `write_rows`, `schedule`, `allow_compaction`, `await_frontier`, `peek_count`) map directly to `Driver` calls; shards are named by a string alias allocated on first use, and object ids are raw `u64`s.
+The driver is now solely a script reader (the `script` module): it reads JSON-line commands from the file named by `DRIVER_SCRIPT` (or stdin), executes each against `clusterd`, and writes one JSON response per line, returning non-zero if any command failed.
+The four original Rust scenarios are fully replaced by scripts; nothing scenario-specific remains in the binary.
+The orchestration verbs (`write_single_ts`, `write_spread`, `write_rows`, `schedule`, `allow_compaction`, `await_frontier`, `peek_count`, `expect_count`) map directly to `Driver` calls; shards are named by a string alias allocated on first use, and object ids are raw `u64`s.
+`expect_count` asserts a peek's row count (failing the run on mismatch) — the scripted form of a scenario's count assertion — while `await_frontier` takes an `allow_timeout` flag so a reproduction like `multi_dataflow` can report a non-hydrating dataflow without failing the run.
+Synthetic writes take a `start` offset so successive batches use disjoint id ranges that accumulate rather than consolidate, which the `index` tick phase relies on.
 
 A script declares relations with `define_schema { name, columns: [{name, type, nullable}] }`, building a `RelationDesc` stored under a name; the other commands reference it by `schema` (defaulting to the built-in `(bigint, text)` sample relation).
 The type vocabulary is intentionally small — `int16`/`int32`/`int64`, `bool`, `string`, `bytes`, with SQL aliases — and extends alongside the matching `Cell` cases.

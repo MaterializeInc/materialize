@@ -40,7 +40,7 @@ use mz_repr::{GlobalId, RelationDesc, Row, SqlColumnType, SqlScalarType, Timesta
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use timely::progress::Antichain;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt};
 
 use crate::data::{
     Cell, pack_cells, sample_desc, synth_rows, write_rows_single_ts, write_rows_spread,
@@ -185,6 +185,10 @@ pub enum Command {
         ts: u64,
         /// Number of synthetic rows to write.
         count: u64,
+        /// First synthetic row index, so successive batches can use disjoint id
+        /// ranges (`start..start + count`) that never consolidate. Defaults to 0.
+        #[serde(default)]
+        start: u64,
         /// Payload padding per row; defaults to [`DEFAULT_ROW_BYTES`].
         #[serde(default)]
         row_bytes: Option<usize>,
@@ -201,6 +205,9 @@ pub enum Command {
         count: u64,
         /// Number of distinct timestamps to spread the rows across.
         n_ts: u64,
+        /// First synthetic row index (see [`Command::WriteSingleTs`]). Defaults to 0.
+        #[serde(default)]
+        start: u64,
         /// Payload padding per row; defaults to [`DEFAULT_ROW_BYTES`].
         #[serde(default)]
         row_bytes: Option<usize>,
@@ -258,6 +265,11 @@ pub enum Command {
         /// Timeout in seconds; defaults to [`DEFAULT_TIMEOUT_SECS`].
         #[serde(default)]
         timeout_secs: Option<u64>,
+        /// If true, a timeout is reported (`status: timeout`) without failing the
+        /// run. Used by reproductions where not reaching the frontier is an
+        /// expected outcome, not an assertion failure.
+        #[serde(default)]
+        allow_timeout: bool,
     },
     /// Peek `id` at `ts` and return the row count.
     PeekCount {
@@ -269,6 +281,19 @@ pub enum Command {
         schema: Option<String>,
         /// The timestamp to peek at.
         ts: u64,
+    },
+    /// Peek `id` at `ts` and assert the row count equals `count`, failing the run
+    /// otherwise. The scripted equivalent of a scenario's count assertion.
+    ExpectCount {
+        /// The index's global id.
+        id: u64,
+        /// Schema name; defaults to the built-in sample schema.
+        #[serde(default)]
+        schema: Option<String>,
+        /// The timestamp to peek at.
+        ts: u64,
+        /// The expected row count.
+        count: u64,
     },
 }
 
@@ -288,6 +313,9 @@ pub enum Response {
         /// Row count.
         count: u64,
     },
+    /// An `await_frontier` with `allow_timeout` timed out without reaching the
+    /// target. Reported, not a failure.
+    Timeout,
     /// A command failed.
     Error {
         /// Human-readable failure description.
@@ -351,12 +379,13 @@ impl ScriptState {
                 schema,
                 ts,
                 count,
+                start,
                 row_bytes,
             } => {
                 let desc = self.resolve_schema(&schema)?;
                 let shard = self.shard_id(&shard);
                 let pad = row_bytes.unwrap_or(DEFAULT_ROW_BYTES);
-                let batch = synth_rows(&desc, 0, count, pad);
+                let batch = synth_rows(&desc, start, count, pad);
                 write_rows_single_ts(&self.client, shard, &desc, &batch, Timestamp::from(ts))
                     .await?;
                 Ok(Response::Wrote { rows: count })
@@ -366,12 +395,13 @@ impl ScriptState {
                 schema,
                 count,
                 n_ts,
+                start,
                 row_bytes,
             } => {
                 let desc = self.resolve_schema(&schema)?;
                 let shard = self.shard_id(&shard);
                 let pad = row_bytes.unwrap_or(DEFAULT_ROW_BYTES);
-                let batch = synth_rows(&desc, 0, count, pad);
+                let batch = synth_rows(&desc, start, count, pad);
                 write_rows_spread(&self.client, shard, &desc, &batch, n_ts).await?;
                 Ok(Response::Wrote { rows: count })
             }
@@ -428,12 +458,20 @@ impl ScriptState {
                 id,
                 ts,
                 timeout_secs,
+                allow_timeout,
             } => {
                 let timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
-                self.driver
+                let result = self
+                    .driver
                     .expect_frontier(GlobalId::User(id), Timestamp::from(ts), timeout)
-                    .await?;
-                Ok(Response::Ok)
+                    .await;
+                match result {
+                    Ok(()) => Ok(Response::Ok),
+                    // `expect_frontier` only errors on timeout. When tolerated,
+                    // report it instead of failing the run.
+                    Err(_) if allow_timeout => Ok(Response::Timeout),
+                    Err(e) => Err(e),
+                }
             }
             Command::PeekCount { id, schema, ts } => {
                 let desc = self.resolve_schema(&schema)?;
@@ -445,18 +483,41 @@ impl ScriptState {
                     count: u64::cast_from(count),
                 })
             }
+            Command::ExpectCount {
+                id,
+                schema,
+                ts,
+                count,
+            } => {
+                let desc = self.resolve_schema(&schema)?;
+                let actual = u64::cast_from(
+                    self.driver
+                        .peek_count(GlobalId::User(id), desc, Timestamp::from(ts))
+                        .await?,
+                );
+                anyhow::ensure!(
+                    actual == count,
+                    "expected {count} rows at ts {ts}, got {actual}"
+                );
+                Ok(Response::Count { count: actual })
+            }
         }
     }
 }
 
-/// Run the command loop: read JSON-line commands from stdin, execute each, and
+/// Run the command loop: read JSON-line commands from `reader`, execute each, and
 /// write one JSON response per line to stdout.
 ///
+/// `reader` is any buffered async source — a file (`DRIVER_SCRIPT`) or stdin.
 /// Returns `Err` if any command failed, so a scripted run exits non-zero on the
 /// first bad command while still reporting per-command results.
-pub async fn run(driver: Driver, loc: PersistLocation) -> anyhow::Result<()> {
+pub async fn run<R: AsyncBufRead + Unpin>(
+    driver: Driver,
+    loc: PersistLocation,
+    reader: R,
+) -> anyhow::Result<()> {
     let mut state = ScriptState::new(driver, loc).await?;
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut lines = reader.lines();
     let mut stdout = tokio::io::stdout();
     let mut failed = false;
 
@@ -512,6 +573,7 @@ mod tests {
                 schema: None,
                 ts: 0,
                 count: 1000,
+                start: 0,
                 row_bytes: None,
             }
         );

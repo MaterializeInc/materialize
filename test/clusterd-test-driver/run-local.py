@@ -60,12 +60,9 @@ CONSENSUS_URL = env(
 BLOB_DIR = env("BLOB_DIR", "/tmp/clusterd-test-driver-blob")
 SCRATCH_DIR = env("SCRATCH_DIR", "/tmp/clusterd-test-driver-scratch")
 SECRETS_DIR = env("SECRETS_DIR", "/tmp/clusterd-test-driver-secrets")
-TARGET_BYTES = env("TARGET_BYTES", str(2 * 1024 * 1024 * 1024))  # 2 GiB
-SCENARIO = env("SCENARIO", "index")
-N_TIMESTAMPS = env("N_TIMESTAMPS", "64")
-# For SCENARIO=script: path to a JSON-line command file piped to the driver's
-# stdin. Relative paths are resolved against the repo root.
-SCRIPT = env("SCRIPT", "")
+# Path to the JSON-line command script the driver runs. Relative paths are
+# resolved against the repo root. Defaults to the `index` scenario script.
+SCRIPT = env("SCRIPT", "test/clusterd-test-driver/scripts/index.jsonl")
 RUN_CLUSTERD = env("RUN_CLUSTERD", "1") == "1"
 # Command prepended to clusterd, e.g. "heaptrack" or "perf record -g --".
 WRAPPER = env("WRAPPER", "")
@@ -282,35 +279,23 @@ def main() -> int:
             wait_for_port(COMPUTE_ADDR)
 
         print("Running driver...")
+        script_path = Path(SCRIPT)
+        if not script_path.is_absolute():
+            script_path = ROOT / script_path
+        print(f"  DRIVER_SCRIPT={script_path}")
         driver_env = dict(
             os.environ,
             CLUSTERD_COMPUTE_ADDR=COMPUTE_ADDR,
             PERSIST_BLOB_URL=f"file://{BLOB_DIR}",
             PERSIST_CONSENSUS_URL=CONSENSUS_URL,
             DRIVER_PUBSUB_BIND=f"0.0.0.0:{PUBSUB_PORT}",
-            TARGET_BYTES=TARGET_BYTES,
-            SCENARIO=SCENARIO,
-            N_TIMESTAMPS=N_TIMESTAMPS,
+            DRIVER_SCRIPT=str(script_path),
         )
-        # In script mode, feed the command file to the driver's stdin.
-        script_file = None
-        if SCENARIO == "script":
-            if not SCRIPT:
-                raise SystemExit("SCENARIO=script requires SCRIPT=<path to .jsonl>")
-            script_path = Path(SCRIPT)
-            if not script_path.is_absolute():
-                script_path = ROOT / script_path
-            script_file = open(script_path, "rb")
-        try:
-            result = subprocess.run(
-                [str(ROOT / "target" / PROFILE_DIR / "headless-driver")],
-                env=driver_env,
-                cwd=ROOT,
-                stdin=script_file,
-            )
-        finally:
-            if script_file is not None:
-                script_file.close()
+        result = subprocess.run(
+            [str(ROOT / "target" / PROFILE_DIR / "headless-driver")],
+            env=driver_env,
+            cwd=ROOT,
+        )
         return result.returncode
     finally:
         if launched is not None:
