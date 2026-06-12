@@ -1440,6 +1440,11 @@ pub struct UpdatePrivilege {
     pub target_id: SystemObjectId,
     /// The role that is granting the privileges.
     pub grantor: RoleId,
+    /// Whether `acl_mode` was derived from the `ALL [PRIVILEGES]` shorthand.
+    /// Used to suppress the `NonApplicablePrivilegeTypes` notice in that
+    /// case: the shorthand is not the user explicitly naming a privilege
+    /// that doesn't apply to the object type, so warning would be noisy.
+    pub acl_from_all: bool,
 }
 
 #[derive(Debug)]

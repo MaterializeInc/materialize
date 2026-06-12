@@ -1131,6 +1131,167 @@ false
 statement error invalid privilege types USAGE, CREATE for SOURCE
 GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE s TO joe
 
+## Regression test for SQL-232:
+## `REVOKE ALL ON TABLE <view/mv/source>` must revoke every privilege the role
+## holds via the TABLE syntax, not just SELECT. Same goes for `GRANT ALL`.
+
+### Exact reproducer from SQL-232: granting an asymmetric subset
+### (INSERT + SELECT) then REVOKE ALL must clear both, not just SELECT.
+statement ok
+GRANT INSERT, SELECT ON TABLE v TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v' AND privilege LIKE 'joe=%'
+----
+v  joe=ar/materialize
+
+statement ok
+REVOKE ALL ON TABLE v FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v' AND privilege LIKE 'joe=%'
+----
+
+### View
+statement ok
+GRANT INSERT, SELECT, UPDATE, DELETE ON TABLE v TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v' AND privilege LIKE 'joe=%'
+----
+v  joe=arwd/materialize
+
+statement ok
+REVOKE ALL ON TABLE v FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v' AND privilege LIKE 'joe=%'
+----
+
+statement ok
+GRANT ALL ON TABLE v TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v' AND privilege LIKE 'joe=%'
+----
+v  joe=arwd/materialize
+
+statement ok
+REVOKE ALL PRIVILEGES ON TABLE v FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v' AND privilege LIKE 'joe=%'
+----
+
+### Materialized view
+statement ok
+GRANT INSERT, SELECT, UPDATE, DELETE ON TABLE mv TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv' AND privilege LIKE 'joe=%'
+----
+mv  joe=arwd/materialize
+
+statement ok
+REVOKE ALL ON TABLE mv FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv' AND privilege LIKE 'joe=%'
+----
+
+statement ok
+GRANT ALL ON TABLE mv TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv' AND privilege LIKE 'joe=%'
+----
+mv  joe=arwd/materialize
+
+statement ok
+REVOKE ALL PRIVILEGES ON TABLE mv FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv' AND privilege LIKE 'joe=%'
+----
+
+### Source
+statement ok
+GRANT INSERT, SELECT, UPDATE, DELETE ON TABLE s TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 's' AND privilege LIKE 'joe=%'
+----
+s  joe=arwd/materialize
+
+statement ok
+REVOKE ALL ON TABLE s FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 's' AND privilege LIKE 'joe=%'
+----
+
+statement ok
+GRANT ALL ON TABLE s TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 's' AND privilege LIKE 'joe=%'
+----
+s  joe=arwd/materialize
+
+statement ok
+REVOKE ALL PRIVILEGES ON TABLE s FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 's' AND privilege LIKE 'joe=%'
+----
+
+### GRANT/REVOKE ALL ON ALL TABLES IN SCHEMA must also expand to the full
+### TABLE set for views/MVs/sources, not just real tables. The schema-scoped
+### iteration uses the same plan path as per-object grants, so this guards
+### against future regressions that split the two paths.
+statement ok
+CREATE ROLE schema_grant_role
+
+statement ok
+GRANT ALL ON ALL TABLES IN SCHEMA public TO schema_grant_role
+
+query TT rowsort
+SELECT name, privilege FROM item_privileges WHERE privilege LIKE 'schema_grant_role=%' AND name IN ('t', 'v', 'mv', 's')
+----
+mv  schema_grant_role=arwd/materialize
+s  schema_grant_role=arwd/materialize
+t  schema_grant_role=arwd/materialize
+v  schema_grant_role=arwd/materialize
+
+statement ok
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM schema_grant_role
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE privilege LIKE 'schema_grant_role=%'
+----
+
+### Asymmetric per-privilege grant via schema-scoped path, then REVOKE ALL
+### via the same path must clear everything, not just SELECT.
+statement ok
+GRANT INSERT, SELECT ON ALL TABLES IN SCHEMA public TO schema_grant_role
+
+query TT rowsort
+SELECT name, privilege FROM item_privileges WHERE privilege LIKE 'schema_grant_role=%' AND name IN ('v', 'mv', 's')
+----
+mv  schema_grant_role=ar/materialize
+s  schema_grant_role=ar/materialize
+v  schema_grant_role=ar/materialize
+
+statement ok
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM schema_grant_role
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE privilege LIKE 'schema_grant_role=%'
+----
+
+statement ok
+DROP ROLE schema_grant_role
+
 ## Type
 
 statement ok
@@ -2519,10 +2680,12 @@ GRANT ALL ON v1 TO joe
 ----
 COMPLETE 0
 
+# `GRANT ALL ON <view>` (which parses as TABLE by default) grants the full TABLE
+# privilege set, matching PostgreSQL semantics. See SQL-232.
 query TT rowsort
 SELECT name, privilege FROM item_privileges WHERE name = 'v1'
 ----
-v1  joe=r/mz_system
+v1  joe=arwd/mz_system
 v1  mz_system=r/mz_system
 
 simple conn=mz_system,user=mz_system

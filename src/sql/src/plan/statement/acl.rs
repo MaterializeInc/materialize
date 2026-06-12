@@ -545,8 +545,6 @@ fn plan_update_privilege(
         // type is table.
         let mut reference_object_type = actual_object_type.clone();
 
-        let acl_mode = privilege_spec_to_acl_mode(scx, &privileges, actual_object_type);
-
         if let SystemObjectId::Object(ObjectId::Item(id)) = &target_id {
             let item = scx.get_item(id);
             let item_type: ObjectType = item.item_type().into();
@@ -566,6 +564,13 @@ fn plan_update_privilege(
                 });
             }
         }
+
+        // Compute the ACL mode against the reference type so that, for example,
+        // `REVOKE ALL ON TABLE <view>` expands to the full TABLE privilege set
+        // (SELECT|INSERT|UPDATE|DELETE) rather than only the privileges valid
+        // for a view on its own (SELECT).
+        let acl_mode = privilege_spec_to_acl_mode(scx, &privileges, reference_object_type);
+        let acl_from_all = matches!(privileges, PrivilegeSpecification::All);
 
         let all_object_privileges = scx.catalog.all_object_privileges(reference_object_type);
         let invalid_privileges = acl_mode.difference(all_object_privileges);
@@ -596,6 +601,7 @@ fn plan_update_privilege(
             acl_mode,
             target_id,
             grantor,
+            acl_from_all,
         });
     }
 
