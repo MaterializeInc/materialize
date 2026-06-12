@@ -197,9 +197,9 @@ A composition runs CockroachDB for consensus, an object store for blob, a real `
 It reuses or starts a CockroachDB container for consensus, uses a `file://` blob directory, builds and launches a local `clusterd`, and runs the `headless-driver` against it.
 Because every process is on localhost, one PubSub address (`127.0.0.1:6879`) and one persist location serve both the driver and `clusterd`, so none of the container-networking caveats apply.
 
-To profile `clusterd` (heaptrack, perf, samply), launch it yourself instead of letting the script spawn it.
-The script prints the exact `clusterd` command it would run under "clusterd command:"; run that under your profiler, then run the script with `RUN_CLUSTERD=0` so it only drives the already-running `clusterd`.
-For example, `heaptrack target/debug/clusterd …` in one shell, then `RUN_CLUSTERD=0 ./test/clusterd-test-driver/run-local.sh` in another.
+To profile `clusterd` (heaptrack, perf, samply), set `WRAPPER` to a command the script prepends to the `clusterd` invocation, e.g. `WRAPPER="heaptrack" ./test/clusterd-test-driver/run-local.sh` or `WRAPPER="perf record -g --" …`.
+On exit the script terminates the inner `clusterd` rather than the wrapper, so the profiler observes its child exit and flushes its output before exiting on its own.
+For full manual control instead, launch `clusterd` yourself using the command the script prints under "clusterd command:", then run with `RUN_CLUSTERD=0` so the script only drives the already-running `clusterd`.
 A release build (`cargo build --release --bin clusterd`, then point the profiler at `target/release/clusterd`) gives representative numbers.
 
 ## Interoperability notes

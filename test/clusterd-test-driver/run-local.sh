@@ -37,6 +37,10 @@ TARGET_BYTES=${TARGET_BYTES:-1000000}
 SCENARIO=${SCENARIO:-index}
 N_TIMESTAMPS=${N_TIMESTAMPS:-64}
 RUN_CLUSTERD=${RUN_CLUSTERD:-1}
+# Command prepended to clusterd, e.g. WRAPPER="heaptrack" or
+# WRAPPER="perf record -g --". On cleanup we terminate the inner clusterd (not
+# the wrapper) so the wrapper flushes its output and exits on its own.
+WRAPPER=${WRAPPER:-}
 ENVIRONMENT_ID="mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0"
 
 mkdir -p "$BLOB_DIR" "$SCRATCH_DIR" "$SECRETS_DIR"
@@ -59,8 +63,32 @@ timely_config() { # $1 = comm port
 EOF
 }
 
+# `launched_pid` is whatever we backgrounded (the wrapper, if any, else
+# clusterd). `clusterd_pid` is the inner clusterd, resolved after launch.
+launched_pid=""
 clusterd_pid=""
-cleanup() { [[ -n "$clusterd_pid" ]] && kill "$clusterd_pid" 2>/dev/null || true; }
+cleanup() {
+    # Terminate the inner clusterd first, so a wrapper (heaptrack/perf) sees its
+    # child exit and flushes its own output, then exits on its own. clusterd
+    # handles SIGTERM (~1s); escalate to SIGKILL only if it ignores it.
+    if [[ -n "$clusterd_pid" ]]; then
+        kill "$clusterd_pid" 2>/dev/null || true
+        for _ in $(seq 1 10); do
+            kill -0 "$clusterd_pid" 2>/dev/null || break
+            sleep 0.3
+        done
+        kill -9 "$clusterd_pid" 2>/dev/null || true
+    fi
+    # Only touch the wrapper if it's a distinct process; give it time to flush,
+    # then force it if it's still hanging after the inner exited.
+    if [[ -n "$launched_pid" && "$launched_pid" != "$clusterd_pid" ]]; then
+        for _ in $(seq 1 20); do
+            kill -0 "$launched_pid" 2>/dev/null || break
+            sleep 0.3
+        done
+        kill "$launched_pid" 2>/dev/null || true
+    fi
+}
 trap cleanup EXIT
 
 if [[ "$RUN_CLUSTERD" == "1" ]]; then
@@ -68,7 +96,7 @@ if [[ "$RUN_CLUSTERD" == "1" ]]; then
     cargo build --bin clusterd
     echo "clusterd command:"
     echo "  PERSIST_PUBSUB_URL=http://127.0.0.1:${PUBSUB_PORT} \\"
-    echo "  target/debug/clusterd \\"
+    echo "  ${WRAPPER} target/debug/clusterd \\"
     echo "    --compute-controller-listen-addr ${COMPUTE_ADDR} \\"
     echo "    --storage-controller-listen-addr ${STORAGE_ADDR} \\"
     echo "    --compute-timely-config '$(timely_config 2102)' \\"
@@ -76,8 +104,10 @@ if [[ "$RUN_CLUSTERD" == "1" ]]; then
     echo "    --process 0 --environment-id ${ENVIRONMENT_ID} \\"
     echo "    --secrets-reader local-file --secrets-reader-local-file-dir ${SECRETS_DIR} \\"
     echo "    --scratch-directory ${SCRATCH_DIR}"
+    # ${WRAPPER} is intentionally unquoted so a multi-word wrapper (e.g.
+    # "perf record -g --") splits into separate arguments.
     PERSIST_PUBSUB_URL="http://127.0.0.1:${PUBSUB_PORT}" \
-        target/debug/clusterd \
+        ${WRAPPER} target/debug/clusterd \
         --compute-controller-listen-addr "${COMPUTE_ADDR}" \
         --storage-controller-listen-addr "${STORAGE_ADDR}" \
         --compute-timely-config "$(timely_config 2102)" \
@@ -86,7 +116,23 @@ if [[ "$RUN_CLUSTERD" == "1" ]]; then
         --secrets-reader local-file --secrets-reader-local-file-dir "${SECRETS_DIR}" \
         --scratch-directory "${SCRATCH_DIR}" \
         >/tmp/clusterd-test-driver-clusterd.log 2>&1 &
-    clusterd_pid=$!
+    launched_pid=$!
+
+    # Resolve the inner clusterd PID. With no wrapper, what we launched *is*
+    # clusterd. With a wrapper, the wrapper's argv also contains
+    # "target/debug/clusterd", so exclude the launched (wrapper) pid when
+    # matching, and retry until the wrapper has forked clusterd.
+    if [[ -z "$WRAPPER" ]]; then
+        clusterd_pid="$launched_pid"
+    else
+        for _ in $(seq 1 60); do
+            clusterd_pid=$(pgrep -f "target/debug/clusterd --compute-controller-listen-addr ${COMPUTE_ADDR}" \
+                | grep -vx "$launched_pid" | head -1 || true)
+            [[ -n "$clusterd_pid" ]] && break
+            sleep 0.5
+        done
+        [[ -z "$clusterd_pid" ]] && clusterd_pid="$launched_pid"
+    fi
 
     # Wait for the compute controller port.
     for _ in $(seq 1 60); do
