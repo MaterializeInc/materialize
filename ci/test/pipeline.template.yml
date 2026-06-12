@@ -456,6 +456,17 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: aws-glue-schema-registry
+        label: AWS Glue Schema Registry (Moto)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: aws-glue-schema-registry
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
     depends_on: build-aarch64

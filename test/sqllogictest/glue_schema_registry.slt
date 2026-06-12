@@ -7,11 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Stage 1 tests for AWS Glue Schema Registry connections.
+# Tests for AWS Glue Schema Registry connections.
 #
-# Validates parsing, planning, catalog round-trip, ALTER compatibility, and
-# the `enable_glue_schema_registry` feature flag. No client crate exists in
-# this stage; `validate()` is a no-op (Stage 3 retrofits real validation).
+# Covers parsing, planning, catalog round-trip, ALTER compatibility, and the
+# `enable_glue_schema_registry` feature flag.
+#
+# `validate()` performs a real `GetRegistry` call against AWS.
+# Sqllogictest has no AWS credentials, so every CREATE CONNECTION here uses
+# `WITH (VALIDATE = false)`. End-to-end validation coverage lives in the
+# LocalStack-backed mzcompose tests.
 #
 # See doc/developer/design/20260512_aws_glue_schema_registry.md.
 
@@ -35,12 +39,13 @@ CREATE CONNECTION aws_conn TO AWS (
     ASSUME ROLE ARN 'arn:aws:iam::123456789000:role/my-role'
 ) WITH (VALIDATE = false)
 
-# Happy path: GSR connection with both required options.
+# Happy path: GSR connection with both required options. Validation is
+# skipped because we have no AWS account to call against.
 statement ok
 CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
     AWS CONNECTION = aws_conn,
     REGISTRY = 'my-registry'
-)
+) WITH (VALIDATE = false)
 
 # SHOW CREATE CONNECTION round-trip (pretty-printed multiline form).
 query T multiline
@@ -107,7 +112,7 @@ statement error CREATE CONNECTION \.\.\. TO AWS GLUE SCHEMA REGISTRY is not avai
 CREATE CONNECTION gated_glue TO AWS GLUE SCHEMA REGISTRY (
     AWS CONNECTION = aws_conn,
     REGISTRY = 'my-registry'
-)
+) WITH (VALIDATE = false)
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_glue_schema_registry TO true;
@@ -119,7 +124,7 @@ statement ok
 CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
     AWS CONNECTION = aws_conn,
     REGISTRY = 'my-registry'
-)
+) WITH (VALIDATE = false)
 
 statement ok
 DROP CONNECTION glue_conn

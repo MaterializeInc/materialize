@@ -113,6 +113,47 @@ impl WithOptionName for AvroSchemaOptionName {
     }
 }
 
+/// Options accepted on the `USING AWS GLUE SCHEMA REGISTRY CONNECTION <name> (…)`
+/// form. Today there is only `SCHEMA NAME`, which is required (the Glue
+/// purification step needs it to fetch the writer schema's latest
+/// version at `CREATE SOURCE` time).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum GlueAvroOptionName {
+    /// The `SCHEMA NAME [=] '<name>'` option. Names the schema within a
+    /// Glue registry whose latest version is fetched during purification.
+    SchemaName,
+}
+
+impl AstDisplay for GlueAvroOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            GlueAvroOptionName::SchemaName => f.write_str("SCHEMA NAME"),
+        }
+    }
+}
+
+impl WithOptionName for GlueAvroOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            // A schema *name* is a user-chosen identifier, no more
+            // sensitive than a table name.
+            Self::SchemaName => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GlueAvroOption<T: AstInfo> {
+    pub name: GlueAvroOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(GlueAvroOption);
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AvroSchemaOption<T: AstInfo> {
     pub name: AvroSchemaOptionName,
@@ -128,6 +169,26 @@ pub enum AvroSchema<T: AstInfo> {
     InlineSchema {
         schema: Schema,
         with_options: Vec<AvroSchemaOption<T>>,
+    },
+    /// `USING AWS GLUE SCHEMA REGISTRY CONNECTION <name> (SCHEMA NAME = '<n>')`.
+    ///
+    /// Parallel to the `Csr` variant. See
+    /// `doc/developer/design/20260512_aws_glue_schema_registry.md`.
+    ///
+    /// **Cross-schema references are intentionally unsupported.** Unlike the
+    /// `Csr` variant — whose `key_reference_schemas` / `value_reference_schemas`
+    /// fields are resolved transitively against the Confluent registry — AWS
+    /// Glue Schema Registry has no analogue: `RegisterSchemaVersion` takes a
+    /// single self-contained `SchemaDefinition` JSON blob with no
+    /// cross-schema-reference field. Avro's *intra-document* named-type
+    /// references still work because they are resolved by the Avro parser
+    /// from a single JSON document.
+    Glue {
+        connection: T::ItemName,
+        with_options: Vec<GlueAvroOption<T>>,
+        /// Populated during purification by fetching the named schema's
+        /// latest version from AWS Glue. Users cannot write this clause.
+        seed: Option<GlueAvroSeed>,
     },
 }
 
@@ -147,6 +208,23 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
                     f.write_str(" (");
                     f.write_node(&display::comma_separated(with_options));
                     f.write_str(")");
+                }
+            }
+            Self::Glue {
+                connection,
+                with_options,
+                seed,
+            } => {
+                f.write_str("USING AWS GLUE SCHEMA REGISTRY CONNECTION ");
+                f.write_node(connection);
+                if !with_options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(with_options));
+                    f.write_str(")");
+                }
+                if let Some(seed) = seed {
+                    f.write_str(" ");
+                    f.write_node(seed);
                 }
             }
         }
@@ -398,6 +476,26 @@ impl AstDisplay for CsrSeedAvro {
     }
 }
 impl_display!(CsrSeedAvro);
+
+/// Resolved reader schema for an `AvroSchema::Glue` source.
+///
+/// Glue schemas have no references (each schema-version is a single
+/// self-contained definition), so unlike [`CsrSeedAvro`] there is no
+/// references vector. Key-side schemas are deferred until we have a
+/// concrete use case — Kafka source keys still go through CSR today.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GlueAvroSeed {
+    pub value_schema: String,
+}
+
+impl AstDisplay for GlueAvroSeed {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SEED VALUE SCHEMA '");
+        f.write_node(&display::escape_single_quote_string(&self.value_schema));
+        f.write_str("'");
+    }
+}
+impl_display!(GlueAvroSeed);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeedProtobuf {
