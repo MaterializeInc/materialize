@@ -416,7 +416,7 @@ openssl-probe = "0.1.6"
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 opentelemetry = { version = "0.31.0", features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"] }
-opentelemetry_sdk = { version = "0.31.0", features = ["experimental_trace_batch_span_processor_with_async_runtime", "rt-tokio"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["experimental_trace_batch_span_processor_with_async_runtime", "rt-tokio"] }
 ordered-float = { version = "5.1.0", features = ["serde"] }
 os_info = "3.11.0"
 parquet = { version = "57", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
