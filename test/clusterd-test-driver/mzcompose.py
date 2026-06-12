@@ -11,6 +11,7 @@
 clusterd, with no environmentd. The driver hosts persist PubSub; clusterd is
 pointed at it via `mz_service`."""
 
+from materialize import ui
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -70,6 +71,8 @@ SCRIPTS = [
 def workflow_default(c: Composition) -> None:
     c.up("cockroach", "minio")
     for i, script in enumerate(SCRIPTS):
+        # Buildkite collapsible section per scenario.
+        ui.section(f"Running scenario {script}")
         # Restart clusterd between scenarios for a clean compute state; the
         # scripts reuse GlobalIds and would otherwise collide.
         if i > 0:
