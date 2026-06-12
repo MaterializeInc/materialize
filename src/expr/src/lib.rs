@@ -36,8 +36,8 @@ pub use linear::{MapFilterProject, memoize_expr};
 pub use relation::func::REPEAT_ROW_NAME;
 pub use relation::func::order_aggregate_datums as order_aggregate_datums_exported_for_benchmarking;
 pub use relation::func::{
-    AggregateFunc, AnalyzedRegex, AnalyzedRegexOpts, CaptureGroupDesc, LagLeadType,
-    NaiveOneByOneAggr, OneByOneAggr, TableFunc,
+    AggregateFunc, AnalyzedRegex, AnalyzedRegexOpts, CaptureGroupDesc, JsonbUnpackField,
+    JsonbUnpackFieldKind, LagLeadType, NaiveOneByOneAggr, OneByOneAggr, TableFunc,
 };
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{

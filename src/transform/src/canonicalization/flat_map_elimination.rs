@@ -23,6 +23,12 @@ use mz_repr::{Diff, RowArena};
 use crate::TransformCtx;
 
 /// Attempts to eliminate FlatMaps that are sure to have 0 or 1 results on each input row.
+///
+/// This discovers the at-most-one-row property dynamically, per instance, by
+/// evaluating the table function on its (all-literal) arguments, and then
+/// removes the FlatMap entirely. Compare `TableFunc::at_most_one_row_per_input`,
+/// which declares the same property statically, per function, for arbitrary
+/// arguments — but only improves unique key inference, keeping the FlatMap.
 #[derive(Debug)]
 pub struct FlatMapElimination;
 
