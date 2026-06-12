@@ -1474,19 +1474,16 @@ Explained Query:
       cte l6 =
         Union // { arity: 2 }
           Negate // { arity: 2 }
-            Project (#0{creatorpersonid}, #3) // { arity: 2 }
-              Map ((0 + #1{count})) // { arity: 4 }
-                Join on=(#0{creatorpersonid} = #2{id}) type=differential // { arity: 3 }
-                  implementation
-                    %0:l4[#0{personid}]UKA » %1[#0]UKA
-                  Get l4 // { arity: 2 }
-                  ArrangeBy keys=[[#0{id}]] // { arity: 1 }
-                    Distinct project=[#0{id}] // { arity: 1 }
-                      Project (#0{id}) // { arity: 1 }
-                        Get l5 // { arity: 2 }
-          Project (#0{creatorpersonid}, #2) // { arity: 2 }
-            Map ((0 + #1{count})) // { arity: 3 }
-              Get l3 // { arity: 2 }
+            Project (#0{creatorpersonid}, #1{count}) // { arity: 2 }
+              Join on=(#0{creatorpersonid} = #2{id}) type=differential // { arity: 3 }
+                implementation
+                  %0:l4[#0{personid}]UKA » %1[#0]UKA
+                Get l4 // { arity: 2 }
+                ArrangeBy keys=[[#0{id}]] // { arity: 1 }
+                  Distinct project=[#0{id}] // { arity: 1 }
+                    Project (#0{id}) // { arity: 1 }
+                      Get l5 // { arity: 2 }
+          Get l3 // { arity: 2 }
           Negate // { arity: 2 }
             Project (#0{id}, #2) // { arity: 2 }
               Map (100) // { arity: 3 }
@@ -1500,9 +1497,9 @@ Explained Query:
         Project (#0{creatorpersonid}) // { arity: 1 }
           Get l6 // { arity: 2 }
     Return // { arity: 5 }
-      Map (coalesce(#2{sum}, 0), (bigint_to_numeric(#1{score}) + #3)) // { arity: 5 }
-        Reduce group_by=[#0{creatorpersonid}, #1] aggregates=[sum(case when (#3) IS NULL then null else #2 end)] // { arity: 3 }
-          Project (#0{creatorpersonid}, #1, #6, #7) // { arity: 4 }
+      Map (coalesce(#2{sum}, 0), (bigint_to_numeric(#1{count}) + #3)) // { arity: 5 }
+        Reduce group_by=[#0{creatorpersonid}, #1{count}] aggregates=[sum(case when (#3) IS NULL then null else #2{count} end)] // { arity: 3 }
+          Project (#0{creatorpersonid}, #1{count}, #6{count}, #7) // { arity: 4 }
             Join on=(#0{creatorpersonid} = #2{person1id} AND #5{creatorpersonid} = case when (#4) IS NULL then null else #3{person2id} end) type=delta // { arity: 8 }
               implementation
                 %0:l6 » %1[#0]K » %2[#0]K
