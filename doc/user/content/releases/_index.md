@@ -19,14 +19,9 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-06-11* <br>
 *Released to Materialize Self-Managed: 2026-06-12* <br>
 
-This release includes OIDC improvements for self-managed deployments,
-improvements, and bug fixes.
-
 ### Improvements {#v26.28-improvements}
 
-- **MCP query tool enabled by default**: The MCP Server for Agents now
-  enables the `query` tool by default, allowing agents to run ad-hoc
-  SQL queries across data products.
+- **Improved performance using temporal filters**: We've made a second round of improvements to temporal filter performance. Steady state CPU usage while using temporal filters is significantly reduced; we saw a drop from 75% CPU to 4% CPU in internal tests.
 - **Multi-item `DROP` with dependencies**: `DROP` statements now succeed
   when multiple co-dependent items are named in the same command,
   matching PostgreSQL behavior.
@@ -42,10 +37,7 @@ improvements, and bug fixes.
 - **Password redaction in system catalog**: `pg_catalog.pg_user.passwd`
   now returns `'********'` instead of the actual password hash,
   matching PostgreSQL behavior.
-- **Faster temporal filters**: Restored filter pushdown for temporal
-  predicates using day-only intervals (e.g.,
-  `t_col - INTERVAL '1' DAY < literal`), which was inadvertently
-  disabled in a prior release.
+
 
 ### Bug Fixes {#v26.28-bug-fixes}
 
