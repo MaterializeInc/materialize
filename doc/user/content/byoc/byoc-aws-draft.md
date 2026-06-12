@@ -7,6 +7,12 @@ menu:
     weight: 50
 ---
 
+{{< warning >}}
+
+Early draft, work in progress. Shared for feedback on the BYOC on AWS MVP design. Not official documentation; flows and details will change.
+
+{{< /warning >}}
+
 Materialize Bring Your Own Cloud (BYOC) runs a full Materialize environment
 inside your own AWS account. Your data never leaves your account: the VPC,
 compute (EKS), metadata database (RDS), and object storage (S3) are all created
