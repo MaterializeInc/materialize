@@ -2,6 +2,7 @@
 //!
 //! See `doc/developer/design/20260612_headless_compute_test_driver.md`.
 
+pub mod data;
 pub mod persist_host;
 
 #[cfg(test)]
