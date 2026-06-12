@@ -34,6 +34,11 @@ use timely::progress::Antichain;
 /// `shard` as `source_id`, then builds and exports an index `index_id` that
 /// arranges that collection by `key_cols`.
 ///
+/// `shard_upper` is the exclusive upper bound of the shard's written data (i.e., the
+/// next timestamp after the last written one). For data written at a single timestamp
+/// `t`, pass `t + 1`. For data spread across `0..n_ts`, pass `n_ts`. The compute
+/// instance uses this to know when the source's data is fully available.
+///
 /// # Construction strategy
 ///
 /// We deliberately do *not* hand-roll the [`RenderPlan`]: the [`LirId`]s used to
@@ -69,6 +74,7 @@ pub fn index_dataflow(
     desc: RelationDesc,
     key_cols: Vec<usize>,
     as_of: Timestamp,
+    shard_upper: Timestamp,
 ) -> DataflowDescription<RenderPlan, CollectionMetadata> {
     // The arrangement key as MIR scalar expressions over the source columns.
     let key: Vec<MirScalarExpr> = key_cols.into_iter().map(MirScalarExpr::column).collect();
@@ -104,7 +110,7 @@ pub fn index_dataflow(
         Plan::finalize_dataflow(mir, &features).expect("lowering index dataflow");
 
     // (3) Augment into the `<RenderPlan, CollectionMetadata>` form sent to clusterd.
-    augment(lowered, source_id, shard, location, desc)
+    augment(lowered, source_id, shard, location, desc, shard_upper)
 }
 
 /// Convert a lowered `DataflowDescription<Plan, ()>` into the
@@ -113,12 +119,15 @@ pub fn index_dataflow(
 /// Mirrors `compute-client`'s `Instance::create_dataflow`: each object's [`Plan`]
 /// is flattened into a [`RenderPlan`], and every source import is augmented with the
 /// storage [`CollectionMetadata`] needed by the compute instance to read it.
+/// `shard_upper` is used as the exclusive upper bound in the source import, telling
+/// the compute instance up to which timestamp the shard's data is available.
 fn augment(
     lowered: DataflowDescription<Plan, ()>,
     source_id: GlobalId,
     shard: ShardId,
     location: PersistLocation,
     desc: RelationDesc,
+    shard_upper: Timestamp,
 ) -> DataflowDescription<RenderPlan, CollectionMetadata> {
     let metadata = CollectionMetadata {
         persist_location: location,
@@ -128,8 +137,8 @@ fn augment(
     };
 
     // Attach the storage metadata to each source import. In a live controller the
-    // `upper` is the storage collection's real write frontier; here the shard holds a
-    // single batch written at timestamp 0, so its upper is `1`.
+    // `upper` is the storage collection's real write frontier; the caller provides
+    // `shard_upper` to reflect the actual upper of the written data.
     let mut source_imports = BTreeMap::new();
     for (id, import) in lowered.source_imports {
         debug_assert_eq!(id, source_id, "only the single source import is expected");
@@ -144,7 +153,7 @@ fn augment(
                 desc,
                 monotonic: import.monotonic,
                 with_snapshot: import.with_snapshot,
-                upper: Antichain::from_elem(Timestamp::from(0).step_forward()),
+                upper: Antichain::from_elem(shard_upper),
             },
         );
     }
@@ -200,6 +209,7 @@ mod tests {
             desc,
             vec![0],
             Timestamp::from(0),
+            Timestamp::from(1),
         );
         // Structural assertions mirroring the spec.
         assert_eq!(df.source_imports.len(), 1);

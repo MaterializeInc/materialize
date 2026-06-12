@@ -73,6 +73,7 @@ async fn index_over_small_shard() {
         desc.clone(),
         vec![0],
         Timestamp::from(0),
+        Timestamp::from(1),
     );
     driver.submit_dataflow(df).expect("submit");
     driver.schedule(index_id).expect("schedule");
