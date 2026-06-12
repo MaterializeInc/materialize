@@ -100,6 +100,8 @@ pub fn register(registry: &MetricsRegistry) {
         register_pool_gauge(registry, "spill_in_flight", "Spill entries queued or being processed.", |s| s.spill_in_flight);
         register_pool_gauge(registry, "slot_exhausted_fallbacks_total", "Inserts that fell back to unpageable heap chunks because their size class had no free slot.", |s| s.slot_exhausted_fallbacks);
         register_pool_gauge(registry, "live_chunks", "Live pool chunks, whatever their residency: for backlog-shaped consumers, the un-drained backlog in chunks.", |s| s.live_chunks);
+        register_pool_gauge(registry, "warm_bytes", "Class bytes of free slots kept warm for fault-free reuse; RSS exceeds resident bytes by up to this bounded amount.", |s| s.warm_bytes);
+        register_pool_gauge(registry, "warm_reuses_total", "Slot allocations served from the warm list: no page faults, no kernel page zeroing.", |s| s.warm_reuses);
 
         PagerMetrics {
             skip_decisions_total: registry.register(metric!(
