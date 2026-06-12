@@ -285,6 +285,9 @@ case "$cmd" in
                 --env ICEBERG_GCS_BUCKET
                 --env ICEBERG_GCP_PROJECT
                 --env ICEBERG_GCP_SA_JSON_B64
+                # For test/canary-environment Iceberg GCS sinks
+                --env QA_CANARY_ICEBERG_GCS_BUCKET
+                --env QA_CANARY_ICEBERG_GCP_SA_JSON_B64
                 --env GITHUB_TOKEN
                 --env GITHUB_GHCR_TOKEN
                 --env GPG_KEY

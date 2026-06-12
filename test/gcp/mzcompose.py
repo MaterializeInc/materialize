@@ -29,17 +29,19 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-import jwt
-
+from materialize.biglake import (
+    biglake_request,
+    catalog_url,
+    create_namespace,
+    ensure_catalog,
+    mint_gcp_access_token,
+    namespace_url,
+    resolve_warehouse_prefix,
+    table_url,
+)
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
-
-# Blanket scope used to mint tokens for both GCS and BigLake. Matches GCP_SCOPE
-# in src/storage-types/src/connections/gcp.rs.
-GCP_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
-
-BIGLAKE_REST_BASE = "https://biglake.googleapis.com/iceberg/v1/restcatalog"
 
 # Per-run namespace name format: e2e_<UTC date>_<random hex>. The date lets the
 # pre-test sweep age out namespaces left behind by killed runs without extra API
@@ -67,131 +69,6 @@ def _require_env(name: str) -> str:
     return value
 
 
-def _mint_gcp_access_token(service_account: dict) -> str:
-    """Mint an OAuth2 access token from a GCP service-account key (JWT bearer flow)."""
-    now = int(time.time())
-    assertion = jwt.encode(
-        {
-            "iss": service_account["client_email"],
-            "scope": GCP_SCOPE,
-            "aud": "https://oauth2.googleapis.com/token",
-            "iat": now,
-            "exp": now + 3600,
-        },
-        service_account["private_key"],
-        algorithm="RS256",
-    )
-    body = urllib.parse.urlencode(
-        {
-            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-            "assertion": assertion,
-        }
-    ).encode()
-    req = urllib.request.Request(
-        "https://oauth2.googleapis.com/token",
-        data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())["access_token"]
-
-
-def _biglake_request(
-    method: str, url: str, token: str, project: str
-) -> urllib.request.Request:
-    return urllib.request.Request(
-        url,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "x-goog-user-project": project,
-        },
-    )
-
-
-def _ensure_biglake_catalog(token: str, project: str, bucket: str) -> None:
-    """Create the BigLake Iceberg REST catalog for this bucket if it's missing.
-
-    The Iceberg REST `/v1/config?warehouse=gs://<bucket>` lookup resolves the catalog
-    whose id equals the bucket name; it does not provision one on demand. Without it,
-    every REST call returns a sanitized 403. Creating it here lets the test bootstrap
-    its own catalog instead of depending on out-of-band (Pulumi/console) setup.
-
-    Credential mode is END_USER: the Materialize sink writes to GCS with the service
-    account's own credentials (see `connect_rest` for the GCP branch in
-    mz_storage_types::connections), not credentials vended by the catalog.
-    """
-    base = f"{BIGLAKE_REST_BASE}/extensions/projects/{project}/catalogs"
-
-    # GET returns the catalog if it exists, 404 if not.
-    try:
-        urllib.request.urlopen(
-            _biglake_request("GET", f"{base}/{bucket}", token, project)
-        )
-        return
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            raise
-
-    create_url = f"{base}?iceberg-catalog-id={urllib.parse.quote(bucket, safe='')}"
-    req = _biglake_request("POST", create_url, token, project)
-    req.add_header("Content-Type", "application/json")
-    req.data = json.dumps(
-        {
-            "catalog-type": "CATALOG_TYPE_GCS_BUCKET",
-            "credential-mode": "CREDENTIAL_MODE_END_USER",
-        }
-    ).encode()
-    try:
-        urllib.request.urlopen(req)
-        print(f"created BigLake catalog for gs://{bucket}")
-    except urllib.error.HTTPError as e:
-        # A concurrent run can create the catalog between our GET and POST.
-        if e.code == 409:
-            return
-        body = e.read().decode("utf-8", errors="replace")
-        print(f"BigLake catalog create failed: HTTP {e.code}\n{body}")
-        raise
-
-
-def _resolve_warehouse_prefix(token: str, project: str, bucket: str) -> str:
-    """Return the catalog prefix BigLake assigns to this warehouse.
-
-    Iceberg REST clients call GET /v1/config?warehouse=... before any other
-    operation. The catalog's response includes an `overrides.prefix` that the
-    client splices in between `/v1/` and resource paths for every later call:
-
-        {uri}/v1/{prefix}/namespaces/{ns}/tables/{tbl}
-
-    See `RestCatalogConfig::url_prefixed` in iceberg-catalog-rest.
-    """
-    warehouse = f"gs://{bucket}"
-    url = (
-        f"{BIGLAKE_REST_BASE}/v1/config"
-        f"?warehouse={urllib.parse.quote(warehouse, safe='')}"
-    )
-    with urllib.request.urlopen(_biglake_request("GET", url, token, project)) as resp:
-        config = json.loads(resp.read())
-    print(f"BigLake /v1/config response: {json.dumps(config)}")
-    return config.get("overrides", {}).get("prefix", "")
-
-
-def _catalog_url(prefix: str, suffix: str) -> str:
-    middle = f"{prefix}/" if prefix else ""
-    return f"{BIGLAKE_REST_BASE}/v1/{middle}{suffix}"
-
-
-def _table_url(prefix: str, namespace: str, table: str) -> str:
-    ns = urllib.parse.quote(namespace, safe="")
-    tbl = urllib.parse.quote(table, safe="")
-    return _catalog_url(prefix, f"namespaces/{ns}/tables/{tbl}")
-
-
-def _namespace_url(prefix: str, namespace: str) -> str:
-    ns = urllib.parse.quote(namespace, safe="")
-    return _catalog_url(prefix, f"namespaces/{ns}")
-
-
 def _verify_sink_committed(
     token: str,
     project: str,
@@ -212,7 +89,7 @@ def _verify_sink_committed(
     `main` / `v1.5-variegata`. Our workspace duckdb is pinned to 1.4.x, whose
     iceberg extension branch (`v1.4-andium`) does not have the backport.
     """
-    url = _table_url(prefix, namespace, table)
+    url = table_url(prefix, namespace, table)
     print(f"BigLake GET table URL: {url}")
 
     deadline = time.time() + 60
@@ -220,7 +97,7 @@ def _verify_sink_committed(
     while time.time() < deadline:
         try:
             with urllib.request.urlopen(
-                _biglake_request("GET", url, token, project)
+                biglake_request("GET", url, token, project)
             ) as resp:
                 body = json.loads(resp.read())
         except urllib.error.HTTPError as e:
@@ -265,20 +142,10 @@ def _verify_sink_committed(
     )
 
 
-def _create_biglake_namespace(
-    token: str, project: str, prefix: str, namespace: str
-) -> None:
-    """Create the namespace. BigLake doesn't auto-create on first commit."""
-    req = _biglake_request("POST", _catalog_url(prefix, "namespaces"), token, project)
-    req.add_header("Content-Type", "application/json")
-    req.data = json.dumps({"namespace": [namespace]}).encode()
-    urllib.request.urlopen(req)
-
-
 def _delete_biglake(method_url: str, token: str, project: str) -> None:
     """DELETE a BigLake resource, tolerating 404 so cleanup is idempotent."""
     try:
-        urllib.request.urlopen(_biglake_request("DELETE", method_url, token, project))
+        urllib.request.urlopen(biglake_request("DELETE", method_url, token, project))
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
@@ -293,7 +160,7 @@ def _paginated_get(url: str, token: str, project: str, items_key: str):
             sep = "&" if "?" in page_url else "?"
             page_url = f"{page_url}{sep}pageToken={urllib.parse.quote(page_token)}"
         with urllib.request.urlopen(
-            _biglake_request("GET", page_url, token, project)
+            biglake_request("GET", page_url, token, project)
         ) as resp:
             body = json.loads(resp.read())
         yield from body.get(items_key, [])
@@ -307,7 +174,7 @@ def _list_biglake_namespaces(token: str, project: str, prefix: str) -> list[str]
     return [
         ns[0]
         for ns in _paginated_get(
-            _catalog_url(prefix, "namespaces"), token, project, "namespaces"
+            catalog_url(prefix, "namespaces"), token, project, "namespaces"
         )
         if len(ns) == 1
     ]
@@ -319,7 +186,7 @@ def _list_biglake_tables(
     return [
         ident["name"]
         for ident in _paginated_get(
-            _catalog_url(
+            catalog_url(
                 prefix, f"namespaces/{urllib.parse.quote(namespace, safe='')}/tables"
             ),
             token,
@@ -349,8 +216,8 @@ def _sweep_stale_biglake_namespaces(token: str, project: str, prefix: str) -> No
         print(f"sweeping stale BigLake namespace: {ns} (age {age})")
         try:
             for tbl in _list_biglake_tables(token, project, prefix, ns):
-                _delete_biglake(_table_url(prefix, ns, tbl), token, project)
-            _delete_biglake(_namespace_url(prefix, ns), token, project)
+                _delete_biglake(table_url(prefix, ns, tbl), token, project)
+            _delete_biglake(namespace_url(prefix, ns), token, project)
         except Exception as e:
             # Keep sweeping; a single bad namespace shouldn't block the test.
             print(f"warning: failed to sweep namespace {ns}: {e}")
@@ -388,18 +255,18 @@ def workflow_default(c: Composition) -> None:
 
         # Mint once and reuse for verification + cleanup. Tokens last an hour;
         # minting up front also fails fast if the service-account key is broken.
-        token = _mint_gcp_access_token(service_account)
+        token = mint_gcp_access_token(service_account)
         # Bootstrap the catalog if absent; /v1/config 403s otherwise.
-        _ensure_biglake_catalog(token, project, bucket)
+        ensure_catalog(token, project, bucket)
         # Discover the per-warehouse catalog prefix once; it's identical for
         # the verify and cleanup paths.
-        prefix = _resolve_warehouse_prefix(token, project, bucket)
+        prefix = resolve_warehouse_prefix(token, project, bucket)
         # Garbage-collect namespaces from previous runs that were killed before
         # their `finally` could run. Best-effort; logged failures don't block.
         _sweep_stale_biglake_namespaces(token, project, prefix)
         # BigLake doesn't auto-create namespaces on first commit, so we have to
         # pre-create (matching how the AWS test pre-creates the S3 Tables namespace).
-        _create_biglake_namespace(token, project, prefix, namespace)
+        create_namespace(token, project, prefix, namespace)
 
         try:
             c.run_testdrive_files(
@@ -426,8 +293,8 @@ def workflow_default(c: Composition) -> None:
             c.sql("DROP SINK demo;")
         finally:
             try:
-                _delete_biglake(_table_url(prefix, namespace, table), token, project)
-                _delete_biglake(_namespace_url(prefix, namespace), token, project)
+                _delete_biglake(table_url(prefix, namespace, table), token, project)
+                _delete_biglake(namespace_url(prefix, namespace), token, project)
             except Exception as cleanup_error:
                 # Don't mask the real failure if there was one.
                 print(f"warning: BigLake cleanup failed: {cleanup_error}")
