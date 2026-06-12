@@ -208,6 +208,11 @@ pub struct PostgresSourcePublicationDetails {
     /// prior to this field being introduced
     pub timeline_id: Option<u64>,
     pub database: String,
+    /// Whether the upstream PostgreSQL server was in recovery (i.e. a physical
+    /// replica, per `pg_is_in_recovery()`) when this source was created. The
+    /// None value indicates the check was not performed, either because the
+    /// source predates this field or because the check was disabled.
+    pub is_physical_replica: Option<bool>,
 }
 
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
@@ -216,6 +221,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
             slot: self.slot.clone(),
             timeline_id: self.timeline_id.clone(),
             database: self.database.clone(),
+            is_physical_replica: self.is_physical_replica,
         }
     }
 
@@ -224,6 +230,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
             slot: proto.slot,
             timeline_id: proto.timeline_id,
             database: proto.database,
+            is_physical_replica: proto.is_physical_replica,
         })
     }
 }
@@ -234,6 +241,9 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
             slot,
             timeline_id,
             database,
+            // The upstream server's replica status can legitimately change
+            // (e.g. on promotion), so it is not a compatibility concern.
+            is_physical_replica: _,
         } = self;
 
         let compatibility_checks = [

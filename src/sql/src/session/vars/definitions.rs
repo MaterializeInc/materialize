@@ -2252,6 +2252,12 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_postgres_physical_replica_detection,
+        desc: "detecting whether the upstream PostgreSQL server of a source is a physical replica",
+        default: false,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

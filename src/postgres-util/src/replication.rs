@@ -243,3 +243,12 @@ pub async fn get_current_wal_lsn(client: &Client) -> Result<PgLsn, PostgresError
 
     Ok(lsn)
 }
+
+/// Returns whether the server is in recovery, i.e. is a physical replica.
+/// Functions like `pg_current_wal_lsn()` error out on such servers.
+pub async fn get_is_in_recovery(client: &Client) -> Result<bool, PostgresError> {
+    let row = query_one(client, crate::sql!("SELECT pg_is_in_recovery()"), &[]).await?;
+    let is_in_recovery: bool = row.get(0);
+
+    Ok(is_in_recovery)
+}
