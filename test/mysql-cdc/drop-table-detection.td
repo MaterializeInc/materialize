@@ -296,7 +296,7 @@ contains:table was dropped
 > DROP SOURCE mz_source CASCADE;
 
 # 9. Comments in awkward positions must not cause missed drop. This test is
-# more testing mysql's binlog replication scrubbing comments than excercising Materialize
+# more testing mysql's binlog replication scrubbing comments than exercising Materialize
 # but is an important confirmation (especially because DROP /* comment */ TABLE) would fail
 # in Materialize today if it got through.
 
@@ -531,18 +531,12 @@ contains:table was dropped
 > DROP SOURCE sticky_source CASCADE;
 > DROP CLUSTER sticky_cluster CASCADE;
 
-# 12. `ANSI_QUOTES` sql_mode: identifiers are still binlogged with backticks.
+# 12. `ANSI_QUOTES` sql_mode: identifiers are still round-tripped correctly
 #
 # By default MySQL quotes identifiers with backticks and treats `"..."` as a
 # string literal. A session whose sql_mode includes ANSI_QUOTES flips this --
 # `"` becomes the identifier quote -- so the client below writes the DDL with
-# double quotes. The detector parses the binlog with a backtick-only dialect, so
-# this would break it IF the double quotes reached the binlog. They do not:
-# MySQL re-quotes the identifiers with backticks when it regenerates the
-# DROP TABLE into the binlog, regardless of the session's sql_mode (the same
-# binlog normalization that strips comments in section 9). This test pins that
-# behavior -- it would fail loudly if a future MySQL preserved the ANSI_QUOTES
-# `"` quoting in the binlog.
+# double quotes.
 #
 # A name with a space is used so the identifier genuinely requires quoting (an
 # unquoted `ansi quoted` would be a syntax error).
