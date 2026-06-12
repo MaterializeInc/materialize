@@ -15,6 +15,12 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 
+# Arrangement merge effort (`arrangement_exert_proportionality`) for the compute
+# and storage timely clusters. Kept as named constants so other launchers (e.g.
+# the clusterd-test-driver local runner) reuse the same defaults.
+DEFAULT_COMPUTE_EXERT_PROPORTIONALITY = 16
+DEFAULT_STORAGE_EXERT_PROPORTIONALITY = 1337
+
 
 class Clusterd(Service):
     def __init__(
@@ -59,8 +65,12 @@ class Clusterd(Service):
 
         process_names = process_names if process_names else [name]
         process_index = process_names.index(name)
-        compute_timely_config = timely_config(process_names, 2102, workers, 16)
-        storage_timely_config = timely_config(process_names, 2103, workers, 1337)
+        compute_timely_config = timely_config(
+            process_names, 2102, workers, DEFAULT_COMPUTE_EXERT_PROPORTIONALITY
+        )
+        storage_timely_config = timely_config(
+            process_names, 2103, workers, DEFAULT_STORAGE_EXERT_PROPORTIONALITY
+        )
 
         environment += [
             f"CLUSTERD_PROCESS={process_index}",

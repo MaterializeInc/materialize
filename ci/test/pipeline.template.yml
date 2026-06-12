@@ -538,6 +538,17 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: clusterd-test-driver
+    label: Clusterd test driver
+    depends_on: build-aarch64
+    timeout_in_minutes: 20
+    inputs: [test/clusterd-test-driver]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: clusterd-test-driver
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: dbt-materialize
     label: dbt-materialize
     depends_on: build-aarch64

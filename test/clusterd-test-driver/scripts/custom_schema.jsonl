@@ -1,0 +1,17 @@
+# Declare a custom schema, write both synthetic and explicit rows against it,
+# index it, and peek. Run locally:
+#   SCENARIO=script SCRIPT=test/clusterd-test-driver/scripts/custom_schema.jsonl \
+#     bin/pyactivate test/clusterd-test-driver/run-local.py
+#
+# A three-column relation: bigint key, boolean flag, nullable text label.
+{"cmd":"define_schema","name":"events","columns":[{"name":"key","type":"bigint"},{"name":"flag","type":"boolean"},{"name":"label","type":"text","nullable":true}]}
+# 1000 synthetic rows at ts 0 (key runs 0..1000, flag alternates, label padded).
+{"cmd":"write_single_ts","shard":"ev","schema":"events","ts":0,"count":1000}
+# Two explicit rows at ts 1, including a null label. upper becomes 2.
+{"cmd":"write_rows","shard":"ev","schema":"events","ts":1,"rows":[[1000,true,"alpha"],[1001,false,null]]}
+# Index keyed by the bigint key column; as_of 0, shard upper 2.
+{"cmd":"define_index","source_id":2000,"index_id":2001,"shard":"ev","schema":"events","key":[0],"as_of":0,"upper":2}
+{"cmd":"schedule","id":2001}
+{"cmd":"await_frontier","id":2001,"ts":2}
+# 1000 synthetic + 2 explicit = 1002 rows.
+{"cmd":"peek_count","id":2001,"schema":"events","ts":1}

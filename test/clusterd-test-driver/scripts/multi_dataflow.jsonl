@@ -1,0 +1,13 @@
+# multi-dataflow scenario: attempt to hydrate two independent dataflows against
+# one replica. This is a reproduction of a current limitation — often only one
+# index hydrates. The awaits use allow_timeout so the run reports the outcome
+# (ok/timeout per index) without failing; this documents the bug rather than
+# asserting it is fixed.
+{"cmd":"write_single_ts","shard":"ma","ts":0,"count":1000}
+{"cmd":"write_single_ts","shard":"mb","ts":0,"count":1000}
+{"cmd":"define_index","source_id":1000,"index_id":1001,"shard":"ma","key":[0],"as_of":0,"upper":1}
+{"cmd":"schedule","id":1001}
+{"cmd":"define_index","source_id":1002,"index_id":1003,"shard":"mb","key":[0],"as_of":0,"upper":1}
+{"cmd":"schedule","id":1003}
+{"cmd":"await_frontier","id":1001,"ts":1,"timeout_secs":30,"allow_timeout":true}
+{"cmd":"await_frontier","id":1003,"ts":1,"timeout_secs":30,"allow_timeout":true}
