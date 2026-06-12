@@ -107,9 +107,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Build clusterd and the driver in a single cargo invocation (clusterd only when
+# we spawn it). --no-default-features (for heaptrack) applies to both packages,
+# but the driver crate has no default features so it is a no-op there.
 if [[ "$RUN_CLUSTERD" == "1" ]]; then
-    echo "Building clusterd (profile: ${PROFILE}${clusterd_build_args[*]:+ ${clusterd_build_args[*]}})..."
-    cargo build --profile "$PROFILE" "${clusterd_build_args[@]}" --bin clusterd
+    echo "Building clusterd + headless-driver (profile: ${PROFILE}${clusterd_build_args[*]:+ ${clusterd_build_args[*]}})..."
+    cargo build --profile "$PROFILE" "${clusterd_build_args[@]}" \
+        -p mz-clusterd --bin clusterd \
+        -p mz-clusterd-test-driver --bin headless-driver
+else
+    echo "Building headless-driver (profile: ${PROFILE})..."
+    cargo build --profile "$PROFILE" -p mz-clusterd-test-driver --bin headless-driver
+fi
+
+if [[ "$RUN_CLUSTERD" == "1" ]]; then
     echo "clusterd command:"
     echo "  PERSIST_PUBSUB_URL=http://127.0.0.1:${PUBSUB_PORT} \\"
     echo "  ${WRAPPER} target/${PROFILE_DIR}/clusterd \\"
@@ -159,9 +170,6 @@ if [[ "$RUN_CLUSTERD" == "1" ]]; then
         sleep 0.5
     done
 fi
-
-echo "Building headless-driver (profile: ${PROFILE})..."
-cargo build --profile "$PROFILE" -p mz-clusterd-test-driver --bin headless-driver
 
 echo "Running driver..."
 CLUSTERD_COMPUTE_ADDR="${COMPUTE_ADDR}" \
