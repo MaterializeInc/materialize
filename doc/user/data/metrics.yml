@@ -127,6 +127,9 @@ metrics:
 - name: mz_catalog_collection_entries
   help: Total number of entries, after consolidation, per catalog collection.
   source: src/catalog/src/durable/metrics.rs
+- name: mz_catalog_info_metrics_reconcile_seconds
+  help: Time taken to rebuild the catalog info metrics from a catalog snapshot.
+  source: src/adapter/src/coord/info_metrics.rs
 - name: mz_catalog_snapshot_consolidations
   help: Count of snapshot consolidation passes.
   source: src/catalog/src/durable/metrics.rs
@@ -166,6 +169,9 @@ metrics:
 - name: mz_cluster_handle_command_duration_seconds
   help: Time spent in handling commands.
   source: src/compute/src/metrics.rs
+- name: mz_cluster_info
+  help: Maps cluster IDs to the cluster's name and size. Constant 1.
+  source: src/adapter/src/coord/info_metrics.rs
 - name: mz_cluster_server_last_command_received
   help: The time (in seconds since the Unix epoch) at which the server last received data from the controller, including CTP keepalives. Used to detect controller connections that are no longer reachable.
   source: src/service/src/transport/metrics.rs
@@ -499,6 +505,12 @@ metrics:
 - name: mz_mysql_sum_gtid_txns
   help: The sum of all transaction-ids committed for each GTID Source-ID UUID seen for this source
   source: src/storage/src/metrics/source/mysql.rs
+- name: mz_oauth_protected_resource_metadata_requests_total
+  help: Total number of requests to the OAuth Protected Resource Metadata endpoint.
+  source: src/environmentd/src/http/oauth_metadata.rs
+- name: mz_object_info
+  help: Maps catalog object IDs to the object's name, schema, database, and type. Constant 1.
+  source: src/adapter/src/coord/info_metrics.rs
 - name: mz_optimization_notices
   help: Number of optimization notices per notice type.
   source: src/adapter/src/metrics.rs
@@ -1288,6 +1300,9 @@ metrics:
 - name: mz_query_total
   help: The total number of queries issued of the given type since process start.
   source: src/adapter/src/metrics.rs
+- name: mz_replica_info
+  help: Maps cluster replica IDs to the replica's name and size. Constant 1.
+  source: src/adapter/src/coord/info_metrics.rs
 - name: mz_result_rows_first_to_last_byte_seconds
   help: The time from just before sending the first result row to sending a final response message after having successfully flushed the last result row to the connection. (This can span multiple FETCH statements.) (This is never observed for unbounded SUBSCRIBEs, i.e., which have no last result row.)
   source: src/adapter/src/metrics.rs
@@ -1348,6 +1363,9 @@ metrics:
 - name: mz_sink_iceberg_writer_close_duration_seconds
   help: Time spent closing Iceberg DeltaWriters in seconds
   source: src/storage/src/metrics/sink/iceberg.rs
+- name: mz_sink_info
+  help: Maps user sink IDs to the sink's type, envelope type, and cluster. Constant 1.
+  source: src/adapter/src/coord/info_metrics.rs
 - name: mz_sink_messages_committed
   help: The number of messages committed to the sink.
   source: src/storage/src/statistics.rs
@@ -1429,6 +1447,9 @@ metrics:
 - name: mz_source_error_retractions
   help: A counter representing the actual number of errors being retracted from the data shard
   source: src/storage/src/metrics/source.rs
+- name: mz_source_info
+  help: Maps user source IDs to the source's type, envelope type, and cluster. Constant 1.
+  source: src/adapter/src/coord/info_metrics.rs
 - name: mz_source_messages_received
   help: The number of raw messages the worker has received from upstream.
   source: src/storage/src/statistics.rs
@@ -1633,6 +1654,9 @@ metrics:
 - name: mz_timely_step_duration_seconds
   help: The time spent in each compute step_or_park call
   source: src/compute/src/metrics.rs
+- name: mz_timestamp_difference_for_bounded_staleness_ms
+  help: How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.
+  source: src/adapter/src/metrics.rs
 - name: mz_timestamp_difference_for_strict_serializable_ms
   help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
   source: src/adapter/src/metrics.rs

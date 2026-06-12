@@ -337,11 +337,11 @@ fn run() -> anyhow::Result<()> {
     }
 
     // Pull tokio metrics
-    for (name, help) in mz_ore::metrics::describe_runtime_metrics() {
+    for (name, help, source) in mz_ore::metrics::describe_runtime_metrics() {
         entries.push(MetricDoc {
             name,
             help,
-            source: "src/ore/src/metrics.rs".to_owned(),
+            source: source.to_owned(),
         });
     }
 

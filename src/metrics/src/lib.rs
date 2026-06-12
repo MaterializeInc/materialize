@@ -94,25 +94,23 @@ pub async fn register_metrics_into(metrics_registry: &MetricsRegistry, config_se
 /// and reads their descriptors back out.
 pub fn describe_metrics() -> Vec<(String, String, &'static str)> {
     let registry = MetricsRegistry::new();
-    let lgalloc_src = "src/metrics/src/lgalloc.rs";
-    let rusage_src = "src/metrics/src/rusage.rs";
 
-    let tag = |descs: Vec<(String, String)>, src| {
+    let tag = |descs: Vec<(String, String)>, src: &'static str| {
         descs.into_iter().map(move |(name, help)| (name, help, src))
     };
 
     let mut out = Vec::new();
     out.extend(tag(
         lgalloc::register_metrics_into(&registry).descs(),
-        lgalloc_src,
+        lgalloc::SOURCE,
     ));
     out.extend(tag(
         lgalloc::register_map_metrics_into(&registry).descs(),
-        lgalloc_src,
+        lgalloc::SOURCE,
     ));
     out.extend(tag(
         rusage::register_metrics_into(&registry).descs(),
-        rusage_src,
+        rusage::SOURCE,
     ));
     out
 }

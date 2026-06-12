@@ -13,6 +13,8 @@ use prometheus::{Gauge, IntGauge};
 
 use crate::MetricsUpdate;
 
+pub(crate) const SOURCE: &str = file!();
+
 macro_rules! metrics {
     ($namespace:ident $(($name:ident, $desc:expr, $suffix:expr, $type:ident)),*) => {
         metrics! { @define $namespace $(($name, $desc, $suffix, $type)),*}

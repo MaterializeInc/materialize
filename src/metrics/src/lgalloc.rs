@@ -16,6 +16,8 @@ use prometheus::core::{AtomicU64, GenericGauge};
 
 use crate::MetricsUpdate;
 
+pub(crate) const SOURCE: &str = file!();
+
 /// Error during FileStats
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
