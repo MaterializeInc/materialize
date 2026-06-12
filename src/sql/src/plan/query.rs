@@ -55,7 +55,6 @@ use mz_expr::{
     Eval, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, REPEAT_ROW_NAME,
     RowSetFinishing, TableFunc, func as expr_func,
 };
-use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::id_gen::IdGen;
@@ -3280,9 +3279,19 @@ fn plan_table_function_internal(
     with_ordinality: bool,
     table_name: Option<FullItemName>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    assert_none!(filter, "cannot parse table function with FILTER");
-    assert_none!(over, "cannot parse table function with OVER");
-    assert!(!*distinct, "cannot parse table function with DISTINCT");
+    // The parser rejects FILTER, OVER, and DISTINCT in every table function
+    // position (`FROM f(...)`, `ROWS FROM (...)`), and table functions in
+    // scalar position are only lifted into a `FROM` clause when all three are
+    // absent, so these are defensive.
+    if filter.is_some() {
+        sql_bail!("FILTER is not allowed for table functions in FROM");
+    }
+    if over.is_some() {
+        sql_bail!("OVER is not allowed for table functions in FROM");
+    }
+    if *distinct {
+        sql_bail!("DISTINCT is not allowed for table functions in FROM");
+    }
 
     let ecx = &ExprContext {
         qcx,
