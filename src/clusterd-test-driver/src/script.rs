@@ -58,7 +58,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 600;
 pub struct ColumnSpec {
     /// Column name.
     pub name: String,
-    /// Scalar type name; see [`scalar_type_from_str`].
+    /// Scalar type name; see `scalar_type_from_str`.
     #[serde(rename = "type")]
     pub ty: String,
     /// Whether the column admits `NULL`.
@@ -189,7 +189,7 @@ pub enum Command {
         /// ranges (`start..start + count`) that never consolidate. Defaults to 0.
         #[serde(default)]
         start: u64,
-        /// Payload padding per row; defaults to [`DEFAULT_ROW_BYTES`].
+        /// Payload padding per row; defaults to `DEFAULT_ROW_BYTES`.
         #[serde(default)]
         row_bytes: Option<usize>,
     },
@@ -208,7 +208,7 @@ pub enum Command {
         /// First synthetic row index (see [`Command::WriteSingleTs`]). Defaults to 0.
         #[serde(default)]
         start: u64,
-        /// Payload padding per row; defaults to [`DEFAULT_ROW_BYTES`].
+        /// Payload padding per row; defaults to `DEFAULT_ROW_BYTES`.
         #[serde(default)]
         row_bytes: Option<usize>,
     },
@@ -262,7 +262,7 @@ pub enum Command {
         id: u64,
         /// The target output-frontier timestamp.
         ts: u64,
-        /// Timeout in seconds; defaults to [`DEFAULT_TIMEOUT_SECS`].
+        /// Timeout in seconds; defaults to `DEFAULT_TIMEOUT_SECS`.
         #[serde(default)]
         timeout_secs: Option<u64>,
         /// If true, a timeout is reported (`status: timeout`) without failing the
