@@ -193,13 +193,14 @@ A composition runs CockroachDB for consensus, an object store for blob, a real `
 
 ## Local runs and profiling
 
-`test/clusterd-test-driver/run-local.sh` runs the whole thing on the host without docker images.
+`bin/pyactivate test/clusterd-test-driver/run-local.py` runs the whole thing on the host without docker images.
 It reuses or starts a CockroachDB container for consensus, uses a `file://` blob directory, builds and launches a local `clusterd`, and runs the `headless-driver` against it.
 Because every process is on localhost, one PubSub address (`127.0.0.1:6879`) and one persist location serve both the driver and `clusterd`, so none of the container-networking caveats apply.
+It is a Python script so it can reuse Materialize's mzcompose helpers; in particular it builds the timely config via the same `timely_config` and `DEFAULT_*_EXERT_PROPORTIONALITY` constants as the `Clusterd` service, so the arrangement merge effort stays in sync with CI defaults. Configuration is via environment variables (`TARGET_BYTES`, `SCENARIO`, `WRAPPER`, `PROFILE`, …).
 
 `TARGET_BYTES` controls how much data is written and is the main knob for run duration; the default is large enough to be worth profiling, lower it for a quick smoke run.
 
-To profile `clusterd` (heaptrack, perf, samply), set `WRAPPER` to a command the script prepends to the `clusterd` invocation, e.g. `WRAPPER="heaptrack" ./test/clusterd-test-driver/run-local.sh` or `WRAPPER="perf record -g --" …`.
+To profile `clusterd` (heaptrack, perf, samply), set `WRAPPER` to a command the runner prepends to the `clusterd` invocation, e.g. `WRAPPER="heaptrack" bin/pyactivate test/clusterd-test-driver/run-local.py` or `WRAPPER="perf record -g --" …`.
 On exit the script terminates the inner `clusterd` rather than the wrapper, so the profiler observes its child exit and flushes its output before exiting on its own.
 For `heaptrack` the script builds `clusterd` with `--no-default-features`, since the default `mz-alloc-default` feature uses jemalloc, which bypasses the system allocator heaptrack hooks; force this for other tools with `CLUSTERD_NO_DEFAULT_FEATURES=1`.
 For full manual control instead, launch `clusterd` yourself using the command the script prints under "clusterd command:", then run with `RUN_CLUSTERD=0` so the script only drives the already-running `clusterd`.
