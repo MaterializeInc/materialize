@@ -73,9 +73,8 @@ pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
     1.0,
     "\
     A limit on the number of outstanding persist bytes being fetched and \
-    parsed, expressed as a multiplier of the process's memory limit. This data \
-    all spills to lgalloc, so values > 1.0 are safe. Only applied to cc \
-    replicas.",
+    parsed, expressed as a multiplier of the process's memory limit. Values \
+    > 1.0 are only safe if this data spills to lgalloc.",
 );
 
 pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
