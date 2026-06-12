@@ -491,19 +491,19 @@ Explained Query:
                 %0[#0{r}, #1{c}]KK » %1:l0[#0{row_no}, #1{col_no}]KK
               ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 4 }
                 Union // { arity: 4 }
+                  Negate // { arity: 4 }
+                    Project (#0..=#2, #5) // { arity: 4 }
+                      Map (null) // { arity: 6 }
+                        Join on=(#0{r} = #3 AND #1{c} = #4) type=differential // { arity: 5 }
+                          implementation
+                            %1[#0, #1]UKKA » %0:l9[#0{r}, #1{c}]KK
+                          Get l9 // { arity: 3 }
+                          ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                            Distinct project=[#0, #1] // { arity: 2 }
+                              Project (#0, #1) // { arity: 2 }
+                                Get l10 // { arity: 4 }
                   Map (null) // { arity: 4 }
-                    Union // { arity: 3 }
-                      Negate // { arity: 3 }
-                        Project (#0..=#2) // { arity: 3 }
-                          Join on=(#0{r} = #3 AND #1{c} = #4) type=differential // { arity: 5 }
-                            implementation
-                              %1[#0, #1]UKKA » %0:l9[#0{r}, #1{c}]KK
-                            Get l9 // { arity: 3 }
-                            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                              Distinct project=[#0, #1] // { arity: 2 }
-                                Project (#0, #1) // { arity: 2 }
-                                  Get l10 // { arity: 4 }
-                      Get l17 // { arity: 3 }
+                    Get l17 // { arity: 3 }
                   Get l10 // { arity: 4 }
               ArrangeBy keys=[[#0{row_no}, #1{col_no}]] // { arity: 2 }
                 Project (#0, #1) // { arity: 2 }
@@ -597,29 +597,27 @@ Explained Query:
       Return // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
-            %0[×]U » %1[×]U
+            %0[×] » %1[×]
           ArrangeBy keys=[[]] // { arity: 1 }
-            Project (#1) // { arity: 1 }
-              Map ((#0{count} / 2)) // { arity: 2 }
-                Union // { arity: 1 }
+            Union // { arity: 1 }
+              Project (#1) // { arity: 1 }
+                Map ((#0{count} / 2)) // { arity: 2 }
                   Get l7 // { arity: 1 }
-                  Map (0) // { arity: 1 }
-                    Union // { arity: 0 }
-                      Negate // { arity: 0 }
-                        Project () // { arity: 0 }
-                          Get l7 // { arity: 1 }
-                      Constant // { arity: 0 }
-                        - ()
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map (0) // { arity: 2 }
+                    Get l7 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (0)
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l19 // { arity: 1 }
-              Map (0) // { arity: 1 }
-                Union // { arity: 0 }
-                  Negate // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l19 // { arity: 1 }
-                  Constant // { arity: 0 }
-                    - ()
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map (0) // { arity: 2 }
+                    Get l19 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (0)
 
 Source materialize.public.input
 

@@ -141,13 +141,12 @@ Explained Query:
     cte l2 =
       Union // { arity: 1 }
         Get l1 // { arity: 1 }
-        Map (null) // { arity: 1 }
-          Union // { arity: 0 }
-            Negate // { arity: 0 }
-              Project () // { arity: 0 }
-                Get l1 // { arity: 1 }
-            Constant // { arity: 0 }
-              - ()
+        Negate // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Map (null) // { arity: 2 }
+              Get l1 // { arity: 1 }
+        Constant // { arity: 1 }
+          - (null)
     cte l3 =
       Project (#0, #2, #3) // { arity: 3 }
         Map (substr(#1{line}, #2{c}, 1)) // { arity: 4 }
@@ -197,32 +196,30 @@ Explained Query:
         Reduce aggregates=[sum(((1 + #1{max}) - #0{r}))] // { arity: 1 }
           CrossJoin type=differential // { arity: 2 }
             implementation
-              %1[×]U » %0:l5[×]ef
+              %0:l5[×]ef » %1[×]ef
             ArrangeBy keys=[[]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Get l5 // { arity: 2 }
             ArrangeBy keys=[[]] // { arity: 1 }
               Union // { arity: 1 }
                 Get l2 // { arity: 1 }
-                Map (null) // { arity: 1 }
-                  Union // { arity: 0 }
-                    Negate // { arity: 0 }
-                      Project () // { arity: 0 }
-                        Get l2 // { arity: 1 }
-                    Constant // { arity: 0 }
-                      - ()
+                Negate // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Map (null) // { arity: 2 }
+                      Get l2 // { arity: 1 }
+                Constant // { arity: 1 }
+                  - (null)
       cte l8 =
         Get l3 // { arity: 3 }
     Return // { arity: 1 }
       Union // { arity: 1 }
         Get l7 // { arity: 1 }
-        Map (null) // { arity: 1 }
-          Union // { arity: 0 }
-            Negate // { arity: 0 }
-              Project () // { arity: 0 }
-                Get l7 // { arity: 1 }
-            Constant // { arity: 0 }
-              - ()
+        Negate // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Map (null) // { arity: 2 }
+              Get l7 // { arity: 1 }
+        Constant // { arity: 1 }
+          - (null)
 
 Source materialize.public.input
 
@@ -589,13 +586,12 @@ Explained Query:
     cte l2 =
       Union // { arity: 1 }
         Get l1 // { arity: 1 }
-        Map (null) // { arity: 1 }
-          Union // { arity: 0 }
-            Negate // { arity: 0 }
-              Project () // { arity: 0 }
-                Get l1 // { arity: 1 }
-            Constant // { arity: 0 }
-              - ()
+        Negate // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Map (null) // { arity: 2 }
+              Get l1 // { arity: 1 }
+        Constant // { arity: 1 }
+          - (null)
     cte l3 =
       Project (#0, #2, #3) // { arity: 3 }
         Map (substr(#1{line}, #2{c}, 1)) // { arity: 4 }
@@ -782,7 +778,7 @@ Explained Query:
         Reduce aggregates=[sum(((1 + #1{max}) - #0{r}))] // { arity: 1 }
           CrossJoin type=differential // { arity: 2 }
             implementation
-              %1[×]U » %0:l20[×]ef
+              %0:l20[×]ef » %1[×]ef
             ArrangeBy keys=[[]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#2{symbol} = "O") // { arity: 3 }
@@ -790,25 +786,23 @@ Explained Query:
             ArrangeBy keys=[[]] // { arity: 1 }
               Union // { arity: 1 }
                 Get l2 // { arity: 1 }
-                Map (null) // { arity: 1 }
-                  Union // { arity: 0 }
-                    Negate // { arity: 0 }
-                      Project () // { arity: 0 }
-                        Get l2 // { arity: 1 }
-                    Constant // { arity: 0 }
-                      - ()
+                Negate // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Map (null) // { arity: 2 }
+                      Get l2 // { arity: 1 }
+                Constant // { arity: 1 }
+                  - (null)
       cte [recursion_limit=142, return_at_limit] l22 =
         Get l3 // { arity: 3 }
     Return // { arity: 1 }
       Union // { arity: 1 }
         Get l21 // { arity: 1 }
-        Map (null) // { arity: 1 }
-          Union // { arity: 0 }
-            Negate // { arity: 0 }
-              Project () // { arity: 0 }
-                Get l21 // { arity: 1 }
-            Constant // { arity: 0 }
-              - ()
+        Negate // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Map (null) // { arity: 2 }
+              Get l21 // { arity: 1 }
+        Constant // { arity: 1 }
+          - (null)
 
 Source materialize.public.input
 

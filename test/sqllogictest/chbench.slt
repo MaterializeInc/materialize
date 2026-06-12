@@ -579,13 +579,12 @@ Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
 
 Used Indexes:
   - materialize.public.fk_orderline_order (*** full scan ***)
@@ -1027,15 +1026,15 @@ Explained Query:
         Project (#1{count_o_id}) // { arity: 1 }
           Reduce group_by=[#0{c_id}] aggregates=[count(#1{o_id})] // { arity: 2 }
             Union // { arity: 2 }
-              Map (null) // { arity: 2 }
-                Union // { arity: 1 }
-                  Negate // { arity: 1 }
-                    Project (#0{c_id}) // { arity: 1 }
-                      Distinct project=[#0{c_id}..=#2{c_w_id}] // { arity: 3 }
-                        Project (#0{c_id}..=#2{c_w_id}) // { arity: 3 }
-                          Get l0 // { arity: 4 }
-                  Project (#0{c_id}) // { arity: 1 }
-                    ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
+              Negate // { arity: 2 }
+                Project (#0{c_id}, #3) // { arity: 2 }
+                  Map (null) // { arity: 4 }
+                    Distinct project=[#0{c_id}..=#2{c_w_id}] // { arity: 3 }
+                      Project (#0{c_id}..=#2{c_w_id}) // { arity: 3 }
+                        Get l0 // { arity: 4 }
+              Project (#0{c_id}, #22) // { arity: 2 }
+                Map (null) // { arity: 23 }
+                  ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
               Project (#0{c_id}, #3{o_id}) // { arity: 2 }
                 Get l0 // { arity: 4 }
 
@@ -1073,17 +1072,16 @@ Explained Query:
                   Project (#0{i_id}, #4{i_data}) // { arity: 2 }
                     ReadStorage materialize.public.item // { arity: 5 }
   Return // { arity: 1 }
-    Project (#2) // { arity: 1 }
-      Map (((100 * #0{sum}) / (1 + #1{sum_ol_amount}))) // { arity: 3 }
-        Union // { arity: 2 }
+    Union // { arity: 1 }
+      Project (#2) // { arity: 1 }
+        Map (((100 * #0{sum}) / (1 + #1{sum_ol_amount}))) // { arity: 3 }
           Get l0 // { arity: 2 }
-          Map (null, null) // { arity: 2 }
-            Union // { arity: 0 }
-              Negate // { arity: 0 }
-                Project () // { arity: 0 }
-                  Get l0 // { arity: 2 }
-              Constant // { arity: 0 }
-                - ()
+      Negate // { arity: 1 }
+        Project (#2) // { arity: 1 }
+          Map (null) // { arity: 3 }
+            Get l0 // { arity: 2 }
+      Constant // { arity: 1 }
+        - (null)
 
 Source materialize.public.item
 
@@ -1279,17 +1277,16 @@ Explained Query:
                             ReadStorage materialize.public.item // { arity: 5 }
                       Get l0 // { arity: 10 }
   Return // { arity: 1 }
-    Project (#1) // { arity: 1 }
-      Map ((#0{sum_ol_amount} / 2)) // { arity: 2 }
-        Union // { arity: 1 }
+    Union // { arity: 1 }
+      Project (#1) // { arity: 1 }
+        Map ((#0{sum_ol_amount} / 2)) // { arity: 2 }
           Get l1 // { arity: 1 }
-          Map (null) // { arity: 1 }
-            Union // { arity: 0 }
-              Negate // { arity: 0 }
-                Project () // { arity: 0 }
-                  Get l1 // { arity: 1 }
-              Constant // { arity: 0 }
-                - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l1 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
 
 Source materialize.public.item
   filter=(like["%b"](padchar(#4{i_data})))
@@ -1379,28 +1376,27 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[sum(#0{ol_amount})] // { arity: 1 }
         Project (#8{ol_amount}) // { arity: 1 }
-          Filter (#7{ol_quantity} <= 10) AND (#7{ol_quantity} >= 1) AND (#12 OR #13 OR #14 OR #15 OR #16) AND ((like["%a"](#17) AND (#12 OR #13 OR #14)) OR (like["%b"](#17) AND (#12 OR #13 OR #15)) OR (like["%c"](#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
-            Map ((#2{ol_w_id} = 1), (#2{ol_w_id} = 2), (#2{ol_w_id} = 3), (#2{ol_w_id} = 4), (#2{ol_w_id} = 5), padchar(#11{i_data})) // { arity: 18 }
+          Filter (#7{ol_quantity} <= 10) AND (#7{ol_quantity} >= 1) AND (#12 OR #13 OR #14 OR #15 OR #16) AND ((like["%a"](#11) AND (#12 OR #13 OR #14)) OR (like["%b"](#11) AND (#12 OR #13 OR #15)) OR (like["%c"](#11) AND (#12 OR #14 OR #16))) // { arity: 17 }
+            Map ((#2{ol_w_id} = 1), (#2{ol_w_id} = 2), (#2{ol_w_id} = 3), (#2{ol_w_id} = 4), (#2{ol_w_id} = 5)) // { arity: 17 }
               Join on=(#4{ol_i_id} = #10{i_id}) type=differential // { arity: 12 }
                 implementation
                   %1:item[#0{i_id}]UKliif » %0:orderline[#4{ol_i_id}]KAeliiiif
                 ArrangeBy keys=[[#4{ol_i_id}]] // { arity: 10 }
                   ReadIndex on=orderline fk_orderline_item=[differential join] // { arity: 10 }
                 ArrangeBy keys=[[#0{i_id}]] // { arity: 2 }
-                  Project (#0{i_id}, #4{i_data}) // { arity: 2 }
+                  Project (#0{i_id}, #5) // { arity: 2 }
                     Filter (#3{i_price} <= 400000) AND (#3{i_price} >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)) // { arity: 6 }
                       Map (padchar(#4{i_data})) // { arity: 6 }
                         ReadStorage materialize.public.item // { arity: 5 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
 
 Source materialize.public.item
   filter=((#3{i_price} <= 400000) AND (#3{i_price} >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)))

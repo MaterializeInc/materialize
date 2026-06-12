@@ -458,20 +458,20 @@ Explained Query:
               ReadIndex on=mz_source_statuses mz_source_statuses_ind=[differential join]
   Return
     Union
-      Map (null, null)
-        Union
-          Negate
-            Project (#0{id}, #1{oid}, #3{name}, #4{type}, #6{size})
-              Filter like["u%"](#0{id})
-                Join on=(#0{id} = #15{id}) type=differential
-                  Get l0
-                  ArrangeBy keys=[[#0{id}]]
-                    Distinct project=[#0{id}]
-                      Project (#0{id})
-                        Get l1
-          Project (#0{id}, #1{oid}, #3{name}, #4{type}, #6{size})
-            Filter like["u%"](#0{id})
-              ReadIndex on=mz_sources mz_sources_ind=[*** full scan ***]
+      Negate
+        Project (#0{id}, #1{oid}, #3{name}, #4{type}, #6{size}, #16, #17)
+          Filter like["u%"](#0{id})
+            Map (null, null)
+              Join on=(#0{id} = #15{id}) type=differential
+                Get l0
+                ArrangeBy keys=[[#0{id}]]
+                  Distinct project=[#0{id}]
+                    Project (#0{id})
+                      Get l1
+      Project (#0{id}, #1{oid}, #3{name}, #4{type}, #6{size}, #15, #16)
+        Filter like["u%"](#0{id})
+          Map (null, null)
+            ReadIndex on=mz_sources mz_sources_ind=[*** full scan ***]
       Get l1
 
 Used Indexes:
