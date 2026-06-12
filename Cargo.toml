@@ -529,7 +529,7 @@ tower-sessions-memory-store = "0.14.0"
 tracing = "0.1.44"
 tracing-capture = "0.1.0"
 tracing-core = "0.1.35"
-tracing-opentelemetry = "0.32.1"
+tracing-opentelemetry = "0.33.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json", "tracing-log"] }
 tungstenite = "0.28.0"
 turmoil = "0.7.2"
