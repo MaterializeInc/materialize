@@ -17,7 +17,21 @@ mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["async", "tracing", "metrics", "test"] }
+# Used by the binary to configure tracing. It also keeps orchestrator-tracing's
+# `tokio-console` feature enabled, which must stay consistent with mz-ore's
+# `tokio-console` (pulled transitively via mz-compute-client) when this bin is
+# built in the same cargo invocation as orchestratord — otherwise
+# orchestrator-tracing fails to compile (E0063 on `TracingConfig::tokio_console`).
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
+# default-features = false to avoid pulling mz-ore's default `tokio-console`
+# feature: this bin can be grouped into a single cargo build with other images'
+# bins (e.g. orchestratord), and enabling tokio-console there breaks
+# orchestrator-tracing, which is built with its own tokio-console feature off.
+mz-ore = { path = "../ore", default-features = false, features = [
+    "async",
+    "tracing",
+    "metrics",
+] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
@@ -30,6 +44,10 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# The `test` feature provides the `#[mz_ore::test]` macro; it is only needed
+# when building tests, not the production binary, so keep it out of the bin's
+# feature set (see the [dependencies] mz-ore comment).
+mz-ore = { path = "../ore", features = ["test"] }
 tempfile.workspace = true
 
 [package.metadata.cargo-udeps.ignore]

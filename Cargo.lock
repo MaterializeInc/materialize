@@ -6204,6 +6204,7 @@ dependencies = [
  "mz-compute-types",
  "mz-dyncfg",
  "mz-expr",
+ "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",

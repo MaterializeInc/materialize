@@ -28,7 +28,9 @@ use mz_clusterd_test_driver::dataflow::index_dataflow;
 use mz_clusterd_test_driver::driver::Driver;
 use mz_clusterd_test_driver::persist_host::PersistHost;
 use mz_compute_client::protocol::command::ComputeCommand;
+use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{GlobalId, Timestamp};
 use timely::progress::Antichain;
@@ -349,6 +351,20 @@ async fn scenario_multi_dataflow() -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Configure tracing so the driver emits structured logs like the real
+    // Materialize binaries. Uses default tracing args (env-driven log filter via
+    // the usual `MZ_*`/`RUST_LOG`-style options is available through
+    // `TracingCliArgs`, but we keep the defaults here).
+    let _tracing_handle = TracingCliArgs::default()
+        .configure_tracing(
+            StaticTracingConfig {
+                service_name: "headless-driver",
+                build_info: mz_persist_client::BUILD_INFO,
+            },
+            MetricsRegistry::new(),
+        )
+        .await?;
+
     let scenario = std::env::var("SCENARIO").unwrap_or_else(|_| "index".to_string());
     match scenario.as_str() {
         "index" => scenario_index().await,
