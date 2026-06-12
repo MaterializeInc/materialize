@@ -156,10 +156,11 @@ This implementation is shippable behind the existing `Handle` API as a drop-in r
 #### Swap-backed extents
 
 Where no filesystem exists, the extent store is anonymous memory the engine deliberately hands to kernel swap.
-An extent is an extent-sized anonymous allocation: "write" compresses the evicted chunk into it and issues `MADV_PAGEOUT`, pushing the pages to the swap device; "read" issues `MADV_WILLNEED` ahead of need — asynchronous swap-in, the backend's readahead mechanism — then decompresses into the chunk's freshly allocated slot; "free" is a plain deallocation, with any swapped copy discarded for free.
+An extent is an extent-sized anonymous allocation, sized to the compressed payload (page-rounded), and residency on the device is a second, separate decision from writing: "write" compresses the chunk into the allocation, which *stays resident* — the compressed-but-resident tier of the residency ladder below — until the pool's RSS target forces a `pageout`, which pushes the pages to the swap device with `MADV_PAGEOUT`; "read" issues `MADV_WILLNEED` ahead of the decompress and makes the pages resident again; "free" is a plain deallocation, with any swapped copy discarded for free.
+Nothing is ever both uncompressed and on the device: slots never reach swap (eviction discards them), and extents reach it only in compressed form.
 
-This is the lz4 + `MADV_PAGEOUT` strategy of [#36948](https://github.com/MaterializeInc/materialize/pull/36948) generalized from a spill-path special case into the pool's backing layer: the same measured costs, the same ~5.6× reduction in swap traffic from compression, now with the pool's write elision and lifecycle policy above it and the Layer 3 format readable through it.
-The I/O executor choice applies unchanged — compress-plus-madvise runs on the evicting worker or on spill threads.
+This is the lz4 + `MADV_PAGEOUT` strategy of [#36948](https://github.com/MaterializeInc/materialize/pull/36948) generalized from a spill-path special case into the pool's backing layer — the same measured costs, the same ~5.6× reduction in swap traffic from compression, now with the pool's write elision and lifecycle policy above it and the Layer 3 format readable through it — and then split in two: compression at write time, device pageout only when the resident ledger demands it.
+Both halves run on spill threads (see I/O execution); `MADV_PAGEOUT` in particular is synchronous reclaim — page-table walks, TLB shootdowns, writeback submission — and belongs off the workers for exactly the reasons eviction does.
 
 The backend has no metadata costs at all; its weakness is the read path, where the kernel owns fault servicing and the old reclaim ceilings apply at low thread counts — mitigated by compression (5.6× fewer bytes to fault) and `MADV_WILLNEED` prefetch, but not eliminated.
 Where both backends are available, the choice is a config knob over the same interface; milestone 2 benches them head to head.
@@ -168,8 +169,11 @@ Where both backends are available, the choice is a config knob over the same int
 
 #### Address space and translation
 
-Reserve large anonymous virtual-memory regions per size class (Umbra's design): a 2 MiB class for batcher chunks and large column pages, hugepage-aligned, plus one or two smaller classes for Layer 3 pages and headers.
-Virtual reservation is `MAP_NORESERVE`-cheap; physical memory materializes on use and is released on eviction with batched `MADV_DONTNEED`.
+Reserve large anonymous virtual-memory regions per size class (Umbra's design).
+The prototype runs eight classes, 64 KiB through 8 MiB in powers of two: the top of the range covers the batcher's bimodal chunk shapes (see Measured), the bottom anticipates Layer 3 pages and headers.
+Classes of 2 MiB and up are hugepage-aligned and marked `MADV_HUGEPAGE`, so a slot's fault-in is a handful of hugepage faults rather than ~512 base-page faults.
+Virtual reservation is `MAP_NORESERVE`-cheap; physical memory materializes on use and is released on eviction with `MADV_DONTNEED` — except for a bounded *warm pool* of freed slots (an eighth of the budget, capped at 1 GiB) that keep their pages mapped, so allocation-heavy phases reuse warm slots with zero page faults and zero kernel page-zeroing instead of re-faulting every insert.
+The warm pool is deliberate, bounded RSS overshoot above the resident budget; the residency-tier section below accounts for it.
 The pool memory is not file-backed: the pool is a cache over the extent store, not a view of it, and data moves between the two only through explicit, engine-scheduled I/O — the kernel never transfers a byte in either direction, unlike both lgalloc (where the mapping is the file) and swap (where anonymous memory is implicitly device-backed).
 
 Slots are scoped to residency: eviction returns a chunk's slot to a free list along with its physical pages, and fault-in allocates a fresh slot, so a chunk's address is stable only between a fault-in and the next eviction.
@@ -186,23 +190,48 @@ There is no page table, no hash map, no latch on the resident path.
 #### Chunk states
 
 Residency is a state, not a type.
-Each chunk carries one atomic state word (the vmcache per-page word, minus the dirty states immutability deletes):
+Each chunk carries one state word (the vmcache per-page word, minus the dirty states immutability deletes):
 
-* `UnbackedResident` — lives only in the pool; no disk copy exists.
-* `WriteInFlight` — write to an extent has been enqueued or issued; the chunk remains readable.
-* `BackedResident` — clean; a disk copy exists; eviction is free (release physical pages, no I/O).
-* `Evicted` — disk copy only; access faults it back in.
-* `Faulting` — read in flight; concurrent accessors wait or retry.
+* `UnbackedResident` — lives only in the pool; no extent copy exists.
+* `WriteInFlight` — handed to a spill thread for compression; the chunk remains readable, and freeing it cancels the work.
+* `BackedResident` — an identical extent copy exists; eviction is a pure page release, no compression and no I/O.
+* `Evicted` — extent copy only; the extent itself may still be RAM-resident (the compressed tier) or paged out to the device.
+* `Oversize` — payload exceeded the largest size class and fell back to an unpageable heap allocation; also the degraded landing state when a fault-in finds its size class exhausted.
+  A prototype limitation, counted and bounded but outside the budget.
 
-The `PagedColumn` enum and its `Resident`/`Paged`/`Compressed` variants disappear; callers hold a chunk handle and access it uniformly.
+The prototype guards the state word with a per-chunk mutex rather than a lock-free atomic, and has no `Faulting` state: fault-in runs synchronously under that lock, which is correct and simple at chunk granularity; a waiting-room state earns its place only if profiles show convoying on hot faults.
+The `PagedColumn` enum's eventual deletion stands, but the migration path runs through it: the prototype adds a `Pooled` variant carrying a chunk handle alongside the legacy `Resident`/`Paged`/`Compressed` variants, and the enum collapses when the last legacy consumer flips.
 
 #### Write-behind, and never writing dead data
 
 "Page out" becomes a state transition, not an I/O.
-Under budget pressure (or eager-backing policy, below) a chunk transitions to `WriteInFlight` and its write-back is performed by the evicting worker or queued to spill threads (see I/O execution); on completion it is `BackedResident`; physical pages are released only when the budget actually demands it.
+Two producers feed `WriteInFlight`, with different intents:
+
+* **Budget eviction.** When resident bytes exceed the budget, enforcement selects a victim (spending its second chance), a spill thread compresses it into an extent, and the slot is released — the chunk lands `Evicted`.
+  A chunk that was already `BackedResident` skips the spill thread entirely: its eviction is a pure page release inline.
+* **Eager backing.** Spill threads with an empty eviction queue walk the candidate queue and compress unbacked chunks into extents *without* evicting them: the chunk lands `BackedResident`, still readable in its slot, and its eventual eviction becomes the cheap kind.
+  A backing pass never spends a chunk's second chance — it must not age anything toward eviction — and proceeds even on pinned chunks, since the slot is untouched.
+  This is the eager/lazy policy bit of "Backing policy" below as implemented today: opt-in (`column_paged_batcher_eager_backing`), idle-cycle work, converting future pressure response from compress-under-deadline into page release.
 
 This captures what makes the swap backend fast — laziness, free re-access before reclaim — while keeping what makes the file backend controllable, and adds the one thing neither backend can do: freeing an `UnbackedResident` chunk is a pure memory operation, and freeing a `WriteInFlight` chunk cancels the write.
 In a merge-heavy workload most chunks die young; avoided writes are the largest available win, and only the engine knows liveness.
+
+#### Residency tiers and the RSS target
+
+With the warm pool and the compressed-resident extents, "resident" is a ladder of four rungs, each bounded, cheapest to reclaim first:
+
+1. **Slots** (uncompressed, directly readable) — bounded by the resident-bytes budget; crossing it compresses the coldest chunks into extents.
+2. **Warm free slots** (pages kept mapped for reuse) — bounded by `min(budget / 8, 1 GiB)`.
+3. **Compressed-resident extents** — bounded by the headroom the *pool RSS target* leaves above the first two rungs: `compressed cap = rss target − budget − warm cap`.
+   Crossing it pages the oldest extents out to the device, FIFO.
+4. **The swap device** — unbounded, holding whatever the ladder pushed down.
+
+The identity that makes the ladder auditable: pool RSS ≤ budget + warm cap + compressed cap = max(rss target, budget + warm cap).
+A target of zero (or anything at or below budget plus warm cap) collapses rung 3 — every extent pages out as soon as it is written, the original behavior — so the tier is strictly additive and disabled by dialing one knob.
+The motivation is the same observation that makes zswap work: most evicted-then-refaulted data is refaulted soon, and serving those faults from compressed RAM (a decompress, microseconds) instead of the swap device (a device read, milliseconds) is a large win for a bounded RSS premium.
+Rung 3 is zswap with the engine's lifecycle knowledge: dead extents free without writeback, and the engine chooses what enters the tier rather than the kernel intercepting pageouts.
+
+Both bounds derive from *physical RAM* — `/proc/meminfo` `MemTotal` clamped by the cgroup limit — never from the announced memory limit, which on swap-provisioned nodes deliberately includes swap and would inflate a "fraction of memory" to a fraction of the disk.
 
 #### Eviction policy
 
@@ -214,7 +243,11 @@ Lifecycle hints drive eviction; a small second-chance FIFO is the backstop for u
 * Hydration-era output is write-once-read-rarely: eager-evict FIFO.
 
 LeanStore's cooling stage exists because a generic buffer manager must speculate about coldness; the engine here knows it, so the speculation machinery reduces to a backstop.
-The budget is the existing `TieredPolicy` atomic pool reinterpreted: it bounds resident bytes, and exceeding it selects eviction victims rather than gating pageout decisions per chunk.
+The budget bounds resident bytes, and exceeding it selects eviction victims rather than gating pageout decisions per chunk.
+
+The prototype splits this differently than the list above implies, and the split looks right rather than provisional: the pool itself speaks *only* the second-chance FIFO — it never receives hints — and lifecycle knowledge is applied by the consumer in the two forms it actually takes.
+Dead chunks are freed (the pool elides any pending write), and the merge batcher simply never hands the pool chunks it knows are about to die: chains shorter than a threshold (`MIN_PAGED_CHAIN_LEN`, 4) stay resident outside the pool, because the rebalance cascade consumes them within a few rounds and paging them only schedules cancelled work.
+That one consumer-side constant eliminated the early-hydration cancellation storms the first prototype measured, without any hint plumbing in the pool API; richer hints can still be added if a consumer turns up that needs them.
 
 #### Borrow safety: epochs
 
@@ -224,6 +257,9 @@ Borrows into pool memory never cross a yield (cursor positions stored across act
 
 This deliberately departs from Umbra's optimistic versioned latches: optimistic validate-and-restart requires restartable readers, and differential cursor consumers dereference borrows in arbitrary downstream code that cannot be re-executed.
 The trade is explicit: we give up evicting a page out from under an active reader — which we do not need, because borrows are yield-bounded — for zero per-access synchronization.
+
+The prototype runs on the pin-count fallback (per-chunk pin counts under the chunk's state mutex; eviction skips pinned chunks), not epochs.
+At Layer 2's access pattern — chunks pinned briefly around bulk copies, not per-record — the mutex cost is invisible, and epochs remain the design for Layer 3's per-record cursor traffic, where milestone 3 decides them empirically (see Open questions).
 
 #### I/O execution
 
@@ -246,7 +282,10 @@ The costs are the machinery — queues, completions, sizing knobs, cross-thread 
 A middle path exists if measurement splits the difference: workers take write stalls synchronously but submit their own readahead through a small per-worker io_uring, checking completions at access time — read-side overlap without dedicated threads.
 The chunk state machine is identical in all three shapes; only the executor of the `WriteInFlight` and `Faulting` transitions differs, so the choice is contained behind one interface and revisitable.
 
-The staging prototype supplies the first data point (see Measured under Performance estimates): on the swap-backed store, where eviction cost is `MADV_PAGEOUT` page-table work rather than a device write, unguarded on-worker enforcement pinned CPUs, and off-worker spill threads behind single-flight enforcement and a bounded queue resolved it.
+For the swap-backed store, the staging prototype decided this question: off-worker (see Measured under Performance estimates).
+Eviction cost there is `MADV_PAGEOUT` page-table work rather than a device write; unguarded on-worker enforcement pinned CPUs, and off-worker spill threads behind single-flight budget enforcement and a bounded queue resolved it.
+The implemented shape: a configurable number of spill threads, spawned once at first enable (thread count changes apply at the next process start); budget enforcement is single-flighted, while compressed-tier enforcement is deferred to the spill threads by notification, with two backstops — workers enforce inline when no spill threads exist, and when the tier overshoots to twice its cap (the queue has demonstrably fallen behind, and a late bound beats no bound).
+Workers also still evict inline when the spill queue is full — the backpressure path; cancellation-heavy phases that used to saturate the queue are now avoided upstream (see Eviction policy).
 The on-worker option remains live for the file-extent backend, where the write is a single bounded `pwrite`.
 
 Eviction throughput is bounded by `madvise` page-table work and TLB shootdowns (the vmcache paper's measured ceiling; their fix, the exmap kernel module, is not shippable here).
@@ -255,8 +294,9 @@ Mitigation is granularity: 2 MiB chunks are ~500× fewer page-table operations p
 #### Compression
 
 Compression is a property of the extent, not the residency state.
-Resident form is always uncompressed in its slot; lz4 (or stronger, see BtrBlocks under Prior art) is applied at write time by whichever thread performs the write (see I/O execution) and reversed at fault-in.
-This keeps codec CPU off the access path — and off worker threads entirely in the off-worker option — and removes today's oddity where `CompressedInner::Memory` holds lz4 bytes in resident memory — softened by the eager `MADV_PAGEOUT` of [#36948](https://github.com/MaterializeInc/materialize/pull/36948), but still kernel-managed on the way back in.
+A chunk's slot form is always uncompressed; lz4 (or stronger, see BtrBlocks under Prior art) is applied at write time by whichever thread performs the write (see I/O execution) and reversed at fault-in.
+This keeps codec CPU off the access path — and off worker threads entirely in the off-worker option.
+Compressed bytes *do* live in resident memory, deliberately: that is the compressed-resident tier (see Residency tiers), which differs from today's `CompressedInner::Memory` oddity in being bounded, engine-accounted, and engine-paged when its cap is crossed, rather than unbounded lz4 bytes left to kernel reclaim.
 
 ### Layer 3: paged sealed batches
 
@@ -286,12 +326,13 @@ This narrowing is also the precise answer to "why not a B+-tree": not because B-
 
 A paged batch is, structurally, a static bulk-loaded B+-tree:
 
-* **Resident header** (small, never evicted): fence keys — the first key of each page, owned — a page table mapping logical index ranges to chunk handles, and optionally a filter.
+* **Resident header** (small, never evicted): fence keys — the first *and last* key of each page, owned; both ends are needed because a sorted run's entries straddle page boundaries, so locating a key takes a range test, not a successor probe — a page table mapping logical index ranges to chunk handles, and optionally a filter.
   Resident overhead is tens of bytes per 2 MiB page, four orders of magnitude below the data.
 * **Column pages** (leaves): the batch's parallel columns split at aligned boundaries.
   Size classes per column density: small pages for offsets/times/diffs, large pages for key and val data.
 
 `seek_key` binary-searches fence keys with zero I/O and faults at most one leaf page.
+A prototype of exactly this shape exists (`PagedRun` in `mz_timely_util::columnar`): pool-chunked sorted runs with first/last fence keys, owned-result seeks with pins scoped inside the call, and a consolidating bounded-window merge — built ahead of the spine integration so the format's mechanics could be tested under the batcher first.
 This is Umbra's B+-tree read path with the write path amputated: because batches are immutable and built bottom-up at seal, there are no structure-modification operations, no latch coupling, no insert path — every hard problem in the mutable-tree literature is absent by construction.
 
 #### Access patterns, read amplification, and policy
@@ -393,14 +434,18 @@ Eager backing converts pressure response from a write storm at the worst moment 
 
 ### Configuration
 
-Dyncfg-driven, mirroring the existing pager flags:
+Dyncfg-driven, mirroring the existing pager flags.
+The prototype's surface:
 
-* enable flags per consumer (compute batchers, storage upsert stash, paged sealed batches), so rollout is independent per surface;
-* resident-bytes budget (the reinterpreted `TieredPolicy` pool);
-* eager-backing threshold (batch size or spine level);
-* I/O executor selection (and spill-thread count where applicable), codec, scratch sizing.
+* enable flags per consumer (`enable_column_paged_batcher_spill` for compute batchers, `enable_upsert_paged_spill` for the storage upsert stash), so rollout is independent per surface;
+* `column_paged_batcher_use_pool` selects the pool over the legacy tiered pager as the shared mechanism;
+* `column_paged_batcher_budget_fraction` — the resident-bytes budget as a fraction of physical RAM, with a 128 MiB floor;
+* `column_paged_batcher_pool_rss_target_fraction` — the pool RSS target as a fraction of physical RAM (default 0.25, zswap's customary share), from which the compressed tier's capacity derives (see Residency tiers);
+* `column_paged_batcher_spill_worker_count` and `column_paged_batcher_eager_backing` — the I/O executor knobs;
+* codec and scratch sizing carry over from the pager flags.
 
-The existing `ColumnPager`/`PagingPolicy` seam is the Layer 2 integration point for batchers; live reconfiguration semantics carry over.
+Fractions resolve against physical RAM (cgroup-clamped), never against the announced memory limit — on swap-provisioned nodes that limit includes swap, and a budget derived from it would defeat the point of having one.
+The existing `ColumnPager`/`PagingPolicy` seam is the Layer 2 integration point for batchers; live reconfiguration semantics carry over, with two prototype exceptions: the spill-thread count applies at first enable (threads spawn once), and the pool itself is a process singleton whose budget retunes in place — live `Pooled` handles keep their accounting coherent through the one instance.
 
 ## Performance estimates
 
@@ -467,7 +512,8 @@ Milestone 2's swap-backed prototype ran on staging under the upsert-v2 source st
 * **Page tables tracked the compressed ledger at ~0.2–0.4%** (82–250 MiB against 20–70 GiB of extents) — the slot-per-resident economics the Address space section argues for, observed.
 * **Die-young elision is real and visible.**
   Early in hydration the chains are small and merge constantly, so chunks die younger than the spill queue's latency: cancellations ran at 100–400/s — each an avoided write — decaying to zero as chains matured and lifetimes stretched.
-  The same churn saturated the bounded spill queue and pushed eviction inline onto workers; growable spill-thread counts and churn-aware victim selection (skip the youngest chains) are the identified follow-ups.
+  The same churn saturated the bounded spill queue and pushed eviction inline onto workers.
+  Both identified follow-ups resolved consumer-side rather than in the pool: the spill-thread count stayed spawn-once (made configurable), and instead of churn-aware victim selection the batcher stopped offering doomed chunks at all — chains below `MIN_PAGED_CHAIN_LEN` stay resident (see Eviction policy), which eliminated the cancellation storms at their source.
 * **Eviction must not run on workers unguarded.**
   A first cut let every worker attempt budget enforcement concurrently; `madvise` plus lock contention pinned CPUs.
   Single-flight enforcement over a resident-only queue plus dedicated spill threads resolved it — for the swap-backed store, where page-table work dominates eviction cost, the off-worker executor is the prototype's de facto answer to the I/O execution question.
@@ -483,6 +529,13 @@ Milestone 2's swap-backed prototype ran on staging under the upsert-v2 source st
   `MADV_PAGEOUT` leaves clean swap-cache copies that the kernel, absent pressure, never drops; cgroup working-set charges them, so dashboards show the ledger as linear "memory growth" that is actually droppable cache.
   Anonymous RSS is the honest health signal.
   The cache also earns its keep: ~99% of observed fault-ins were served from it as minor faults — an accidental free middle tier between the pool and the device.
+  The compressed-resident tier (see Residency tiers) is that accident made deliberate: the same fault-absorbing middle layer, but engine-bounded and engine-accounted instead of at the kernel's pressure-dependent mercy.
+* **The residency ladder behaves as specified.**
+  A later run with the tier enabled (RSS target at the 0.25 default on a ~180 GiB-RAM box, ≈45 GiB of tier headroom; budget floored at 128 MiB) showed the configured signature: anonymous RSS climbed to ≈53 GiB — extents accumulating compressed-resident — and only then did device pageouts begin, oldest first, holding RSS flat at the target while the backlog kept growing.
+  The node's first genuine kernel pressure event during these runs passed without worker stalls or `pgscan` involvement on the pool.
+* **Bounded now costs roughly nothing.**
+  Head-to-head on the same sources, tier-enabled pool hydration came within single-digit percent of the upsert-v1 RocksDB baseline (RocksDB on an in-memory emulated filesystem — its fastest case) — while the v1 run held the entire state in RSS plus RocksDB's working copies, with a far higher peak, and the pool run held residency at the target by construction.
+  The original benchmark motivation was "how much does boundedness cost"; the measured answer is parity.
 
 ## Minimal viable prototype and milestones
 
@@ -649,6 +702,7 @@ Epochs cost nothing on the read path and only delay eviction by one yield cycle;
 * **Owned vs. pinned API for the first cut of Layer 2.**
   Keeping `take`-style owned rehydration (one memcpy out of the pool) eases migration; pinned borrows are the end state; builders allocating pool memory directly (zero-copy seal) is the end-end state.
   Recommend owned-first, with the chunk handle designed so pinning is additive.
+  Status: the prototype shipped owned-first as recommended, pinning exists and `PagedRun` uses it, and the *insert* side is already zero-staging — `insert_with` hands serialization the slot memory to fill in place, so a chunk's single copy is written directly into the pool.
 * **Budget topology.**
   One global pool with per-dataflow priorities, or partitioned pools per cluster replica role?
   Peek-serving arrangements need protection from hydration floods either way; the simplest sufficient mechanism is preferred.
