@@ -45,7 +45,14 @@ pub fn sample_desc() -> RelationDesc {
 /// Builds `n` rows; `payload` is `pad` bytes wide so callers can target a byte
 /// budget (≈ `n * (pad + overhead)`).
 pub fn sample_rows(n: u64, pad: usize) -> Vec<Row> {
-    (0..n)
+    sample_rows_from(0, n, pad)
+}
+
+/// Like [`sample_rows`], but ids run `start..start + n`. Successive batches with
+/// disjoint id ranges produce distinct rows that never consolidate with each
+/// other, so a downstream count equals the total rows written.
+pub fn sample_rows_from(start: u64, n: u64, pad: usize) -> Vec<Row> {
+    (start..start + n)
         .map(|i| {
             let mut row = Row::default();
             let mut packer = row.packer();

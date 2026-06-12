@@ -11,7 +11,8 @@
 //! runs one scenario, exits non-zero on assertion failure.
 //!
 //! Select the scenario via the `SCENARIO` env var (default: `index`):
-//!   - `index`         — baseline: write data at a single timestamp and hydrate.
+//!   - `index`         — load data at ts 0 and hydrate, then tick the frontier
+//!                       forward with incremental appends (TICKS, TICK_ROWS).
 //!   - `deep-history`  — hydrate over a shard with many distinct timestamps.
 //!   - `side-effects`  — drive `AllowCompaction` explicitly to advance the read frontier.
 //!   - `multi-dataflow` — attempt to hydrate two dataflows simultaneously (reproduction).
@@ -20,7 +21,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use mz_clusterd_test_driver::data::{
-    rows_for_bytes, sample_desc, sample_rows, write_rows_single_ts, write_rows_spread,
+    rows_for_bytes, sample_desc, sample_rows, sample_rows_from, write_rows_single_ts,
+    write_rows_spread,
 };
 use mz_clusterd_test_driver::dataflow::index_dataflow;
 use mz_clusterd_test_driver::driver::Driver;
@@ -65,7 +67,14 @@ async fn setup() -> anyhow::Result<Setup> {
     })
 }
 
-/// Baseline scenario: write `n` rows at ts 0, build an index, and verify the count.
+/// Baseline scenario in two phases.
+///
+/// Load phase: write `n` rows at ts 0, build an index with `as_of = 0`, and wait
+/// for it to hydrate. Tick phase: append `TICK_ROWS` fresh rows at each of
+/// `TICKS` advancing timestamps, waiting for the index's output frontier to step
+/// forward each time. The tick phase exercises steady-state incremental
+/// maintenance, distinct from the initial hydration, and is the interesting part
+/// to profile under a `WRAPPER`.
 async fn scenario_index() -> anyhow::Result<()> {
     let Setup {
         loc,
@@ -73,11 +82,23 @@ async fn scenario_index() -> anyhow::Result<()> {
         target_bytes,
     } = setup().await?;
 
+    let ticks: u64 = std::env::var("TICKS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+    let tick_rows_n: u64 = std::env::var("TICK_ROWS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1000);
+
     let client = driver.host.client().await?;
     let shard = ShardId::new();
     let desc = sample_desc();
+
+    // --- Load phase: bulk write at ts 0, build the index, hydrate. ---
     let n = rows_for_bytes(target_bytes, 64);
     let rows = sample_rows(n, 64);
+    let load_start = std::time::Instant::now();
     write_rows_single_ts(&client, shard, &desc, &rows, Timestamp::from(0)).await?;
 
     let (source_id, index_id) = (GlobalId::User(1000), GlobalId::User(1001));
@@ -96,11 +117,39 @@ async fn scenario_index() -> anyhow::Result<()> {
     driver
         .expect_frontier(index_id, Timestamp::from(1), Duration::from_secs(600))
         .await?;
+    let load_elapsed = load_start.elapsed();
+
+    // --- Tick phase: append at advancing timestamps, wait for the frontier. ---
+    // Each batch uses a disjoint id range so rows never consolidate and the
+    // final count is exactly the total written.
+    let tick_start = std::time::Instant::now();
+    for t in 1..=ticks {
+        let id_start = n + (t - 1) * tick_rows_n;
+        let batch = sample_rows_from(id_start, tick_rows_n, 64);
+        write_rows_single_ts(&client, shard, &desc, &batch, Timestamp::from(t)).await?;
+        driver
+            .expect_frontier(
+                index_id,
+                Timestamp::from(t).step_forward(),
+                Duration::from_secs(600),
+            )
+            .await?;
+    }
+    let tick_elapsed = tick_start.elapsed();
+
+    // Peek at the last written timestamp; every loaded and ticked row is present.
     let count = driver
-        .peek_count(index_id, desc, Timestamp::from(0))
+        .peek_count(index_id, desc, Timestamp::from(ticks))
         .await?;
-    anyhow::ensure!(u64::cast_from(count) == n, "expected {n} rows, got {count}");
-    println!("OK: indexed {count} rows");
+    let expected = n + ticks * tick_rows_n;
+    anyhow::ensure!(
+        u64::cast_from(count) == expected,
+        "expected {expected} rows, got {count}"
+    );
+    println!(
+        "OK: index loaded {n} rows in {load_elapsed:?}, ticked {ticks} frontiers \
+         (+{tick_rows_n} rows each) in {tick_elapsed:?}; {count} rows total"
+    );
     Ok(())
 }
 
