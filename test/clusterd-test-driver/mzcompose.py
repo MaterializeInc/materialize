@@ -67,4 +67,10 @@ def workflow_default(c: Composition) -> None:
             c.kill("clusterd")
         c.up("clusterd")
         # Run the driver to completion; it exits non-zero on assertion failure.
-        c.run("headless-driver", env_extra={"SCENARIO": scenario, **extra})
+        # use_aliases gives the run container the `headless-driver` network
+        # alias so clusterd can reach the PubSub server it hosts.
+        c.run(
+            "headless-driver",
+            env_extra={"SCENARIO": scenario, **extra},
+            use_aliases=True,
+        )
