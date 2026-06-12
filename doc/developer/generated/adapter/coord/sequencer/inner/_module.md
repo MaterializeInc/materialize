@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: b5d02e9316
+revision: 886115545f
 ---
 
 # adapter::coord::sequencer::inner
@@ -12,4 +12,4 @@ The generic `sequence_staged` driver and the `Staged` / `StagedContext` / `Stage
 `validate_role_attributes` permits the `LOGIN` attribute even when password auth is disabled, restricting the unavailable-feature gate to `SUPERUSER` and `PASSWORD` attributes.
 `await_real_time_recent_timestamp` (public to the crate) and the private `real_time_recent_timestamp_error` helper convert `StorageError::RtrTimeout` and `StorageError::RtrDropFailure` to the dedicated `AdapterError::RtrTimeout` / `AdapterError::RtrDropFailure` variants with humanized collection names; callers in the `peek`, `explain_timestamp`, and `command_handler` modules use these helpers when awaiting real-time recency futures.
 `sequence_side_effecting_func` handles `PgCancelBackend` with a `NULL` connection-id argument by returning `NULL` immediately (matching PostgreSQL semantics), before attempting to look up or cancel any connection.
-`ConnectionDetails::Gcp` connections are validated by reading the credentials JSON secret and calling `GcpServiceAccountKeyTokenUri::validate_json` to verify the service account key's OAuth2 token URI before any external request is made.
+Connection secret content is validated through `check_connection_secret_content_guards` for `CREATE CONNECTION` and `ALTER CONNECTION`, and through `check_secret_content_guards_of_dependents` when a secret's value changes, before any catalog entry is installed or persisted.

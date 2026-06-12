@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/consistency.rs
-revision: 541f36e7d8
+revision: 12fbe31d24
 ---
 
 # testdrive::action::consistency

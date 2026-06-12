@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: cc73ab4d73
+revision: 5b42d5e422
 ---
 
 # mz-sql::session::vars
@@ -11,3 +11,4 @@ Delegates to `definitions` for all variable declarations, `value` for parsing/fo
 `set_default` (used by `ALTER ROLE ... SET`) skips `check_read_only` for variables listed in `allow_role_default`; currently only `restrict_to_user_objects` is listed there, pairing with a superuser RBAC check in `rbac.rs`.
 `restrict_to_user_objects()` returns the value of the `restrict_to_user_objects` session variable.
 All dyncfg-backed system variables are internal-only and not reachable via `ALTER SYSTEM SET` by environment superusers.
+Adding a new variant to `VarInput` or `OwnedVarInput` requires extending the `mz_catalog.mz_role_parameters` materialized view in `src/catalog/src/builtin/mz_catalog.rs`, which discriminates on the externally-tagged JSON shape of `OwnedVarInput` to format `parameter_value`.

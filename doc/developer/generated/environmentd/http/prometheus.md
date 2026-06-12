@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http/prometheus.rs
-revision: a436c4a753
+revision: 12fbe31d24
 ---
 
 # environmentd::http::prometheus

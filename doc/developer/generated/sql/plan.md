@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan.rs
-revision: b5d02e9316
+revision: 886115545f
 ---
 
 # mz-sql::plan
@@ -10,3 +10,4 @@ The file contains ~1000 lines of type definitions covering every statement kind 
 `SubscribeFrom::Query` carries an `HirRelationExpr` (not a `MirRelationExpr`); decorrelation happens downstream.
 The module layout is documented inline: `handle_statement` (in `statement`) is the entry point; `SELECT` queries flow through `query`; all plans involve `hir` + `lowering`; supporting utilities live in `error`, `notice`, `literal`, `plan_utils`, `scope`, `with_options`, `explain`, and `typeconv`.
 `ConnectionDetails` includes a `Gcp(GcpConnection)` variant for GCP connections, and a `GlueSchemaRegistry(GlueSchemaRegistryConnection<ReferencedConnection>)` variant for AWS Glue Schema Registry connections.
+`ConnectionDetails::secret_content_guards` returns a list of `(CatalogItemId, validator_fn)` pairs identifying secrets whose contents the connection places requirements on; currently only `Gcp` connections return an entry, using `GcpServiceAccountKeyTokenUri::validate_json` to reject service-account keys with a non-Google `token_uri`.

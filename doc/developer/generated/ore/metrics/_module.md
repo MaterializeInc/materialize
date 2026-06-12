@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/metrics.rs
-revision: c8a90af6a2
+revision: c151574dec
 ---
 
 # mz-ore::metrics
@@ -9,9 +9,8 @@ Provides the Materialize-wide Prometheus metrics infrastructure: a registry, met
 
 Key types and traits:
 
-* `MetricsRegistry` — wraps `prometheus::Registry` and adds support for postprocessors (called on every `gather()`), computed gauges, a typed `register` method driven by the `MakeCollector` trait, and a per-metric enrichment-rules store (`rules_by_metric()`) populated when metrics are registered with `Rule`s.
-* `Rule` / `NameLookup` / `ObjectName` — the enrichment-rule types (from the `rule` submodule) used to attach human-readable name labels (`cluster_name`, `replica_name`, object name, schema, database) to metric families at scrape time. `Rule` variants include `ClusterNameLookup`, `ReplicaNameLookup`, and `ObjectNameLookup`.
-* `metric!` macro / `MakeCollectorOpts` — ergonomic DSL for declaring metric options (name, help, labels, buckets, and enrichment `rules`) that feed into `MetricsRegistry::register`.
+* `MetricsRegistry` — wraps `prometheus::Registry` and adds support for postprocessors (called on every `gather()`), computed gauges, and a typed `register` method driven by the `MakeCollector` trait.
+* `metric!` macro / `MakeCollectorOpts` — ergonomic DSL for declaring metric options (name, help, labels, and buckets) that feed into `MetricsRegistry::register`.
 * `MakeCollector` — trait implemented for all standard Prometheus metric types; enables generic registration.
 * `DeleteOnDropWrapper<M>` — wraps a `MetricVec` so that only delete-on-drop child metrics can be created from it, preventing label leaks; re-exported type aliases (`CounterVec`, `GaugeVec`, `IntCounterVec`, etc.) shadow the raw Prometheus types.
 * `ComputedGenericGauge` / `ComputedGauge` / `ComputedIntGauge` / `ComputedUIntGauge` — gauges whose value is recomputed from a closure on every scrape.
