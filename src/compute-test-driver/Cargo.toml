@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[[bin]]
+name = "headless-driver"
+path = "src/bin/headless-driver.rs"
+
 [lints]
 workspace = true
 
