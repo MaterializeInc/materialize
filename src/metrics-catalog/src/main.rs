@@ -329,6 +329,15 @@ fn run() -> anyhow::Result<()> {
         });
     }
 
+    // Pull tokio metrics
+    for (name, help) in mz_ore::metrics::describe_runtime_metrics() {
+        entries.push(MetricDoc {
+            name,
+            help,
+            source: "src/ore/src/metrics.rs".to_owned(),
+        });
+    }
+
     entries.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.source.cmp(&b.source)));
 
     let catalog = Catalog { metrics: entries };

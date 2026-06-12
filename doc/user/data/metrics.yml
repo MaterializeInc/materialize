@@ -1624,6 +1624,66 @@ metrics:
 - name: mz_timestamp_difference_for_strict_serializable_ms
   help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
   source: src/adapter/src/metrics.rs
+- name: mz_tokio_blocking_queue_depth
+  help: The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_budget_forced_yield_count
+  help: The number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_global_queue_depth
+  help: The number of tasks currently scheduled in the runtime's global queue.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_num_alive_tasks
+  help: The current number of alive tasks in the runtime.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_num_blocking_threads
+  help: The number of additional threads spawned by the runtime.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_num_idle_blocking_threads
+  help: The number of idle threads which have spawned by the runtime for spawn_blocking calls.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_num_workers
+  help: The number of worker threads used by the runtime.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_remote_schedule_count
+  help: The number of tasks scheduled from outside of the runtime.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_spawned_tasks_count
+  help: The number of tasks spawned in this runtime since it was created.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_local_queue_depth
+  help: The number of tasks currently scheduled in the workers' local queues.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_local_schedule_count
+  help: The number of tasks scheduled from within the runtime on the given worker's local queue.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_mean_poll_time
+  help: The mean duration of task polls in seconds.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_noop_count
+  help: The number of times the given worker thread unparked but performed no work before parking again.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_overflow_count
+  help: The number of times the given worker thread saturated its local queue.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_park_count
+  help: The total number of times the worker threads have parked.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_park_unpark_count
+  help: The total number of times the worker threads have parked and unparked.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_poll_count
+  help: The number of tasks the given worker thread has polled.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_steal_count
+  help: The number of tasks the given worker thread stole from another worker thread.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_steal_operations
+  help: The number of times the given worker thread stole tasks from another worker thread.
+  source: src/ore/src/metrics.rs
+- name: mz_tokio_worker_total_busy_duration
+  help: The amount of time the worker threads have been busy, in seconds.
+  source: src/ore/src/metrics.rs
 - name: mz_ts_oracle_batched_op_count
   help: count of batched operations
   source: src/timestamp-oracle/src/metrics.rs

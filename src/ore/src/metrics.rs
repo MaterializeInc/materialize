@@ -911,6 +911,24 @@ pub fn register_runtime_metrics(
     }
 }
 
+/// Returns the `(name, help)` of every Tokio runtime metric registered by
+/// [`register_runtime_metrics`].
+#[cfg(feature = "async")]
+pub fn describe_runtime_metrics() -> Vec<(String, String)> {
+    // A current-thread runtime is enough to enumerate the metrics; we only read
+    // their names and help text, never their values.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("building a current-thread runtime");
+    let registry = MetricsRegistry::new();
+    register_runtime_metrics("describe", runtime.handle().metrics(), &registry);
+    registry
+        .gather()
+        .into_iter()
+        .map(|mf| (mf.name().to_owned(), mf.help().to_owned()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

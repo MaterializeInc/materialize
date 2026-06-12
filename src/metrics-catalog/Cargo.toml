@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 mz-metrics = { path = "../metrics" }
+mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 quote.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_yaml.workspace = true
