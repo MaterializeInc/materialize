@@ -803,6 +803,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-glue"
+version = "1.142.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc77647907307c70ffd751db85653804552e4a3c27f054d3af7a0874ef4dfe22"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand 2.3.0",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-kms"
 version = "1.104.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5819,6 +5843,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-aws-glue-schema-registry"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "aws-sdk-glue",
+ "aws-smithy-runtime-api",
+ "aws-types",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mz-aws-secrets-controller"
 version = "0.1.0"
 dependencies = [
@@ -8349,6 +8386,7 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "mysql_async",
+ "mz-aws-glue-schema-registry",
  "mz-aws-util",
  "mz-build-tools",
  "mz-ccsr",
