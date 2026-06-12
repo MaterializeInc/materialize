@@ -219,6 +219,96 @@ def get_known_issues_from_github(
     return (known_issues, issues_with_invalid_regex)
 
 
+def _auth_headers(token: str | None) -> dict[str, str]:
+    if token is None:
+        token = os.getenv("GITHUB_TOKEN")
+    if not token:
+        raise ValueError("No GitHub token provided. Set GITHUB_TOKEN.")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+
+def list_release_tags(
+    repo: str = "MaterializeInc/materialize",
+    token: str | None = None,
+) -> set[str]:
+    """List the tags of all existing GitHub releases."""
+    headers = _auth_headers(token)
+    tags = set()
+    page = 1
+    while True:
+        response = requests.get(
+            f"https://api.github.com/repos/{repo}/releases",
+            headers=headers,
+            params={"per_page": 100, "page": page},
+        )
+        if response.status_code != 200:
+            raise ValueError(
+                f"Failed to list GitHub releases for {repo}: "
+                f"{response.status_code}, response={response.text[:500]}"
+            )
+        releases = response.json()
+        if not releases:
+            return tags
+        tags.update(release["tag_name"] for release in releases)
+        page += 1
+
+
+def create_release(
+    tag: str,
+    body: str,
+    repo: str = "MaterializeInc/materialize",
+    token: str | None = None,
+    make_latest: bool = True,
+) -> None:
+    """Create a GitHub release for an existing tag, unless one already exists."""
+    headers = _auth_headers(token)
+
+    response = requests.get(
+        f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+        headers=headers,
+    )
+    if response.status_code == 200:
+        print(f"GitHub release for {tag} already exists: {response.json()['html_url']}")
+        return
+    if response.status_code != 404:
+        raise ValueError(
+            f"Failed to check for existing GitHub release for {tag}: "
+            f"{response.status_code}, response={response.text[:500]}"
+        )
+
+    # Creating a release for a nonexistent tag would silently create the tag
+    # at the head of the default branch, so require that the tag exists.
+    response = requests.get(
+        f"https://api.github.com/repos/{repo}/git/ref/tags/{tag}",
+        headers=headers,
+    )
+    if response.status_code != 200:
+        raise ValueError(
+            f"Tag {tag} does not exist in {repo}: "
+            f"{response.status_code}, response={response.text[:500]}"
+        )
+
+    response = requests.post(
+        f"https://api.github.com/repos/{repo}/releases",
+        headers=headers,
+        json={
+            "tag_name": tag,
+            "name": tag,
+            "body": body,
+            "make_latest": "true" if make_latest else "false",
+        },
+    )
+    if response.status_code != 201:
+        raise ValueError(
+            f"Failed to create GitHub release for {tag}: "
+            f"{response.status_code}, response={response.text[:500]}"
+        )
+    print(f"Created GitHub release: {response.json()['html_url']}")
+
+
 def for_github_re(text: bytes) -> bytes:
     """
     Matching newlines in regular expressions is kind of annoying, don't expect
