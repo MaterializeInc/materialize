@@ -14,9 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
-use mz_expr::{
-    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc,
-};
+use mz_expr::{CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MfpPlan, TableFunc};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::{CompactScalars, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -24,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan, ReducePlan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::{MonotonicTopKPlan, TopKPlan};
 use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Plan, PlanNode};
@@ -154,10 +153,10 @@ pub enum Expr {
         /// The input collection.
         input: LirId,
         /// Linear operator to apply to each record.
-        mfp: MapFilterProject,
+        mfp: MfpPlan<LirScalarExpr>,
         /// Whether the input is from an arrangement, and if so, whether we can seek to a specific
         /// value therein.
-        input_key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        input_key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
     },
     /// A variable number of output records for each input record.
     ///
@@ -172,15 +171,15 @@ pub enum Expr {
     /// cases. Instead, in these cases use a `mfp` member that projects away these large fields.
     FlatMap {
         /// The particular arrangement of the input we expect to use, if any.
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: LirId,
         /// Expressions that for each row prepare the arguments to `func`.
-        exprs: Vec<MirScalarExpr>,
+        exprs: Vec<LirScalarExpr>,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Linear operator to apply to each record produced by `func`.
-        mfp_after: MapFilterProject,
+        mfp_after: MfpPlan<LirScalarExpr>,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -200,7 +199,7 @@ pub enum Expr {
     /// Aggregation by key.
     Reduce {
         /// The particular arrangement of the input we expect to use, if any.
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: LirId,
         /// A plan for changing input records into key, value pairs.
@@ -214,7 +213,7 @@ pub enum Expr {
         /// An MFP that must be applied to results. The projection part of this MFP must preserve
         /// the key for the reduction; otherwise, the results become undefined. Additionally, the
         /// MFP must be free from temporal predicates so that it can be readily evaluated.
-        mfp_after: MapFilterProject,
+        mfp_after: MfpPlan<LirScalarExpr>,
         /// How the renderer should form the internal input arrangement built by `Reduce`.
         /// Mirrors [`PlanNode::Reduce::temporal_bucketing_strategy`].
         temporal_bucketing_strategy: ArrangementStrategy,
@@ -274,11 +273,11 @@ pub enum Expr {
     /// can be exported.
     ArrangeBy {
         /// The key that must be used to access the input.
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: LirId,
         /// The MFP that must be applied to the input.
-        input_mfp: MapFilterProject,
+        input_mfp: MfpPlan<LirScalarExpr>,
         /// A list of arrangement keys, and possibly a raw collection, that will be added to those
         /// of the input. Does not include any other existing arrangements.
         forms: AvailableCollections,

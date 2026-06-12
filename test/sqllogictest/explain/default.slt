@@ -228,8 +228,10 @@ EXPLAIN WITH(humanized expressions)
 SELECT generate_series(a, b) from t
 ----
 Explained Query:
-  →Table Function generate_series(#0{a}, #1{b}, 1)
-    →Arranged materialize.public.t
+  →Fused with Child Map/Filter/Project
+    Project: #2
+      →Table Function generate_series(#0{a}, #1{b}, 1)
+        →Arranged materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -2013,12 +2015,14 @@ Explained Query:
     cte l1 =
       →Union
         →Stream l0
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l0
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l0
   →Return
     →Differential Cross Join %0:t4[×] » %1[×]
       after %1:
@@ -2245,12 +2249,12 @@ materialize.public.mv_default_union:
       →Temporally-Bucketed Consolidating Union
         →Fused with Child Map/Filter/Project
           Project: #0
-          Filter: (mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days)))
+          TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
             →Read materialize.public.events
         →Negate Diffs
           →Fused with Child Map/Filter/Project
             Project: #0
-            Filter: (mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 90 days)))
+            TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 90 days))
               →Read materialize.public.events
 
 Target cluster: no_replicas

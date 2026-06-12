@@ -318,49 +318,55 @@ SELECT a + b, 1 FROM t
                 ],
                 null,
                 {
-                  "expressions": [
-                    {
-                      "CallBinary": {
-                        "func": {
-                          "AddInt32": null
-                        },
-                        "expr1": {
-                          "Column": [
-                            0,
-                            "a"
-                          ]
-                        },
-                        "expr2": {
-                          "Column": [
-                            1,
-                            "b"
-                          ]
-                        }
-                      }
-                    },
-                    {
-                      "Literal": [
+                  "mfp": {
+                    "mfp": {
+                      "expressions": [
                         {
-                          "Ok": {
-                            "data": [
-                              45,
-                              1
-                            ]
+                          "CallBinary": {
+                            "func": {
+                              "AddInt32": null
+                            },
+                            "expr1": {
+                              "Column": [
+                                0,
+                                "a"
+                              ]
+                            },
+                            "expr2": {
+                              "Column": [
+                                1,
+                                "b"
+                              ]
+                            }
                           }
                         },
                         {
-                          "scalar_type": "Int32",
-                          "nullable": false
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  45,
+                                  1
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": false
+                            }
+                          ]
                         }
-                      ]
+                      ],
+                      "predicates": [],
+                      "projection": [
+                        2,
+                        3
+                      ],
+                      "input_arity": 2
                     }
-                  ],
-                  "predicates": [],
-                  "projection": [
-                    2,
-                    3
-                  ],
-                  "input_arity": 2
+                  },
+                  "lower_bounds": [],
+                  "upper_bounds": []
                 }
               ]
             }
@@ -397,13 +403,19 @@ SELECT c + d, 1 FROM u
             },
             "plan": {
               "Collection": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0,
-                  1
-                ],
-                "input_arity": 2
+                "mfp": {
+                  "mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [
+                      0,
+                      1
+                    ],
+                    "input_arity": 2
+                  }
+                },
+                "lower_bounds": [],
+                "upper_bounds": []
               }
             }
           }
@@ -527,13 +539,19 @@ SELECT * FROM ov
                     }
                   },
                   "input_mfp": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0,
-                      1
-                    ],
-                    "input_arity": 2
+                    "mfp": {
+                      "mfp": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    },
+                    "lower_bounds": [],
+                    "upper_bounds": []
                   },
                   "forms": {
                     "raw": true,
@@ -654,12 +672,18 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                     ],
                                     null,
                                     {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 2
+                                      "mfp": {
+                                        "mfp": {
+                                          "expressions": [],
+                                          "predicates": [],
+                                          "projection": [
+                                            0
+                                          ],
+                                          "input_arity": 2
+                                        }
+                                      },
+                                      "lower_bounds": [],
+                                      "upper_bounds": []
                                     }
                                   ]
                                 }
@@ -685,12 +709,18 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                       },
                                       "plan": {
                                         "Collection": {
-                                          "expressions": [],
-                                          "predicates": [],
-                                          "projection": [
-                                            0
-                                          ],
-                                          "input_arity": 1
+                                          "mfp": {
+                                            "mfp": {
+                                              "expressions": [],
+                                              "predicates": [],
+                                              "projection": [
+                                                0
+                                              ],
+                                              "input_arity": 1
+                                            }
+                                          },
+                                          "lower_bounds": [],
+                                          "upper_bounds": []
                                         }
                                       }
                                     }
@@ -709,12 +739,18 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                     }
                   },
                   "input_mfp": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0
-                    ],
-                    "input_arity": 1
+                    "mfp": {
+                      "mfp": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0
+                        ],
+                        "input_arity": 1
+                      }
+                    },
+                    "lower_bounds": [],
+                    "upper_bounds": []
                   },
                   "forms": {
                     "raw": false,
@@ -840,13 +876,19 @@ SELECT * FROM ov
                     }
                   },
                   "input_mfp": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0,
-                      1
-                    ],
-                    "input_arity": 2
+                    "mfp": {
+                      "mfp": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    },
+                    "lower_bounds": [],
+                    "upper_bounds": []
                   },
                   "forms": {
                     "raw": true,
@@ -973,12 +1015,18 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                           ],
                                           null,
                                           {
-                                            "expressions": [],
-                                            "predicates": [],
-                                            "projection": [
-                                              0
-                                            ],
-                                            "input_arity": 2
+                                            "mfp": {
+                                              "mfp": {
+                                                "expressions": [],
+                                                "predicates": [],
+                                                "projection": [
+                                                  0
+                                                ],
+                                                "input_arity": 2
+                                              }
+                                            },
+                                            "lower_bounds": [],
+                                            "upper_bounds": []
                                           }
                                         ]
                                       }
@@ -1004,12 +1052,18 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                             },
                                             "plan": {
                                               "Collection": {
-                                                "expressions": [],
-                                                "predicates": [],
-                                                "projection": [
-                                                  0
-                                                ],
-                                                "input_arity": 1
+                                                "mfp": {
+                                                  "mfp": {
+                                                    "expressions": [],
+                                                    "predicates": [],
+                                                    "projection": [
+                                                      0
+                                                    ],
+                                                    "input_arity": 1
+                                                  }
+                                                },
+                                                "lower_bounds": [],
+                                                "upper_bounds": []
                                               }
                                             }
                                           }
@@ -1028,12 +1082,18 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                           }
                         },
                         "input_mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0
-                          ],
-                          "input_arity": 1
+                          "mfp": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                0
+                              ],
+                              "input_arity": 1
+                            }
+                          },
+                          "lower_bounds": [],
+                          "upper_bounds": []
                         },
                         "forms": {
                           "raw": false,
@@ -1122,42 +1182,48 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                               ],
                               null,
                               {
-                                "expressions": [
-                                  {
-                                    "CallBinary": {
-                                      "func": {
-                                        "AddInt32": null
-                                      },
-                                      "expr1": {
-                                        "Column": [
-                                          0,
-                                          "x"
-                                        ]
-                                      },
-                                      "expr2": {
-                                        "Literal": [
-                                          {
-                                            "Ok": {
-                                              "data": [
-                                                45,
-                                                1
-                                              ]
-                                            }
+                                "mfp": {
+                                  "mfp": {
+                                    "expressions": [
+                                      {
+                                        "CallBinary": {
+                                          "func": {
+                                            "AddInt32": null
                                           },
-                                          {
-                                            "scalar_type": "Int32",
-                                            "nullable": false
+                                          "expr1": {
+                                            "Column": [
+                                              0,
+                                              "x"
+                                            ]
+                                          },
+                                          "expr2": {
+                                            "Literal": [
+                                              {
+                                                "Ok": {
+                                                  "data": [
+                                                    45,
+                                                    1
+                                                  ]
+                                                }
+                                              },
+                                              {
+                                                "scalar_type": "Int32",
+                                                "nullable": false
+                                              }
+                                            ]
                                           }
-                                        ]
+                                        }
                                       }
-                                    }
+                                    ],
+                                    "predicates": [],
+                                    "projection": [
+                                      1
+                                    ],
+                                    "input_arity": 1
                                   }
-                                ],
-                                "predicates": [],
-                                "projection": [
-                                  1
-                                ],
-                                "input_arity": 1
+                                },
+                                "lower_bounds": [],
+                                "upper_bounds": []
                               }
                             ]
                           }
@@ -1202,42 +1268,48 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                               ],
                               null,
                               {
-                                "expressions": [
-                                  {
-                                    "CallBinary": {
-                                      "func": {
-                                        "SubInt32": null
-                                      },
-                                      "expr1": {
-                                        "Column": [
-                                          0,
-                                          "x"
-                                        ]
-                                      },
-                                      "expr2": {
-                                        "Literal": [
-                                          {
-                                            "Ok": {
-                                              "data": [
-                                                45,
-                                                1
-                                              ]
-                                            }
+                                "mfp": {
+                                  "mfp": {
+                                    "expressions": [
+                                      {
+                                        "CallBinary": {
+                                          "func": {
+                                            "SubInt32": null
                                           },
-                                          {
-                                            "scalar_type": "Int32",
-                                            "nullable": false
+                                          "expr1": {
+                                            "Column": [
+                                              0,
+                                              "x"
+                                            ]
+                                          },
+                                          "expr2": {
+                                            "Literal": [
+                                              {
+                                                "Ok": {
+                                                  "data": [
+                                                    45,
+                                                    1
+                                                  ]
+                                                }
+                                              },
+                                              {
+                                                "scalar_type": "Int32",
+                                                "nullable": false
+                                              }
+                                            ]
                                           }
-                                        ]
+                                        }
                                       }
-                                    }
+                                    ],
+                                    "predicates": [],
+                                    "projection": [
+                                      1
+                                    ],
+                                    "input_arity": 1
                                   }
-                                ],
-                                "predicates": [],
-                                "projection": [
-                                  1
-                                ],
-                                "input_arity": 1
+                                },
+                                "lower_bounds": [],
+                                "upper_bounds": []
                               }
                             ]
                           }
@@ -1371,12 +1443,18 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                 }
                                               },
                                               "input_mfp": {
-                                                "expressions": [],
-                                                "predicates": [],
-                                                "projection": [
-                                                  0
-                                                ],
-                                                "input_arity": 1
+                                                "mfp": {
+                                                  "mfp": {
+                                                    "expressions": [],
+                                                    "predicates": [],
+                                                    "projection": [
+                                                      0
+                                                    ],
+                                                    "input_arity": 1
+                                                  }
+                                                },
+                                                "lower_bounds": [],
+                                                "upper_bounds": []
                                               },
                                               "forms": {
                                                 "raw": true,
@@ -1474,12 +1552,18 @@ SELECT x * 5 FROM cte WHERE x = 5
                                             },
                                             "plan": {
                                               "Collection": {
-                                                "expressions": [],
-                                                "predicates": [],
-                                                "projection": [
-                                                  0
-                                                ],
-                                                "input_arity": 1
+                                                "mfp": {
+                                                  "mfp": {
+                                                    "expressions": [],
+                                                    "predicates": [],
+                                                    "projection": [
+                                                      0
+                                                    ],
+                                                    "input_arity": 1
+                                                  }
+                                                },
+                                                "lower_bounds": [],
+                                                "upper_bounds": []
                                               }
                                             }
                                           }
@@ -1498,12 +1582,18 @@ SELECT x * 5 FROM cte WHERE x = 5
                           }
                         },
                         "input_mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0
-                          ],
-                          "input_arity": 1
+                          "mfp": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                0
+                              ],
+                              "input_arity": 1
+                            }
+                          },
+                          "lower_bounds": [],
+                          "upper_bounds": []
                         },
                         "forms": {
                           "raw": false,
@@ -1550,29 +1640,35 @@ SELECT x * 5 FROM cte WHERE x = 5
               }
             },
             "mfp": {
-              "expressions": [
-                {
-                  "Literal": [
+              "mfp": {
+                "mfp": {
+                  "expressions": [
                     {
-                      "Ok": {
-                        "data": [
-                          45,
-                          25
-                        ]
-                      }
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
+                      "Literal": [
+                        {
+                          "Ok": {
+                            "data": [
+                              45,
+                              25
+                            ]
+                          }
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": false
+                        }
+                      ]
                     }
-                  ]
+                  ],
+                  "predicates": [],
+                  "projection": [
+                    1
+                  ],
+                  "input_arity": 1
                 }
-              ],
-              "predicates": [],
-              "projection": [
-                1
-              ],
-              "input_arity": 1
+              },
+              "lower_bounds": [],
+              "upper_bounds": []
             },
             "input_key_val": [
               [
@@ -1729,12 +1825,18 @@ SELECT generate_series(a, b) from t
             ],
             "func": "GenerateSeriesInt32",
             "mfp_after": {
-              "expressions": [],
-              "predicates": [],
-              "projection": [
-                2
-              ],
-              "input_arity": 3
+              "mfp": {
+                "mfp": {
+                  "expressions": [],
+                  "predicates": [],
+                  "projection": [
+                    2
+                  ],
+                  "input_arity": 3
+                }
+              },
+              "lower_bounds": [],
+              "upper_bounds": []
             }
           }
         }
@@ -1824,13 +1926,19 @@ SELECT DISTINCT a, b FROM t
             },
             "plan": "Distinct",
             "mfp_after": {
-              "expressions": [],
-              "predicates": [],
-              "projection": [
-                0,
-                1
-              ],
-              "input_arity": 2
+              "mfp": {
+                "mfp": {
+                  "expressions": [],
+                  "predicates": [],
+                  "projection": [
+                    0,
+                    1
+                  ],
+                  "input_arity": 2
+                }
+              },
+              "lower_bounds": [],
+              "upper_bounds": []
             },
             "temporal_bucketing_strategy": "Direct"
           }
@@ -1983,14 +2091,20 @@ GROUP BY a
               }
             },
             "mfp_after": {
-              "expressions": [],
-              "predicates": [],
-              "projection": [
-                0,
-                1,
-                2
-              ],
-              "input_arity": 3
+              "mfp": {
+                "mfp": {
+                  "expressions": [],
+                  "predicates": [],
+                  "projection": [
+                    0,
+                    1,
+                    2
+                  ],
+                  "input_arity": 3
+                }
+              },
+              "lower_bounds": [],
+              "upper_bounds": []
             },
             "temporal_bucketing_strategy": "Direct"
           }
@@ -2067,12 +2181,18 @@ FROM t
                             ],
                             null,
                             {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1
-                              ],
-                              "input_arity": 2
+                              "mfp": {
+                                "mfp": {
+                                  "expressions": [],
+                                  "predicates": [],
+                                  "projection": [
+                                    1
+                                  ],
+                                  "input_arity": 2
+                                }
+                              },
+                              "lower_bounds": [],
+                              "upper_bounds": []
                             }
                           ]
                         }
@@ -2157,13 +2277,19 @@ FROM t
                     }
                   },
                   "mfp_after": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0,
-                      1
-                    ],
-                    "input_arity": 2
+                    "mfp": {
+                      "mfp": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    },
+                    "lower_bounds": [],
+                    "upper_bounds": []
                   },
                   "temporal_bucketing_strategy": "Direct"
                 }
@@ -2207,13 +2333,19 @@ FROM t
                             }
                           },
                           "input_mfp": {
-                            "expressions": [],
-                            "predicates": [],
-                            "projection": [
-                              0,
-                              1
-                            ],
-                            "input_arity": 2
+                            "mfp": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            },
+                            "lower_bounds": [],
+                            "upper_bounds": []
                           },
                           "forms": {
                             "raw": true,
@@ -2264,10 +2396,16 @@ FROM t
                                                   [],
                                                   null,
                                                   {
-                                                    "expressions": [],
-                                                    "predicates": [],
-                                                    "projection": [],
-                                                    "input_arity": 2
+                                                    "mfp": {
+                                                      "mfp": {
+                                                        "expressions": [],
+                                                        "predicates": [],
+                                                        "projection": [],
+                                                        "input_arity": 2
+                                                      }
+                                                    },
+                                                    "lower_bounds": [],
+                                                    "upper_bounds": []
                                                   }
                                                 ]
                                               }
@@ -2305,44 +2443,50 @@ FROM t
                             }
                           },
                           "mfp": {
-                            "expressions": [
-                              {
-                                "Literal": [
+                            "mfp": {
+                              "mfp": {
+                                "expressions": [
                                   {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            0
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "Int64",
+                                        "nullable": true
+                                      }
+                                    ]
                                   },
                                   {
-                                    "scalar_type": "Int64",
-                                    "nullable": true
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            49
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "Int64",
+                                        "nullable": false
+                                      }
+                                    ]
                                   }
-                                ]
-                              },
-                              {
-                                "Literal": [
-                                  {
-                                    "Ok": {
-                                      "data": [
-                                        49
-                                      ]
-                                    }
-                                  },
-                                  {
-                                    "scalar_type": "Int64",
-                                    "nullable": false
-                                  }
-                                ]
+                                ],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 0
                               }
-                            ],
-                            "predicates": [],
-                            "projection": [
-                              0,
-                              1
-                            ],
-                            "input_arity": 0
+                            },
+                            "lower_bounds": [],
+                            "upper_bounds": []
                           },
                           "input_key_val": null
                         }
@@ -2457,14 +2601,20 @@ SELECT * FROM hierarchical_group_by
               }
             },
             "mfp_after": {
-              "expressions": [],
-              "predicates": [],
-              "projection": [
-                0,
-                1,
-                2
-              ],
-              "input_arity": 3
+              "mfp": {
+                "mfp": {
+                  "expressions": [],
+                  "predicates": [],
+                  "projection": [
+                    0,
+                    1,
+                    2
+                  ],
+                  "input_arity": 3
+                }
+              },
+              "lower_bounds": [],
+              "upper_bounds": []
             },
             "temporal_bucketing_strategy": "Direct"
           }
@@ -2538,12 +2688,18 @@ MATERIALIZED VIEW hierarchical_global_mv
                             ],
                             null,
                             {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1
-                              ],
-                              "input_arity": 2
+                              "mfp": {
+                                "mfp": {
+                                  "expressions": [],
+                                  "predicates": [],
+                                  "projection": [
+                                    1
+                                  ],
+                                  "input_arity": 2
+                                }
+                              },
+                              "lower_bounds": [],
+                              "upper_bounds": []
                             }
                           ]
                         }
@@ -2591,13 +2747,19 @@ MATERIALIZED VIEW hierarchical_global_mv
                     }
                   },
                   "mfp_after": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0,
-                      1
-                    ],
-                    "input_arity": 2
+                    "mfp": {
+                      "mfp": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    },
+                    "lower_bounds": [],
+                    "upper_bounds": []
                   },
                   "temporal_bucketing_strategy": "Direct"
                 }
@@ -2641,13 +2803,19 @@ MATERIALIZED VIEW hierarchical_global_mv
                             }
                           },
                           "input_mfp": {
-                            "expressions": [],
-                            "predicates": [],
-                            "projection": [
-                              0,
-                              1
-                            ],
-                            "input_arity": 2
+                            "mfp": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            },
+                            "lower_bounds": [],
+                            "upper_bounds": []
                           },
                           "forms": {
                             "raw": true,
@@ -2698,10 +2866,16 @@ MATERIALIZED VIEW hierarchical_global_mv
                                                   [],
                                                   null,
                                                   {
-                                                    "expressions": [],
-                                                    "predicates": [],
-                                                    "projection": [],
-                                                    "input_arity": 2
+                                                    "mfp": {
+                                                      "mfp": {
+                                                        "expressions": [],
+                                                        "predicates": [],
+                                                        "projection": [],
+                                                        "input_arity": 2
+                                                      }
+                                                    },
+                                                    "lower_bounds": [],
+                                                    "upper_bounds": []
                                                   }
                                                 ]
                                               }
@@ -2739,44 +2913,50 @@ MATERIALIZED VIEW hierarchical_global_mv
                             }
                           },
                           "mfp": {
-                            "expressions": [
-                              {
-                                "Literal": [
+                            "mfp": {
+                              "mfp": {
+                                "expressions": [
                                   {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            0
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "Int32",
+                                        "nullable": true
+                                      }
+                                    ]
                                   },
                                   {
-                                    "scalar_type": "Int32",
-                                    "nullable": true
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            0
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "Int32",
+                                        "nullable": true
+                                      }
+                                    ]
                                   }
-                                ]
-                              },
-                              {
-                                "Literal": [
-                                  {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
-                                  },
-                                  {
-                                    "scalar_type": "Int32",
-                                    "nullable": true
-                                  }
-                                ]
+                                ],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 0
                               }
-                            ],
-                            "predicates": [],
-                            "projection": [
-                              0,
-                              1
-                            ],
-                            "input_arity": 0
+                            },
+                            "lower_bounds": [],
+                            "upper_bounds": []
                           },
                           "input_key_val": null
                         }
@@ -2862,12 +3042,18 @@ SELECT * FROM hierarchical_global
                             ],
                             null,
                             {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1
-                              ],
-                              "input_arity": 2
+                              "mfp": {
+                                "mfp": {
+                                  "expressions": [],
+                                  "predicates": [],
+                                  "projection": [
+                                    1
+                                  ],
+                                  "input_arity": 2
+                                }
+                              },
+                              "lower_bounds": [],
+                              "upper_bounds": []
                             }
                           ]
                         }
@@ -2907,13 +3093,19 @@ SELECT * FROM hierarchical_global
                     }
                   },
                   "mfp_after": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0,
-                      1
-                    ],
-                    "input_arity": 2
+                    "mfp": {
+                      "mfp": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    },
+                    "lower_bounds": [],
+                    "upper_bounds": []
                   },
                   "temporal_bucketing_strategy": "Direct"
                 }
@@ -2957,13 +3149,19 @@ SELECT * FROM hierarchical_global
                             }
                           },
                           "input_mfp": {
-                            "expressions": [],
-                            "predicates": [],
-                            "projection": [
-                              0,
-                              1
-                            ],
-                            "input_arity": 2
+                            "mfp": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            },
+                            "lower_bounds": [],
+                            "upper_bounds": []
                           },
                           "forms": {
                             "raw": true,
@@ -3014,10 +3212,16 @@ SELECT * FROM hierarchical_global
                                                   [],
                                                   null,
                                                   {
-                                                    "expressions": [],
-                                                    "predicates": [],
-                                                    "projection": [],
-                                                    "input_arity": 2
+                                                    "mfp": {
+                                                      "mfp": {
+                                                        "expressions": [],
+                                                        "predicates": [],
+                                                        "projection": [],
+                                                        "input_arity": 2
+                                                      }
+                                                    },
+                                                    "lower_bounds": [],
+                                                    "upper_bounds": []
                                                   }
                                                 ]
                                               }
@@ -3055,44 +3259,50 @@ SELECT * FROM hierarchical_global
                             }
                           },
                           "mfp": {
-                            "expressions": [
-                              {
-                                "Literal": [
+                            "mfp": {
+                              "mfp": {
+                                "expressions": [
                                   {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            0
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "Int32",
+                                        "nullable": true
+                                      }
+                                    ]
                                   },
                                   {
-                                    "scalar_type": "Int32",
-                                    "nullable": true
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            0
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "Int32",
+                                        "nullable": true
+                                      }
+                                    ]
                                   }
-                                ]
-                              },
-                              {
-                                "Literal": [
-                                  {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
-                                  },
-                                  {
-                                    "scalar_type": "Int32",
-                                    "nullable": true
-                                  }
-                                ]
+                                ],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 0
                               }
-                            ],
-                            "predicates": [],
-                            "projection": [
-                              0,
-                              1
-                            ],
-                            "input_arity": 0
+                            },
+                            "lower_bounds": [],
+                            "upper_bounds": []
                           },
                           "input_key_val": null
                         }
@@ -3383,13 +3593,19 @@ GROUP BY a
                       }
                     },
                     "mfp_after": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -3643,13 +3859,19 @@ GROUP BY a
                       }
                     },
                     "mfp_after": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -3779,12 +4001,18 @@ FROM t
                       ],
                       null,
                       {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          1
-                        ],
-                        "input_arity": 2
+                        "mfp": {
+                          "mfp": {
+                            "expressions": [],
+                            "predicates": [],
+                            "projection": [
+                              1
+                            ],
+                            "input_arity": 2
+                          }
+                        },
+                        "lower_bounds": [],
+                        "upper_bounds": []
                       }
                     ]
                   }
@@ -4020,12 +4248,18 @@ FROM t
                                   }
                                 },
                                 "mfp_after": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0
-                                  ],
-                                  "input_arity": 1
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0
+                                      ],
+                                      "input_arity": 1
+                                    }
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -4250,12 +4484,18 @@ FROM t
                                   }
                                 },
                                 "mfp_after": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0
-                                  ],
-                                  "input_arity": 1
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0
+                                      ],
+                                      "input_arity": 1
+                                    }
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -4343,10 +4583,16 @@ FROM t
                                                     },
                                                     "plan": {
                                                       "Collection": {
-                                                        "expressions": [],
-                                                        "predicates": [],
-                                                        "projection": [],
-                                                        "input_arity": 2
+                                                        "mfp": {
+                                                          "mfp": {
+                                                            "expressions": [],
+                                                            "predicates": [],
+                                                            "projection": [],
+                                                            "input_arity": 2
+                                                          }
+                                                        },
+                                                        "lower_bounds": [],
+                                                        "upper_bounds": []
                                                       }
                                                     }
                                                   }
@@ -4383,44 +4629,50 @@ FROM t
                                   }
                                 },
                                 "mfp": {
-                                  "expressions": [
-                                    {
-                                      "Literal": [
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [
                                         {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "String",
+                                              "nullable": true
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "String",
-                                          "nullable": true
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "String",
+                                              "nullable": true
+                                            }
+                                          ]
                                         }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
+                                      ],
+                                      "predicates": [],
+                                      "projection": [
+                                        0,
+                                        1
+                                      ],
+                                      "input_arity": 0
                                     }
-                                  ],
-                                  "predicates": [],
-                                  "projection": [
-                                    0,
-                                    1
-                                  ],
-                                  "input_arity": 0
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "input_key_val": null
                               }
@@ -4551,14 +4803,20 @@ MATERIALIZED VIEW collated_group_by_mv
                       }
                     },
                     "mfp_after": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1,
-                        2
-                      ],
-                      "input_arity": 3
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1,
+                            2
+                          ],
+                          "input_arity": 3
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -4691,14 +4949,20 @@ MATERIALIZED VIEW collated_group_by_mv
                       }
                     },
                     "mfp_after": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1,
-                        2
-                      ],
-                      "input_arity": 3
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1,
+                            2
+                          ],
+                          "input_arity": 3
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -4952,13 +5216,19 @@ MATERIALIZED VIEW collated_group_by_mv
                       }
                     },
                     "mfp_after": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -5212,13 +5482,19 @@ MATERIALIZED VIEW collated_group_by_mv
                       }
                     },
                     "mfp_after": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -5968,14 +6244,20 @@ SELECT * FROM collated_group_by
                       }
                     },
                     "mfp_after": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1,
-                        2
-                      ],
-                      "input_arity": 3
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1,
+                            2
+                          ],
+                          "input_arity": 3
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -6108,14 +6390,20 @@ SELECT * FROM collated_group_by
                       }
                     },
                     "mfp_after": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1,
-                        2
-                      ],
-                      "input_arity": 3
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1,
+                            2
+                          ],
+                          "input_arity": 3
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -6369,13 +6657,19 @@ SELECT * FROM collated_group_by
                       }
                     },
                     "mfp_after": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -6629,13 +6923,19 @@ SELECT * FROM collated_group_by
                       }
                     },
                     "mfp_after": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -7346,12 +7646,18 @@ MATERIALIZED VIEW collated_global_mv
                       ],
                       null,
                       {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          1
-                        ],
-                        "input_arity": 2
+                        "mfp": {
+                          "mfp": {
+                            "expressions": [],
+                            "predicates": [],
+                            "projection": [
+                              1
+                            ],
+                            "input_arity": 2
+                          }
+                        },
+                        "lower_bounds": [],
+                        "upper_bounds": []
                       }
                     ]
                   }
@@ -7429,13 +7735,19 @@ MATERIALIZED VIEW collated_global_mv
                                   }
                                 },
                                 "mfp_after": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0,
-                                    1
-                                  ],
-                                  "input_arity": 2
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0,
+                                        1
+                                      ],
+                                      "input_arity": 2
+                                    }
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -7539,13 +7851,19 @@ MATERIALIZED VIEW collated_global_mv
                                   }
                                 },
                                 "mfp_after": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0,
-                                    1
-                                  ],
-                                  "input_arity": 2
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0,
+                                        1
+                                      ],
+                                      "input_arity": 2
+                                    }
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -7770,12 +8088,18 @@ MATERIALIZED VIEW collated_global_mv
                                   }
                                 },
                                 "mfp_after": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0
-                                  ],
-                                  "input_arity": 1
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0
+                                      ],
+                                      "input_arity": 1
+                                    }
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -8000,12 +8324,18 @@ MATERIALIZED VIEW collated_global_mv
                                   }
                                 },
                                 "mfp_after": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0
-                                  ],
-                                  "input_arity": 1
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0
+                                      ],
+                                      "input_arity": 1
+                                    }
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -8447,17 +8777,23 @@ MATERIALIZED VIEW collated_global_mv
                                 },
                                 "plan": {
                                   "Collection": {
-                                    "expressions": [],
-                                    "predicates": [],
-                                    "projection": [
-                                      2,
-                                      4,
-                                      0,
-                                      1,
-                                      3,
-                                      5
-                                    ],
-                                    "input_arity": 6
+                                    "mfp": {
+                                      "mfp": {
+                                        "expressions": [],
+                                        "predicates": [],
+                                        "projection": [
+                                          2,
+                                          4,
+                                          0,
+                                          1,
+                                          3,
+                                          5
+                                        ],
+                                        "input_arity": 6
+                                      }
+                                    },
+                                    "lower_bounds": [],
+                                    "upper_bounds": []
                                   }
                                 }
                               }
@@ -8489,10 +8825,16 @@ MATERIALIZED VIEW collated_global_mv
                                                     },
                                                     "plan": {
                                                       "Collection": {
-                                                        "expressions": [],
-                                                        "predicates": [],
-                                                        "projection": [],
-                                                        "input_arity": 6
+                                                        "mfp": {
+                                                          "mfp": {
+                                                            "expressions": [],
+                                                            "predicates": [],
+                                                            "projection": [],
+                                                            "input_arity": 6
+                                                          }
+                                                        },
+                                                        "lower_bounds": [],
+                                                        "upper_bounds": []
                                                       }
                                                     }
                                                   }
@@ -8529,108 +8871,114 @@ MATERIALIZED VIEW collated_global_mv
                                   }
                                 },
                                 "mfp": {
-                                  "expressions": [
-                                    {
-                                      "Literal": [
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [
                                         {
-                                          "Ok": {
-                                            "data": [
-                                              49
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  49
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int64",
+                                              "nullable": false
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "Int64",
-                                          "nullable": false
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "String",
+                                              "nullable": true
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int64",
+                                              "nullable": true
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "Int64",
-                                          "nullable": true
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "String",
+                                              "nullable": true
+                                            }
+                                          ]
                                         }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
+                                      ],
+                                      "predicates": [],
+                                      "projection": [
+                                        0,
+                                        1,
+                                        2,
+                                        3,
+                                        4,
+                                        5
+                                      ],
+                                      "input_arity": 0
                                     }
-                                  ],
-                                  "predicates": [],
-                                  "projection": [
-                                    0,
-                                    1,
-                                    2,
-                                    3,
-                                    4,
-                                    5
-                                  ],
-                                  "input_arity": 0
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "input_key_val": null
                               }
@@ -8714,12 +9062,18 @@ SELECT * FROM collated_global
                       ],
                       null,
                       {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          1
-                        ],
-                        "input_arity": 2
+                        "mfp": {
+                          "mfp": {
+                            "expressions": [],
+                            "predicates": [],
+                            "projection": [
+                              1
+                            ],
+                            "input_arity": 2
+                          }
+                        },
+                        "lower_bounds": [],
+                        "upper_bounds": []
                       }
                     ]
                   }
@@ -8789,13 +9143,19 @@ SELECT * FROM collated_global
                                   }
                                 },
                                 "mfp_after": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0,
-                                    1
-                                  ],
-                                  "input_arity": 2
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0,
+                                        1
+                                      ],
+                                      "input_arity": 2
+                                    }
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -8899,13 +9259,19 @@ SELECT * FROM collated_global
                                   }
                                 },
                                 "mfp_after": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0,
-                                    1
-                                  ],
-                                  "input_arity": 2
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0,
+                                        1
+                                      ],
+                                      "input_arity": 2
+                                    }
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -9130,12 +9496,18 @@ SELECT * FROM collated_global
                                   }
                                 },
                                 "mfp_after": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0
-                                  ],
-                                  "input_arity": 1
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0
+                                      ],
+                                      "input_arity": 1
+                                    }
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -9360,12 +9732,18 @@ SELECT * FROM collated_global
                                   }
                                 },
                                 "mfp_after": {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0
-                                  ],
-                                  "input_arity": 1
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [],
+                                      "predicates": [],
+                                      "projection": [
+                                        0
+                                      ],
+                                      "input_arity": 1
+                                    }
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -9807,17 +10185,23 @@ SELECT * FROM collated_global
                                 },
                                 "plan": {
                                   "Collection": {
-                                    "expressions": [],
-                                    "predicates": [],
-                                    "projection": [
-                                      2,
-                                      4,
-                                      0,
-                                      1,
-                                      3,
-                                      5
-                                    ],
-                                    "input_arity": 6
+                                    "mfp": {
+                                      "mfp": {
+                                        "expressions": [],
+                                        "predicates": [],
+                                        "projection": [
+                                          2,
+                                          4,
+                                          0,
+                                          1,
+                                          3,
+                                          5
+                                        ],
+                                        "input_arity": 6
+                                      }
+                                    },
+                                    "lower_bounds": [],
+                                    "upper_bounds": []
                                   }
                                 }
                               }
@@ -9849,10 +10233,16 @@ SELECT * FROM collated_global
                                                     },
                                                     "plan": {
                                                       "Collection": {
-                                                        "expressions": [],
-                                                        "predicates": [],
-                                                        "projection": [],
-                                                        "input_arity": 6
+                                                        "mfp": {
+                                                          "mfp": {
+                                                            "expressions": [],
+                                                            "predicates": [],
+                                                            "projection": [],
+                                                            "input_arity": 6
+                                                          }
+                                                        },
+                                                        "lower_bounds": [],
+                                                        "upper_bounds": []
                                                       }
                                                     }
                                                   }
@@ -9889,108 +10279,114 @@ SELECT * FROM collated_global
                                   }
                                 },
                                 "mfp": {
-                                  "expressions": [
-                                    {
-                                      "Literal": [
+                                  "mfp": {
+                                    "mfp": {
+                                      "expressions": [
                                         {
-                                          "Ok": {
-                                            "data": [
-                                              49
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  49
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int64",
+                                              "nullable": false
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "Int64",
-                                          "nullable": false
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "String",
+                                              "nullable": true
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int64",
+                                              "nullable": true
+                                            }
+                                          ]
                                         },
                                         {
-                                          "scalar_type": "Int64",
-                                          "nullable": true
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "String",
+                                              "nullable": true
+                                            }
+                                          ]
                                         }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
+                                      ],
+                                      "predicates": [],
+                                      "projection": [
+                                        0,
+                                        1,
+                                        2,
+                                        3,
+                                        4,
+                                        5
+                                      ],
+                                      "input_arity": 0
                                     }
-                                  ],
-                                  "predicates": [],
-                                  "projection": [
-                                    0,
-                                    1,
-                                    2,
-                                    3,
-                                    4,
-                                    5
-                                  ],
-                                  "input_arity": 0
+                                  },
+                                  "lower_bounds": [],
+                                  "upper_bounds": []
                                 },
                                 "input_key_val": null
                               }
@@ -10088,26 +10484,38 @@ WHERE a = c AND d = e AND b + d > 42
                           },
                           "plan": {
                             "Collection": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                0,
-                                1
-                              ],
-                              "input_arity": 2
+                              "mfp": {
+                                "mfp": {
+                                  "expressions": [],
+                                  "predicates": [],
+                                  "projection": [
+                                    0,
+                                    1
+                                  ],
+                                  "input_arity": 2
+                                }
+                              },
+                              "lower_bounds": [],
+                              "upper_bounds": []
                             }
                           }
                         }
                       }
                     },
                     "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "forms": {
                       "raw": true,
@@ -10172,24 +10580,36 @@ WHERE a = c AND d = e AND b + d > 42
                           },
                           "plan": {
                             "Collection": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                0
-                              ],
-                              "input_arity": 1
+                              "mfp": {
+                                "mfp": {
+                                  "expressions": [],
+                                  "predicates": [],
+                                  "projection": [
+                                    0
+                                  ],
+                                  "input_arity": 1
+                                }
+                              },
+                              "lower_bounds": [],
+                              "upper_bounds": []
                             }
                           }
                         }
                       }
                     },
                     "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0
-                      ],
-                      "input_arity": 1
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0
+                          ],
+                          "input_arity": 1
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "forms": {
                       "raw": true,
@@ -10998,60 +11418,66 @@ WHERE a = c AND d = e AND f = a
                               ],
                               null,
                               {
-                                "expressions": [],
-                                "predicates": [
-                                  [
-                                    1,
-                                    {
-                                      "CallUnary": {
-                                        "func": {
-                                          "Not": null
-                                        },
-                                        "expr": {
+                                "mfp": {
+                                  "mfp": {
+                                    "expressions": [],
+                                    "predicates": [
+                                      [
+                                        1,
+                                        {
                                           "CallUnary": {
                                             "func": {
-                                              "IsNull": null
+                                              "Not": null
                                             },
                                             "expr": {
-                                              "Column": [
-                                                0,
-                                                "c"
-                                              ]
+                                              "CallUnary": {
+                                                "func": {
+                                                  "IsNull": null
+                                                },
+                                                "expr": {
+                                                  "Column": [
+                                                    0,
+                                                    "c"
+                                                  ]
+                                                }
+                                              }
                                             }
                                           }
                                         }
-                                      }
-                                    }
-                                  ],
-                                  [
-                                    2,
-                                    {
-                                      "CallUnary": {
-                                        "func": {
-                                          "Not": null
-                                        },
-                                        "expr": {
+                                      ],
+                                      [
+                                        2,
+                                        {
                                           "CallUnary": {
                                             "func": {
-                                              "IsNull": null
+                                              "Not": null
                                             },
                                             "expr": {
-                                              "Column": [
-                                                1,
-                                                "d"
-                                              ]
+                                              "CallUnary": {
+                                                "func": {
+                                                  "IsNull": null
+                                                },
+                                                "expr": {
+                                                  "Column": [
+                                                    1,
+                                                    "d"
+                                                  ]
+                                                }
+                                              }
                                             }
                                           }
                                         }
-                                      }
-                                    }
-                                  ]
-                                ],
-                                "projection": [
-                                  0,
-                                  1
-                                ],
-                                "input_arity": 2
+                                      ]
+                                    ],
+                                    "projection": [
+                                      0,
+                                      1
+                                    ],
+                                    "input_arity": 2
+                                  }
+                                },
+                                "lower_bounds": [],
+                                "upper_bounds": []
                               }
                             ]
                           }
@@ -11059,13 +11485,19 @@ WHERE a = c AND d = e AND f = a
                       }
                     },
                     "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "forms": {
                       "raw": true,
@@ -11162,60 +11594,66 @@ WHERE a = c AND d = e AND f = a
                               ],
                               null,
                               {
-                                "expressions": [],
-                                "predicates": [
-                                  [
-                                    1,
-                                    {
-                                      "CallUnary": {
-                                        "func": {
-                                          "Not": null
-                                        },
-                                        "expr": {
+                                "mfp": {
+                                  "mfp": {
+                                    "expressions": [],
+                                    "predicates": [
+                                      [
+                                        1,
+                                        {
                                           "CallUnary": {
                                             "func": {
-                                              "IsNull": null
+                                              "Not": null
                                             },
                                             "expr": {
-                                              "Column": [
-                                                0,
-                                                "e"
-                                              ]
+                                              "CallUnary": {
+                                                "func": {
+                                                  "IsNull": null
+                                                },
+                                                "expr": {
+                                                  "Column": [
+                                                    0,
+                                                    "e"
+                                                  ]
+                                                }
+                                              }
                                             }
                                           }
                                         }
-                                      }
-                                    }
-                                  ],
-                                  [
-                                    2,
-                                    {
-                                      "CallUnary": {
-                                        "func": {
-                                          "Not": null
-                                        },
-                                        "expr": {
+                                      ],
+                                      [
+                                        2,
+                                        {
                                           "CallUnary": {
                                             "func": {
-                                              "IsNull": null
+                                              "Not": null
                                             },
                                             "expr": {
-                                              "Column": [
-                                                1,
-                                                "f"
-                                              ]
+                                              "CallUnary": {
+                                                "func": {
+                                                  "IsNull": null
+                                                },
+                                                "expr": {
+                                                  "Column": [
+                                                    1,
+                                                    "f"
+                                                  ]
+                                                }
+                                              }
                                             }
                                           }
                                         }
-                                      }
-                                    }
-                                  ]
-                                ],
-                                "projection": [
-                                  0,
-                                  1
-                                ],
-                                "input_arity": 2
+                                      ]
+                                    ],
+                                    "projection": [
+                                      0,
+                                      1
+                                    ],
+                                    "input_arity": 2
+                                  }
+                                },
+                                "lower_bounds": [],
+                                "upper_bounds": []
                               }
                             ]
                           }
@@ -11223,13 +11661,19 @@ WHERE a = c AND d = e AND f = a
                       }
                     },
                     "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
                     },
                     "forms": {
                       "raw": true,

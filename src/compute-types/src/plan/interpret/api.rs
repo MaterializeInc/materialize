@@ -18,10 +18,7 @@ use std::fmt::Debug;
 
 use differential_dataflow::lattice::Lattice;
 use itertools::zip_eq;
-use mz_expr::{
-    EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RECURSION_LIMIT,
-    TableFunc,
-};
+use mz_expr::{EvalError, Id, LetRecLimit, LocalId, MfpPlan, RECURSION_LIMIT, TableFunc};
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{assert_none, soft_panic_or_log};
@@ -29,6 +26,7 @@ use mz_repr::{Diff, Row, Timestamp};
 
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::{AvailableCollections, GetPlan, Plan, PlanNode};
@@ -72,19 +70,19 @@ pub trait Interpreter {
         &self,
         ctx: &Context<Self::Domain>,
         input: Self::Domain,
-        mfp: &MapFilterProject,
-        input_key_val: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        mfp: &MfpPlan<LirScalarExpr>,
+        input_key_val: &Option<(Vec<LirScalarExpr>, Option<Row>)>,
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.
     fn flat_map(
         &self,
         ctx: &Context<Self::Domain>,
-        input_key: &Option<Vec<MirScalarExpr>>,
+        input_key: &Option<Vec<LirScalarExpr>>,
         input: Self::Domain,
-        exprs: &Vec<MirScalarExpr>,
+        exprs: &Vec<LirScalarExpr>,
         func: &TableFunc,
-        mfp: &MapFilterProject,
+        mfp: &MfpPlan<LirScalarExpr>,
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.
@@ -99,11 +97,11 @@ pub trait Interpreter {
     fn reduce(
         &self,
         ctx: &Context<Self::Domain>,
-        input_key: &Option<Vec<MirScalarExpr>>,
+        input_key: &Option<Vec<LirScalarExpr>>,
         input: Self::Domain,
         key_val_plan: &KeyValPlan,
         plan: &ReducePlan,
-        mfp_after: &MapFilterProject,
+        mfp_after: &MfpPlan<LirScalarExpr>,
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.
@@ -139,8 +137,8 @@ pub trait Interpreter {
         ctx: &Context<Self::Domain>,
         input: Self::Domain,
         forms: &AvailableCollections,
-        input_key: &Option<Vec<MirScalarExpr>>,
-        input_mfp: &MapFilterProject,
+        input_key: &Option<Vec<LirScalarExpr>>,
+        input_mfp: &MfpPlan<LirScalarExpr>,
     ) -> Self::Domain;
 }
 
