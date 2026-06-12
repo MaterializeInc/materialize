@@ -82,6 +82,7 @@ CATALOG_SERVER_SYSTEM_SCHEMAS = [
     "mz_unsafe",
 ]
 
+
 def workflow_default(c: Composition) -> None:
     # `catalog-server-explain` validation runs inside `fast_tests` (shard 0), so
     # skip it here to avoid running it twice (and it is `--rewrite`-capable, so
