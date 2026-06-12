@@ -92,35 +92,75 @@ def ensure_cockroach() -> None:
         if started.returncode != 0:
             run(
                 [
-                    "docker", "run", "--name=cockroach", "-d",
-                    "-p", f"{COCKROACH_PORT}:26257", "-p", "26258:8080",
-                    "cockroachdb/cockroach:latest", "start-single-node",
-                    "--insecure", "--store=type=mem,size=2G",
+                    "docker",
+                    "run",
+                    "--name=cockroach",
+                    "-d",
+                    "-p",
+                    f"{COCKROACH_PORT}:26257",
+                    "-p",
+                    "26258:8080",
+                    "cockroachdb/cockroach:latest",
+                    "start-single-node",
+                    "--insecure",
+                    "--store=type=mem,size=2G",
                 ]
             )
         time.sleep(3)
     run(
-        ["docker", "exec", "cockroach", "cockroach", "sql", "--insecure", "-e",
-         "CREATE SCHEMA IF NOT EXISTS consensus"]
+        [
+            "docker",
+            "exec",
+            "cockroach",
+            "cockroach",
+            "sql",
+            "--insecure",
+            "-e",
+            "CREATE SCHEMA IF NOT EXISTS consensus",
+        ]
     )
 
 
 def cargo_build() -> None:
     feature_args = ["--no-default-features"] if NO_DEFAULT_FEATURES else []
     if RUN_CLUSTERD:
-        print(f"Building clusterd + headless-driver (profile: {PROFILE}"
-              f"{' --no-default-features' if NO_DEFAULT_FEATURES else ''})...")
+        print(
+            f"Building clusterd + headless-driver (profile: {PROFILE}"
+            f"{' --no-default-features' if NO_DEFAULT_FEATURES else ''})..."
+        )
         # Single cargo invocation builds both bins. --no-default-features applies
         # to both packages, but the driver crate has no default features.
         run(
-            ["cargo", "build", "--profile", PROFILE, *feature_args,
-             "-p", "mz-clusterd", "--bin", "clusterd",
-             "-p", "mz-clusterd-test-driver", "--bin", "headless-driver"]
+            [
+                "cargo",
+                "build",
+                "--profile",
+                PROFILE,
+                *feature_args,
+                "-p",
+                "mz-clusterd",
+                "--bin",
+                "clusterd",
+                "-p",
+                "mz-clusterd-test-driver",
+                "--bin",
+                "headless-driver",
+            ]
         )
     else:
         print(f"Building headless-driver (profile: {PROFILE})...")
-        run(["cargo", "build", "--profile", PROFILE,
-             "-p", "mz-clusterd-test-driver", "--bin", "headless-driver"])
+        run(
+            [
+                "cargo",
+                "build",
+                "--profile",
+                PROFILE,
+                "-p",
+                "mz-clusterd-test-driver",
+                "--bin",
+                "headless-driver",
+            ]
+        )
 
 
 def clusterd_command() -> list[str]:
@@ -133,15 +173,24 @@ def clusterd_command() -> list[str]:
     return [
         *shlex.split(WRAPPER),
         str(ROOT / "target" / PROFILE_DIR / "clusterd"),
-        "--compute-controller-listen-addr", COMPUTE_ADDR,
-        "--storage-controller-listen-addr", STORAGE_ADDR,
-        "--compute-timely-config", compute_tc,
-        "--storage-timely-config", storage_tc,
-        "--process", "0",
-        "--environment-id", ENVIRONMENT_ID,
-        "--secrets-reader", "local-file",
-        "--secrets-reader-local-file-dir", SECRETS_DIR,
-        "--scratch-directory", SCRATCH_DIR,
+        "--compute-controller-listen-addr",
+        COMPUTE_ADDR,
+        "--storage-controller-listen-addr",
+        STORAGE_ADDR,
+        "--compute-timely-config",
+        compute_tc,
+        "--storage-timely-config",
+        storage_tc,
+        "--process",
+        "0",
+        "--environment-id",
+        ENVIRONMENT_ID,
+        "--secrets-reader",
+        "local-file",
+        "--secrets-reader-local-file-dir",
+        SECRETS_DIR,
+        "--scratch-directory",
+        SCRATCH_DIR,
     ]
 
 
@@ -209,11 +258,17 @@ def main() -> int:
     try:
         if RUN_CLUSTERD:
             cmd = clusterd_command()
-            print("clusterd command:\n  PERSIST_PUBSUB_URL=http://127.0.0.1:"
-                  f"{PUBSUB_PORT} \\\n  " + " ".join(shlex.quote(a) for a in cmd))
+            print(
+                "clusterd command:\n  PERSIST_PUBSUB_URL=http://127.0.0.1:"
+                f"{PUBSUB_PORT} \\\n  " + " ".join(shlex.quote(a) for a in cmd)
+            )
             log = open("/tmp/clusterd-test-driver-clusterd.log", "w")
-            clusterd_env = dict(os.environ, PERSIST_PUBSUB_URL=f"http://127.0.0.1:{PUBSUB_PORT}")
-            launched = subprocess.Popen(cmd, stdout=log, stderr=log, env=clusterd_env, cwd=ROOT)
+            clusterd_env = dict(
+                os.environ, PERSIST_PUBSUB_URL=f"http://127.0.0.1:{PUBSUB_PORT}"
+            )
+            launched = subprocess.Popen(
+                cmd, stdout=log, stderr=log, env=clusterd_env, cwd=ROOT
+            )
             # Wait for the wrapper to fork clusterd, then resolve its pid.
             clusterd_pid = None
             for _ in range(60):
