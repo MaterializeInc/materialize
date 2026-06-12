@@ -1,0 +1,22 @@
+[package]
+name = "mz-metrics-catalog"
+description = "Generates a catalog of `metric!` definitions for the user-facing docs."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+mz-metrics = { path = "../metrics" }
+quote.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_yaml.workspace = true
+syn = { workspace = true, features = ["visit"] }
+walkdir.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }

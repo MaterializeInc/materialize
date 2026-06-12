@@ -1,0 +1,529 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Generates a YAML file of every `metric!` definition in the Materialize
+//! source tree for the user-facing metrics documentation.
+//!
+//! It walks the Rust AST with `syn`,
+//! visiting every `metric!` invocation outside of `#[cfg(test)]` and extracts
+//! its properties.
+//!
+//! Regenerate with `bin/gen-metrics-catalog`.
+
+use std::process;
+
+use anyhow::{Context, bail};
+use quote::ToTokens;
+use serde::Serialize;
+use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
+use syn::visit::Visit;
+use syn::{Attribute, Expr, Ident, ItemMod, Lit, Macro, Meta, Token, braced, bracketed};
+use walkdir::WalkDir;
+
+// Known directories that we want to ignore when walking the source tree.
+static IGNORED_DIRS: &[&str] = &["tests", "benches", "examples"];
+
+/// The catalog as serialized to YAML.
+#[derive(Serialize)]
+struct Catalog {
+    metrics: Vec<MetricDoc>,
+}
+
+/// A single `metric!` definition.
+#[derive(Serialize)]
+struct MetricDoc {
+    name: String,
+    help: String,
+    /// Repo-relative path to the file the metric is defined in.
+    source: String,
+}
+
+/// Parses the token body of a `metric!` invocation. Mirrors the grammar in
+/// `mz_ore::metric!`.
+/// Only `name` and `help` are retained; the remaining fields are consumed but
+/// discarded so token parsing stays in sync with the real macro grammar.
+struct MetricArgs {
+    name: Option<Expr>,
+    help: Option<Expr>,
+    subsystem: Option<Expr>,
+}
+
+impl Parse for MetricArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut args = MetricArgs {
+            name: None,
+            help: None,
+            subsystem: None,
+        };
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            match key.to_string().as_str() {
+                "name" => args.name = Some(input.parse()?),
+                "help" => args.help = Some(input.parse()?),
+                "subsystem" => args.subsystem = Some(input.parse()?),
+                // We don't care about const_labels, var_labels, or rules, but still need to parse
+                // them to stay in sync.
+                "const_labels" => {
+                    let content;
+                    braced!(content in input);
+                    while !content.is_empty() {
+                        let _k: Expr = content.parse()?;
+                        content.parse::<Token![=>]>()?;
+                        let _v: Expr = content.parse()?;
+                        if content.peek(Token![,]) {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "rules" | "var_labels" => {
+                    let content;
+                    bracketed!(content in input);
+                    let _ = Punctuated::<Expr, Token![,]>::parse_terminated(&content)?;
+                }
+                _ => {
+                    // Unknown field; consume one expression to stay in sync.
+                    let _: Expr = input.parse()?;
+                }
+            }
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(args)
+    }
+}
+
+impl MetricArgs {
+    fn into_doc(self, source: &str) -> MetricDoc {
+        let name = self
+            .name
+            .as_ref()
+            .map(expr_to_string)
+            .unwrap_or_else(|| "<unknown>".into());
+        // A `subsystem` prefixes the metric name, matching Prometheus'
+        // `fq_name` (`<subsystem>_<name>`). It is frequently a runtime value
+        // (e.g. `subsystem: component`), in which case we glob it to `*`.
+        let name = match &self.subsystem {
+            Some(subsystem) => format!("{}_{name}", subsystem_to_string(subsystem)),
+            None => name,
+        };
+        MetricDoc {
+            name,
+            help: self.help.as_ref().map(expr_to_string).unwrap_or_default(),
+            source: source.to_owned(),
+        }
+    }
+}
+
+/// Renders a `subsystem` for use as a metric-name prefix: a string literal is
+/// used verbatim, while anything else (a runtime value like `component`) globs
+/// to `*`, since its concrete value is only known at runtime.
+fn subsystem_to_string(e: &Expr) -> String {
+    match e {
+        Expr::Lit(lit) => match &lit.lit {
+            Lit::Str(s) => s.value(),
+            _ => "*".into(),
+        },
+        _ => "*".into(),
+    }
+}
+
+/// Whether the macro's path ends in `name`.
+fn macro_named(mac: &Macro, name: &str) -> bool {
+    mac.path
+        .segments
+        .last()
+        .map(|s| s.ident == name)
+        .unwrap_or(false)
+}
+
+/// Turns a Rust format string into a glob: `{}` and `{name}` become `*`,
+/// while the escapes `{{` and `}}` collapse to literal `{` and `}`.
+fn format_template_to_glob(fmt: &str) -> String {
+    let mut out = String::new();
+    let mut chars = fmt.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            // Handle escaped opening curly braces.
+            '{' if chars.peek() == Some(&'{') => {
+                chars.next();
+                out.push('{');
+            }
+            //
+            '{' => {
+                // Consume the placeholder up to and including its closing `}`.
+                for n in chars.by_ref() {
+                    if n == '}' {
+                        break;
+                    }
+                }
+                // Replace the placeholder {} with *
+                out.push('*');
+            }
+            // Handle escaped closing curly braces.
+            '}' if chars.peek() == Some(&'}') => {
+                chars.next();
+                out.push('}');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Extracts a `format!`'s template string and globs its placeholders, if the
+/// first argument is a string literal.
+fn format_macro_to_glob(mac: &Macro) -> Option<String> {
+    let args = mac
+        .parse_body_with(Punctuated::<Expr, Token![,]>::parse_terminated)
+        .ok()?;
+    match args.first()? {
+        Expr::Lit(lit) => match &lit.lit {
+            Lit::Str(s) => Some(format_template_to_glob(&s.value())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Renders an expr for display:
+///
+/// * a string literal becomes its value;
+/// * a `format!("mz_foo_{}_bar", ..)` becomes the template with each `{..}`
+///   placeholder replaced by `*` (e.g. `mz_foo_*_bar`), since these values
+///   are only known at runtime.
+/// * anything else falls back to its token form.
+fn expr_to_string(e: &Expr) -> String {
+    match e {
+        Expr::Lit(lit) => match &lit.lit {
+            Lit::Str(s) => s.value(),
+            _ => e.to_token_stream().to_string(),
+        },
+        Expr::Macro(m) if macro_named(&m.mac, "format") => {
+            format_macro_to_glob(&m.mac).unwrap_or_else(|| e.to_token_stream().to_string())
+        }
+        _ => e.to_token_stream().to_string(),
+    }
+}
+
+/// Returns true if any attribute is `#[cfg(test)]` (or `#[cfg(any(test, ..))]`).
+fn has_cfg_test(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && matches!(&attr.meta, Meta::List(list) if list.tokens.to_string().contains("test"))
+    })
+}
+
+struct Collector<'a> {
+    source: &'a str,
+    out: &'a mut Vec<MetricDoc>,
+}
+
+impl<'ast> Visit<'ast> for Collector<'_> {
+    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
+        // Skip test-only modules so the user-facing catalog excludes test metrics.
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        syn::visit::visit_item_mod(self, node);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast Macro) {
+        // Look for `metric!` invocations.
+        let is_metric = mac
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident == "metric")
+            .unwrap_or(false);
+        if is_metric {
+            match mac.parse_body::<MetricArgs>() {
+                Ok(args) => self.out.push(args.into_doc(self.source)),
+                Err(e) => eprintln!("warn: failed to parse metric! in {}: {e}", self.source),
+            }
+        }
+        syn::visit::visit_macro(self, mac);
+    }
+}
+
+fn run() -> anyhow::Result<()> {
+    let mut args = std::env::args().skip(1);
+    let (Some(src_root), Some(out_file)) = (args.next(), args.next()) else {
+        bail!("usage: mz-metrics-catalog <src-root> <out-file>");
+    };
+
+    let mut entries: Vec<MetricDoc> = Vec::new();
+    let walker = WalkDir::new(&src_root).into_iter().filter_entry(|e| {
+        let name = e.file_name().to_str().unwrap_or("");
+        // Prune test/bench/example trees and build output.
+        !(e.file_type().is_dir() && IGNORED_DIRS.contains(&name))
+    });
+    for entry in walker {
+        let entry = entry.context("walking source tree")?;
+        let path = entry.path();
+        if path.extension().map(|e| e == "rs").unwrap_or(false) {
+            let content =
+                std::fs::read_to_string(path).with_context(|| format!("reading {path:?}"))?;
+            if !content.contains("metric!") {
+                continue;
+            }
+            let ast = match syn::parse_file(&content) {
+                Ok(ast) => ast,
+                Err(e) => {
+                    eprintln!("warn: skipping {path:?} (parse error: {e})");
+                    continue;
+                }
+            };
+            let source = path.to_string_lossy();
+            let mut collector = Collector {
+                source: &source,
+                out: &mut entries,
+            };
+            collector.visit_file(&ast);
+        }
+    }
+
+    // Some metrics are registered through `metric!`-wrapping macros whose names
+    // are assembled at macro-expansion time (e.g. `concat!(stringify!(...))`),
+    // so `syn` can't see them. Pull those directly from the crate that defines
+    // them. See `mz_metrics::describe_metrics`.
+    for (name, help, source) in mz_metrics::describe_metrics() {
+        entries.push(MetricDoc {
+            name,
+            help,
+            source: source.to_owned(),
+        });
+    }
+
+    entries.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.source.cmp(&b.source)));
+
+    let catalog = Catalog { metrics: entries };
+    let body = serde_yaml::to_string(&catalog).context("serializing catalog")?;
+    let header = "# Generated by `bin/gen-metrics-catalog`. DO NOT EDIT.\n\
+                  # Source of truth: `metric!` invocations in the Rust source tree.\n";
+    std::fs::write(&out_file, format!("{header}{body}"))
+        .with_context(|| format!("writing {out_file}"))?;
+    Ok(())
+}
+
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("error: {err:#}");
+        process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A bare `{}` is a real placeholder and globs to `*`, e.g.
+    /// `format!("mz_persist_{}_test_metric", name)`.
+    #[mz_ore::test]
+    fn format_template_to_glob_replaces_placeholder_with_star() {
+        assert_eq!(
+            format_template_to_glob("mz_persist_{}_test_metric"),
+            "mz_persist_*_test_metric"
+        );
+    }
+
+    // Each pair of brace is escaped, so nothing globs
+    #[mz_ore::test]
+    fn format_template_to_glob_even_number_of_brace_pairs() {
+        assert_eq!(
+            format_template_to_glob("mz_persist_{{}}_test_metric"),
+            "mz_persist_{}_test_metric"
+        );
+    }
+
+    /// `{{{}}}` is an escaped `{`, then a `{}` placeholder, then an escaped `}`,
+    /// so it becomes `{*}`
+    #[mz_ore::test]
+    fn format_template_to_glob_odd_number_of_brace_pairs() {
+        assert_eq!(
+            format_template_to_glob("mz_persist_{{{}}}_test_metric"),
+            "mz_persist_{*}_test_metric"
+        );
+    }
+
+    // placeholder inside braces should not be globbed since each brace is escaped
+    #[mz_ore::test]
+    fn format_template_to_glob_even_number_inline_placeholder() {
+        assert_eq!(
+            format_template_to_glob("mz_persist_{{{{name}}}}_test_metric"),
+            "mz_persist_{{name}}_test_metric"
+        );
+    }
+
+    // placeholder inside braces should be globbed since it's not escaped
+    #[mz_ore::test]
+    fn format_template_to_glob_odd_number_inline_placeholder() {
+        assert_eq!(
+            format_template_to_glob("mz_persist_{{{name}}}_test_metric"),
+            "mz_persist_{*}_test_metric"
+        );
+    }
+
+    /// Parses a full `metric!(..)` invocation through the same `MetricArgs`
+    /// path the collector uses, then renders it to a [`MetricDoc`].
+    fn parse_metric(invocation: &str) -> MetricDoc {
+        let mac: Macro = syn::parse_str(invocation).expect("valid macro invocation");
+        let args = mac
+            .parse_body::<MetricArgs>()
+            .expect("valid metric! arguments");
+        args.into_doc("test.rs")
+    }
+
+    /// The bare minimum: just the required `name` and `help`.
+    #[mz_ore::test]
+    fn parses_required_fields_only() {
+        let doc = parse_metric(r#"metric!(name: "mz_foo", help: "a foo")"#);
+        assert_eq!(doc.name, "mz_foo");
+        assert_eq!(doc.help, "a foo");
+    }
+
+    /// A trailing comma after the last field is allowed by the macro grammar.
+    #[mz_ore::test]
+    fn allows_trailing_comma() {
+        let doc = parse_metric(r#"metric!(name: "mz_foo", help: "a foo",)"#);
+        assert_eq!(doc.name, "mz_foo");
+        assert_eq!(doc.help, "a foo");
+    }
+
+    /// Every optional field present, in canonical macro order, across multiple
+    /// lines — mirrors how real metrics are written in the tree. The literal
+    /// `subsystem` is prepended to the name (`<subsystem>_<name>`).
+    #[mz_ore::test]
+    fn parses_realistic_multiline_invocation() {
+        let doc = parse_metric(
+            r#"metric!(
+                name: "step_duration_seconds",
+                help: "The time spent in each compute step_or_park call",
+                subsystem: "compute",
+                const_labels: {"cluster" => "compute"},
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
+                rules: [rule_a(), rule_b()],
+            )"#,
+        );
+        assert_eq!(doc.name, "compute_step_duration_seconds");
+        assert_eq!(doc.help, "The time spent in each compute step_or_park call");
+    }
+
+    /// Each optional `metric!` field parses on its own alongside the required
+    /// `name`/`help`. The all-fields-together case is covered by
+    /// `parses_realistic_multiline_invocation`.
+    #[mz_ore::test]
+    fn parses_each_optional_field() {
+        let optionals = [
+            r#"const_labels: {"cluster" => "compute"}"#,
+            r#"var_labels: ["worker_id", "command_type"]"#,
+            "buckets: histogram_seconds_buckets(0.1, 1.0)",
+            "rules: [rule_a(), rule_b()]",
+        ];
+        for opt in optionals {
+            let invocation = format!(r#"metric!(name: "mz_foo", help: "a foo metric", {opt})"#);
+            let doc = parse_metric(&invocation);
+            assert_eq!(doc.name, "mz_foo", "failed for: {invocation}");
+            assert_eq!(doc.help, "a foo metric", "failed for: {invocation}");
+        }
+    }
+
+    /// Empty `var_labels`/`rules` collections parse.
+    #[mz_ore::test]
+    fn parses_empty_collections() {
+        let doc = parse_metric(r#"metric!(name: "mz_foo", help: "h", var_labels: [], rules: [])"#);
+        assert_eq!(doc.name, "mz_foo");
+    }
+
+    /// Multiple `const_labels` pairs, with a trailing comma inside the braces.
+    #[mz_ore::test]
+    fn parses_multiple_const_labels_with_trailing_comma() {
+        let doc = parse_metric(
+            r#"metric!(name: "mz_foo", help: "h", const_labels: {"a" => "1", "b" => "2",})"#,
+        );
+        assert_eq!(doc.name, "mz_foo");
+    }
+
+    /// A `format!` in the `name` position globs its placeholders to `*`.
+    #[mz_ore::test]
+    fn globs_format_macro_in_name() {
+        let doc = parse_metric(r#"metric!(name: format!("mz_persist_{}_bytes", name), help: "h")"#);
+        assert_eq!(doc.name, "mz_persist_*_bytes");
+    }
+
+    /// A `format!` in the `help` position is globbed too.
+    #[mz_ore::test]
+    fn globs_format_macro_in_help() {
+        let doc =
+            parse_metric(r#"metric!(name: "mz_foo", help: format!("total {} batches", name))"#);
+        assert_eq!(doc.help, "total * batches");
+    }
+
+    /// Positional and named placeholders both glob to `*`.
+    #[mz_ore::test]
+    fn globs_format_macro_with_named_and_positional_placeholders() {
+        let doc =
+            parse_metric(r#"metric!(name: format!("mz_{0}_{kind}_total", a, kind), help: "h")"#);
+        assert_eq!(doc.name, "mz_*_*_total");
+    }
+
+    /// A string-literal `subsystem` is prepended to the name, mirroring
+    /// Prometheus' `fq_name` (`<subsystem>_<name>`).
+    #[mz_ore::test]
+    fn prepends_literal_subsystem() {
+        let doc = parse_metric(r#"metric!(name: "requests_total", help: "h", subsystem: "http")"#);
+        assert_eq!(doc.name, "http_requests_total");
+    }
+
+    /// A runtime (non-literal) `subsystem` globs to `*`, since its concrete
+    /// value is only known at runtime (e.g. `subsystem: component`).
+    #[mz_ore::test]
+    fn globs_runtime_subsystem() {
+        let doc =
+            parse_metric(r#"metric!(name: "requests_total", help: "h", subsystem: component)"#);
+        assert_eq!(doc.name, "*_requests_total");
+    }
+
+    /// A non-literal, non-`format!` `name` falls back to
+    /// its token form.
+    #[mz_ore::test]
+    fn falls_back_to_token_form_for_non_literal_name() {
+        let doc = parse_metric(r#"metric!(name: METRIC_NAME, help: "h")"#);
+        assert_eq!(doc.name, "METRIC_NAME");
+    }
+
+    /// NOTE: the real `metric!` macro fixes field order; our parser is
+    /// intentionally order-independent (it matches on the key) so the catalog
+    /// stays robust to grammar tweaks. Document that leniency here.
+    #[mz_ore::test]
+    fn parser_tolerates_reordered_fields() {
+        let doc = parse_metric(r#"metric!(help: "a foo", var_labels: ["x"], name: "mz_foo")"#);
+        assert_eq!(doc.name, "mz_foo");
+        assert_eq!(doc.help, "a foo");
+    }
+
+    /// A missing `name` renders as the `<unknown>` sentinel rather than failing.
+    #[mz_ore::test]
+    fn missing_name_renders_as_unknown() {
+        let doc = parse_metric(r#"metric!(help: "h")"#);
+        assert_eq!(doc.name, "<unknown>");
+        assert_eq!(doc.help, "h");
+    }
+
+    /// A missing `help` renders as the empty string.
+    #[mz_ore::test]
+    fn missing_help_renders_as_empty() {
+        let doc = parse_metric(r#"metric!(name: "mz_foo")"#);
+        assert_eq!(doc.name, "mz_foo");
+        assert_eq!(doc.help, "");
+    }
+}
