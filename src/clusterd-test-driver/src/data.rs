@@ -91,9 +91,12 @@ pub async fn write_rows_single_ts(
     Ok(())
 }
 
-/// Writes `rows` spread across timestamps `0..n_ts`, one append per timestamp,
-/// distributing rows round-robin by index. Advances `upper` to `n_ts`. All rows
-/// are inserted with diff `+1`.
+/// Writes `rows` spread across timestamps `0..n_ts` (row `i` at time `i % n_ts`)
+/// in a single append that seals `[0, n_ts)`. All rows are inserted with diff
+/// `+1`. This is one `compare_and_append` regardless of `n_ts` — persist accepts
+/// updates at any timestamp within the sealed range — so it stays fast even for
+/// very large `n_ts` (a per-timestamp append would be `n_ts` consensus
+/// round-trips).
 pub async fn write_rows_spread(
     client: &PersistClient,
     shard: ShardId,
@@ -113,20 +116,20 @@ pub async fn write_rows_spread(
             },
         )
         .await?;
-    for t in 0..n_ts {
-        let batch: Vec<_> = rows
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| u64::cast_from(*i) % n_ts == t)
-            .map(|(_, r)| ((SourceData(Ok(r.clone())), ()), Timestamp::from(t), 1i64))
-            .collect();
-        let lower = Antichain::from_elem(Timestamp::from(t));
-        let upper = Antichain::from_elem(Timestamp::from(t).step_forward());
-        writer
-            .compare_and_append(&batch, lower, upper)
-            .await?
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-    }
+    let updates: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let t = u64::cast_from(i) % n_ts;
+            ((SourceData(Ok(r.clone())), ()), Timestamp::from(t), 1i64)
+        })
+        .collect();
+    let lower = Antichain::from_elem(Timestamp::from(0));
+    let upper = Antichain::from_elem(Timestamp::from(n_ts));
+    writer
+        .compare_and_append(&updates, lower, upper)
+        .await?
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }
 
