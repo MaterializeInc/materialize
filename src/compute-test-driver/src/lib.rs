@@ -5,6 +5,7 @@
 pub mod ctp;
 pub mod data;
 pub mod persist_host;
+pub mod responses;
 pub mod target;
 
 #[cfg(test)]
