@@ -329,6 +329,7 @@ impl ComputeState {
             let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let use_pool = COLUMN_PAGED_BATCHER_USE_POOL.get(config);
             let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
+            let eager_backing = COLUMN_PAGED_BATCHER_EAGER_BACKING.get(config);
             let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
             let swap_pageout = COLUMN_PAGED_BATCHER_SWAP_PAGEOUT.get(config);
 
@@ -349,7 +350,7 @@ impl ComputeState {
                 Backend::Swap
             };
 
-            if use_pool && apply_pool_config(enabled, total, spill_threads) {
+            if use_pool && apply_pool_config(enabled, total, spill_threads, eager_backing) {
                 // Keep the tiered singleton configured even though the pool
                 // is the installed mechanism: consumers that captured a
                 // tiered pager (boot-time config ordering between the
@@ -363,6 +364,7 @@ impl ComputeState {
                     mem_limit,
                     budget_bytes = total,
                     spill_threads,
+                    eager_backing,
                     "column-paged batcher: applying pool config",
                 );
             } else {

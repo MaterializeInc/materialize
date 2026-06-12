@@ -144,6 +144,20 @@ pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT: Config<usize> = Config::new(
     "Buffer-pool spill threads for off-worker eviction I/O; 0 evicts inline on the caller.",
 );
 
+/// Eagerly compress unbacked buffer-pool chunks to `BackedResident` on idle
+/// spill threads (write-behind). The chunk stays readable in its slot while
+/// a compressed extent accumulates on the swap device, so budget-driven
+/// eviction becomes a pure page release instead of a compression. Trades
+/// background CPU (compression of chunks that may die before pressure
+/// reaches them) for near-free pressure response.
+pub const COLUMN_PAGED_BATCHER_EAGER_BACKING: Config<bool> = Config::new(
+    "column_paged_batcher_eager_backing",
+    false,
+    "Eagerly compress buffer-pool chunks to compressed-but-resident on idle spill threads, so \
+     budget-driven eviction is a pure page release. Only meaningful in pool mode with spill \
+     workers.",
+);
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     "enable_mz_join_core",
@@ -567,4 +581,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
         .add(&COLUMN_PAGED_BATCHER_USE_POOL)
         .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
+        .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
 }

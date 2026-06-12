@@ -102,6 +102,7 @@ pub fn register(registry: &MetricsRegistry) {
         register_pool_gauge(registry, "live_chunks", "Live pool chunks, whatever their residency: for backlog-shaped consumers, the un-drained backlog in chunks.", |s| s.live_chunks);
         register_pool_gauge(registry, "warm_bytes", "Class bytes of free slots kept warm for fault-free reuse; RSS exceeds resident bytes by up to this bounded amount.", |s| s.warm_bytes);
         register_pool_gauge(registry, "warm_reuses_total", "Slot allocations served from the warm list: no page faults, no kernel page zeroing.", |s| s.warm_reuses);
+        register_pool_gauge(registry, "eager_backs_total", "Chunks eagerly compressed to compressed-but-resident by idle spill threads; their later eviction is a pure page release.", |s| s.eager_backs);
 
         PagerMetrics {
             skip_decisions_total: registry.register(metric!(

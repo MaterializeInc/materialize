@@ -146,6 +146,10 @@ pub struct PoolStats {
     /// Slot allocations served from the warm list: reuses that faulted no
     /// pages and skipped the kernel's page zeroing.
     pub warm_reuses: u64,
+    /// Chunks eagerly compressed to `BackedResident` by idle spill threads
+    /// (write-behind): still readable in their slots, with eviction
+    /// pre-paid.
+    pub eager_backs: u64,
 }
 
 #[derive(Debug, Default)]
@@ -164,6 +168,7 @@ struct Counters {
     oversize_bytes: AtomicU64,
     warm_bytes: AtomicU64,
     warm_reuses: AtomicU64,
+    eager_backs: AtomicU64,
 }
 
 /// A buffer pool over swap-backed extents. Cheap to clone; all clones share
@@ -204,6 +209,13 @@ struct Spill {
     /// Whether evictions are handed to spill threads. Set when threads are
     /// first spawned; cleared to fall back to inline eviction.
     enabled: std::sync::atomic::AtomicBool,
+    /// Whether idle spill threads eagerly compress unbacked chunks to
+    /// `BackedResident` (write-behind): the chunk stays readable in its slot
+    /// while a compressed extent accumulates on the swap device, so a later
+    /// budget-driven eviction is a pure page release instead of a
+    /// compression. Costs CPU on chunks that die before eviction would have
+    /// reached them; pays at every pressure event.
+    eager: std::sync::atomic::AtomicBool,
     /// Number of spill threads spawned (spawn-once; later config changes
     /// only toggle `enabled`).
     threads: AtomicU64,
@@ -215,6 +227,19 @@ struct Spill {
 /// caller: bounded memory overshoot under burst beats an unbounded queue of
 /// still-resident chunks.
 const SPILL_QUEUE_MAX: usize = 64;
+
+/// What a spill thread does with a chunk once compressed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpillKind {
+    /// Budget-driven: release the slot, leaving the chunk `Evicted`. Pins
+    /// observed at dequeue cancel the work — a chunk being read is
+    /// demonstrably hot and should not be evicted.
+    Evict,
+    /// Eager write-behind: keep the slot, leaving the chunk
+    /// `BackedResident`. Pins are irrelevant — concurrent reads of the
+    /// immutable slot coexist with compression, and the slot stays put.
+    Back,
+}
 
 /// Location of a chunk's pool slot.
 #[derive(Debug, Clone, Copy)]
@@ -460,6 +485,7 @@ impl Pool {
             oversize_bytes: c.oversize_bytes.load(Ordering::Relaxed),
             warm_bytes: c.warm_bytes.load(Ordering::Relaxed),
             warm_reuses: c.warm_reuses.load(Ordering::Relaxed),
+            eager_backs: c.eager_backs.load(Ordering::Relaxed),
             spill_scheduled: c.spill_scheduled.load(Ordering::Relaxed),
             spill_cancelled: c.spill_cancelled.load(Ordering::Relaxed),
             spill_in_flight: self.0.spill.in_flight.load(Ordering::Relaxed),
@@ -500,6 +526,24 @@ impl Pool {
         self.0.spill.enabled.store(true, Ordering::Relaxed);
     }
 
+    /// Enables or disables eager backing: when on, idle spill threads
+    /// compress unbacked chunks to `BackedResident` ahead of pressure, so
+    /// budget-driven eviction becomes a pure page release. Only meaningful
+    /// with spill threads spawned.
+    pub fn set_eager_backing(&self, eager: bool) {
+        self.0.spill.eager.store(eager, Ordering::Relaxed);
+        if eager {
+            self.0.spill.cv.notify_all();
+        }
+    }
+
+    /// Test hook: performs one eager-backing step on the calling thread.
+    /// Returns whether progress was made.
+    #[doc(hidden)]
+    pub fn back_step(&self) -> bool {
+        self.0.back_one()
+    }
+
     /// Test hook: waits until the spill queue is empty and no entry is being
     /// processed, so tests observe deterministic post-eviction states.
     #[doc(hidden)]
@@ -530,7 +574,7 @@ impl Pool {
         let Some(meta) = popped else {
             return false;
         };
-        self.0.spill_process(&meta);
+        self.0.spill_process(&meta, SpillKind::Evict);
         self.0.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
         true
     }
@@ -779,28 +823,110 @@ impl PoolInner {
 
     /// Spill-thread main loop. The thread owns an `Arc<PoolInner>`, so the
     /// pool (a process-wide singleton in production) lives as long as its
-    /// threads; threads park on the condvar when idle.
+    /// threads. Queued (budget-driven) evictions take priority; with eager
+    /// backing enabled, idle threads compress unbacked chunks to
+    /// `BackedResident` instead of parking, and park with a timeout once
+    /// everything reachable is backed.
     fn spill_worker(self: Arc<Self>) {
         loop {
             let meta = {
                 let mut queue = self.spill.queue.lock().expect("spill queue poisoned");
                 loop {
                     if let Some(meta) = queue.pop_front() {
-                        break meta;
+                        break Some(meta);
+                    }
+                    if self.spill.eager.load(Ordering::Relaxed) {
+                        break None;
                     }
                     queue = self.spill.cv.wait(queue).expect("spill queue poisoned");
                 }
             };
-            self.spill_process(&meta);
-            self.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
+            match meta {
+                Some(meta) => {
+                    self.spill_process(&meta, SpillKind::Evict);
+                    self.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
+                }
+                None => {
+                    if !self.back_one() {
+                        // Nothing left to back: park briefly. Eviction
+                        // hand-offs notify the condvar; fresh inserts are
+                        // picked up by the timeout.
+                        let queue = self.spill.queue.lock().expect("spill queue poisoned");
+                        if queue.is_empty() {
+                            let _ = self
+                                .spill
+                                .cv
+                                .wait_timeout(queue, std::time::Duration::from_millis(100))
+                                .expect("spill queue poisoned");
+                        }
+                    }
+                }
+            }
         }
     }
 
-    /// Performs (or cancels) one scheduled eviction. Lock discipline: the
+    /// Eagerly compresses one unbacked chunk from the eviction queue into
+    /// `BackedResident`, returning whether any progress was made (work done
+    /// or candidates remaining). Bounded scan; non-actionable entries are
+    /// requeued or dropped per the same rules budget enforcement uses,
+    /// except that the second-chance `touched` bit is left alone — backing
+    /// is not an eviction and must not consume a chunk's reprieve.
+    fn back_one(&self) -> bool {
+        for _ in 0..16 {
+            let popped = self.queue.lock().expect("pool queue poisoned").pop_front();
+            let Some(weak) = popped else {
+                return false;
+            };
+            let Some(meta) = weak.upgrade() else {
+                continue;
+            };
+            {
+                let Ok(mut state) = meta.state.try_lock() else {
+                    self.queue
+                        .lock()
+                        .expect("pool queue poisoned")
+                        .push_back(weak);
+                    continue;
+                };
+                if state.freed {
+                    state.queued = false;
+                    continue;
+                }
+                match state.residency {
+                    Residency::Evicted | Residency::Oversize => {
+                        state.queued = false;
+                        continue;
+                    }
+                    Residency::UnbackedResident => {
+                        state.residency = Residency::WriteInFlight;
+                    }
+                    Residency::BackedResident | Residency::WriteInFlight => {
+                        self.queue
+                            .lock()
+                            .expect("pool queue poisoned")
+                            .push_back(weak);
+                        continue;
+                    }
+                }
+            }
+            self.spill.in_flight.fetch_add(1, Ordering::Relaxed);
+            self.spill_process(&meta, SpillKind::Back);
+            self.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
+            // The chunk remains an eviction candidate (now a cheap one).
+            self.queue
+                .lock()
+                .expect("pool queue poisoned")
+                .push_back(weak);
+            return true;
+        }
+        true
+    }
+
+    /// Performs (or cancels) one scheduled compression. Lock discipline: the
     /// chunk lock is held only to validate and to commit — never across the
     /// compression or the `pageout` reclaim, which are the multi-millisecond
     /// costs this path exists to keep off budget-enforcing threads.
-    fn spill_process(&self, meta: &Arc<ChunkMeta>) {
+    fn spill_process(&self, meta: &Arc<ChunkMeta>, kind: SpillKind) {
         // Validate under the lock, then release it for the I/O. The slot is
         // captured under the lock and remains owned by this chunk for the
         // unlocked compression: in `WriteInFlight`, eviction skips the chunk
@@ -823,10 +949,12 @@ impl PoolInner {
             if state.residency != Residency::WriteInFlight {
                 return;
             }
-            if state.pins > 0 {
+            if kind == SpillKind::Evict && state.pins > 0 {
                 // Being read: cancel rather than compress data that is
                 // demonstrably hot. The chunk stays in the second-chance
-                // queue and a later pass reconsiders it.
+                // queue and a later pass reconsiders it. (Backing proceeds
+                // pinned: reads of the immutable slot coexist with
+                // compression, and the slot is staying put anyway.)
                 state.residency = Residency::UnbackedResident;
                 self.counters
                     .spill_cancelled
@@ -862,10 +990,17 @@ impl PoolInner {
         self.counters
             .extent_bytes_written
             .fetch_add(u64::cast_from(extent.comp_len()), Ordering::Relaxed);
+        state.extent = Some(extent);
+        if kind == SpillKind::Back {
+            // Write-behind: the chunk stays readable in its slot; the extent
+            // makes any later budget-driven eviction a pure page release.
+            self.counters.eager_backs.fetch_add(1, Ordering::Relaxed);
+            state.residency = Residency::BackedResident;
+            return;
+        }
         self.counters
             .evictions_compress
             .fetch_add(1, Ordering::Relaxed);
-        state.extent = Some(extent);
         if state.pins > 0 {
             // Pinned during compression: keep the slot resident; the extent
             // makes any later eviction cheap.
@@ -1236,6 +1371,58 @@ mod tests {
         fn check<T: Send + Sync>() {}
         check::<Pool>();
         check::<ChunkHandle>();
+    }
+
+    /// Eager backing compresses a chunk to `BackedResident` while it stays
+    /// readable in its slot; the later budget-driven eviction is a pure page
+    /// release, and the contents round-trip through the extent.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn eager_backing_round_trip() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 11);
+        let handle = pool.insert(&mut orig.clone());
+        assert_eq!(handle.residency(), Residency::UnbackedResident);
+
+        assert!(pool.back_step(), "one chunk is backable");
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        let stats = pool.stats();
+        assert_eq!(stats.eager_backs, 1);
+        assert_eq!(
+            stats.evictions_compress, 0,
+            "backing is not an eviction and compresses off the eviction counter",
+        );
+        assert!(stats.extent_bytes_written > 0);
+
+        // Still readable without a fault path: the slot is resident.
+        {
+            let pin = handle.pin();
+            assert_eq!(&*pin, orig.as_slice());
+        }
+
+        // The pre-paid eviction is cheap, and the extent round-trips.
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        assert_eq!(pool.stats().evictions_cheap, 1);
+        pool.poison_free_slots();
+        let pin = handle.pin();
+        assert_eq!(&*pin, orig.as_slice());
+    }
+
+    /// Backing proceeds while the chunk is pinned: reads of the immutable
+    /// slot coexist with compression, and the slot stays put.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn eager_backing_proceeds_pinned() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 12);
+        let handle = pool.insert(&mut orig.clone());
+        let pin = handle.pin();
+        assert!(pool.back_step());
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        assert_eq!(&*pin, orig.as_slice());
+        drop(pin);
+        assert_eq!(pool.stats().eager_backs, 1);
     }
 
     /// Freeing under the warm cap parks the slot warm; the next insert of the
