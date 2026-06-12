@@ -48,6 +48,8 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
     b. You can't use the security groups for the clients as a source in the security groups for the targets. Therefore, the security groups for your targets must use the IP addresses of the clients to allow traffic. For more details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
 
+    c. If the broker or NLB subnets have [network ACLs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html), they must allow inbound traffic on the ephemeral port range (1024–65535) from the VPC CIDR, not just the listener port. NACLs are stateless, so a listener-port-only rule drops the ephemeral return traffic on cross-AZ connections once [cross-zone load balancing](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/network-load-balancers.html) is enabled, causing intermittent per-broker timeouts.
+
 1. Create a VPC [endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html) and associate it with the **Network Load Balancer** that you’ve just created.
 
     Note the **service name** that is generated for the endpoint service.
@@ -165,3 +167,9 @@ connection you just configured:
 
    * For **in-region connections**, the correct availability zone is specified
       for each broker.
+
+   * The broker/NLB subnets' [network ACL](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html)
+      allows the ephemeral port range (1024–65535) from the VPC CIDR, not just
+      the listener port. A listener-port-only NACL causes intermittent,
+      self-resolving, all-or-nothing per-broker timeouts once cross-zone load
+      balancing is enabled.
