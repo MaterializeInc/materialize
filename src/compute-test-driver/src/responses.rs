@@ -55,12 +55,28 @@ impl Responses {
             loop {
                 tokio::select! {
                     cmd = cmd_rx.recv() => match cmd {
-                        Some(cmd) => { let _ = client.send(cmd).await; }
+                        // Log a send failure: callers waiting on frontiers/peeks
+                        // would otherwise see only a misleading timeout.
+                        Some(cmd) => {
+                            if let Err(e) = client.send(cmd).await {
+                                tracing::error!("compute command send failed: {e}");
+                                break;
+                            }
+                        }
                         None => break,
                     },
                     resp = client.recv() => match resp {
                         Ok(Some(resp)) => Self::dispatch(&pump_shared, resp),
-                        Ok(None) | Err(_) => break,
+                        // Distinguish a clean EOF from a transport error so that
+                        // an e2e hang has a breadcrumb rather than silent death.
+                        Ok(None) => {
+                            tracing::warn!("clusterd closed the compute connection");
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::error!("compute response recv failed: {e}");
+                            break;
+                        }
                     },
                 }
             }

@@ -92,6 +92,9 @@ impl Driver {
                     return;
                 }
                 if rx.changed().await.is_err() {
+                    // The watch sender is gone (pump exited, e.g. clusterd
+                    // disconnected). The frontier can no longer advance, so
+                    // park and let the outer timeout fire with its message.
                     futures::future::pending::<()>().await;
                 }
             }

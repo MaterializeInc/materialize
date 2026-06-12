@@ -11,8 +11,6 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
-differential-dataflow.workspace = true
 futures.workspace = true
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
@@ -25,7 +23,6 @@ mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-storage-types = { path = "../storage-types" }
-semver.workspace = true
 timely.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-stream.workspace = true

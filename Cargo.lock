@@ -6284,8 +6284,6 @@ name = "mz-compute-test-driver"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "differential-dataflow",
  "futures",
  "mz-cluster-client",
  "mz-compute-client",
@@ -6298,7 +6296,6 @@ dependencies = [
  "mz-repr",
  "mz-service",
  "mz-storage-types",
- "semver",
  "tempfile",
  "timely",
  "tokio",
