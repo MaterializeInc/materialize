@@ -27,6 +27,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from textwrap import dedent
+from typing import Any, LiteralString
 
 import psycopg
 
@@ -75,6 +76,12 @@ def _pg_connect(c: Composition, service: str) -> psycopg.Connection:
     )
 
 
+def _query_scalar(conn: psycopg.Connection, query: LiteralString) -> Any:
+    row = conn.execute(query).fetchone()
+    assert row is not None, f"query returned no rows: {query}"
+    return row[0]
+
+
 def _allow_replication(c: Composition, service: str) -> None:
     """Permit replication connections (basebackup, streaming, logical decoding).
 
@@ -96,7 +103,7 @@ def _wait_for_standby(c: Composition) -> None:
     for _ in range(60):
         try:
             conn = _pg_connect(c, "pg-standby")
-            in_recovery = conn.execute("SELECT pg_is_in_recovery()").fetchone()[0]
+            in_recovery = _query_scalar(conn, "SELECT pg_is_in_recovery()")
             conn.close()
             if in_recovery:
                 return
@@ -193,12 +200,13 @@ def _verify_reading_from_standby(c: Composition) -> None:
     """Prove Materialize really decoded from the standby, not the primary."""
     conn = _pg_connect(c, "pg-standby")
     try:
-        in_recovery = conn.execute("SELECT pg_is_in_recovery()").fetchone()[0]
+        in_recovery = _query_scalar(conn, "SELECT pg_is_in_recovery()")
         assert in_recovery, "expected pg-standby to be a replica in recovery"
 
-        logical_slots = conn.execute(
-            "SELECT count(*) FROM pg_replication_slots WHERE slot_type = 'logical'"
-        ).fetchone()[0]
+        logical_slots = _query_scalar(
+            conn,
+            "SELECT count(*) FROM pg_replication_slots WHERE slot_type = 'logical'",
+        )
         assert (
             logical_slots >= 1
         ), f"expected a logical slot on the standby, found {logical_slots}"
@@ -208,7 +216,7 @@ def _verify_reading_from_standby(c: Composition) -> None:
     # The primary must NOT carry Materialize's logical slot.
     conn = _pg_connect(c, "pg-primary")
     try:
-        in_recovery = conn.execute("SELECT pg_is_in_recovery()").fetchone()[0]
+        in_recovery = _query_scalar(conn, "SELECT pg_is_in_recovery()")
         assert not in_recovery, "expected pg-primary to be the primary"
     finally:
         conn.close()
