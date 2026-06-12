@@ -14,16 +14,20 @@
 //! Local iteration without mzcompose:
 //!   1. Start CockroachDB (see CLAUDE.md).
 //!   2. Launch the driver first so it hosts PubSub on a fixed port (e.g. 0.0.0.0:6879).
-//!   3. Launch clusterd manually, e.g.:
-//!        PERSIST_PUBSUB_URL=http://127.0.0.1:6879 \
-//!        cargo run -p mz-clusterd -- \
-//!          --compute-controller-listen-addr 127.0.0.1:2101 \
-//!          --storage-controller-listen-addr 127.0.0.1:2100 \
-//!          --compute-timely-config '<TimelyConfig json>' \
-//!          --storage-timely-config '<TimelyConfig json>' \
-//!          --process 0 --scratch-directory /tmp/clusterd-scratch
-//!      (Run `cargo run -p mz-clusterd -- --help` to confirm required flags and the
-//!       exact TimelyConfig JSON shape from src/cluster-client/src/client.rs.)
+//!   3. Launch clusterd manually (run `cargo run -p mz-clusterd -- --help` to
+//!      confirm required flags and the exact `TimelyConfig` JSON shape from
+//!      `src/cluster-client/src/client.rs`):
+//!
+//! ```text
+//! PERSIST_PUBSUB_URL=http://127.0.0.1:6879 \
+//!   cargo run -p mz-clusterd -- \
+//!     --compute-controller-listen-addr 127.0.0.1:2101 \
+//!     --storage-controller-listen-addr 127.0.0.1:2100 \
+//!     --compute-timely-config 'TIMELY_CONFIG_JSON' \
+//!     --storage-timely-config 'TIMELY_CONFIG_JSON' \
+//!     --process 0 --scratch-directory /tmp/clusterd-scratch
+//! ```
+//!
 //!   4. Run the e2e test with CLUSTERD_COMPUTE_ADDR=127.0.0.1:2101 and the same
 //!      PersistHost bind/port the clusterd PubSub URL points at.
 

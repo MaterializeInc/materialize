@@ -18,11 +18,3 @@ pub mod driver;
 pub mod persist_host;
 pub mod responses;
 pub mod target;
-
-#[cfg(test)]
-mod tests {
-    #[mz_ore::test]
-    fn it_links() {
-        assert_eq!(2 + 2, 4);
-    }
-}

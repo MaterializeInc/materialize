@@ -204,3 +204,10 @@ A composition runs CockroachDB for consensus, an object store for blob, a real `
 * The persist data-shard schema and `SourceData` encoding must match exactly what a compute persist-import expects, or decoding fails at read time.
   This risk is confined to the direct-write use case; the dataflow-write strategy produces correctly encoded data by construction.
 * Bypassing txn-wal means a directly written shard has no transactional coordination, which is acceptable for synthetic single-writer tests but must not be presented as production-faithful storage behavior.
+
+## Future work
+
+* **A scripting language for the driver.**
+  Encoding interactions in Rust is the first step, but the goal is something easier to iterate on than recompiling a test.
+  A dedicated declarative script, or loading Python scripts (e.g. via `pyo3`) that call the `Driver` API, would let a test author describe persist mutations, replica commands, and assertions without a Rust build cycle.
+  The mechanism is already a thin, scriptable surface (`send`, `submit_dataflow`, `schedule`, `expect_frontier`, `peek`, `subscribe_raw`), so a scripting layer binds to it rather than replacing it.
