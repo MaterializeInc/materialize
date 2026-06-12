@@ -631,6 +631,24 @@ class State:
                 return svc
         raise ValueError(f"No service matching '{pattern}' found in namespace")
 
+    def _port_forward(self, target: str, *ports: str) -> subprocess.Popen[bytes]:
+        # kubectl port-forward terminates as soon as any forwarded connection
+        # errors (e.g. a connection reset from the pod), leaving every
+        # subsequent connection attempt with "connection refused", so keep
+        # restarting it.
+        cmd = " ".join(
+            ["kubectl", "port-forward", target, "-n", "materialize-environment"]
+            + list(ports)
+        )
+        return subprocess.Popen(
+            [
+                "bash",
+                "-c",
+                f"while true; do {cmd}; echo 'port-forward to {target} exited, restarting'; sleep 1; done",
+            ],
+            preexec_fn=os.setpgrp,
+        )
+
     def connect(self, c: Composition) -> None:
         # Find services by name pattern (they're named like mz<id>-environmentd)
         environmentd_svc = self._find_service("environmentd")
@@ -639,29 +657,11 @@ class State:
         balancerd_svc = self._find_service("balancerd")
         print(f"Got balancerd service: {balancerd_svc}")
 
-        self.environmentd_port_forward_process = subprocess.Popen(
-            [
-                "kubectl",
-                "port-forward",
-                f"svc/{environmentd_svc}",
-                "-n",
-                "materialize-environment",
-                "6877:6877",
-                "6878:6878",
-            ],
-            preexec_fn=os.setpgrp,
+        self.environmentd_port_forward_process = self._port_forward(
+            f"svc/{environmentd_svc}", "6877:6877", "6878:6878"
         )
-        self.balancerd_port_forward_process = subprocess.Popen(
-            [
-                "kubectl",
-                "port-forward",
-                f"svc/{balancerd_svc}",
-                "-n",
-                "materialize-environment",
-                "6875:6875",
-                "6876:6876",
-            ],
-            preexec_fn=os.setpgrp,
+        self.balancerd_port_forward_process = self._port_forward(
+            f"svc/{balancerd_svc}", "6875:6875", "6876:6876"
         )
         time.sleep(10)
 
@@ -991,7 +991,18 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     add_arguments_temporary_test(parser)
     args = parser.parse_args()
 
-    previous_tags = get_self_managed_versions()
+    all_versions = get_self_managed_versions()
+    # Upgrading through every released minor version takes ~5 minutes per step
+    # on EKS and grows with every release, blowing through the CI timeout.
+    # Only walk the minimal supported upgrade path instead (see
+    # doc/user/content/self-managed-deployments/upgrading/_index.md):
+    # - pre-v26 versions must be upgraded one minor version at a time
+    # - upgrading to v26.1+ requires going through v26.0 first
+    # - from v26.0 on, minor versions can be skipped
+    v26 = MzVersion.parse_mz("v26.0.0")
+    previous_tags = [v for v in all_versions if v < v26]
+    for major in sorted({v.major for v in all_versions if v >= v26}):
+        previous_tags.append(min(v for v in all_versions if v.major == major))
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "aws-upgrade"
     aws = AWS(path)

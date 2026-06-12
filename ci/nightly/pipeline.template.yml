@@ -1508,13 +1508,14 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize-terraform-self-managed#131"
 
     - id: terraform-aws-upgrade
       label: "Terraform + Helm Chart Upgrade on AWS"
       artifact_paths: [test/terraform/aws-upgrade/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 60
+      # ~26 min EKS setup + ~5 min per upgrade step + tests + ~18 min destroy
+      # (cleanup runs in the pre-exit hook, inside the job timeout)
+      timeout_in_minutes: 90
       concurrency: 1
       concurrency_group: 'terraform-upgrade-aws'
       agents:
@@ -1533,7 +1534,6 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize-terraform-self-managed#131"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
