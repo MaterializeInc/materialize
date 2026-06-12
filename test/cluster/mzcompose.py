@@ -3927,6 +3927,96 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         c.run_testdrive_files("statement-logging/statement-logging.td")
 
 
+def workflow_statement_logging_prepared_invisible(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Regression for #34244: throttling the first execution of a prepared
+    statement makes every subsequent execution of that statement invisible in
+    mz_recent_activity_log."""
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_target_data_rate = 1;
+            ALTER SYSTEM SET statement_logging_max_data_credit = 1;
+            ALTER SYSTEM SET enable_rbac_checks = false;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        conn = c.sql_connection(reuse_connection=False)
+        cur = conn.cursor()
+        cur.execute("SET application_name = 'invisible_repro'")
+        cur.execute("SET statement_logging_sample_rate = 1.0")
+        sys_cur = c.sql_cursor(port=6877, user="mz_system", reuse_connection=False)
+
+        cur.execute("SELECT %s::text", ("first",), prepare=True)
+        assert cur.fetchone()[0] == "first"
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_target_data_rate = 1000000000;
+            ALTER SYSTEM SET statement_logging_max_data_credit = 1000000000;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        n_subsequent = 5
+        deadline = time.time() + 30
+        mseh_count = 0
+        while time.time() < deadline:
+            for _ in range(n_subsequent):
+                cur.execute("SELECT %s::text", ("again",), prepare=True)
+                cur.fetchone()
+            time.sleep(2)
+            sys_cur.execute(
+                "SELECT count(*) FROM mz_internal.mz_statement_execution_history "
+                "WHERE application_name = 'invisible_repro'"
+            )
+            mseh_count = int(sys_cur.fetchone()[0])
+            if mseh_count >= n_subsequent:
+                break
+
+        assert mseh_count >= n_subsequent, (
+            f"test inconclusive: only {mseh_count} mseh rows after retries"
+        )
+
+        sys_cur.execute("""
+            SELECT count(*)
+            FROM mz_internal.mz_statement_execution_history mseh
+            LEFT JOIN mz_internal.mz_prepared_statement_history mpsh
+              ON mseh.prepared_statement_id = mpsh.id
+            WHERE mseh.application_name = 'invisible_repro'
+              AND mpsh.id IS NULL
+        """)
+        orphan_count = int(sys_cur.fetchone()[0])
+
+        sys_cur.execute("""
+            SELECT count(*)
+            FROM mz_internal.mz_recent_activity_log
+            WHERE application_name = 'invisible_repro'
+              AND sql = 'SELECT $1::text'
+        """)
+        activity_log_count = int(sys_cur.fetchone()[0])
+
+        cur.close()
+        conn.close()
+        sys_cur.close()
+
+        assert orphan_count == 0, (
+            f"{orphan_count} mseh rows reference a prepared_statement_id "
+            f"with no matching mz_prepared_statement_history row"
+        )
+        assert activity_log_count >= n_subsequent, (
+            f"only {activity_log_count} of {n_subsequent} subsequent "
+            f"executions visible in mz_recent_activity_log"
+        )
+
+
 def workflow_blue_green_deployment(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
