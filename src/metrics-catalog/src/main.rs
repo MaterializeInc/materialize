@@ -18,6 +18,7 @@
 use std::process;
 
 use anyhow::{Context, bail};
+use mz_ore::metrics::MetricVisibility;
 use quote::ToTokens;
 use serde::Serialize;
 use syn::parse::{Parse, ParseStream};
@@ -32,6 +33,23 @@ use walkdir::WalkDir;
 // Known directories that we want to ignore when walking the source tree.
 static IGNORED_DIRS: &[&str] = &["target", "tests", "benches", "examples"];
 
+/// Maps a `metric!`'s `visibility:` expression to a [`MetricVisibility`].
+fn visibility_from_expr(expr: Option<&Expr>) -> MetricVisibility {
+    let Some(Expr::Path(path)) = expr else {
+        return MetricVisibility::Internal;
+    };
+    match path
+        .path
+        .segments
+        .last()
+        .map(|s| s.ident.to_string())
+        .as_deref()
+    {
+        Some("Public") => MetricVisibility::Public,
+        _ => MetricVisibility::Internal,
+    }
+}
+
 /// The catalog as serialized to YAML.
 #[derive(Serialize)]
 struct Catalog {
@@ -45,16 +63,20 @@ struct MetricDoc {
     help: String,
     /// Repo-relative path to the file the metric is defined in.
     source: String,
+    /// Whether customers should build dashboards and alerts on this metric.
+    visibility: MetricVisibility,
 }
 
 /// Parses the token body of a `metric!` invocation. Mirrors the grammar in
 /// `mz_ore::metric!`.
-/// Only `name` and `help` are retained; the remaining fields are consumed but
-/// discarded so token parsing stays in sync with the real macro grammar.
+/// Only `name`, `help`, `subsystem`, and `visibility` are retained; the
+/// remaining fields are consumed but discarded so token parsing stays in sync
+/// with the real macro grammar.
 struct MetricArgs {
     name: Option<Expr>,
     help: Option<Expr>,
     subsystem: Option<Expr>,
+    visibility: Option<Expr>,
 }
 
 impl Parse for MetricArgs {
@@ -63,6 +85,7 @@ impl Parse for MetricArgs {
             name: None,
             help: None,
             subsystem: None,
+            visibility: None,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -71,6 +94,7 @@ impl Parse for MetricArgs {
                 "name" => args.name = Some(input.parse()?),
                 "help" => args.help = Some(input.parse()?),
                 "subsystem" => args.subsystem = Some(input.parse()?),
+                "visibility" => args.visibility = Some(input.parse()?),
                 // We don't care about const_labels, var_labels, or rules, but still need to parse
                 // them to stay in sync.
                 "const_labels" => {
@@ -117,10 +141,12 @@ impl MetricArgs {
             Some(subsystem) => format!("{}_{name}", subsystem_to_string(subsystem)),
             None => name,
         };
+        let visibility = visibility_from_expr(self.visibility.as_ref());
         MetricDoc {
             name,
             help: self.help.as_ref().map(expr_to_string).unwrap_or_default(),
             source: source.to_owned(),
+            visibility,
         }
     }
 }
@@ -333,6 +359,7 @@ fn run() -> anyhow::Result<()> {
             name,
             help,
             source: source.to_owned(),
+            visibility: MetricVisibility::Internal,
         });
     }
 
@@ -342,6 +369,7 @@ fn run() -> anyhow::Result<()> {
             name,
             help,
             source: source.to_owned(),
+            visibility: MetricVisibility::Internal,
         });
     }
 
@@ -567,6 +595,38 @@ mod tests {
         let doc = parse_metric(r#"metric!(name: "mz_foo")"#);
         assert_eq!(doc.name, "mz_foo");
         assert_eq!(doc.help, "");
+    }
+
+    /// A `visibility: MetricVisibility::Public` annotation makes a metric
+    /// `Public`; an explicit `Internal` stays `Internal`.
+    #[mz_ore::test]
+    fn parses_visibility_annotation() {
+        let doc = parse_metric(
+            r#"metric!(name: "mz_foo", help: "h", visibility: MetricVisibility::Public)"#,
+        );
+        assert_eq!(doc.visibility, MetricVisibility::Public);
+        let doc = parse_metric(
+            r#"metric!(name: "mz_foo", help: "h", visibility: MetricVisibility::Internal)"#,
+        );
+        assert_eq!(doc.visibility, MetricVisibility::Internal);
+    }
+
+    /// The `visibility:` annotation is recognized however the enum is qualified,
+    /// since we key off the final path segment.
+    #[mz_ore::test]
+    fn parses_qualified_visibility_annotation() {
+        let doc = parse_metric(
+            r#"metric!(name: "mz_foo", help: "h", visibility: mz_ore::metrics::MetricVisibility::Public)"#,
+        );
+        assert_eq!(doc.visibility, MetricVisibility::Public);
+    }
+
+    /// A metric with no `visibility:` annotation defaults to `Internal`,
+    /// matching the macro.
+    #[mz_ore::test]
+    fn visibility_defaults_to_internal() {
+        let doc = parse_metric(r#"metric!(name: "mz_foo", help: "h")"#);
+        assert_eq!(doc.visibility, MetricVisibility::Internal);
     }
 
     /// Parses `#[<attr>] fn f() {}` and returns its attributes, so `is_test_only`
