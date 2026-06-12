@@ -280,6 +280,9 @@ ignore = [
     # rand unsoundness when a custom logger accesses ThreadRng during reseeding.
     # Affects transitive deps (rand 0.7.3 via http-types, rand 0.8.5 via fail/quickcheck/etc).
     "RUSTSEC-2026-0097",
+    # Allows private key leakage through timing information
+    # rsa is required through iceberg-storage-opendal
+    "RUSTSEC-2023-0071",
 ]
 
 # Must be manually kept in sync with about.toml.
