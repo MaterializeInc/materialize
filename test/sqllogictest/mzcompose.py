@@ -44,6 +44,12 @@ SERVICES = [CockroachOrPostgresMetadata(), Mz(app_password=""), Materialized()] 
 
 COCKROACH_DEFAULT_PORT = 26257
 
+# Replica configuration the recorded catalog-server EXPLAIN plans depend on.
+# Shared by `run_sqllogictest`'s defaults and the `catalog-server-explain
+# --rewrite` plan fill so a rewrite reproduces the plans CI validates.
+DEFAULT_REPLICA_SIZE = "scale=1,workers=2"
+DEFAULT_REPLICAS = 1
+
 # --- catalog_server_explain.slt coverage ------------------------------------
 #
 # `catalog_server_explain.slt` snapshots the EXPLAIN plan of every index,
@@ -77,8 +83,7 @@ CATALOG_SERVER_SYSTEM_SCHEMAS = [
 ]
 
 REGENERATE_HINT = (
-    "  bin/mzcompose --find sqllogictest run catalog-server-explain --rewrite\n"
-    "  bin/sqllogictest -- --rewrite-results test/sqllogictest/catalog_server_explain.slt"
+    "  bin/mzcompose --find sqllogictest run catalog-server-explain --rewrite"
 )
 
 
@@ -154,12 +159,12 @@ def workflow_catalog_server_explain(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """Assert catalog_server_explain.slt covers exactly the current set of
-    mz_catalog_server objects. With --rewrite, regenerate the query list instead
-    (preserving the already-recorded plans)."""
+    mz_catalog_server objects. With --rewrite, regenerate the query list and
+    fill in the recorded plans instead, producing a ready-to-commit file."""
     parser.add_argument(
         "--rewrite",
         action="store_true",
-        help="Regenerate the auto-generated query list instead of validating it.",
+        help="Regenerate the query list and recorded plans instead of validating.",
     )
     args = parser.parse_args()
 
@@ -169,10 +174,11 @@ def workflow_catalog_server_explain(
     if args.rewrite:
         _rewrite_catalog_server_explain(queries)
         print(f"Wrote {len(queries)} EXPLAIN queries to {CATALOG_SERVER_EXPLAIN_SLT}.")
-        print(
-            "Now fill in the plans:\n"
-            "  bin/sqllogictest -- --rewrite-results test/sqllogictest/catalog_server_explain.slt"
-        )
+        # Newly added objects land with empty plans; fill them (and refresh any
+        # churned plans) by running sqllogictest in rewrite mode, so a single
+        # invocation produces a ready-to-commit file.
+        _fill_catalog_server_explain_plans(c)
+        print(f"Filled in plans for {CATALOG_SERVER_EXPLAIN_SLT}.")
     else:
         _validate_catalog_server_explain(queries)
         print(
@@ -297,6 +303,25 @@ def _rewrite_catalog_server_explain(queries: list[str]) -> None:
     CATALOG_SERVER_EXPLAIN_SLT.write_text("\n".join(head + body + tail))
 
 
+def _fill_catalog_server_explain_plans(c: Composition) -> None:
+    """Run sqllogictest in rewrite mode to fill the recorded plans for the
+    auto-generated query list, equivalent to `bin/sqllogictest --
+    --rewrite-results`. Uses the same replica configuration the plans are
+    validated with so the rewrite is reproducible."""
+    rel_path = str(CATALOG_SERVER_EXPLAIN_SLT.relative_to(MZ_ROOT))
+    c.up(c.metadata_store(), Service("slt_1", idle=True))
+    cmd = SltRunStepConfig(file_set=set(), flags=[]).to_command(
+        "slt_1",
+        rel_path,
+        DEFAULT_REPLICAS,
+        DEFAULT_REPLICA_SIZE,
+        junit_report_path=None,
+        metadata_store=c.metadata_store(),
+        rewrite_results=True,
+    )
+    c.exec("slt_1", *cmd, capture=True, capture_stderr=True)
+
+
 def _validate_catalog_server_explain(queries: list[str]) -> None:
     _, records_lines, _ = _split_catalog_server_explain()
     covered = set(_parse_catalog_server_explain_records(records_lines).keys())
@@ -327,8 +352,8 @@ def _validate_catalog_server_explain(queries: list[str]) -> None:
 def run_sqllogictest(
     c: Composition, parser: WorkflowArgumentParser, run_config: SltRunConfig
 ) -> None:
-    parser.add_argument("--replica-size", default="scale=1,workers=2", type=str)
-    parser.add_argument("--replicas", default=1, type=int)
+    parser.add_argument("--replica-size", default=DEFAULT_REPLICA_SIZE, type=str)
+    parser.add_argument("--replicas", default=DEFAULT_REPLICAS, type=int)
     parser.add_argument("--parallelism", default=MAX_SLTS, type=int)
     args = parser.parse_args()
 
