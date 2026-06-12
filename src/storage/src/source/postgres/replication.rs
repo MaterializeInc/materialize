@@ -323,10 +323,14 @@ pub(crate) fn render<'scope>(
             // Note that we need to fetch the probe LSN _after_ having created the replication
             // slot, to make sure the fetched LSN will be included in the replication stream.
             let probe_ts = (config.now_fn)().into();
-            let max_lsn = super::fetch_max_lsn(&*metadata_client).await?;
+            let max_lsn = mz_postgres_util::get_current_wal_lsn(
+                &*metadata_client,
+                connection.publication_details.get_is_physical_replica(),
+            )
+            .await?;
             let probe = Probe {
                 probe_ts,
-                upstream_frontier: Antichain::from_elem(max_lsn),
+                upstream_frontier: Antichain::from_elem(MzOffset::from(max_lsn)),
             };
             probe_output.give(&probe_cap[0], probe);
 
@@ -385,6 +389,7 @@ pub(crate) fn render<'scope>(
                 committed_uppers.as_mut(),
                 &probe_output,
                 &probe_cap[0],
+                connection.publication_details.get_is_physical_replica(),
             )
             .await?;
 
@@ -628,6 +633,7 @@ async fn raw_stream<'a>(
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
     probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
+    is_physical_replica: bool,
 ) -> Result<
     Result<impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a, DefiniteError>,
     TransientError,
@@ -741,12 +747,13 @@ async fn raw_stream<'a>(
 
             while !probe_tx.is_closed() {
                 let probe_ts = probe_ticker.tick().await;
-                let probe_or_err = super::fetch_max_lsn(&*metadata_client)
-                    .await
-                    .map(|lsn| Probe {
-                        probe_ts,
-                        upstream_frontier: Antichain::from_elem(lsn),
-                    });
+                let probe_or_err =
+                    mz_postgres_util::get_current_wal_lsn(&*metadata_client, is_physical_replica)
+                        .await
+                        .map(|lsn| Probe {
+                            probe_ts,
+                            upstream_frontier: Antichain::from_elem(MzOffset::from(lsn)),
+                        });
                 let _ = probe_tx.send(Some(probe_or_err));
             }
         })

@@ -237,8 +237,24 @@ pub async fn get_timeline_id(client: &Client) -> Result<u64, PostgresError> {
     }
 }
 
-pub async fn get_current_wal_lsn(client: &Client) -> Result<PgLsn, PostgresError> {
-    let row = query_one(client, crate::sql!("SELECT pg_current_wal_lsn()"), &[]).await?;
+pub async fn get_current_wal_lsn(
+    client: &Client,
+    is_physical_standby: bool,
+) -> Result<PgLsn, PostgresError> {
+    // A physical standby (a.k.a. hot standby) is a postgres replica receiving physical replication (files as opposed to statements).
+    // It will not support pg_current_wal_lsn. Instead we use pg_last_wal_replay_lsn which reports the latest available data replayed by the replica
+    // (as opposed to received -- there will be a further-ahead curser for the latest LSN recieved from the leader). Treating pg_last_wal_replay_lsn
+    // as the latest from the replica means RTR will be with respect to the replica, not the primary.
+    let query = if is_physical_standby {
+        crate::sql!("SELECT pg_last_wal_replay_lsn()")
+    } else {
+        // Based on the documentation, it appears that `pg_current_wal_lsn` has
+        // the same "upper" semantics of `confirmed_flush_lsn`:
+        // <https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-BACKUP>
+        // We may need to revisit this and use `pg_current_wal_flush_lsn`.
+        crate::sql!("SELECT pg_current_wal_lsn()")
+    };
+    let row = query_one(client, query, &[]).await?;
     let lsn: PgLsn = row.get(0);
 
     Ok(lsn)

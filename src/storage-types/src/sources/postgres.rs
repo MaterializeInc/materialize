@@ -79,12 +79,16 @@ impl PostgresSourceConnection {
             .await?;
         let client = config
             .connect(
-                "postgres_wal_lsn",
+                "get_postgres_lsn",
                 &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
 
-        let lsn = mz_postgres_util::get_current_wal_lsn(&client).await?;
+        let lsn = mz_postgres_util::get_current_wal_lsn(
+            &client,
+            self.publication_details.get_is_physical_replica(),
+        )
+        .await?;
 
         let current_upper = Antichain::from_elem(MzOffset::from(u64::from(lsn)));
         Ok(current_upper)
@@ -213,6 +217,12 @@ pub struct PostgresSourcePublicationDetails {
     /// None value indicates the check was not performed, either because the
     /// source predates this field or because the check was disabled.
     pub is_physical_replica: Option<bool>,
+}
+
+impl PostgresSourcePublicationDetails {
+    pub fn get_is_physical_replica(&self) -> bool {
+        self.is_physical_replica.unwrap_or(false)
+    }
 }
 
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
