@@ -124,9 +124,30 @@ The mechanism lives in a new crate, `src/clusterd-test-driver`, exposing a libra
 ### Command and dataflow submission
 
 * The mechanism submits any `ComputeCommand` the caller constructs, including `CreateDataflow`, `Schedule`, `AllowCompaction`, `Peek`, and `CancelPeek`.
-* It provides small, optional helpers for assembling a `DataflowDescription<RenderPlan, CollectionMetadata>` from parts: source imports, objects to build, index exports, and sink exports.
-* These helpers are generic building blocks.
-  The specific shape of a plan, such as an `ArrangeBy` for an index, is supplied by the use case.
+* Dataflow assembly goes through `DataflowBuilder` rather than a single opinionated constructor (see below).
+
+### Dataflow construction: `DataflowBuilder`
+
+The first cut shipped a single `index_dataflow(source_id, index_id, shard, location, desc, key_cols, as_of, upper)` function.
+That function bakes in five choices a test should control independently: the number of storage inputs, the shape of the computation, the number and kind of exports, the temporal bounds, and the identifiers.
+The reusable part is none of those; it is the *mechanism*, which is the MIR-to-LIR lowering, the `RenderPlan::try_from` conversion, the `CollectionMetadata` attachment, and the `SqlRelationType`-versus-`ReprRelationType` bookkeeping.
+`DataflowBuilder` owns exactly that mechanism and exposes the five axes as verbs.
+
+* `new(name)` starts an empty builder holding a MIR `DataflowDescription` and a side map from `GlobalId` to the persist metadata (`shard`, `location`, `desc`, `upper`) for each import.
+* `import_persist(id, PersistSource { shard, location, desc, upper })` registers a storage collection: it calls `import_source` on the MIR description and records the metadata for the augment step.
+  It returns a typed input handle whose `get()` produces the correctly typed `global_get` node, so the test never constructs a `ReprRelationType` by hand.
+* `build(id, expr)` inserts a MIR object to compute, wrapping the caller's `MirRelationExpr` via `OptimizedMirRelationExpr::declare_optimized`.
+  A pure index over a source skips this verb, since `export_index` arranges its `on_id` directly.
+* `export_index(index_id, on_id, key_cols)` exports an index, deriving the `on_type` from the referenced object rather than taking it as an argument.
+* `as_of(t)` and `until(t)` set the temporal bounds.
+* `finish()` runs the lowering and augment and returns the `DataflowDescription<RenderPlan, CollectionMetadata>` the protocol expects.
+
+The contract is deliberately narrow: the caller supplies MIR, and the builder lowers it faithfully and attaches persist wiring.
+Optimization, including fusion, predicate pushdown, and join-implementation selection, stays the caller's responsibility, which matches the original `index_dataflow` behavior of lowering hand-built minimal MIR without optimizing.
+This keeps the dependency surface minimal, with no dependency on `mz-transform`.
+The one shape that does not lower from raw MIR is a `Join`, whose `implementation` defaults to `Unimplemented` and is rejected by the LIR lowering; supporting joins later adds an opt-in `optimize()` verb that runs the `JoinImplementation` transform, paid for only by the tests that need it.
+
+With this boundary, `index_dataflow` becomes thin sugar: import one persist source, set `as_of`, export one index, and finish.
 
 ### Assertion primitives
 
@@ -222,7 +243,25 @@ The script builds with the `optimized` cargo profile by default (release-like bu
 
 ## Future work
 
-* **A scripting language for the driver.**
-  Encoding interactions in Rust is the first step, but the goal is something easier to iterate on than recompiling a test.
-  A dedicated declarative script, or loading Python scripts (e.g. via `pyo3`) that call the `Driver` API, would let a test author describe persist mutations, replica commands, and assertions without a Rust build cycle.
-  The mechanism is already a thin, scriptable surface (`send`, `submit_dataflow`, `schedule`, `expect_frontier`, `peek`, `subscribe_raw`), so a scripting layer binds to it rather than replacing it.
+### Scripting via JSON
+
+Encoding interactions in Rust is the first step, but the goal is something easier to iterate on than recompiling a test.
+The natural script format is JSON, authored directly rather than through a Python or fluent client, because an agent can write the JSON form of a query plan and MIR already derives a JSON serialization.
+This removes the layer a conventional DSL would need: there is no curated relational or scalar sub-language to maintain, since the serde tags of `MirRelationExpr`, `MirScalarExpr`, and the function enums are themselves the vocabulary, read straight from the source.
+
+The driver becomes a persistent command reader instead of a one-shot `SCENARIO` binary: it reads JSON-line commands, executes them against `clusterd`, and streams responses back, reusing the existing response pump for the return path.
+The command set is the serialized `Driver` and `DataflowBuilder` surface.
+Orchestration commands are coarse and map almost directly: `write`, `define`, `schedule`, `allow_compaction`, `await_frontier`, and `peek`.
+A `define` command carries the builder's inputs, namely the imports with their persist metadata, the objects as MIR expressions, the index exports as an `on_id` plus key, and the temporal bounds.
+Authoring happens at the MIR level, so the impossible-to-hand-build `RenderPlan` is produced by the lowering exactly as today, and the dual relation-type footgun stays inside the builder.
+
+One caveat is load bearing.
+`Row` derives its serde over a packed byte buffer, so a `Literal` or `Constant` serializes the internal datum encoding as an opaque byte array, which is not hand-authorable.
+The fix is surgical: the `define` schema accepts native MIR serde everywhere except at literal payloads, where it takes a friendly datum form (for example `{"Int64": 5}`) plus a `ColumnType` and packs it to a `Row` server-side via a `RowPacker`, reusing an existing datum parser if one exists.
+Everything else stays native serde, so the function-variant explosion never reaches the schema.
+
+The build order is incremental and each step stands alone.
+First, `DataflowBuilder` as the semantic core, with `index_dataflow` refactored onto it.
+Second, the persistent command-reader driver.
+Third, the `define` and orchestration JSON schema with the literal shim.
+Joins and the opt-in `optimize()` verb remain the single open decision, deferred to the step that needs them.
