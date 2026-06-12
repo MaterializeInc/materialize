@@ -865,6 +865,22 @@ async fn execute_pending_sinks(client: &Client, plan: &DeploymentPlan) -> Result
         return Ok(());
     }
 
+    // Sink-only schemas are created here: `apply` only ensures schemas for
+    // its own phases (secrets/connections/sources/tables) and `stage`
+    // excludes sinks from staging schemas, so a schema containing nothing
+    // but sinks does not exist yet.
+    let sink_schemas: BTreeSet<(&str, &str)> = sinks_to_create
+        .iter()
+        .map(|stmt| (stmt.database.as_str(), stmt.schema.as_str()))
+        .collect();
+    for (database, schema) in sink_schemas {
+        client
+            .provisioning()
+            .create_schema(database, schema)
+            .await
+            .map_err(CliError::Connection)?;
+    }
+
     for stmt in sinks_to_create {
         verbose!(
             "Creating sink {}.{}.{}...",
