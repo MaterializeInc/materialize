@@ -1,0 +1,35 @@
+[package]
+name = "mz-compute-test-driver"
+description = "Headless frontend to clusterd for scripted compute tests."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+differential-dataflow.workspace = true
+futures.workspace = true
+mz-build-info = { path = "../build-info", features = ["semver"] }
+mz-cluster-client = { path = "../cluster-client" }
+mz-compute-client = { path = "../compute-client" }
+mz-compute-types = { path = "../compute-types" }
+mz-expr = { path = "../expr" }
+mz-ore = { path = "../ore", features = ["tracing", "metrics", "test"] }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-types = { path = "../persist-types" }
+mz-repr = { path = "../repr" }
+mz-service = { path = "../service" }
+mz-storage-types = { path = "../storage-types" }
+semver.workspace = true
+timely.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[package.metadata.cargo-udeps.ignore]
+normal = []

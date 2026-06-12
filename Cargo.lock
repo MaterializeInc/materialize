@@ -6280,6 +6280,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-compute-test-driver"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "differential-dataflow",
+ "futures",
+ "mz-build-info",
+ "mz-cluster-client",
+ "mz-compute-client",
+ "mz-compute-types",
+ "mz-expr",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-repr",
+ "mz-service",
+ "mz-storage-types",
+ "semver",
+ "timely",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mz-compute-types"
 version = "0.0.0"
 dependencies = [
