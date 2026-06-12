@@ -13,12 +13,12 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use mz_compute_test_driver::data::{
+use mz_clusterd_test_driver::data::{
     rows_for_bytes, sample_desc, sample_rows, write_rows_single_ts,
 };
-use mz_compute_test_driver::dataflow::index_dataflow;
-use mz_compute_test_driver::driver::Driver;
-use mz_compute_test_driver::persist_host::PersistHost;
+use mz_clusterd_test_driver::dataflow::index_dataflow;
+use mz_clusterd_test_driver::driver::Driver;
+use mz_clusterd_test_driver::persist_host::PersistHost;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{GlobalId, Timestamp};

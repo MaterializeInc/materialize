@@ -1,4 +1,4 @@
-# Headless compute test driver
+# Headless clusterd test driver
 
 ## Summary
 
@@ -101,7 +101,7 @@ A use case drives the flow: it writes or arranges persist state through the mech
 
 ## Mechanism
 
-The mechanism lives in a new crate, `src/compute-test-driver`, exposing a library with the `Driver` API and a thin binary for `mzcompose` workflows.
+The mechanism lives in a new crate, `src/clusterd-test-driver`, exposing a library with the `Driver` API and a thin binary for `mzcompose` workflows.
 
 ### Persist access and PubSub host
 

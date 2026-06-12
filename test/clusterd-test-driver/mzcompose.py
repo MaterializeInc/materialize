@@ -25,7 +25,7 @@ class HeadlessDriver(Service):
         super().__init__(
             name=name,
             config={
-                "mzbuild": "compute-test-driver",
+                "mzbuild": "clusterd-test-driver",
                 "environment": [
                     "CLUSTERD_COMPUTE_ADDR=clusterd:2101",
                     f"PERSIST_BLOB_URL={minio_blob_uri()}",

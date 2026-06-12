@@ -9,7 +9,7 @@
 
 //! Headless frontend to `clusterd` for scripted compute tests.
 //!
-//! See `doc/developer/design/20260612_headless_compute_test_driver.md`.
+//! See `doc/developer/design/20260612_headless_clusterd_test_driver.md`.
 
 pub mod ctp;
 pub mod data;

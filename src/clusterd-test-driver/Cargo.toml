@@ -1,5 +1,5 @@
 [package]
-name = "mz-compute-test-driver"
+name = "mz-clusterd-test-driver"
 description = "Headless frontend to clusterd for scripted compute tests."
 version = "0.0.0"
 edition.workspace = true

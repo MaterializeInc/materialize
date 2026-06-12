@@ -538,14 +538,14 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - id: compute-test-driver
-    label: Compute test driver
+  - id: clusterd-test-driver
+    label: Clusterd test driver
     depends_on: build-aarch64
     timeout_in_minutes: 20
-    inputs: [test/compute-test-driver]
+    inputs: [test/clusterd-test-driver]
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: compute-test-driver
+          composition: clusterd-test-driver
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 

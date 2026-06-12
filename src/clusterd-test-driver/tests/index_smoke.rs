@@ -11,18 +11,18 @@
 //! index, then peek the result.
 //!
 //! This test only runs when `CLUSTERD_COMPUTE_ADDR` is set (see
-//! [`mz_compute_test_driver::target::e2e_enabled`]); otherwise it returns early so
+//! [`mz_clusterd_test_driver::target::e2e_enabled`]); otherwise it returns early so
 //! that it compiles and passes by skipping. It is exercised against real infra by
 //! the mzcompose stack.
 
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use mz_compute_test_driver::data::{sample_desc, sample_rows, write_rows_single_ts};
-use mz_compute_test_driver::dataflow::index_dataflow;
-use mz_compute_test_driver::driver::Driver;
-use mz_compute_test_driver::persist_host::PersistHost;
-use mz_compute_test_driver::target;
+use mz_clusterd_test_driver::data::{sample_desc, sample_rows, write_rows_single_ts};
+use mz_clusterd_test_driver::dataflow::index_dataflow;
+use mz_clusterd_test_driver::driver::Driver;
+use mz_clusterd_test_driver::persist_host::PersistHost;
+use mz_clusterd_test_driver::target;
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{GlobalId, Timestamp};
 
