@@ -252,7 +252,7 @@ fn array_fill<'a>(
     lower_bounds: OptionalArg<Option<Array<'a>>>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    const MAX_SIZE: usize = 1 << 28 - 1;
+    const MAX_SIZE: usize = (1 << 28) - 1;
     const NULL_ARR_ERR: &str = "dimension array or low bound array";
     const NULL_ELEM_ERR: &str = "dimension values";
 
