@@ -219,7 +219,7 @@ fn expr_to_string(e: &Expr) -> String {
 /// Whether `attrs` mark an item as test-only, so the user-facing catalog should
 /// skip it (and everything inside it). This deliberately just checks whether any
 /// attribute mentions `test`, which catches both test-runner attributes
-/// (`#[test]`, `#[mz_ore::test]`, `#[tokio::test]`, …) and `#[cfg(test)]` gates.
+/// (`test`, `mz_ore::test`, `tokio::test`, …) and `cfg(test)` gates.
 ///
 /// It's a coarse over-approximation: a feature name that
 /// merely contains "test" would also match. However the
@@ -263,17 +263,24 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 
     fn visit_macro(&mut self, mac: &'ast Macro) {
-        // Look for `metric!` invocations.
-        let is_metric = mac
-            .path
-            .segments
-            .last()
-            .map(|s| s.ident == "metric")
-            .unwrap_or(false);
-        if is_metric {
+        if macro_named(mac, "metric") {
             match mac.parse_body::<MetricArgs>() {
                 Ok(args) => self.out.push(args.into_doc(self.source)),
                 Err(e) => eprintln!("warn: failed to parse metric! in {}: {e}", self.source),
+            }
+        } else if macro_named(mac, "vec") {
+            // `syn` leaves a macro's body as opaque tokens, so a `metric!` nested
+            // inside a `vec![..]` is never visited. Re-parse the body as an expression
+            // list and run a fresh sub-visitor over it to reach those nested `metric!`s.
+            if let Ok(exprs) = mac.parse_body_with(Punctuated::<Expr, Token![,]>::parse_terminated)
+            {
+                let mut sub = Collector {
+                    source: self.source,
+                    out: &mut *self.out,
+                };
+                for expr in &exprs {
+                    sub.visit_expr(expr);
+                }
             }
         }
         syn::visit::visit_macro(self, mac);
@@ -569,14 +576,14 @@ mod tests {
         item.attrs
     }
 
-    /// `#[cfg(test)]` and test-runner attributes (`#[test]`, `#[mz_ore::test]`,
-    /// `#[tokio::test]`, …) mark an item as test-only.
     #[mz_ore::test]
     fn is_test_only_matches_test_items() {
+        // `cfg(test)` and test-runner attributes (`test`, `mz_ore::test`,
+        // `tokio::test`, …) mark an item as test-only.
         assert!(is_test_only(&attrs_of("#[cfg(test)]")));
-        assert!(is_test_only(&attrs_of("#[test]")));
+        assert!(is_test_only(&attrs_of("#[test]"))); // allow(test-attribute)
         assert!(is_test_only(&attrs_of("#[mz_ore::test]")));
-        assert!(is_test_only(&attrs_of("#[tokio::test]")));
+        assert!(is_test_only(&attrs_of("#[tokio::test]"))); // allow(test-attribute)
         assert!(is_test_only(&attrs_of("#[mz_ore::test(tokio::test)]")));
     }
 
@@ -589,5 +596,54 @@ mod tests {
         assert!(!is_test_only(&attrs_of(r#"#[cfg(feature = "chrono")]"#)));
         assert!(!is_test_only(&attrs_of("#[inline]")));
         assert!(!is_test_only(&attrs_of("#[derive(Clone)]")));
+    }
+
+    /// Collects every metric name found by walking `src`.
+    fn collect_names(src: &str) -> Vec<String> {
+        let file: syn::File = syn::parse_str(src).expect("valid source");
+        let mut out = Vec::new();
+        Collector {
+            source: "test.rs",
+            out: &mut out,
+        }
+        .visit_file(&file);
+        out.into_iter().map(|m| m.name).collect()
+    }
+
+    /// A `metric!` nested inside a `vec![..]` is still found: `syn` leaves the
+    /// macro body as opaque tokens, so the collector re-parses and descends.
+    #[mz_ore::test]
+    fn collects_metric_nested_in_vec() {
+        let names = collect_names(
+            r#"
+            fn f(name: &str) {
+                let _ = vec![
+                    make(metric!(name: "nested_in_vec", help: "h", const_labels: {"name" => name})),
+                ];
+            }
+            "#,
+        );
+        assert!(
+            names.contains(&"nested_in_vec".to_string()),
+            "got {names:?}"
+        );
+    }
+
+    /// We descend only into `vec!`, not arbitrary macros.
+    #[mz_ore::test]
+    fn ignores_metric_inside_macro_rules_definition() {
+        let names = collect_names(
+            r#"
+            macro_rules! m {
+                () => {
+                    registry.register(metric!(name: concat!("a", "b"), help: "h"))
+                };
+            }
+            "#,
+        );
+        assert!(
+            names.is_empty(),
+            "macro_rules! body must not be scraped, got {names:?}"
+        );
     }
 }

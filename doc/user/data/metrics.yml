@@ -1207,6 +1207,18 @@ metrics:
 - name: mz_persist_state_writer_removed
   help: count of writers removed from the state
   source: src/persist-client/src/internal/metrics.rs
+- name: mz_persist_task_total_idle_duration
+  help: Seconds of time spent idling, ie. waiting for a task to be woken up.
+  source: src/persist-client/src/internal/metrics.rs
+- name: mz_persist_task_total_idled_count
+  help: The total number of task idles. Useful for computing the average idle time.
+  source: src/persist-client/src/internal/metrics.rs
+- name: mz_persist_task_total_scheduled_count
+  help: The total number of task schedules. Useful for computing the average scheduled time.
+  source: src/persist-client/src/internal/metrics.rs
+- name: mz_persist_task_total_scheduled_duration
+  help: Seconds of time spent scheduled, ie. ready to poll but not yet polled.
+  source: src/persist-client/src/internal/metrics.rs
 - name: mz_persist_wait_resolved_via_sleep
   help: count of wait-for-uppers resolved via sleep
   source: src/persist-client/src/internal/metrics.rs
