@@ -82,11 +82,6 @@ CATALOG_SERVER_SYSTEM_SCHEMAS = [
     "mz_unsafe",
 ]
 
-REGENERATE_HINT = (
-    "  bin/mzcompose --find sqllogictest run catalog-server-explain --rewrite"
-)
-
-
 def workflow_default(c: Composition) -> None:
     # `catalog-server-explain` validation runs inside `fast_tests` (shard 0), so
     # skip it here to avoid running it twice (and it is `--rewrite`-capable, so
@@ -336,7 +331,7 @@ def _validate_catalog_server_explain(queries: list[str]) -> None:
         f"{CATALOG_SERVER_EXPLAIN_SLT} is out of date with the objects on "
         f"{CATALOG_SERVER_CLUSTER}.",
         "Regenerate it with:",
-        REGENERATE_HINT,
+        "  bin/mzcompose --find sqllogictest run catalog-server-explain --rewrite",
     ]
     if missing:
         lines.append(f"\nMissing EXPLAIN queries ({len(missing)}):")
@@ -475,7 +470,7 @@ class SltRunStepConfig:
         container_name: str,
         file: str,
         replicas: int,
-        replica_size: int,
+        replica_size: str,
         junit_report_path: Path | None,
         metadata_store: str,
         metadata_store_port: int = COCKROACH_DEFAULT_PORT,
