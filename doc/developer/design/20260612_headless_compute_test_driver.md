@@ -167,13 +167,14 @@ Use cases are tests and examples built on the mechanism, kept out of the core cr
   Drive the side-effecting commands the controller normally issues automatically, on the test's own schedule: when `Schedule` fires, when and how far `AllowCompaction` advances `since`, and when `UpdateConfiguration` changes parameters.
   This lets a test hold a frontier, delay compaction, or reconfigure mid-flight to observe the replica's response deterministically.
 
-### RenderPlan assembly for the index
+### RenderPlan assembly for the index (resolved)
 
-* The decision is to hand-build the minimal `RenderPlan::ArrangeBy` node rather than reuse the optimizer's lowering.
-  This avoids coupling to the lowering API at the cost of risk that a subtly invalid plan is rejected by the worker.
-* This choice is explicitly marked for revisiting.
-  If hand-construction proves brittle, the fallback is to construct a small MIR or LIR fragment and run the existing lowering to `RenderPlan`, the same path `environmentd` uses.
-* If hand-construction is generally useful, the assembly helper graduates into the mechanism; until then it stays with the use case.
+* Hand-building a `RenderPlan` from outside `mz-compute-types` is impossible: `LirId` has a private constructor and `LetFreePlan`'s `nodes`/`root`/`topological_order` fields are private.
+  The "hand-build" option in the original design is therefore not available to an external crate.
+* The implementation uses the lowering pipeline `environmentd` itself uses.
+  It builds a `DataflowDescription<OptimizedMirRelationExpr, ()>` via `import_source` + `export_index`, lowers it with `Plan::finalize_dataflow`, then converts each object with `RenderPlan::try_from` and attaches `CollectionMetadata` to the source import.
+  `LirId`s and topological order come from production code, not hand-rolling.
+* This was verified end to end: the `mzcompose` workflow built the index over a persist shard, the index hydrated, and a peek returned the expected row count.
 
 ## mzcompose integration
 
@@ -185,14 +186,21 @@ A composition runs CockroachDB for consensus, an object store for blob, a real `
 
 ## Testing
 
-* A `cargo test` runs a use case against a `clusterd` started as a child process for a fast local loop.
-* The `mzcompose` workflow runs the same use case against a containerized `clusterd`.
-* Step-level verification during development: a direct persist write is confirmed by reading the snapshot back and counting rows; the handshake is confirmed by the replica logging instance creation; a dataflow is confirmed by frontier advance; a peek count is confirmed against the known row count.
+* The driver never spawns `clusterd`; `mzcompose` brings up the full stack (CockroachDB, an object store, `clusterd`, and the driver image) and is the faithful end-to-end path.
+  The verified scenario writes synthetic rows to a persist shard, builds an index over it, waits for the frontier, and asserts the peek count.
+* Crate-level `cargo test` covers the infra-free units (direct persist write round-trip via `mem://`, spread-timestamp write, response demux merge, dataflow structure).
+  The end-to-end integration test (`tests/index_smoke.rs`) skips unless `CLUSTERD_COMPUTE_ADDR` is set, so `cargo test` stays green without a running stack.
+
+## Interoperability notes
+
+* **Protocol version.** The CTP handshake checks the client version against the replica's.
+  The driver uses `mz_persist_client::BUILD_INFO` (a release-versioned crate, synced by `bin/bump-version`) rather than its own crate version, which is `0.0.0` and would fail the check.
+* **Peek stash.** The replica stashes large peek results in persist by default (above a 10 KB threshold).
+  The driver disables `enable_compute_peek_response_stash` via `UpdateConfiguration` during the handshake so peeks return their rows inline; a use case wanting stashed results would read them back from persist.
 
 ## Risks
 
-* A hand-built `RenderPlan` may be rejected by the worker.
-  Mitigation is the lowering fallback noted above.
+* The `RenderPlan` risk is resolved: the lowering pipeline is used and verified end to end (see above).
 * The persist data-shard schema and `SourceData` encoding must match exactly what a compute persist-import expects, or decoding fails at read time.
   This risk is confined to the direct-write use case; the dataflow-write strategy produces correctly encoded data by construction.
 * Bypassing txn-wal means a directly written shard has no transactional coordination, which is acceptable for synthetic single-writer tests but must not be presented as production-faithful storage behavior.
