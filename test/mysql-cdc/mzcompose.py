@@ -33,11 +33,7 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 
-def create_mysql(
-    mysql_version: str,
-    binlog_full_metadata: bool = True,
-    extra_args: list[str] | None = None,
-) -> MySql:
+def create_mysql(mysql_version: str, binlog_full_metadata: bool = True) -> MySql:
     additional_args = []
     if binlog_full_metadata:
         additional_args.extend(
@@ -47,8 +43,6 @@ def create_mysql(
                 "--enforce_gtid_consistency=ON",
             ]
         )
-    if extra_args:
-        additional_args.extend(extra_args)
     return MySql(version=mysql_version, additional_args=additional_args)
 
 
