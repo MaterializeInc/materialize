@@ -196,6 +196,15 @@ pub const ENABLE_MCP_DEVELOPER: Config<bool> = Config::new(
     "Whether the MCP developer HTTP endpoint is enabled. When false, requests to /api/mcp/developer return 503 Service Unavailable.",
 );
 
+/// Whether the MCP developer query tool is enabled.
+/// When false, the `query` tool is hidden from tools/list and calls to it return an error.
+/// Developers can still use `query_system_catalog`.
+pub const ENABLE_MCP_DEVELOPER_QUERY_TOOL: Config<bool> = Config::new(
+    "enable_mcp_developer_query_tool",
+    true,
+    "Whether the MCP developer query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Developers can still use query_system_catalog.",
+);
+
 /// Whether the external metrics endpoint on environmentd is enabled.
 pub const ENABLE_PUBLIC_METRICS_ENDPOINT: Config<bool> = Config::new(
     "enable_public_metrics_endpoint",
@@ -286,6 +295,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENT)
         .add(&ENABLE_MCP_AGENT_QUERY_TOOL)
         .add(&ENABLE_MCP_DEVELOPER)
+        .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&USER_ID_POOL_BATCH_SIZE)

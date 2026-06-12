@@ -1834,6 +1834,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_agent",
             "enable_mcp_agent_query_tool",
             "enable_mcp_developer",
+            "enable_mcp_developer_query_tool",
             "mcp_max_response_size",
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",

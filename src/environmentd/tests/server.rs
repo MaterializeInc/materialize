@@ -5191,6 +5191,25 @@ fn run_mcp_datadriven_inner(
             let url = match tc.directive.as_str() {
                 "mcp-agent" => &agents_url,
                 "mcp-developer" => &developer_url,
+                // Setup SQL, executed over pgwire as the default HTTP user
+                // (the role the MCP endpoints run as), e.g. to create user
+                // objects for the `query` tool to target.
+                "sql" => {
+                    let mut client = server
+                        .pg_config()
+                        .user(&HTTP_DEFAULT_USER.name)
+                        .connect(postgres::NoTls)
+                        .unwrap();
+                    // One statement at a time: DDL is not allowed in the
+                    // implicit transaction block of a multi-statement query.
+                    for stmt in tc.input.split(';') {
+                        let stmt = stmt.trim();
+                        if !stmt.is_empty() {
+                            client.batch_execute(stmt).unwrap();
+                        }
+                    }
+                    return "ok\n".to_string();
+                }
                 other => panic!("unknown directive: {}", other),
             };
 
@@ -5255,13 +5274,26 @@ fn test_mcp_agent_disabled() {
     run_mcp_datadriven("tests/testdata/mcp/agent_disabled", harness);
 }
 
-/// Tests the MCP developer endpoint.
+/// Tests the MCP developer endpoint with the query tool explicitly disabled.
 #[mz_ore::test]
-fn test_mcp_developer() {
+fn test_mcp_developer_with_query_tool_disabled() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_developer_query_tool".to_string(),
+            "false".to_string(),
+        );
+    run_mcp_datadriven("tests/testdata/mcp/developer", harness);
+}
+
+/// Tests the MCP developer endpoint with the query tool enabled (default behavior).
+#[mz_ore::test]
+fn test_mcp_developer_query_tool() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(false, true)
         .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string());
-    run_mcp_datadriven("tests/testdata/mcp/developer", harness);
+    run_mcp_datadriven("tests/testdata/mcp/developer_query_tool", harness);
 }
 
 /// Tests the MCP developer endpoint when disabled (503).
