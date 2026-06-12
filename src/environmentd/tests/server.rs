@@ -750,7 +750,7 @@ fn test_statement_logging_prepared_statement_throttling() {
 
 /// throttling the first execution of a prepared statement must not make
 //  every subsequent execution of that statement invisible in
-// `mz_recent_activity_log`.
+//  `mz_recent_activity_log`.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_statement_logging_throttled_prepared_statement_stays_visible() {
