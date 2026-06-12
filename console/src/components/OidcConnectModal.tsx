@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 import {
-  Code,
   ModalBody,
   ModalCloseButton,
   ModalContent,
@@ -27,7 +26,6 @@ import {
 } from "~/components/copyableComponents";
 import McpConnectInstructions from "~/components/McpConnectInstructions";
 import { Modal } from "~/components/Modal";
-import TextLink from "~/components/TextLink";
 import { useAppConfig } from "~/config/useAppConfig";
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
@@ -76,21 +74,7 @@ const OidcConnectModal = ({
             whiteSpace="normal"
             color={colors.foreground.secondary}
           >
-            {!balancerdHost && (
-              <>
-                Replace <Code fontSize="xs">{HOST_PLACEHOLDER}</Code> with your
-                Materialize SQL endpoint.{" "}
-              </>
-            )}
-            See the{" "}
-            <TextLink
-              href="https://materialize.com/docs/self-managed-deployments/installation/install-on-gcp/#step-3-apply-the-terraform"
-              isExternal
-            >
-              installation docs
-            </TextLink>{" "}
-            for full setup details. When prompted for a password, paste the ID
-            token below.
+            When prompted for a password, paste the ID token below.
           </Text>
           {idToken ? (
             <VStack alignItems="stretch" spacing={6} mt="4">
