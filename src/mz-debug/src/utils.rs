@@ -96,7 +96,9 @@ pub async fn get_k8s_auth_mode(
 
     match authenticator_kind {
         AuthenticatorKind::None => Ok(AuthMode::None),
-        AuthenticatorKind::Password => {
+        // Sasl and Oidc both authenticate with a username and password, so they
+        // are handled identically to Password here.
+        AuthenticatorKind::Password | AuthenticatorKind::Sasl | AuthenticatorKind::Oidc => {
             if let (Some(mz_username), Some(mz_password)) = (&mz_username, &mz_password) {
                 Ok(AuthMode::Password(PasswordAuthCredentials {
                     username: mz_username.clone(),
@@ -108,7 +110,7 @@ pub async fn get_k8s_auth_mode(
                 ))
             }
         }
-        _ => Err(anyhow::anyhow!(
+        AuthenticatorKind::Frontegg => Err(anyhow::anyhow!(
             "Unsupported authenticator kind: {:?}",
             authenticator_kind
         )),
