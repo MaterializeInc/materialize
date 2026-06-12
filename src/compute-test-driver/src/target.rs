@@ -1,0 +1,32 @@
+//! Resolves the clusterd compute controller address. The driver connects to an
+//! externally-managed clusterd (mzcompose or a manually-launched process); it
+//! never spawns one.
+//!
+//! Local iteration without mzcompose:
+//!   1. Start CockroachDB (see CLAUDE.md).
+//!   2. Launch the driver first so it hosts PubSub on a fixed port (e.g. 0.0.0.0:6879).
+//!   3. Launch clusterd manually, e.g.:
+//!        PERSIST_PUBSUB_URL=http://127.0.0.1:6879 \
+//!        cargo run -p mz-clusterd -- \
+//!          --compute-controller-listen-addr 127.0.0.1:2101 \
+//!          --storage-controller-listen-addr 127.0.0.1:2100 \
+//!          --compute-timely-config '<TimelyConfig json>' \
+//!          --storage-timely-config '<TimelyConfig json>' \
+//!          --process 0 --scratch-directory /tmp/clusterd-scratch
+//!      (Run `cargo run -p mz-clusterd -- --help` to confirm required flags and the
+//!       exact TimelyConfig JSON shape from src/cluster-client/src/client.rs.)
+//!   4. Run the e2e test with CLUSTERD_COMPUTE_ADDR=127.0.0.1:2101 and the same
+//!      PersistHost bind/port the clusterd PubSub URL points at.
+
+/// The clusterd compute controller address, from `CLUSTERD_COMPUTE_ADDR`
+/// (default `127.0.0.1:2101`).
+pub fn compute_addr() -> String {
+    std::env::var("CLUSTERD_COMPUTE_ADDR").unwrap_or_else(|_| "127.0.0.1:2101".to_string())
+}
+
+/// Whether an end-to-end test should run: true only when a target address was
+/// explicitly provided. Integration tests skip when unset to keep `cargo test`
+/// green without a running clusterd.
+pub fn e2e_enabled() -> bool {
+    std::env::var("CLUSTERD_COMPUTE_ADDR").is_ok()
+}

@@ -4,6 +4,7 @@
 
 pub mod data;
 pub mod persist_host;
+pub mod target;
 
 #[cfg(test)]
 mod tests {
