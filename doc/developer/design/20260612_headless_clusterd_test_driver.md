@@ -266,8 +266,14 @@ Second, the persistent command-reader driver.
 Third, the full-MIR `define` schema with the literal shim.
 Joins and the opt-in `optimize()` verb remain the single open decision, deferred to the step that needs them.
 
-Steps one and two are implemented.
+Steps one and two are implemented, and the literal shim from step three is built early because schema and row authoring need it.
 `SCENARIO=script` runs the reader (the `script` module): it reads JSON-line commands from stdin, executes each against `clusterd`, and writes one JSON response per line, returning non-zero if any command failed.
-The orchestration verbs (`write_single_ts`, `write_spread`, `schedule`, `allow_compaction`, `await_frontier`, `peek_count`) map directly to `Driver` calls; shards are named by a string alias allocated on first use, and object ids are raw `u64`s.
-`define_index` covers the common single-index shape via the `index_dataflow` sugar; generalizing it to a full-MIR `define` with the literal shim is the remaining step three.
-A sample script lives at `test/clusterd-test-driver/scripts/index.jsonl`, run locally with `SCENARIO=script SCRIPT=<path> bin/pyactivate test/clusterd-test-driver/run-local.py`.
+The orchestration verbs (`write_single_ts`, `write_spread`, `write_rows`, `schedule`, `allow_compaction`, `await_frontier`, `peek_count`) map directly to `Driver` calls; shards are named by a string alias allocated on first use, and object ids are raw `u64`s.
+
+A script declares relations with `define_schema { name, columns: [{name, type, nullable}] }`, building a `RelationDesc` stored under a name; the other commands reference it by `schema` (defaulting to the built-in `(bigint, text)` sample relation).
+The type vocabulary is intentionally small — `int16`/`int32`/`int64`, `bool`, `string`, `bytes`, with SQL aliases — and extends alongside the matching `Cell` cases.
+Rows come two ways against that schema: `write_single_ts`/`write_spread` take a `count` and generate synthetic rows by type, while `write_rows` takes explicit JSON values.
+The explicit path runs through `cell_from_json`, the `JSON value + ColumnType -> Datum` mapping that is exactly the literal shim the full-MIR `define` will reuse for literal constants — so the load-bearing `Row` caveat above is already resolved.
+
+`define_index` covers the common single-index shape via the `index_dataflow` sugar; generalizing it to a full-MIR `define` (reusing `cell_from_json` for literals) is the remaining step three.
+Sample scripts live at `test/clusterd-test-driver/scripts/` (`index.jsonl`, `custom_schema.jsonl`), run locally with `SCENARIO=script SCRIPT=<path> bin/pyactivate test/clusterd-test-driver/run-local.py`.

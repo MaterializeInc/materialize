@@ -22,7 +22,57 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
 
-/// A two-column `(bigint, text)` schema used by the simple generators.
+/// An owned scalar value, packable into a [`Row`].
+///
+/// Bridges synthetic generation and explicit script-provided values: both need
+/// owned storage because [`Datum`] borrows its `String` and `Bytes` payloads. The
+/// supported set is intentionally small; floats, numerics, and temporal types can
+/// be added alongside their synthetic/parse rules when a scenario needs them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Cell {
+    /// SQL `NULL` (only valid in a nullable column).
+    Null,
+    /// `smallint`.
+    Int16(i16),
+    /// `integer`.
+    Int32(i32),
+    /// `bigint`.
+    Int64(i64),
+    /// `boolean`.
+    Bool(bool),
+    /// `text`.
+    Str(String),
+    /// `bytea`.
+    Bytes(Vec<u8>),
+}
+
+impl Cell {
+    /// Borrow this cell as a [`Datum`] for packing.
+    pub fn datum(&self) -> Datum<'_> {
+        match self {
+            Cell::Null => Datum::Null,
+            Cell::Int16(v) => Datum::from(*v),
+            Cell::Int32(v) => Datum::from(*v),
+            Cell::Int64(v) => Datum::from(*v),
+            Cell::Bool(v) => Datum::from(*v),
+            Cell::Str(v) => Datum::String(v),
+            Cell::Bytes(v) => Datum::Bytes(v),
+        }
+    }
+}
+
+/// Pack one row from owned cells, in column order.
+pub fn pack_cells(cells: &[Cell]) -> Row {
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    for cell in cells {
+        packer.push(cell.datum());
+    }
+    row
+}
+
+/// A two-column `(bigint, text)` schema used as the default for the generators
+/// and the script reader.
 pub fn sample_desc() -> RelationDesc {
     RelationDesc::builder()
         .with_column(
@@ -42,8 +92,45 @@ pub fn sample_desc() -> RelationDesc {
         .finish()
 }
 
-/// Builds `n` rows; `payload` is `pad` bytes wide so callers can target a byte
-/// budget (≈ `n * (pad + overhead)`).
+/// A deterministic synthetic value for a column of `scalar_type` at row index `i`.
+///
+/// `pad` widens `text` columns so callers can target a byte budget. Each value is
+/// a function of `i`, so a row is distinct per `i` as long as the schema has at
+/// least one wide-enough column (int, text, or bytes); an all-`bool` schema would
+/// collide. Unsupported types panic — schema construction rejects them first.
+pub fn synth_cell(scalar_type: &SqlScalarType, i: u64, pad: usize) -> Cell {
+    match scalar_type {
+        // Narrow ints wrap within their non-negative range; use a wide column as
+        // the id for large row counts. The modulus keeps the value in range, so
+        // `try_from` never fails.
+        SqlScalarType::Int16 => Cell::Int16(i16::try_from(i % 0x8000).expect("fits i16")),
+        SqlScalarType::Int32 => Cell::Int32(i32::try_from(i % 0x8000_0000).expect("fits i32")),
+        SqlScalarType::Int64 => Cell::Int64(i64::try_from(i).expect("row index fits i64")),
+        SqlScalarType::Bool => Cell::Bool(i % 2 == 0),
+        SqlScalarType::String => Cell::Str(format!("{:0>width$}", i, width = pad)),
+        SqlScalarType::Bytes => Cell::Bytes(format!("{:0>width$}", i, width = pad).into_bytes()),
+        other => panic!("synth_cell: unsupported scalar type {other:?}"),
+    }
+}
+
+/// Generate `n` synthetic rows for `desc`, with row indices running
+/// `start..start + n`.
+///
+/// Successive batches over disjoint index ranges produce distinct rows that never
+/// consolidate, so a downstream count equals the total rows written (provided the
+/// schema carries a wide-enough column; see [`synth_cell`]).
+pub fn synth_rows(desc: &RelationDesc, start: u64, n: u64, pad: usize) -> Vec<Row> {
+    let types: Vec<SqlScalarType> = desc.iter_types().map(|c| c.scalar_type.clone()).collect();
+    (start..start + n)
+        .map(|i| {
+            let cells: Vec<Cell> = types.iter().map(|t| synth_cell(t, i, pad)).collect();
+            pack_cells(&cells)
+        })
+        .collect()
+}
+
+/// Builds `n` rows of the [`sample_desc`] schema; `payload` is `pad` bytes wide so
+/// callers can target a byte budget (≈ `n * (pad + overhead)`).
 pub fn sample_rows(n: u64, pad: usize) -> Vec<Row> {
     sample_rows_from(0, n, pad)
 }
@@ -52,16 +139,7 @@ pub fn sample_rows(n: u64, pad: usize) -> Vec<Row> {
 /// disjoint id ranges produce distinct rows that never consolidate with each
 /// other, so a downstream count equals the total rows written.
 pub fn sample_rows_from(start: u64, n: u64, pad: usize) -> Vec<Row> {
-    (start..start + n)
-        .map(|i| {
-            let mut row = Row::default();
-            let mut packer = row.packer();
-            packer.push(Datum::Int64(i64::try_from(i).expect("fits")));
-            let s = format!("{:0>width$}", i, width = pad);
-            packer.push(Datum::String(&s));
-            row
-        })
-        .collect()
+    synth_rows(&sample_desc(), start, n, pad)
 }
 
 /// Writes `rows` to `shard` at `ts`, advancing `upper` to `ts+1`. All rows are
