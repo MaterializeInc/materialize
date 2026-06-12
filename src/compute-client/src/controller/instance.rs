@@ -378,7 +378,34 @@ impl Instance {
                 collection.read_frontier().to_owned()
             };
 
-            let input_read_holds = collection.storage_dependencies.values().cloned().collect();
+            // Cloning a `ReadHold` fails when its issuer has hung up. For these holds the issuer
+            // is the `StorageCollections`, which doesn't hang up as long as the `Instance` exists,
+            // except during process shutdown, when the tokio runtime drops tasks in arbitrary
+            // order. In that case there is no way of correctly initializing the per-replica
+            // collection state, so we stop trying. We still add the replica itself, to keep the
+            // bookkeeping consistent with the controller's, but it will never hydrate.
+            let mut input_read_holds = Vec::with_capacity(collection.storage_dependencies.len());
+            let mut hung_up = None;
+            for hold in collection.storage_dependencies.values() {
+                match hold.try_clone() {
+                    Ok(hold) => input_read_holds.push(hold),
+                    Err(_) => {
+                        hung_up = Some(hold.id());
+                        break;
+                    }
+                }
+            }
+            if let Some(input_id) = hung_up {
+                tracing::info!(
+                    replica_id = %id,
+                    %collection_id,
+                    %input_id,
+                    "giving up on adding replica collections: storage read hold issuer hung \
+                     up, the process is shutting down",
+                );
+                break;
+            }
+
             replica.add_collection(*collection_id, as_of, input_read_holds);
         }
 

@@ -165,10 +165,16 @@ impl ReadHold {
         self.try_downgrade(Antichain::new())
             .expect("known to succeed");
     }
-}
 
-impl Clone for ReadHold {
-    fn clone(&self) -> Self {
+    /// Clones this [ReadHold], returning an `Err` when the issuer of the read
+    /// hold has hung up, in which case the clone would not actually hold back
+    /// the since of the collection.
+    ///
+    /// The issuer hanging up is only expected during process shutdown, when
+    /// the tokio runtime drops tasks in arbitrary order. Callers that may run
+    /// concurrently with shutdown can use this method to handle that case
+    /// gracefully, instead of panicking via [Clone::clone].
+    pub fn try_clone(&self) -> Result<Self, SendError<(GlobalId, ChangeBatch<Timestamp>)>> {
         if self.id.is_user() {
             tracing::trace!("cloning ReadHold on {}: {:?}", self.id, self.since);
         }
@@ -181,18 +187,22 @@ impl Clone for ReadHold {
         if !changes.is_empty() {
             // We do care about sending here. If the other end hung up we don't
             // really have a read hold anymore.
-            match (self.change_tx)(self.id.clone(), changes) {
-                Ok(_) => (),
-                Err(e) => {
-                    panic!("cannot clone ReadHold: {}", e);
-                }
-            }
+            (self.change_tx)(self.id.clone(), changes)?;
         }
 
-        Self {
+        Ok(Self {
             id: self.id.clone(),
             since: self.since.clone(),
             change_tx: Arc::clone(&self.change_tx),
+        })
+    }
+}
+
+impl Clone for ReadHold {
+    fn clone(&self) -> Self {
+        match self.try_clone() {
+            Ok(clone) => clone,
+            Err(e) => panic!("cannot clone ReadHold: {}", e),
         }
     }
 }
@@ -204,5 +214,27 @@ impl Drop for ReadHold {
         }
 
         self.release();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn try_clone_after_issuer_hung_up() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let hold =
+            ReadHold::with_channel(GlobalId::User(1), Antichain::from_elem(Timestamp::MIN), tx);
+
+        let clone = hold.try_clone().expect("issuer is alive");
+        drop(clone);
+
+        // Once the issuer has hung up, cloning must fail instead of producing
+        // a hold that doesn't actually hold back the since.
+        drop(rx);
+        assert!(hold.try_clone().is_err());
     }
 }
