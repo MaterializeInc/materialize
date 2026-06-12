@@ -135,6 +135,7 @@ impl Client {
         config.host(host);
         config.port(profile.port);
         config.user(&profile.username);
+        config.dbname("materialize");
         if let Some(password) = &profile.password {
             config.password(password.as_str());
         }

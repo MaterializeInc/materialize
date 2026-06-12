@@ -36,6 +36,7 @@ pub fn run(settings: &Settings, psql_args: Vec<String>) -> Result<(), CliError> 
     cmd.env("PGHOST", host);
     cmd.env("PGPORT", profile.port.to_string());
     cmd.env("PGUSER", &profile.username);
+    cmd.env("PGDATABASE", "materialize");
     if let Some(password) = &profile.password {
         cmd.env("PGPASSWORD", password);
     }
