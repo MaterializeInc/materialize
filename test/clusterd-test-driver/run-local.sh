@@ -41,6 +41,11 @@ RUN_CLUSTERD=${RUN_CLUSTERD:-1}
 # WRAPPER="perf record -g --". On cleanup we terminate the inner clusterd (not
 # the wrapper) so the wrapper flushes its output and exits on its own.
 WRAPPER=${WRAPPER:-}
+# Cargo profile for clusterd and the driver. `optimized` (release-like, fast
+# build, keeps debug symbols) gives representative profiling numbers; override
+# with PROFILE=dev for a quicker unoptimized build.
+PROFILE=${PROFILE:-optimized}
+PROFILE_DIR=$([[ "$PROFILE" == "dev" ]] && echo debug || echo "$PROFILE")
 ENVIRONMENT_ID="mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0"
 
 mkdir -p "$BLOB_DIR" "$SCRATCH_DIR" "$SECRETS_DIR"
@@ -92,11 +97,11 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "$RUN_CLUSTERD" == "1" ]]; then
-    echo "Building clusterd..."
-    cargo build --bin clusterd
+    echo "Building clusterd (profile: ${PROFILE})..."
+    cargo build --profile "$PROFILE" --bin clusterd
     echo "clusterd command:"
     echo "  PERSIST_PUBSUB_URL=http://127.0.0.1:${PUBSUB_PORT} \\"
-    echo "  ${WRAPPER} target/debug/clusterd \\"
+    echo "  ${WRAPPER} target/${PROFILE_DIR}/clusterd \\"
     echo "    --compute-controller-listen-addr ${COMPUTE_ADDR} \\"
     echo "    --storage-controller-listen-addr ${STORAGE_ADDR} \\"
     echo "    --compute-timely-config '$(timely_config 2102)' \\"
@@ -106,8 +111,9 @@ if [[ "$RUN_CLUSTERD" == "1" ]]; then
     echo "    --scratch-directory ${SCRATCH_DIR}"
     # ${WRAPPER} is intentionally unquoted so a multi-word wrapper (e.g.
     # "perf record -g --") splits into separate arguments.
+    # shellcheck disable=SC2086
     PERSIST_PUBSUB_URL="http://127.0.0.1:${PUBSUB_PORT}" \
-        ${WRAPPER} target/debug/clusterd \
+        ${WRAPPER} "target/${PROFILE_DIR}/clusterd" \
         --compute-controller-listen-addr "${COMPUTE_ADDR}" \
         --storage-controller-listen-addr "${STORAGE_ADDR}" \
         --compute-timely-config "$(timely_config 2102)" \
@@ -119,14 +125,14 @@ if [[ "$RUN_CLUSTERD" == "1" ]]; then
     launched_pid=$!
 
     # Resolve the inner clusterd PID. With no wrapper, what we launched *is*
-    # clusterd. With a wrapper, the wrapper's argv also contains
-    # "target/debug/clusterd", so exclude the launched (wrapper) pid when
-    # matching, and retry until the wrapper has forked clusterd.
+    # clusterd. With a wrapper, the wrapper's argv also contains the clusterd
+    # path, so exclude the launched (wrapper) pid when matching, and retry
+    # until the wrapper has forked clusterd.
     if [[ -z "$WRAPPER" ]]; then
         clusterd_pid="$launched_pid"
     else
         for _ in $(seq 1 60); do
-            clusterd_pid=$(pgrep -f "target/debug/clusterd --compute-controller-listen-addr ${COMPUTE_ADDR}" \
+            clusterd_pid=$(pgrep -f "target/${PROFILE_DIR}/clusterd --compute-controller-listen-addr ${COMPUTE_ADDR}" \
                 | grep -vx "$launched_pid" | head -1 || true)
             [[ -n "$clusterd_pid" ]] && break
             sleep 0.5
@@ -143,8 +149,8 @@ if [[ "$RUN_CLUSTERD" == "1" ]]; then
     done
 fi
 
-echo "Building headless-driver..."
-cargo build -p mz-clusterd-test-driver --bin headless-driver
+echo "Building headless-driver (profile: ${PROFILE})..."
+cargo build --profile "$PROFILE" -p mz-clusterd-test-driver --bin headless-driver
 
 echo "Running driver..."
 CLUSTERD_COMPUTE_ADDR="${COMPUTE_ADDR}" \
@@ -154,4 +160,4 @@ CLUSTERD_COMPUTE_ADDR="${COMPUTE_ADDR}" \
     TARGET_BYTES="${TARGET_BYTES}" \
     SCENARIO="${SCENARIO}" \
     N_TIMESTAMPS="${N_TIMESTAMPS}" \
-    target/debug/headless-driver
+    "target/${PROFILE_DIR}/headless-driver"

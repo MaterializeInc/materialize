@@ -200,7 +200,7 @@ Because every process is on localhost, one PubSub address (`127.0.0.1:6879`) and
 To profile `clusterd` (heaptrack, perf, samply), set `WRAPPER` to a command the script prepends to the `clusterd` invocation, e.g. `WRAPPER="heaptrack" ./test/clusterd-test-driver/run-local.sh` or `WRAPPER="perf record -g --" …`.
 On exit the script terminates the inner `clusterd` rather than the wrapper, so the profiler observes its child exit and flushes its output before exiting on its own.
 For full manual control instead, launch `clusterd` yourself using the command the script prints under "clusterd command:", then run with `RUN_CLUSTERD=0` so the script only drives the already-running `clusterd`.
-A release build (`cargo build --release --bin clusterd`, then point the profiler at `target/release/clusterd`) gives representative numbers.
+The script builds with the `optimized` cargo profile by default (release-like but with debug symbols), so the numbers are representative; override with `PROFILE=dev` for a quicker unoptimized build.
 
 ## Interoperability notes
 
