@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 from materialize import MZ_ROOT
 from materialize.mzcompose import loader
@@ -25,6 +26,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
 
 PROJECTS_DIR = MZ_ROOT / "test" / "mz-deploy" / "projects"
 
@@ -49,6 +51,9 @@ SERVICES = [
             "enable_create_table_from_source": "true",
         },
     ),
+    # Kafka broker for the sinks workflow. Only started by workflows that
+    # exercise sinks; the others never bring it up.
+    Redpanda(),
     # mz-deploy runs as a prebuilt mzbuild image (see src/mz-deploy/ci) rather
     # than a host `cargo build`, so CI doesn't recompile it on every run. The
     # projects directory is mounted at /projects; the binary reaches the
@@ -1377,3 +1382,189 @@ def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) 
             f"expected pgpass_v2 in SHOW CREATE after secret change, " f"got:\n{sql}"
         )
         assert_idempotent_after_update("connection-updates/change-secret")
+
+
+def workflow_sinks(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Exercise the sink deployment lifecycle.
+
+    Sinks are deferred during ``stage`` (they must not start producing
+    until promotion) and created by ``promote`` after the schema swap.
+    When a later deployment swaps a schema containing a sink's upstream
+    materialized view, ``promote`` repoints the sink to the replacement
+    object via ``ALTER SINK ... SET FROM`` instead of recreating it.
+
+    Covers:
+    - stage + promote of a new project creates the deferred sink.
+    - updating the upstream MV and promoting repoints the sink in place
+      (same sink ID, new upstream MV ID).
+    """
+    setup_base(c)
+    c.up("redpanda")
+
+    def sink_id() -> str:
+        rows = c.sql_query(
+            "SELECT s.id FROM mz_sinks s "
+            "JOIN mz_schemas sc ON s.schema_id = sc.id "
+            "WHERE s.name = 'event_sink' AND sc.name = 'egress'",
+            database="app",
+        )
+        assert len(rows) == 1, f"Expected sink event_sink in egress, got {rows}"
+        return rows[0][0]
+
+    def mv_id() -> str:
+        rows = c.sql_query(
+            "SELECT mv.id FROM mz_materialized_views mv "
+            "JOIN mz_schemas sc ON mv.schema_id = sc.id "
+            "WHERE mv.name = 'event_totals' AND sc.name = 'core'",
+            database="app",
+        )
+        assert len(rows) == 1, f"Expected MV event_totals in core, got {rows}"
+        return rows[0][0]
+
+    def wait_for_sink_running(timeout_secs: int = 120) -> None:
+        deadline = time.time() + timeout_secs
+        status = None
+        while time.time() < deadline:
+            rows = c.sql_query(
+                "SELECT status FROM mz_internal.mz_sink_statuses "
+                "WHERE name = 'event_sink'",
+                database="app",
+            )
+            status = rows[0][0] if rows else None
+            if status == "running":
+                return
+            assert status not in ("stalled", "failed"), f"sink status: {status}"
+            time.sleep(2)
+        raise AssertionError(f"sink never reached 'running', last status: {status}")
+
+    # ── 1. Apply infrastructure ──────────────────────────────────────────
+    # Creates clusters, the app database, the Kafka connection, and the
+    # events table. Sinks and MVs are deploy-time objects and are not
+    # touched by apply.
+    result = run_mz_deploy(c, "sinks/v1", "apply")
+    assert result.returncode == 0, f"apply failed: {result.stderr}"
+
+    c.sql(
+        "INSERT INTO app.public.events VALUES "
+        "(1, 'signup', 10.0), (2, 'signup', 5.0), (3, 'purchase', NULL)",
+        database="app",
+        user="deploy_user",
+    )
+
+    with c.test_case("sink-stage-promote"):
+        # ── 2. Stage v1: sink is deferred ────────────────────────────────
+        result = run_mz_deploy(
+            c, "sinks/v1", "stage", "--deploy-id", "s1", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage s1 failed: {result.stderr}"
+
+        # The MV's schema and cluster are staged.
+        rows = c.sql_query(
+            "SELECT name FROM mz_schemas WHERE name = 'core_s1'", database="app"
+        )
+        assert len(rows) == 1, f"Expected core_s1 schema, got {rows}"
+        rows = c.sql_query("SELECT name FROM mz_clusters WHERE name = 'compute_s1'")
+        assert len(rows) == 1, f"Expected compute_s1 cluster, got {rows}"
+
+        # The sink is deferred: not created during stage, and its cluster
+        # is not cloned (sinks don't propagate cluster dirtiness).
+        rows = c.sql_query(
+            "SELECT name FROM mz_sinks WHERE name = 'event_sink'", database="app"
+        )
+        assert len(rows) == 0, f"Sink must not exist before promote, got {rows}"
+        rows = c.sql_query("SELECT name FROM mz_clusters WHERE name = 'egress_s1'")
+        assert len(rows) == 0, f"Expected no egress_s1 cluster, got {rows}"
+
+        result = run_mz_deploy(
+            c, "sinks/v1", "wait", "s1", "--timeout", "300", "--allowed-lag", "86400"
+        )
+        assert result.returncode == 0, f"wait s1 failed: {result.stderr}"
+
+        # ── 3. Promote v1: deferred sink is created ──────────────────────
+        result = run_mz_deploy(
+            c,
+            "sinks/v1",
+            "promote",
+            "s1",
+            "--no-ready-check",
+            "--dry-run",
+            "--output",
+            "json",
+        )
+        plan = json.loads(result.stdout)
+        assert len(plan["sinks_to_create"]) == 1, f"Expected 1 sink to create: {plan}"
+        assert plan["sinks_to_create"][0]["object"] == "event_sink", f"got {plan}"
+        assert len(plan["sinks_to_repoint"]) == 0, f"Expected no repoints: {plan}"
+
+        result = run_mz_deploy(c, "sinks/v1", "promote", "s1", "--no-ready-check")
+        assert result.returncode == 0, f"promote s1 failed: {result.stderr}"
+
+        # Sink exists in the egress schema on the egress cluster.
+        rows = c.sql_query(
+            "SELECT s.name FROM mz_sinks s "
+            "JOIN mz_schemas sc ON s.schema_id = sc.id "
+            "JOIN mz_clusters cl ON s.cluster_id = cl.id "
+            "WHERE s.name = 'event_sink' AND sc.name = 'egress' "
+            "AND cl.name = 'egress'",
+            database="app",
+        )
+        assert len(rows) == 1, f"Expected event_sink on egress cluster, got {rows}"
+
+        # And it actually connects to the broker and starts producing.
+        wait_for_sink_running()
+
+    with c.test_case("sink-repoint-on-mv-update"):
+        sink_id_before = sink_id()
+        mv_id_before = mv_id()
+
+        # ── 4. Stage v2 (MV definition changed) ──────────────────────────
+        result = run_mz_deploy(
+            c, "sinks/v2", "stage", "--deploy-id", "s2", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage s2 failed: {result.stderr}"
+
+        result = run_mz_deploy(
+            c, "sinks/v2", "wait", "s2", "--timeout", "300", "--allowed-lag", "86400"
+        )
+        assert result.returncode == 0, f"wait s2 failed: {result.stderr}"
+
+        # ── 5. Promote v2: sink is repointed, not recreated ──────────────
+        result = run_mz_deploy(
+            c,
+            "sinks/v2",
+            "promote",
+            "s2",
+            "--no-ready-check",
+            "--dry-run",
+            "--output",
+            "json",
+        )
+        plan = json.loads(result.stdout)
+        # The sink still appears under sinks_to_create: stage records every
+        # project sink as a pending statement and promote skips the ones
+        # that already exist. The ID checks below prove it is not recreated.
+        repoints = plan["sinks_to_repoint"]
+        assert len(repoints) == 1, f"Expected 1 sink to repoint: {plan}"
+        assert repoints[0]["sink_name"] == "event_sink", f"got {plan}"
+        assert repoints[0]["dependency_name"] == "event_totals", f"got {plan}"
+
+        result = run_mz_deploy(c, "sinks/v2", "promote", "s2", "--no-ready-check")
+        assert result.returncode == 0, f"promote s2 failed: {result.stderr}"
+
+        # The MV was replaced by the swap; the sink survived in place.
+        assert mv_id() != mv_id_before, "MV should have a new ID after the swap"
+        assert sink_id() == sink_id_before, "Sink must be repointed, not recreated"
+
+        # The sink now depends on the replacement MV.
+        rows = c.sql_query(
+            "SELECT mv.id FROM mz_sinks s "
+            "JOIN mz_internal.mz_object_dependencies d ON s.id = d.object_id "
+            "JOIN mz_materialized_views mv ON d.referenced_object_id = mv.id "
+            "WHERE s.name = 'event_sink'",
+            database="app",
+        )
+        assert [r[0] for r in rows] == [
+            mv_id()
+        ], f"Sink should depend on the new MV {mv_id()}, got {rows}"
+
+        wait_for_sink_running()
