@@ -1521,10 +1521,12 @@ async fn partially_truncate_metrics_history(
 
     // Produce retractions by inverting diffs of rows we want to delete.
     let mut builder = write_handle.builder(Antichain::from_elem(old_upper_ts));
+    // Re-used allocation for decoding rows, avoids allocating a fresh vector per row.
+    let mut datum_vec = DatumVec::new();
     while let Some(chunk) = rows.next().await {
         for (data, _t, diff) in chunk {
             let Ok(row) = &data.0 else { continue };
-            let datums = row.unpack();
+            let datums = datum_vec.borrow_with(row);
             let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
             if *occurred_at >= keep_since {
                 continue;
