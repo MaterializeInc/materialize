@@ -6211,6 +6211,8 @@ dependencies = [
  "mz-repr",
  "mz-service",
  "mz-storage-types",
+ "serde",
+ "serde_json",
  "tempfile",
  "timely",
  "tokio",

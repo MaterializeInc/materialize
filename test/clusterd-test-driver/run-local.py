@@ -63,6 +63,9 @@ SECRETS_DIR = env("SECRETS_DIR", "/tmp/clusterd-test-driver-secrets")
 TARGET_BYTES = env("TARGET_BYTES", str(2 * 1024 * 1024 * 1024))  # 2 GiB
 SCENARIO = env("SCENARIO", "index")
 N_TIMESTAMPS = env("N_TIMESTAMPS", "64")
+# For SCENARIO=script: path to a JSON-line command file piped to the driver's
+# stdin. Relative paths are resolved against the repo root.
+SCRIPT = env("SCRIPT", "")
 RUN_CLUSTERD = env("RUN_CLUSTERD", "1") == "1"
 # Command prepended to clusterd, e.g. "heaptrack" or "perf record -g --".
 WRAPPER = env("WRAPPER", "")
@@ -289,11 +292,25 @@ def main() -> int:
             SCENARIO=SCENARIO,
             N_TIMESTAMPS=N_TIMESTAMPS,
         )
-        result = subprocess.run(
-            [str(ROOT / "target" / PROFILE_DIR / "headless-driver")],
-            env=driver_env,
-            cwd=ROOT,
-        )
+        # In script mode, feed the command file to the driver's stdin.
+        script_file = None
+        if SCENARIO == "script":
+            if not SCRIPT:
+                raise SystemExit("SCENARIO=script requires SCRIPT=<path to .jsonl>")
+            script_path = Path(SCRIPT)
+            if not script_path.is_absolute():
+                script_path = ROOT / script_path
+            script_file = open(script_path, "rb")
+        try:
+            result = subprocess.run(
+                [str(ROOT / "target" / PROFILE_DIR / "headless-driver")],
+                env=driver_env,
+                cwd=ROOT,
+                stdin=script_file,
+            )
+        finally:
+            if script_file is not None:
+                script_file.close()
         return result.returncode
     finally:
         if launched is not None:

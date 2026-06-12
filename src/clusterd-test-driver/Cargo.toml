@@ -37,6 +37,8 @@ mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-storage-types = { path = "../storage-types" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 timely.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-stream.workspace = true

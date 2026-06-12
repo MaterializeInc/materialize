@@ -16,6 +16,8 @@
 //!   - `deep-history`  — hydrate over a shard with many distinct timestamps.
 //!   - `side-effects`  — drive `AllowCompaction` explicitly to advance the read frontier.
 //!   - `multi-dataflow` — attempt to hydrate two dataflows simultaneously (reproduction).
+//!   - `script`        — read JSON-line commands from stdin and execute them (see
+//!                       [`mz_clusterd_test_driver::script`]).
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -349,6 +351,15 @@ async fn scenario_multi_dataflow() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Read JSON-line commands from stdin and execute them against `clusterd`.
+///
+/// Unlike the fixed scenarios above, this stays agnostic: the script drives every
+/// interaction. See [`mz_clusterd_test_driver::script`] for the protocol.
+async fn scenario_script() -> anyhow::Result<()> {
+    let Setup { loc, driver, .. } = setup().await?;
+    mz_clusterd_test_driver::script::run(driver, loc).await
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Configure tracing so the driver emits structured logs like the real
@@ -371,6 +382,7 @@ async fn main() -> anyhow::Result<()> {
         "deep-history" => scenario_deep_history().await,
         "side-effects" => scenario_side_effects().await,
         "multi-dataflow" => scenario_multi_dataflow().await,
+        "script" => scenario_script().await,
         other => anyhow::bail!("unknown scenario: {other:?}"),
     }
 }

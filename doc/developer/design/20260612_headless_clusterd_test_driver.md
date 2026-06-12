@@ -263,5 +263,11 @@ Everything else stays native serde, so the function-variant explosion never reac
 The build order is incremental and each step stands alone.
 First, `DataflowBuilder` as the semantic core, with `index_dataflow` refactored onto it.
 Second, the persistent command-reader driver.
-Third, the `define` and orchestration JSON schema with the literal shim.
+Third, the full-MIR `define` schema with the literal shim.
 Joins and the opt-in `optimize()` verb remain the single open decision, deferred to the step that needs them.
+
+Steps one and two are implemented.
+`SCENARIO=script` runs the reader (the `script` module): it reads JSON-line commands from stdin, executes each against `clusterd`, and writes one JSON response per line, returning non-zero if any command failed.
+The orchestration verbs (`write_single_ts`, `write_spread`, `schedule`, `allow_compaction`, `await_frontier`, `peek_count`) map directly to `Driver` calls; shards are named by a string alias allocated on first use, and object ids are raw `u64`s.
+`define_index` covers the common single-index shape via the `index_dataflow` sugar; generalizing it to a full-MIR `define` with the literal shim is the remaining step three.
+A sample script lives at `test/clusterd-test-driver/scripts/index.jsonl`, run locally with `SCENARIO=script SCRIPT=<path> bin/pyactivate test/clusterd-test-driver/run-local.py`.
