@@ -408,12 +408,18 @@ pub fn global_pool_peek() -> Option<mz_ore::pool::Pool> {
 /// resolves to it when `enabled`, and per-consumer opt-ins via
 /// [`shared_pager`] reach it either way — and the pool's resident budget is
 /// retuned in place so live handles stay coherent.
-pub fn apply_pool_config(enabled: bool, budget_bytes: usize, spill_threads: usize) -> bool {
+pub fn apply_pool_config(
+    enabled: bool,
+    budget_bytes: usize,
+    spill_threads: usize,
+    eager_backing: bool,
+) -> bool {
     let Some(pool) = global_pool() else {
         return false;
     };
     pool.set_budget(budget_bytes);
     pool.set_spill_threads(spill_threads);
+    pool.set_eager_backing(eager_backing);
     POOL_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
     COMPUTE_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
     true
@@ -1018,7 +1024,7 @@ mod tests {
     fn pool_mode_routing() {
         let _guard = global_config_lock();
         // Pool mode on: the global pager and shared pager both go pooled.
-        let ok = apply_pool_config(true, 1 << 30, 0);
+        let ok = apply_pool_config(true, 1 << 30, 0, false);
         assert!(ok, "pool reservation expected to succeed in tests");
         let mut col = sample_typed();
         let paged = global_pager().page(&mut col);
