@@ -4,19 +4,15 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use mz_compute_test_driver::data::{sample_desc, sample_rows, write_rows_single_ts};
+use mz_compute_test_driver::data::{
+    rows_for_bytes, sample_desc, sample_rows, write_rows_single_ts,
+};
 use mz_compute_test_driver::dataflow::index_dataflow;
 use mz_compute_test_driver::driver::Driver;
 use mz_compute_test_driver::persist_host::PersistHost;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{GlobalId, Timestamp};
-
-/// Rows needed to roughly hit `target_bytes` with `pad`-wide payloads.
-fn rows_for_bytes(target_bytes: u64, pad: usize) -> u64 {
-    let per_row = u64::cast_from(pad) + 24;
-    (target_bytes / per_row).max(1)
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
