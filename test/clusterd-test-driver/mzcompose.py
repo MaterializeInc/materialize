@@ -48,9 +48,23 @@ SERVICES = [
 ]
 
 
+# Each entry is (scenario, extra env). `multi-dataflow` reproduces a current
+# limitation and exits 0 by design; the others assert and fail the run on error.
+SCENARIOS = [
+    ("index", {}),
+    ("deep-history", {"N_TIMESTAMPS": "32"}),
+    ("side-effects", {}),
+    ("multi-dataflow", {}),
+]
+
+
 def workflow_default(c: Composition) -> None:
     c.up("cockroach", "minio")
-    # clusterd hosts the compute replica; the driver connects to it.
-    c.up("clusterd")
-    # Run the driver to completion; it exits non-zero on assertion failure.
-    c.run("headless-driver")
+    for i, (scenario, extra) in enumerate(SCENARIOS):
+        # Restart clusterd between scenarios for a clean compute state; the
+        # scenarios reuse GlobalIds and would otherwise collide.
+        if i > 0:
+            c.kill("clusterd")
+        c.up("clusterd")
+        # Run the driver to completion; it exits non-zero on assertion failure.
+        c.run("headless-driver", env_extra={"SCENARIO": scenario, **extra})

@@ -186,8 +186,8 @@ A composition runs CockroachDB for consensus, an object store for blob, a real `
 
 ## Testing
 
-* The driver never spawns `clusterd`; `mzcompose` brings up the full stack (CockroachDB, an object store, `clusterd`, and the driver image) and is the faithful end-to-end path.
-  The verified scenario writes synthetic rows to a persist shard, builds an index over it, waits for the frontier, and asserts the peek count.
+* The driver never spawns `clusterd`; `mzcompose` brings up the full stack (CockroachDB, an object store, `clusterd`, and the driver image) and is the faithful end-to-end path that CI runs.
+  `workflow_default` runs every scenario in turn, restarting `clusterd` between them for a clean compute state: `index`, `deep-history`, and `side-effects` assert and fail the run on error; `multi-dataflow` reproduces a current limitation and exits 0 by design.
 * Crate-level `cargo test` covers the infra-free units (direct persist write round-trip via `mem://`, spread-timestamp write, response demux merge, dataflow structure).
   The end-to-end integration test (`tests/index_smoke.rs`) skips unless `CLUSTERD_COMPUTE_ADDR` is set, so `cargo test` stays green without a running stack.
 
