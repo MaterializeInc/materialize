@@ -22,6 +22,9 @@ static QUERY_OUTPUT_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\r?\n
 static DOUBLE_LINE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
 static EOF_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap());
+// Separates the regex from the replacement in a `replace` directive. Two or
+// more spaces, so that the regex itself may contain single spaces.
+static REPLACE_SEP_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" {2,}").unwrap());
 
 #[derive(Debug, Clone)]
 pub struct Parser<'a> {
@@ -151,6 +154,37 @@ impl<'a> Parser<'a> {
             }),
 
             "reset-server" => Ok(Record::ResetServer),
+
+            // `replace <regex>  <replacement>`: register a substitution applied
+            // to the actual output of subsequent queries before comparison. The
+            // regex and replacement are separated by two-or-more spaces, so the
+            // regex may contain single spaces. See `Record::Replace`.
+            "replace" => {
+                let args = first_line
+                    .strip_prefix("replace")
+                    .expect("dispatched on \"replace\"")
+                    .trim_start();
+                let mut parts = REPLACE_SEP_REGEX.splitn(args, 2);
+                let pattern = parts
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| anyhow!("replace directive missing regex in: {}", first_line))?;
+                let replacement = parts.next().ok_or_else(|| {
+                    anyhow!(
+                        "replace directive missing replacement (separate the regex \
+                         and replacement with two or more spaces) in: {}",
+                        first_line
+                    )
+                })?;
+                // Validate the regex now, so an error is located at parse time.
+                Regex::new(pattern).map_err(|e| {
+                    anyhow!("invalid regex {:?} in replace directive: {}", pattern, e)
+                })?;
+                Ok(Record::Replace {
+                    pattern: pattern.to_owned(),
+                    replacement: replacement.to_owned(),
+                })
+            }
 
             other => bail!(
                 "Unexpected start of record on line {}: {}",

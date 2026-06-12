@@ -168,6 +168,28 @@ pipes the contents of file.csv to the following SQL statement:
 COPY table FROM STDIN
 ```
 
+### `replace` extension
+
+The `replace` directive registers a regular-expression substitution that is
+applied to the actual output of every subsequent `query` before it is compared
+against (or rewritten into) the expected output.
+It exists to mask non-deterministic tokens that would otherwise make a snapshot
+unstable, for example a folded `mz_now()` timestamp in an `EXPLAIN` plan.
+
+```
+replace (> )\d{13}  ${1}<TIMESTAMP>
+```
+
+The regex and the replacement are separated by two or more spaces, so the regex
+itself may contain single spaces.
+The replacement may use the `$1` / `${name}` capture-group syntax of the Rust
+`regex` crate.
+Multiple `replace` directives accumulate and are applied in order, and they
+survive a `reset-server`.
+Because the substitution is applied to actual output before both comparison and
+rewrite, the masked token is what gets recorded, so the file stays stable across
+runs.
+
 ### modes
 
 We have extended sqllogictest to have the concept of the "mode." There are two
