@@ -74,7 +74,8 @@ async fn index_over_small_shard() {
         vec![0],
         Timestamp::from(0),
         Timestamp::from(1),
-    );
+    )
+    .expect("build index dataflow");
     driver.submit_dataflow(df).expect("submit");
     driver.schedule(index_id).expect("schedule");
 

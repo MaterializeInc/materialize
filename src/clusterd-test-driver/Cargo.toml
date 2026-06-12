@@ -12,7 +12,6 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 futures.workspace = true
-mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }

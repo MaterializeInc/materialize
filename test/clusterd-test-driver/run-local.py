@@ -218,6 +218,11 @@ def wait_for_port(addr: str, timeout: float = 30.0) -> None:
                 return
         except OSError:
             time.sleep(0.5)
+    # Fail loudly: a silent return leads to a confusing connect error in the
+    # driver instead of a clear "clusterd never bound its port".
+    raise SystemExit(
+        f"timed out after {timeout}s waiting for {addr} to accept connections"
+    )
 
 
 def terminate(launched: "subprocess.Popen[bytes]", clusterd_pid: int | None) -> None:

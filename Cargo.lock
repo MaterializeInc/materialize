@@ -6199,7 +6199,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "futures",
- "mz-cluster-client",
  "mz-compute-client",
  "mz-compute-types",
  "mz-dyncfg",

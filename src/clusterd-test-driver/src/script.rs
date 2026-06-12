@@ -448,6 +448,16 @@ impl ScriptState {
                 upper,
             } => {
                 let desc = self.resolve_schema(&schema)?;
+                // Validate the key columns against the schema up front, so a bad
+                // index (e.g. key past the last column) yields a clean error rather
+                // than reaching the lowering with an out-of-range column reference.
+                let arity = desc.arity();
+                for &col in &key {
+                    anyhow::ensure!(
+                        col < arity,
+                        "key column {col} out of range for a {arity}-column schema"
+                    );
+                }
                 let shard = self.shard_id(&shard);
                 let df = index_dataflow(
                     GlobalId::User(source_id),
@@ -458,7 +468,7 @@ impl ScriptState {
                     key,
                     Timestamp::from(as_of),
                     Timestamp::from(upper),
-                );
+                )?;
                 self.driver.submit_dataflow(df)?;
                 Ok(Response::Ok)
             }

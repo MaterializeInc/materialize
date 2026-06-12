@@ -8,6 +8,8 @@
 {"cmd":"expect_error","command":{"cmd":"write_rows","shard":"e","ts":0,"rows":[[1]]}}
 # Wrong value type: text supplied for the bigint column.
 {"cmd":"expect_error","command":{"cmd":"write_rows","shard":"e","ts":0,"rows":[["not-an-int","x"]]}}
+# Index key column out of range: the sample schema has two columns (0, 1).
+{"cmd":"expect_error","command":{"cmd":"define_index","source_id":2000,"index_id":2001,"shard":"e","key":[5],"as_of":0,"upper":1}}
 # Replica behavior: an unscheduled dataflow makes no progress, so awaiting its
 # output frontier times out. With a short timeout this is caught, not fatal.
 {"cmd":"write_single_ts","shard":"e","ts":0,"count":100}

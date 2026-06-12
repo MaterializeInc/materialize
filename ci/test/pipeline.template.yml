@@ -548,11 +548,6 @@ steps:
           composition: clusterd-test-driver
     agents:
       queue: hetzner-aarch64-4cpu-8gb
-    # This composition uses its own clusterd-test-driver mzbuild image, which the
-    # instrumented (coverage/sanitizer no-LTO) builds do not produce, so the image
-    # is "not found" there. Skip those pipelines; it runs in the main pipeline.
-    coverage: skip
-    sanitizer: skip
 
   - id: dbt-materialize
     label: dbt-materialize

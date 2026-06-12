@@ -206,12 +206,17 @@ impl DataflowBuilder {
 
     /// Lower the accumulated MIR and attach persist wiring, producing the
     /// `DataflowDescription` the compute protocol expects.
-    pub fn finish(self) -> DataflowDescription<RenderPlan, CollectionMetadata> {
-        // Lower MIR -> LIR. Deterministic and self-contained; a failure here means a
-        // malformed input plan, which is a programmer error in this driver.
+    ///
+    /// Returns an error rather than panicking on a malformed plan (e.g. a key
+    /// column out of range, or an unbalanced object graph), so a caller driving
+    /// this from external input — notably the script reader — can surface a clean
+    /// error instead of crashing the process.
+    pub fn finish(self) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
+        // Lower MIR -> LIR. Deterministic and self-contained.
         let features = OptimizerFeatures::default();
         let lowered: DataflowDescription<Plan, ()> =
-            Plan::finalize_dataflow(self.mir, &features).expect("lowering dataflow");
+            Plan::finalize_dataflow(self.mir, &features)
+                .map_err(|e| anyhow::anyhow!("lowering dataflow failed: {e}"))?;
         augment(lowered, &self.sources)
     }
 }
@@ -233,7 +238,7 @@ pub fn index_dataflow(
     key_cols: Vec<usize>,
     as_of: Timestamp,
     shard_upper: Timestamp,
-) -> DataflowDescription<RenderPlan, CollectionMetadata> {
+) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
     let mut builder = DataflowBuilder::new("headless-index");
     builder.import_persist(
         source_id,
@@ -260,7 +265,7 @@ pub fn index_dataflow(
 fn augment(
     lowered: DataflowDescription<Plan, ()>,
     sources: &BTreeMap<GlobalId, PersistSource>,
-) -> DataflowDescription<RenderPlan, CollectionMetadata> {
+) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
     // Attach the storage metadata to each source import, looked up by id. In a live
     // controller the `upper` is the storage collection's real write frontier; the
     // caller provides it via `PersistSource::upper` to reflect the written data.
@@ -268,7 +273,7 @@ fn augment(
     for (id, import) in lowered.source_imports {
         let source = sources
             .get(&id)
-            .unwrap_or_else(|| panic!("no persist metadata registered for source {id}"));
+            .ok_or_else(|| anyhow::anyhow!("no persist metadata registered for source {id}"))?;
         let metadata = CollectionMetadata {
             persist_location: source.location.clone(),
             data_shard: source.shard,
@@ -294,13 +299,19 @@ fn augment(
     let objects_to_build = lowered
         .objects_to_build
         .into_iter()
-        .map(|object| BuildDesc {
-            id: object.id,
-            plan: RenderPlan::try_from(object.plan).expect("valid lowered plan"),
+        .map(|object| {
+            // `RenderPlan::try_from` fails (with `()`) on a structurally invalid
+            // lowered plan; surface it as an error rather than panicking.
+            let plan = RenderPlan::try_from(object.plan)
+                .map_err(|()| anyhow::anyhow!("RenderPlan conversion failed for {}", object.id))?;
+            Ok::<_, anyhow::Error>(BuildDesc {
+                id: object.id,
+                plan,
+            })
         })
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
-    DataflowDescription {
+    Ok(DataflowDescription {
         source_imports,
         objects_to_build,
         // The remaining fields carry over unchanged from the lowered dataflow.
@@ -313,7 +324,7 @@ fn augment(
         refresh_schedule: lowered.refresh_schedule,
         debug_name: lowered.debug_name,
         time_dependence: lowered.time_dependence,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -343,7 +354,8 @@ mod tests {
             vec![0],
             Timestamp::from(0),
             Timestamp::from(1),
-        );
+        )
+        .unwrap();
         // Structural assertions mirroring the spec.
         assert_eq!(df.source_imports.len(), 1);
         assert_eq!(df.objects_to_build.len(), 1);
@@ -426,7 +438,7 @@ mod tests {
         builder.build(comp_id, src.get().project(vec![0]));
         builder.as_of(Timestamp::from(0));
         builder.export_index(index_id, comp_id, vec![0]);
-        let df = builder.finish();
+        let df = builder.finish().unwrap();
 
         // One source import; the index export references the computed object.
         assert_eq!(df.source_imports.len(), 1);
