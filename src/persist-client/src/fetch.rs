@@ -59,23 +59,26 @@ use crate::schema::{PartMigration, SchemaCache};
 
 pub(crate) const FETCH_SEMAPHORE_COST_ADJUSTMENT: Config<f64> = Config::new(
     "persist_fetch_semaphore_cost_adjustment",
-    // We use `encoded_size_bytes` as the number of permits, but the parsed size
-    // is larger than the encoded one, so adjust it. This default value is from
-    // eyeballing graphs in experiments that were run on tpch loadgen data.
+    // We use `encoded_size_bytes` as the number of permits, but the decoded,
+    // heap-resident size is larger, so adjust it. This default value is from
+    // eyeballing graphs in experiments that were run on tpch loadgen data, and
+    // may need retuning now that the decoded data lands on the heap rather than
+    // in lgalloc.
     1.2,
     "\
     An adjustment multiplied by encoded_size_bytes to approximate an upper \
-    bound on the size in lgalloc, which includes the decoded version.",
+    bound on the heap size of a fetched part, which includes the decoded \
+    version.",
 );
 
 pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
     "persist_fetch_semaphore_permit_adjustment",
-    1.0,
+    0.1,
     "\
-    A limit on the number of outstanding persist bytes being fetched and \
-    parsed, expressed as a multiplier of the process's memory limit. This data \
-    all spills to lgalloc, so values > 1.0 are safe. Only applied to cc \
-    replicas.",
+    A hard bound on the outstanding persist bytes being fetched and decoded, \
+    expressed as a multiplier of the process's memory limit. Applied to all \
+    replicas. These bytes are heap-resident (there is no disk to spill to) and \
+    must coexist with the arrangements being built, so this is well below 1.0.",
 );
 
 pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
