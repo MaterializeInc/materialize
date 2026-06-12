@@ -551,6 +551,32 @@ def annotate_logged_errors(
     errors = get_errors(log_files)
 
     if not errors:
+        # No error pattern was detected in the logs and no junit report
+        # contains an error, but the test may still have failed, so annotate
+        # the failure anyway so that it doesn't go unnoticed, and show the
+        # current failures on main branch.
+        # Only fetch the main branch status when we are running in CI, but not
+        # on main, so inside of a PR or a release branch instead.
+        if (
+            ui.env_is_truthy("BUILDKITE")
+            and os.getenv("BUILDKITE_BRANCH") != "main"
+            and test_result != 0
+            and get_job_state() not in ("canceling", "canceled")
+        ):
+            annotation = Annotation(
+                suite_name=get_suite_name(),
+                buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
+                is_failure=True,
+                build_history_on_main=get_failures_on_main(test_analytics),
+                unknown_errors=[],
+                known_errors=[],
+                test_cmd=test_cmd,
+                test_desc=test_desc,
+                ignore_failure=False,
+            )
+            add_annotation_raw(style="error", markdown=annotation.to_markdown())
+
+            store_annotation_in_test_analytics(test_analytics, annotation)
         return (0, False)
 
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
@@ -761,34 +787,6 @@ def annotate_logged_errors(
         )
     except Exception as e:
         print(f"Annotating failed, continuing: {e}")
-
-    # No need for rest of the logic as no error logs were found, but since
-    # this script was called the test still failed, so showing the current
-    # failures on main branch.
-    # Only fetch the main branch status when we are running in CI, but no on
-    # main, so inside of a PR or a release branch instead.
-    if (
-        len(unknown_errors) == 0
-        and len(known_errors) == 0
-        and ui.env_is_truthy("BUILDKITE")
-        and os.getenv("BUILDKITE_BRANCH") != "main"
-        and test_result != 0
-        and get_job_state() not in ("canceling", "canceled")
-    ):
-        annotation = Annotation(
-            suite_name=get_suite_name(),
-            buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
-            is_failure=True,
-            build_history_on_main=build_history_on_main,
-            unknown_errors=[],
-            known_errors=[],
-            test_cmd=test_cmd,
-            test_desc=test_desc,
-            ignore_failure=False,
-        )
-        add_annotation_raw(style="error", markdown=annotation.to_markdown())
-
-        store_annotation_in_test_analytics(test_analytics, annotation)
 
     store_known_issues_in_test_analytics(test_analytics, known_issues)
 
