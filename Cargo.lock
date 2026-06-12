@@ -6299,8 +6299,10 @@ dependencies = [
  "mz-service",
  "mz-storage-types",
  "semver",
+ "tempfile",
  "timely",
  "tokio",
+ "tokio-stream",
  "tracing",
  "uuid",
 ]

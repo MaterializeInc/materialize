@@ -19,7 +19,7 @@ mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["tracing", "metrics", "test"] }
+mz-ore = { path = "../ore", features = ["async", "tracing", "metrics", "test"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
@@ -28,8 +28,12 @@ mz-storage-types = { path = "../storage-types" }
 semver.workspace = true
 timely.workspace = true
 tokio = { workspace = true, features = ["full"] }
+tokio-stream.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [package.metadata.cargo-udeps.ignore]
 normal = []
