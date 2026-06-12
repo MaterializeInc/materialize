@@ -8338,7 +8338,7 @@ impl<'a> Parser<'a> {
 
     fn parse_rows_from(&mut self) -> Result<TableFactor<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let functions = self.parse_comma_separated(Parser::parse_named_function)?;
+        let functions = self.parse_comma_separated(Parser::parse_windowless_function)?;
         self.expect_token(&Token::RParen)?;
         let (with_ordinality, alias) = self.parse_table_function_suffix()?;
         Ok(TableFactor::RowsFrom {
@@ -8371,6 +8371,23 @@ impl<'a> Parser<'a> {
     fn parse_named_function(&mut self) -> Result<Function<Raw>, ParserError> {
         let name = self.parse_raw_name()?;
         self.parse_function(name)
+    }
+
+    /// Parses a function call in a position that only permits "windowless"
+    /// function syntax (PostgreSQL's `func_expr_windowless`): DISTINCT,
+    /// FILTER, and OVER are not part of the grammar here, which guarantees
+    /// the planner's invariant that table functions never carry them.
+    fn parse_windowless_function(&mut self) -> Result<Function<Raw>, ParserError> {
+        let name = self.parse_raw_name()?;
+        self.expect_token(&Token::LParen)?;
+        let args = self.parse_optional_args(false)?;
+        Ok(Function {
+            name,
+            args,
+            filter: None,
+            over: None,
+            distinct: false,
+        })
     }
 
     fn parse_derived_table_factor(

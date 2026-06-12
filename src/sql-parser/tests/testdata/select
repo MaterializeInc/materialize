@@ -1387,6 +1387,29 @@ error: Expected right parenthesis, found WITH
 SELECT * FROM ROWS FROM (generate_series(1, 2) WITH ORDINALITY)
                                                ^
 
+# FILTER, OVER, and DISTINCT are not part of the grammar in ROWS FROM
+# (PostgreSQL's func_expr_windowless).
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(1, 2) FILTER (WHERE true), generate_series(3, 4))
+----
+error: Expected right parenthesis, found FILTER
+SELECT * FROM ROWS FROM (generate_series(1, 2) FILTER (WHERE true), generate_series(3, 4))
+                                               ^
+
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(1, 2) OVER (), generate_series(3, 4))
+----
+error: Expected right parenthesis, found OVER
+SELECT * FROM ROWS FROM (generate_series(1, 2) OVER (), generate_series(3, 4))
+                                               ^
+
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(DISTINCT 1, 2), generate_series(3, 4))
+----
+error: Expected right parenthesis, found number "1"
+SELECT * FROM ROWS FROM (generate_series(DISTINCT 1, 2), generate_series(3, 4))
+                                                  ^
+
 parse-statement
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY
 ----

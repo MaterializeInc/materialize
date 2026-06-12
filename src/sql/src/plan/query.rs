@@ -3279,6 +3279,10 @@ fn plan_table_function_internal(
     with_ordinality: bool,
     table_name: Option<FullItemName>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
+    // The parser rejects FILTER, OVER, and DISTINCT in every table function
+    // position (`FROM f(...)`, `ROWS FROM (...)`), and table functions in
+    // scalar position are only lifted into a `FROM` clause when all three are
+    // absent, so these are defensive.
     if filter.is_some() {
         sql_bail!("FILTER is not allowed for table functions in FROM");
     }
