@@ -4890,9 +4890,9 @@ dependencies = [
 
 [[package]]
 name = "k8s-controller"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31f3b5a24a0a44317e69d8b536f823290725f1bd3eaa6d971c98a7cf995d1ed6"
+checksum = "a9a1ba25014e0459f311fb50ece23c42905be914b2eaf66ae801feb07a80847c"
 dependencies = [
  "async-trait",
  "futures",
@@ -4900,6 +4900,7 @@ dependencies = [
  "kube-runtime",
  "rand 0.9.4",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
 ]
