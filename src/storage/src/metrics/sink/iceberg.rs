@@ -32,8 +32,6 @@ pub(crate) struct IcebergSinkMetricDefs {
     pub snapshots_committed: IntCounterVec,
     /// Commit failures in the iceberg sink.
     pub commit_failures: IntCounterVec,
-    /// Commit conflicts in the iceberg sink.
-    pub commit_conflicts: IntCounterVec,
     /// Time spent committing batches to Iceberg.
     pub commit_duration_seconds: HistogramVec,
     /// Time spent closing Iceberg DeltaWriters.
@@ -81,13 +79,6 @@ impl IcebergSinkMetricDefs {
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Sink],
             )),
-            commit_conflicts: registry.register(metric!(
-                name: "mz_sink_iceberg_commit_conflicts",
-                help: "Number of commit conflicts in the iceberg sink",
-                var_labels: ["sink_id", "worker_id"],
-                visibility: MetricVisibility::Public,
-                tags: [MetricTag::Sink],
-            )),
             commit_duration_seconds: registry.register(metric!(
                 name: "mz_sink_iceberg_commit_duration_seconds",
                 help: "Time spent committing batches to Iceberg in seconds",
@@ -117,8 +108,6 @@ pub(crate) struct IcebergSinkMetrics {
     pub snapshots_committed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Number of commit failures in the iceberg sink.
     pub commit_failures: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    /// Number of commit conflicts in the iceberg sink.
-    pub commit_conflicts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Time spent committing batches to Iceberg.
     pub commit_duration_seconds: DeleteOnDropHistogram<Vec<String>>,
     /// Time spent closing Iceberg DeltaWriters.
@@ -142,9 +131,6 @@ impl IcebergSinkMetrics {
                 .get_delete_on_drop_metric(labels.clone()),
             commit_failures: defs
                 .commit_failures
-                .get_delete_on_drop_metric(labels.clone()),
-            commit_conflicts: defs
-                .commit_conflicts
                 .get_delete_on_drop_metric(labels.clone()),
             commit_duration_seconds: defs
                 .commit_duration_seconds
