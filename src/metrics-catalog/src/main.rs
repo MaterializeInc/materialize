@@ -61,6 +61,11 @@ struct Catalog {
 struct MetricDoc {
     name: String,
     help: String,
+    /// The metric's label keys: the union of its `var_labels` and the keys of
+    /// its `const_labels`, sorted and deduplicated. Omitted from the YAML when
+    /// the metric has no labels.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    labels: Vec<String>,
     /// Repo-relative path to the file the metric is defined in.
     source: String,
     /// Whether customers should build dashboards and alerts on this metric.
@@ -69,14 +74,20 @@ struct MetricDoc {
 
 /// Parses the token body of a `metric!` invocation. Mirrors the grammar in
 /// `mz_ore::metric!`.
-/// Only `name`, `help`, `subsystem`, and `visibility` are retained; the
-/// remaining fields are consumed but discarded so token parsing stays in sync
-/// with the real macro grammar.
+/// Only `name`, `help`, `subsystem`, `visibility`, and the label keys
+/// (`var_labels` and the keys of `const_labels`) are retained; the remaining
+/// fields are consumed but discarded so token parsing stays in sync with the
+/// real macro grammar.
 struct MetricArgs {
     name: Option<Expr>,
     help: Option<Expr>,
     subsystem: Option<Expr>,
     visibility: Option<Expr>,
+    /// The keys of `const_labels` (the `k` in each `k => v` pair); the values
+    /// are dropped.
+    const_label_keys: Vec<Expr>,
+    /// The `var_labels` names.
+    var_labels: Vec<Expr>,
 }
 
 impl Parse for MetricArgs {
@@ -86,6 +97,8 @@ impl Parse for MetricArgs {
             help: None,
             subsystem: None,
             visibility: None,
+            const_label_keys: Vec::new(),
+            var_labels: Vec::new(),
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -95,24 +108,26 @@ impl Parse for MetricArgs {
                 "help" => args.help = Some(input.parse()?),
                 "subsystem" => args.subsystem = Some(input.parse()?),
                 "visibility" => args.visibility = Some(input.parse()?),
-                // We don't care about const_labels, var_labels, or rules, but still need to parse
-                // them to stay in sync.
+                // Retain the label keys; the const_label *values* are consumed
+                // but discarded.
                 "const_labels" => {
                     let content;
                     braced!(content in input);
                     while !content.is_empty() {
-                        let _k: Expr = content.parse()?;
+                        let k: Expr = content.parse()?;
                         content.parse::<Token![=>]>()?;
                         let _v: Expr = content.parse()?;
+                        args.const_label_keys.push(k);
                         if content.peek(Token![,]) {
                             content.parse::<Token![,]>()?;
                         }
                     }
                 }
-                "rules" | "var_labels" => {
+                "var_labels" => {
                     let content;
                     bracketed!(content in input);
-                    let _ = Punctuated::<Expr, Token![,]>::parse_terminated(&content)?;
+                    let labels = Punctuated::<Expr, Token![,]>::parse_terminated(&content)?;
+                    args.var_labels.extend(labels);
                 }
                 _ => {
                     // Unknown field; consume one expression to stay in sync.
@@ -142,9 +157,20 @@ impl MetricArgs {
             None => name,
         };
         let visibility = visibility_from_expr(self.visibility.as_ref());
+        // A metric's labels are the union of its `var_labels` and the keys of
+        // its `const_labels`.
+        let mut labels: Vec<String> = self
+            .const_label_keys
+            .iter()
+            .chain(self.var_labels.iter())
+            .map(expr_to_string)
+            .collect();
+        labels.sort();
+        labels.dedup();
         MetricDoc {
             name,
             help: self.help.as_ref().map(expr_to_string).unwrap_or_default(),
+            labels,
             source: source.to_owned(),
             visibility,
         }
@@ -358,6 +384,8 @@ fn run() -> anyhow::Result<()> {
         entries.push(MetricDoc {
             name,
             help,
+            // TODO (SangJunBak): Populate labels
+            labels: Vec::new(),
             source: source.to_owned(),
             visibility: MetricVisibility::Internal,
         });
@@ -368,6 +396,8 @@ fn run() -> anyhow::Result<()> {
         entries.push(MetricDoc {
             name,
             help,
+            // TODO (SangJunBak): Populate labels
+            labels: Vec::new(),
             source: source.to_owned(),
             visibility: MetricVisibility::Internal,
         });
@@ -486,6 +516,8 @@ mod tests {
         );
         assert_eq!(doc.name, "compute_step_duration_seconds");
         assert_eq!(doc.help, "The time spent in each compute step_or_park call");
+        // `var_labels` plus the keys of `const_labels`, sorted.
+        assert_eq!(doc.labels, vec!["cluster", "worker_id"]);
     }
 
     /// Each optional `metric!` field parses on its own alongside the required
@@ -507,11 +539,44 @@ mod tests {
         }
     }
 
-    /// Empty `var_labels`/`rules` collections parse.
+    /// Empty `var_labels`/`rules` collections parse, and yield no labels.
     #[mz_ore::test]
     fn parses_empty_collections() {
         let doc = parse_metric(r#"metric!(name: "mz_foo", help: "h", var_labels: [], rules: [])"#);
         assert_eq!(doc.name, "mz_foo");
+        assert!(doc.labels.is_empty());
+    }
+
+    /// `var_labels` and the keys of `const_labels` are merged into a single
+    /// sorted, deduplicated `labels` list; the const_label *values* are dropped.
+    #[mz_ore::test]
+    fn collects_and_merges_label_keys() {
+        let doc = parse_metric(
+            r#"metric!(
+                name: "mz_foo",
+                help: "h",
+                const_labels: {"cluster" => "compute", "build_type" => "release"},
+                var_labels: ["worker_id", "command_type"],
+            )"#,
+        );
+        assert_eq!(
+            doc.labels,
+            vec!["build_type", "cluster", "command_type", "worker_id"]
+        );
+    }
+
+    /// Only `var_labels`, no `const_labels`.
+    #[mz_ore::test]
+    fn collects_var_labels_only() {
+        let doc = parse_metric(r#"metric!(name: "mz_foo", help: "h", var_labels: ["source_id"])"#);
+        assert_eq!(doc.labels, vec!["source_id"]);
+    }
+
+    /// A metric with no `var_labels` or `const_labels` has no labels.
+    #[mz_ore::test]
+    fn no_labels_renders_as_empty() {
+        let doc = parse_metric(r#"metric!(name: "mz_foo", help: "h")"#);
+        assert!(doc.labels.is_empty());
     }
 
     /// Multiple `const_labels` pairs, with a trailing comma inside the braces.
