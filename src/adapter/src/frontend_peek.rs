@@ -218,8 +218,16 @@ impl PeekClient {
         // emitting; non-streaming arms emit via `log_ended_execution`.
         logging_guard.defuse();
 
+        let mut end_already_logged = false;
         let result = self
-            .try_frontend_peek_inner(session, catalog, stmt, params, statement_logging_id)
+            .try_frontend_peek_inner(
+                session,
+                catalog,
+                stmt,
+                params,
+                statement_logging_id,
+                &mut end_already_logged,
+            )
             .await;
 
         // Log the end of execution if we are logging this statement and
@@ -268,6 +276,12 @@ impl PeekClient {
                 // can adjust the `From` impl to do exactly what we need here,
                 // so the special cases above won't be needed.
                 Ok(Some(resp)) => resp.into(),
+                // A concurrent teardown (e.g. a `DROP CLUSTER`) already retired
+                // and logged the end of this peek on the coordinator; logging
+                // again would double-end and panic in `end_statement_execution`.
+                Err(_) if end_already_logged => {
+                    return result;
+                }
                 Err(e) => StatementEndedExecutionReason::Errored {
                     error: e.to_string(),
                 },
@@ -288,6 +302,7 @@ impl PeekClient {
         stmt: Option<Arc<Statement<Raw>>>,
         params: Params,
         statement_logging_id: Option<crate::statement_logging::StatementLoggingId>,
+        end_already_logged: &mut bool,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
@@ -1327,6 +1342,7 @@ impl PeekClient {
                             session.conn_id().clone(),
                             source_ids,
                             watch_set,
+                            end_already_logged,
                         )
                         .await?
                     }
