@@ -178,32 +178,45 @@ impl OauthMetadataMetrics {
 /// routes. Derived once per listener from its authenticator and consulted
 /// by both the 401 `WWW-Authenticate` challenge and this discovery handler,
 /// so the two never disagree about whether OAuth is on offer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum McpOAuthDiscovery {
     /// The listener validates no OAuth bearer token, so there is no flow to
-    /// advertise. Covers `None`, `Password`, and `Sasl`.
+    /// advertise. Covers `None`, `Password`, and `Sasl`, plus `Frontegg`
+    /// when no issuer URL is configured.
     Disabled,
     /// Self-managed OIDC: the authorization server is the `oidc_issuer`
     /// dyncfg, read at request time so an operator can change it without a
     /// restart.
     Oidc,
-    // Frontegg (cloud) validates tokens against its own pre-shared key
-    // rather than `oidc_issuer`, and its authorization server is the
-    // configured Frontegg URL. Advertising it needs a `Frontegg { issuer }`
-    // arm here plus edge plumbing; tracked in DEX-31.
+    /// Frontegg (cloud): the authorization server is the workspace URL
+    /// supplied at startup via `--frontegg-oauth-issuer-url`.
+    Frontegg { issuer: String },
 }
 
 impl McpOAuthDiscovery {
     /// The single mapping from a listener's authenticator to its OAuth
-    /// advertisement behavior. Only `Oidc` validates bearer tokens against
-    /// `oidc_issuer`, so only `Oidc` advertises today.
-    pub(crate) fn for_authenticator(kind: listeners::AuthenticatorKind) -> Self {
-        match kind {
-            listeners::AuthenticatorKind::Oidc => Self::Oidc,
-            listeners::AuthenticatorKind::Frontegg
-            | listeners::AuthenticatorKind::Password
-            | listeners::AuthenticatorKind::Sasl
-            | listeners::AuthenticatorKind::None => Self::Disabled,
+    /// advertisement behavior. Frontegg requires a valid issuer URL;
+    /// otherwise falls back to `Disabled`.
+    pub(crate) fn for_authenticator(
+        kind: listeners::AuthenticatorKind,
+        frontegg_oauth_issuer_url: Option<&str>,
+    ) -> Self {
+        match (kind, frontegg_oauth_issuer_url) {
+            (listeners::AuthenticatorKind::Oidc, _) => Self::Oidc,
+            (listeners::AuthenticatorKind::Frontegg, Some(issuer)) => {
+                if let Err(err) = validate_issuer_url(issuer) {
+                    warn!(
+                        error = %err,
+                        "frontegg-oauth-issuer-url is invalid; MCP OAuth discovery disabled"
+                    );
+                    Self::Disabled
+                } else {
+                    Self::Frontegg {
+                        issuer: issuer.to_string(),
+                    }
+                }
+            }
+            _ => Self::Disabled,
         }
     }
 
@@ -241,9 +254,11 @@ pub(crate) async fn handle_protected_resource_metadata(
     Extension(metrics): Extension<OauthMetadataMetrics>,
     req: Request,
 ) -> Response {
+    // Early-return for listeners that don't advertise OAuth, before we touch
+    // request headers. Keeps the response 404 even when `Host` is malformed,
+    // so probes can't distinguish "Disabled listener" from "non-existent
+    // listener" by the status code.
     if !config.discovery.is_enabled() {
-        // Listener validates no OAuth bearer token (None/Password/Sasl), so
-        // there is no authorization flow to advertise.
         metrics.inc(MetricStatus::Disabled);
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -257,51 +272,62 @@ pub(crate) async fn handle_protected_resource_metadata(
     };
     let resource = format!("{PUBLISHED_SCHEME}://{host}/api/mcp");
 
-    let adapter_client =
-        match tokio::time::timeout(ADAPTER_WAIT_TIMEOUT, adapter_client_rx.clone()).await {
-            Ok(Ok(client)) => client,
-            Ok(Err(_)) | Err(_) => {
-                metrics.inc(MetricStatus::AdapterUnavailable);
-                return (StatusCode::SERVICE_UNAVAILABLE, "adapter not ready").into_response();
+    let issuer = match &config.discovery {
+        McpOAuthDiscovery::Disabled => unreachable!("handled above"),
+        McpOAuthDiscovery::Frontegg { issuer } => {
+            // Validated once at startup in `for_authenticator`; trusted here.
+            issuer.clone()
+        }
+        McpOAuthDiscovery::Oidc => {
+            let adapter_client =
+                match tokio::time::timeout(ADAPTER_WAIT_TIMEOUT, adapter_client_rx.clone()).await {
+                    Ok(Ok(client)) => client,
+                    Ok(Err(_)) | Err(_) => {
+                        metrics.inc(MetricStatus::AdapterUnavailable);
+                        return (StatusCode::SERVICE_UNAVAILABLE, "adapter not ready")
+                            .into_response();
+                    }
+                };
+            let system_vars = adapter_client.get_system_vars().await;
+            let Some(issuer) = OIDC_ISSUER.get(system_vars.dyncfgs()) else {
+                // No OAuth authorization server is configured. Per RFC 9728 the
+                // document MUST contain at least one entry in
+                // `authorization_servers`, so the honest response is 404 rather
+                // than an empty document that misleads the client.
+                warn!("oauth-protected-resource: oidc_issuer is unset; cannot publish");
+                metrics.inc(MetricStatus::NoIssuer);
+                return StatusCode::NOT_FOUND.into_response();
+            };
+            if let Err(err) = validate_issuer_url(&issuer) {
+                // Don't echo the issuer into the WARN: a userinfo-bearing value
+                // would turn this log line into a credential dump. The error
+                // reason is specific enough.
+                warn!(error = %err, "oauth-protected-resource: refusing to publish invalid oidc_issuer");
+                metrics.inc(MetricStatus::InvalidIssuer);
+                return (StatusCode::SERVICE_UNAVAILABLE, err).into_response();
             }
-        };
-    let system_vars = adapter_client.get_system_vars().await;
-    let Some(issuer) = OIDC_ISSUER.get(system_vars.dyncfgs()) else {
-        // No OAuth authorization server is configured. Per RFC 9728 the
-        // document MUST contain at least one entry in
-        // `authorization_servers`, so the honest response is 404 rather
-        // than an empty document that misleads the client.
-        warn!("oauth-protected-resource: oidc_issuer is unset; cannot publish");
-        metrics.inc(MetricStatus::NoIssuer);
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    if let Err(err) = validate_issuer_url(&issuer) {
-        // Don't echo the issuer into the WARN: a userinfo-bearing value
-        // would turn this log line into a credential dump. The error
-        // reason is specific enough.
-        warn!(error = %err, "oauth-protected-resource: refusing to publish invalid oidc_issuer");
-        metrics.inc(MetricStatus::InvalidIssuer);
-        return (StatusCode::SERVICE_UNAVAILABLE, err).into_response();
-    }
 
-    // We still publish when no audience is configured (mirroring the
-    // authenticator, which warns and skips `aud` validation), but a resource
-    // server that does not bind tokens to its own audience is exposed to
-    // same-issuer token reuse, so make the gap visible to operators.
-    if OIDC_AUDIENCE
-        .get(system_vars.dyncfgs())
-        .as_array()
-        .is_none_or(|audiences| audiences.is_empty())
-    {
-        warn!(
-            "oauth-protected-resource: publishing with oidc_audience unset; tokens from this \
-             issuer are not audience-bound to this resource"
-        );
-    }
+            // We still publish when no audience is configured (mirroring the
+            // authenticator, which warns and skips `aud` validation), but a resource
+            // server that does not bind tokens to its own audience is exposed to
+            // same-issuer token reuse, so make the gap visible to operators.
+            if OIDC_AUDIENCE
+                .get(system_vars.dyncfgs())
+                .as_array()
+                .is_none_or(|audiences| audiences.is_empty())
+            {
+                warn!(
+                    "oauth-protected-resource: publishing with oidc_audience unset; tokens from \
+                     this issuer are not audience-bound to this resource"
+                );
+            }
+            issuer.to_string()
+        }
+    };
 
     let metadata = ProtectedResourceMetadata {
         resource,
-        authorization_servers: vec![issuer.to_string()],
+        authorization_servers: vec![issuer],
         bearer_methods_supported: vec!["header".to_string()],
         scopes_supported: vec![MCP_SCOPE.to_string()],
     };
@@ -647,31 +673,58 @@ mod tests {
         }
     }
 
-    /// Pin the authenticator-to-discovery mapping. Today only `Oidc`
-    /// advertises OAuth; if Frontegg, Password, Sasl, or None flips to
-    /// enabled by accident, MCP clients would be steered into a flow
-    /// the listener can't honour.
+    /// Pin the authenticator-to-discovery mapping so a refactor doesn't
+    /// silently steer MCP clients into a flow the listener can't honour.
     #[mz_ore::test]
     fn test_mcp_oauth_discovery_for_authenticator() {
         use listeners::AuthenticatorKind;
+        // Oidc always advertises, regardless of the Frontegg issuer URL.
+        for issuer in [None, Some("https://ignored.example.com")] {
+            assert_eq!(
+                McpOAuthDiscovery::for_authenticator(AuthenticatorKind::Oidc, issuer),
+                McpOAuthDiscovery::Oidc,
+            );
+        }
+        // Frontegg requires a valid issuer URL; absent or invalid → Disabled.
         assert_eq!(
-            McpOAuthDiscovery::for_authenticator(AuthenticatorKind::Oidc),
-            McpOAuthDiscovery::Oidc,
+            McpOAuthDiscovery::for_authenticator(AuthenticatorKind::Frontegg, None),
+            McpOAuthDiscovery::Disabled,
         );
+        assert_eq!(
+            McpOAuthDiscovery::for_authenticator(AuthenticatorKind::Frontegg, Some("not a url"),),
+            McpOAuthDiscovery::Disabled,
+        );
+        assert_eq!(
+            McpOAuthDiscovery::for_authenticator(
+                AuthenticatorKind::Frontegg,
+                Some("https://acme.frontegg.com"),
+            ),
+            McpOAuthDiscovery::Frontegg {
+                issuer: "https://acme.frontegg.com".to_string(),
+            },
+        );
+        // Non-token authenticators stay disabled even with an issuer URL set.
         for kind in [
             AuthenticatorKind::None,
             AuthenticatorKind::Password,
-            AuthenticatorKind::Frontegg,
             AuthenticatorKind::Sasl,
         ] {
-            assert_eq!(
-                McpOAuthDiscovery::for_authenticator(kind),
-                McpOAuthDiscovery::Disabled,
-                "{kind:?} must not advertise OAuth until explicitly wired up",
-            );
+            for issuer in [None, Some("https://acme.frontegg.com")] {
+                assert_eq!(
+                    McpOAuthDiscovery::for_authenticator(kind, issuer),
+                    McpOAuthDiscovery::Disabled,
+                    "{kind:?} must not advertise OAuth",
+                );
+            }
         }
         assert!(McpOAuthDiscovery::Oidc.is_enabled());
         assert!(!McpOAuthDiscovery::Disabled.is_enabled());
+        assert!(
+            McpOAuthDiscovery::Frontegg {
+                issuer: "https://acme.frontegg.com".to_string(),
+            }
+            .is_enabled()
+        );
     }
 
     /// Rejects values that would confuse clients downstream or leak

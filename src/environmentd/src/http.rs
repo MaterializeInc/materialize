@@ -172,6 +172,7 @@ pub struct HttpConfig {
     /// today, and an attacker reaching the server directly can otherwise
     /// poison the published metadata URLs.
     pub http_host_name: Option<String>,
+    pub frontegg_oauth_issuer_url: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
@@ -230,6 +231,7 @@ impl HttpServer {
             active_connection_counter,
             helm_chart_version,
             http_host_name,
+            frontegg_oauth_issuer_url,
             concurrent_webhook_req,
             metrics,
             metrics_registry,
@@ -243,6 +245,14 @@ impl HttpServer {
     ) -> HttpServer {
         let tls_enabled = tls.is_some();
         let webhook_cache = WebhookAppenderCache::new();
+
+        // Compute OAuth discovery once per listener so the Bearer challenge
+        // and the discovery handler always agree, and the middleware doesn't
+        // re-derive (and re-allocate the Frontegg issuer) on each request.
+        let oauth_discovery = Arc::new(oauth_metadata::McpOAuthDiscovery::for_authenticator(
+            authenticator_kind,
+            frontegg_oauth_issuer_url.as_deref(),
+        ));
 
         // Create secure session store and manager
         let session_store = TowerSessionMemoryStore::default();
@@ -552,9 +562,7 @@ impl HttpServer {
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(oauth_metadata::DiscoveryConfig {
                     http_host_name: http_host_name.clone(),
-                    discovery: oauth_metadata::McpOAuthDiscovery::for_authenticator(
-                        authenticator_kind,
-                    ),
+                    discovery: (*oauth_discovery).clone(),
                 }))
                 .layer(Extension(oauth_metadata_metrics.clone()));
             router = router.merge(oauth_metadata_router);
@@ -589,6 +597,7 @@ impl HttpServer {
                 .layer(auth_middleware.clone())
                 .layer(Extension(BearerChallengeConfig {
                     scope: oauth_metadata::MCP_SCOPE,
+                    discovery: Arc::clone(&oauth_discovery),
                 }))
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()))
@@ -959,6 +968,9 @@ where
 pub(crate) struct BearerChallengeConfig {
     /// OAuth scope advertised in the `Bearer` challenge's `scope=` parameter.
     pub scope: &'static str,
+    /// Precomputed once at server build time and shared with the discovery
+    /// handler so the two never disagree.
+    pub discovery: Arc<oauth_metadata::McpOAuthDiscovery>,
 }
 
 /// Per-request decision about which `WWW-Authenticate` challenges to emit
@@ -1204,7 +1216,7 @@ async fn http_auth(
             .any(|prefix| path.starts_with(prefix))
         || bearer_config.is_some();
     let (bearer_resource_metadata, bearer_scope) = if let Some(config) = &bearer_config
-        && oauth_metadata::McpOAuthDiscovery::for_authenticator(authenticator_kind).is_enabled()
+        && config.discovery.is_enabled()
     {
         (
             oauth_metadata::metadata_url(&req, http_host_name.as_deref()),
