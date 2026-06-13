@@ -380,24 +380,22 @@ fn run() -> anyhow::Result<()> {
     // are assembled at macro-expansion time (e.g. `concat!(stringify!(...))`),
     // so `syn` can't see them. Pull those directly from the crate that defines
     // them. See `mz_metrics::describe_metrics`.
-    for (name, help, source) in mz_metrics::describe_metrics() {
+    for (name, help, labels, source) in mz_metrics::describe_metrics() {
         entries.push(MetricDoc {
             name,
             help,
-            // TODO (SangJunBak): Populate labels
-            labels: Vec::new(),
+            labels,
             source: source.to_owned(),
             visibility: MetricVisibility::Internal,
         });
     }
 
     // Pull tokio metrics
-    for (name, help, source) in mz_ore::metrics::describe_runtime_metrics() {
+    for (name, help, labels, source) in mz_ore::metrics::describe_runtime_metrics() {
         entries.push(MetricDoc {
             name,
             help,
-            // TODO (SangJunBak): Populate labels
-            labels: Vec::new(),
+            labels,
             source: source.to_owned(),
             visibility: MetricVisibility::Internal,
         });

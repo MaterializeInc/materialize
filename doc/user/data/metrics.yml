@@ -702,94 +702,140 @@ metrics:
   visibility: internal
 - name: mz_metrics_lgalloc_allocations_total
   help: Number of region allocations in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_area_total_bytes
   help: Number of bytes in all areas in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_areas_total
   help: Number of areas backing size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_clean_regions_bytes_total
   help: Number of clean regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_clean_regions_total
   help: Number of clean regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_clear_eager_bytes_total
   help: Number of thread regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_clear_eager_total
   help: Number of thread regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_clear_slow_bytes_total
   help: Number of thread regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_clear_slow_total
   help: Number of thread regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_deallocations_total
   help: Number of region deallocations for size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_file_allocated_size_bytes
   help: Sum of allocated sizes in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_file_size_bytes
   help: Sum of file sizes in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_free_regions_bytes_total
   help: Number of free regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_free_regions_total
   help: Number of free regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_global_regions_bytes_total
   help: Number of global regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_global_regions_total
   help: Number of global regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_refill_total
   help: Number of area refills for size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_slow_path_total
   help: Number of slow path region allocations for size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_thread_regions_bytes_total
   help: Number of thread regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_thread_regions_total
   help: Number of thread regions in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_vm_active_bytes
   help: Sum of active sizes in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_vm_dirty_bytes
   help: Sum of dirty sizes in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_lgalloc_vm_mapped_bytes
   help: Sum of mapped sizes in size class
+  labels:
+  - size_class
   source: src/metrics/src/lgalloc.rs
   visibility: internal
 - name: mz_metrics_libc_ru_inblock_total
@@ -3084,82 +3130,122 @@ metrics:
   visibility: internal
 - name: mz_tokio_blocking_queue_depth
   help: The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_budget_forced_yield_count
   help: The number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_global_queue_depth
   help: The number of tasks currently scheduled in the runtime's global queue.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_num_alive_tasks
   help: The current number of alive tasks in the runtime.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_num_blocking_threads
   help: The number of additional threads spawned by the runtime.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_num_idle_blocking_threads
   help: The number of idle threads which have spawned by the runtime for spawn_blocking calls.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_num_workers
   help: The number of worker threads used by the runtime.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_remote_schedule_count
   help: The number of tasks scheduled from outside of the runtime.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_spawned_tasks_count
   help: The number of tasks spawned in this runtime since it was created.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_local_queue_depth
   help: The number of tasks currently scheduled in the workers' local queues.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_local_schedule_count
   help: The number of tasks scheduled from within the runtime on the given worker's local queue.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_mean_poll_time
   help: The mean duration of task polls in seconds.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_noop_count
   help: The number of times the given worker thread unparked but performed no work before parking again.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_overflow_count
   help: The number of times the given worker thread saturated its local queue.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_park_count
   help: The total number of times the worker threads have parked.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_park_unpark_count
   help: The total number of times the worker threads have parked and unparked.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_poll_count
   help: The number of tasks the given worker thread has polled.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_steal_count
   help: The number of tasks the given worker thread stole from another worker thread.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_steal_operations
   help: The number of times the given worker thread stole tasks from another worker thread.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_tokio_worker_total_busy_duration
   help: The amount of time the worker threads have been busy, in seconds.
+  labels:
+  - runtime
   source: src/ore/src/metrics.rs
   visibility: internal
 - name: mz_ts_oracle_batched_op_count
