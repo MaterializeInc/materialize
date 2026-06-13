@@ -58,6 +58,7 @@
 
   {{ create_indexes(target_relation) }}
   {% do persist_docs(target_relation, model) %}
+  {% do materialize__alter_owner(target_relation) %}
 
   {{ run_hooks(post_hooks, inside_transaction=False) }}
   {{ run_hooks(post_hooks, inside_transaction=True) }}
