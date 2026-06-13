@@ -87,12 +87,16 @@ metrics:
   - session_type
   source: src/adapter/src/metrics.rs
   visibility: public
+  tags:
+  - environment
 - name: mz_active_subscribes
   help: The number of active SUBSCRIBE queries.
   labels:
   - session_type
   source: src/adapter/src/metrics.rs
   visibility: public
+  tags:
+  - environment
 - name: mz_adapter_commands
   help: The total number of adapter commands issued of the given type since process start.
   labels:
@@ -101,6 +105,8 @@ metrics:
   - status
   source: src/adapter/src/metrics.rs
   visibility: public
+  tags:
+  - environment
 - name: mz_append_table_duration_seconds
   help: Latency for appending to any (user or system) table.
   source: src/adapter/src/metrics.rs
@@ -121,6 +127,8 @@ metrics:
   - worker_id
   source: src/compute/src/metrics.rs
   visibility: public
+  tags:
+  - compute
 - name: mz_arrangement_sizes_collection_time_seconds
   help: Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.
   source: src/adapter/src/metrics.rs
@@ -300,6 +308,8 @@ metrics:
   - size
   source: src/adapter/src/coord/info_metrics.rs
   visibility: public
+  tags:
+  - compute
 - name: mz_cluster_server_last_command_received
   help: The time (in seconds since the Unix epoch) at which the server last received data from the controller, including CTP keepalives. Used to detect controller connections that are no longer reachable.
   labels:
@@ -373,6 +383,8 @@ metrics:
   - replica_id
   source: src/compute-client/src/metrics.rs
   visibility: public
+  tags:
+  - compute
 - name: mz_compute_controller_collection_count
   help: The number of installed compute collections.
   labels:
@@ -424,6 +436,8 @@ metrics:
   - replica_id
   source: src/compute-client/src/metrics.rs
   visibility: public
+  tags:
+  - compute
 - name: mz_compute_controller_peek_count
   help: The number of pending peeks.
   labels:
@@ -475,6 +489,8 @@ metrics:
   - result
   source: src/compute-client/src/metrics.rs
   visibility: public
+  tags:
+  - compute
 - name: mz_compute_peeks_total
   help: The total number of peeks served.
   labels:
@@ -508,6 +524,8 @@ metrics:
   - worker_id
   source: src/compute/src/metrics.rs
   visibility: public
+  tags:
+  - compute
 - name: mz_compute_response_message_bytes_total
   help: The total number of bytes sent in compute response messages.
   labels:
@@ -572,6 +590,10 @@ metrics:
   - replica_id
   source: src/cluster-client/src/metrics.rs
   visibility: public
+  tags:
+  - compute
+  - source
+  - sink
 - name: mz_dataflow_wallclock_lag_seconds_count
   help: The total count of dataflow wallclock lag measurements.
   labels:
@@ -947,6 +969,8 @@ metrics:
   - type
   source: src/adapter/src/coord/info_metrics.rs
   visibility: public
+  tags:
+  - environment
 - name: mz_optimization_notices
   help: Number of optimization notices per notice type.
   labels:
@@ -2313,6 +2337,8 @@ metrics:
   - statement_type
   source: src/adapter/src/metrics.rs
   visibility: public
+  tags:
+  - environment
 - name: mz_replica_info
   help: Maps cluster replica IDs to the replica's name and size. Constant 1.
   labels:
@@ -2322,6 +2348,8 @@ metrics:
   - size
   source: src/adapter/src/coord/info_metrics.rs
   visibility: public
+  tags:
+  - compute
 - name: mz_result_rows_first_to_last_byte_seconds
   help: The time from just before sending the first result row to sending a final response message after having successfully flushed the last result row to the connection. (This can span multiple FETCH statements.) (This is never observed for unbounded SUBSCRIBEs, i.e., which have no last result row.)
   labels:
@@ -2369,6 +2397,8 @@ metrics:
   - worker_id
   source: src/storage/src/statistics.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_bytes_staged
   help: The number of bytes staged but possibly not committed to the sink.
   labels:
@@ -2376,6 +2406,8 @@ metrics:
   - worker_id
   source: src/storage/src/statistics.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_consumed_progress_records
   help: The number of progress records consumed by the sink.
   labels:
@@ -2389,6 +2421,8 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/sink/iceberg.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_iceberg_commit_duration_seconds
   help: Time spent committing batches to Iceberg in seconds
   labels:
@@ -2396,6 +2430,8 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/sink/iceberg.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_iceberg_commit_failures
   help: Number of commit failures in the iceberg sink
   labels:
@@ -2403,6 +2439,8 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/sink/iceberg.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_iceberg_data_files_written
   help: Number of data files written by the iceberg sink
   labels:
@@ -2410,6 +2448,8 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/sink/iceberg.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_iceberg_delete_files_written
   help: Number of delete files written by the iceberg sink
   labels:
@@ -2417,6 +2457,8 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/sink/iceberg.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_iceberg_snapshots_committed
   help: Number of snapshots committed by the iceberg sink
   labels:
@@ -2424,6 +2466,8 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/sink/iceberg.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_iceberg_stashed_rows
   help: Number of stashed rows in the iceberg sink
   labels:
@@ -2447,6 +2491,8 @@ metrics:
   - type
   source: src/adapter/src/coord/info_metrics.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_messages_committed
   help: The number of messages committed to the sink.
   labels:
@@ -2479,12 +2525,16 @@ metrics:
   - sink_id
   source: src/storage/src/metrics/sink/kafka.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_rdkafka_disconnects
   help: The number of disconnections, whether triggered by the broker, the network, the load balancer, or something else across all brokers.
   labels:
   - sink_id
   source: src/storage/src/metrics/sink/kafka.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_rdkafka_msg_cnt
   help: The current number of messages in producer queues.
   labels:
@@ -2509,6 +2559,8 @@ metrics:
   - sink_id
   source: src/storage/src/metrics/sink/kafka.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_rdkafka_req_timeouts
   help: The total number of requests that timed out across all brokers.
   labels:
@@ -2533,6 +2585,8 @@ metrics:
   - sink_id
   source: src/storage/src/metrics/sink/kafka.rs
   visibility: public
+  tags:
+  - sink
 - name: mz_sink_rdkafka_txmsg_bytes
   help: The total number of bytes transmitted (produced) to brokers.
   labels:
@@ -2586,6 +2640,8 @@ metrics:
   - worker_id
   source: src/storage/src/statistics.rs
   visibility: public
+  tags:
+  - source
 - name: mz_source_commit_upper_accepted_times
   help: The number of accepted remap bindings that are held in the reclock commit upper operator.
   labels:
@@ -2634,6 +2690,8 @@ metrics:
   - type
   source: src/adapter/src/coord/info_metrics.rs
   visibility: public
+  tags:
+  - source
 - name: mz_source_messages_received
   help: The number of raw messages the worker has received from upstream.
   labels:
@@ -2642,12 +2700,16 @@ metrics:
   - worker_id
   source: src/storage/src/statistics.rs
   visibility: public
+  tags:
+  - source
 - name: mz_source_offset_commit_failures
   help: A counter representing how many times we have failed to commit offsets for a source
   labels:
   - source_id
   source: src/storage/src/metrics/source.rs
   visibility: public
+  tags:
+  - source
 - name: mz_source_offset_committed
   help: The total number of _values_ (source-defined unit) we have fully processed, and storage and committed.
   labels:
@@ -2656,6 +2718,8 @@ metrics:
   - worker_id
   source: src/storage/src/statistics.rs
   visibility: public
+  tags:
+  - source
 - name: mz_source_offset_known
   help: The total number of _values_ (source-defined unit) present in upstream.
   labels:
@@ -2664,6 +2728,8 @@ metrics:
   - worker_id
   source: src/storage/src/statistics.rs
   visibility: public
+  tags:
+  - source
 - name: mz_source_processed_batches
   help: A counter representing the number of persist sink batches with actual data we have successfully processed.
   labels:
