@@ -42,7 +42,6 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_license_keys::ValidatedLicenseKey;
-use mz_orchestrator::DiskLimit;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -2437,21 +2436,6 @@ impl CatalogState {
             }
         };
         Ok(location)
-    }
-
-    /// Return whether the given replica size requests a disk.
-    ///
-    /// Note that here we treat replica sizes that enable swap as _not_ requesting disk. For swap
-    /// replicas, the provided disk limit is informational and mostly ignored. Whether an instance
-    /// has access to swap depends on the configuration of the node it gets scheduled on, and is
-    /// not something we can know at this point.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the given size doesn't exist in `cluster_replica_sizes`.
-    pub(crate) fn cluster_replica_size_has_disk(&self, size: &str) -> bool {
-        let alloc = &self.cluster_replica_sizes.0[size];
-        !alloc.swap_enabled && alloc.disk_limit != Some(DiskLimit::ZERO)
     }
 
     pub(crate) fn ensure_valid_replica_size(
