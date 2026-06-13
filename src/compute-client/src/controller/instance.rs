@@ -345,7 +345,7 @@ impl Instance {
         client: ReplicaClient,
         config: ReplicaConfig,
         epoch: u64,
-    ) {
+    ) -> Result<(), read_holds::ReadHoldIssuerHungUp> {
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
         let metrics = self.metrics.for_replica(id);
@@ -359,6 +359,7 @@ impl Instance {
         );
 
         // Add per-replica collection state.
+        let mut shutdown_input = None;
         for (collection_id, collection) in &self.collections {
             // Skip log collections not maintained by this replica,
             // and collections targeted at a different replica.
@@ -378,11 +379,42 @@ impl Instance {
                 collection.read_frontier().to_owned()
             };
 
-            let input_read_holds = collection.storage_dependencies.values().cloned().collect();
+            // Cloning a `ReadHold` fails when its issuer has hung up. For these holds the issuer
+            // is the `StorageCollections`, which doesn't hang up as long as the `Instance` exists,
+            // except during process shutdown, when the tokio runtime drops tasks in arbitrary
+            // order. In that case there is no way of correctly initializing the per-replica
+            // collection state, so we give up. We still add the replica itself, to keep the
+            // bookkeeping consistent with the controller's, and then signal the unrecoverable
+            // error to the caller, which shuts the instance down.
+            let mut input_read_holds = Vec::with_capacity(collection.storage_dependencies.len());
+            let mut hung_up = Vec::new();
+            for hold in collection.storage_dependencies.values() {
+                match hold.try_clone() {
+                    Ok(hold) => input_read_holds.push(hold),
+                    Err(read_holds::ReadHoldIssuerHungUp(input_id)) => hung_up.push(input_id),
+                }
+            }
+            if !hung_up.is_empty() {
+                tracing::error!(
+                    replica_id = %id,
+                    %collection_id,
+                    ?hung_up,
+                    "giving up on adding replica collections: storage read hold issuers hung \
+                     up, the process is shutting down",
+                );
+                shutdown_input = hung_up.into_iter().next();
+                break;
+            }
+
             replica.add_collection(*collection_id, as_of, input_read_holds);
         }
 
         self.replicas.insert(id, replica);
+
+        match shutdown_input {
+            Some(input_id) => Err(read_holds::ReadHoldIssuerHungUp(input_id)),
+            None => Ok(()),
+        }
     }
 
     /// Enqueue the given response for delivery to the controller clients.
@@ -1043,6 +1075,18 @@ impl Instance {
         );
     }
 
+    /// Terminate the [`Instance::run`] loop, causing the instance task to shut down.
+    ///
+    /// Unlike [`Instance::shutdown`], this does not assert that the instance has no replicas
+    /// left. We use it to react to unrecoverable errors that can only occur during process
+    /// shutdown, such as a storage read hold issuer hanging up while we rehydrate a replica.
+    fn initiate_shutdown(&mut self) {
+        // Replacing `command_rx` with a fresh, sender-less channel makes the next `recv` in
+        // [`Instance::run`] return `None`, terminating the loop.
+        let (_tx, rx) = mpsc::unbounded_channel();
+        self.command_rx = rx;
+    }
+
     /// Sends a command to replicas of this instance.
     #[mz_ore::instrument(level = "debug")]
     fn send(&mut self, cmd: ComputeCommand) {
@@ -1148,7 +1192,14 @@ impl Instance {
         }
 
         // Add replica to tracked state.
-        self.add_replica_state(id, client, config, epoch);
+        if self.add_replica_state(id, client, config, epoch).is_err() {
+            // A storage read hold issuer hung up, which only happens during process shutdown.
+            // There is no way to correctly bring up the replica anymore, so we shut the instance
+            // down instead of running on with half-initialized replica state. `add_replica_state`
+            // has already logged the details and inserted the replica to keep our bookkeeping
+            // consistent with the controller's.
+            self.initiate_shutdown();
+        }
 
         Ok(())
     }
