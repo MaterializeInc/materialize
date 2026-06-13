@@ -18,7 +18,7 @@
 use std::process;
 
 use anyhow::{Context, bail};
-use mz_ore::metrics::MetricVisibility;
+use mz_ore::metrics::{MetricTag, MetricVisibility};
 use quote::ToTokens;
 use serde::Serialize;
 use syn::parse::{Parse, ParseStream};
@@ -50,6 +50,27 @@ fn visibility_from_expr(expr: Option<&Expr>) -> MetricVisibility {
     }
 }
 
+/// Maps an element from a `metric!`'s `tags:` expression to a [`MetricTag`].
+fn tag_from_expr(e: &Expr, source: &str) -> MetricTag {
+    let Expr::Path(path) = e else {
+        panic!(
+            "unexpected tag expression in {source}: {}",
+            e.to_token_stream()
+        );
+    };
+    let ident = match path.path.segments.last() {
+        Some(seg) => seg.ident.to_string(),
+        None => panic!("empty tag path in {source}"),
+    };
+    match ident.as_str() {
+        "Environment" => MetricTag::Environment,
+        "Compute" => MetricTag::Compute,
+        "Source" => MetricTag::Source,
+        "Sink" => MetricTag::Sink,
+        other => panic!("unknown MetricTag `{other}` in {source}"),
+    }
+}
+
 /// The catalog as serialized to YAML.
 #[derive(Serialize)]
 struct Catalog {
@@ -70,11 +91,15 @@ struct MetricDoc {
     source: String,
     /// Whether customers should build dashboards and alerts on this metric.
     visibility: MetricVisibility,
+    /// The metric's [`MetricTag`]s, in the order they're declared. Tags
+    /// categorize a metric. Omitted from the YAML when the metric is untagged.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<MetricTag>,
 }
 
 /// Parses the token body of a `metric!` invocation. Mirrors the grammar in
 /// `mz_ore::metric!`.
-/// Only `name`, `help`, `subsystem`, `visibility`, and the label keys
+/// Only `name`, `help`, `subsystem`, `visibility`, `tags`, and the label keys
 /// (`var_labels` and the keys of `const_labels`) are retained; the remaining
 /// fields are consumed but discarded so token parsing stays in sync with the
 /// real macro grammar.
@@ -83,6 +108,8 @@ struct MetricArgs {
     help: Option<Expr>,
     subsystem: Option<Expr>,
     visibility: Option<Expr>,
+    /// The `tags` entries (e.g. `MetricTag::Source`).
+    tags: Vec<Expr>,
     /// The keys of `const_labels` (the `k` in each `k => v` pair); the values
     /// are dropped.
     const_label_keys: Vec<Expr>,
@@ -97,6 +124,7 @@ impl Parse for MetricArgs {
             help: None,
             subsystem: None,
             visibility: None,
+            tags: Vec::new(),
             const_label_keys: Vec::new(),
             var_labels: Vec::new(),
         };
@@ -128,6 +156,12 @@ impl Parse for MetricArgs {
                     bracketed!(content in input);
                     let labels = Punctuated::<Expr, Token![,]>::parse_terminated(&content)?;
                     args.var_labels.extend(labels);
+                }
+                "tags" => {
+                    let content;
+                    bracketed!(content in input);
+                    let tags = Punctuated::<Expr, Token![,]>::parse_terminated(&content)?;
+                    args.tags.extend(tags);
                 }
                 _ => {
                     // Unknown field; consume one expression to stay in sync.
@@ -167,12 +201,19 @@ impl MetricArgs {
             .collect();
         labels.sort();
         labels.dedup();
+
+        let tags = self
+            .tags
+            .iter()
+            .map(|tag| tag_from_expr(tag, source))
+            .collect();
         MetricDoc {
             name,
             help: self.help.as_ref().map(expr_to_string).unwrap_or_default(),
             labels,
             source: source.to_owned(),
             visibility,
+            tags,
         }
     }
 }
@@ -387,6 +428,7 @@ fn run() -> anyhow::Result<()> {
             labels,
             source: source.to_owned(),
             visibility: MetricVisibility::Internal,
+            tags: Vec::new(),
         });
     }
 
@@ -398,6 +440,7 @@ fn run() -> anyhow::Result<()> {
             labels,
             source: source.to_owned(),
             visibility: MetricVisibility::Internal,
+            tags: Vec::new(),
         });
     }
 
@@ -690,6 +733,49 @@ mod tests {
     fn visibility_defaults_to_internal() {
         let doc = parse_metric(r#"metric!(name: "mz_foo", help: "h")"#);
         assert_eq!(doc.visibility, MetricVisibility::Internal);
+    }
+
+    /// `tags:` entries resolve to the corresponding [`MetricTag`], in
+    /// declaration order
+    #[mz_ore::test]
+    fn parses_tags() {
+        let doc = parse_metric(
+            r#"metric!(
+                name: "mz_foo",
+                help: "h",
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Source, mz_ore::metrics::MetricTag::Sink],
+            )"#,
+        );
+        assert_eq!(doc.tags, vec![MetricTag::Source, MetricTag::Sink]);
+    }
+
+    #[mz_ore::test]
+    fn parses_tags_with_trailing_comma() {
+        let doc = parse_metric(r#"metric!(name: "mz_foo", help: "h", tags: [MetricTag::Sink,])"#);
+        assert_eq!(doc.tags, vec![MetricTag::Sink]);
+    }
+
+    #[mz_ore::test]
+    fn parses_tags_with_extraneous_spaces() {
+        let doc = parse_metric(
+            r#"metric!(name: "mz_foo", help: "h", tags: [MetricTag::Sink,   MetricTag::Environment])"#,
+        );
+        assert_eq!(doc.tags, vec![MetricTag::Sink, MetricTag::Environment]);
+    }
+
+    #[mz_ore::test]
+    fn no_tags_renders_as_empty() {
+        let doc = parse_metric(r#"metric!(name: "mz_foo", help: "h")"#);
+        assert!(doc.tags.is_empty());
+        let doc = parse_metric(r#"metric!(name: "mz_foo", help: "h", tags: [])"#);
+        assert!(doc.tags.is_empty());
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "unknown MetricTag `Bogus`")]
+    fn unknown_tag_panics() {
+        parse_metric(r#"metric!(name: "mz_foo", help: "h", tags: [MetricTag::Bogus])"#);
     }
 
     /// Parses `#[<attr>] fn f() {}` and returns its attributes, so `is_test_only`
