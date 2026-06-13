@@ -12,9 +12,7 @@ disable_list: true
 
 This page lists the essential Prometheus metrics exposed by Materialize: the
 ones we recommend building dashboards and alerts on. This list may evolve as
-we add observability for new features and refine what's most useful. A `*` in
-a metric name denotes a family of metrics whose name is completed at runtime
-(for example, `mz_persist_*_bytes`).
+we add observability for new features and refine what's most useful.
 
 The metrics are grouped by the component of Materialize they describe. A
 grouping is shown only when it has at least one metric. For the complete list
