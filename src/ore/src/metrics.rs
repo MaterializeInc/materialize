@@ -146,7 +146,7 @@ pub enum MetricVisibility {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MetricTag {
-    /// Control plane metrics (client connections, availability, catalog).
+    /// SQL Control plane metrics (client connections, availability, catalog).
     Environment,
     /// Metrics for compute objects (indexes, materialized views).
     Compute,

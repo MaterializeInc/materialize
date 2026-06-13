@@ -19,7 +19,7 @@ grouping is shown only when it has at least one metric. For the complete list
 of metrics Materialize exposes, see [Appendix:
 Metrics](/manage/monitor/appendix-metrics/).
 
-{{< metrics-table visibility="public" tag="environment" heading="Environment-level metrics" description="Metrics for the control plane: client connections, availability, and the catalog." >}}
+{{< metrics-table visibility="public" tag="environment" heading="Environment-level metrics" description="Metrics for the SQL control plane: client connections, availability, and the catalog." >}}
 
 {{< metrics-table visibility="public" tag="compute" heading="Compute metrics" description="Metrics for compute objects, such as indexes and materialized views, running on [clusters](/concepts/clusters/) and their replicas." >}}
 
