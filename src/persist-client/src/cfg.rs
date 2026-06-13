@@ -312,6 +312,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::USE_CRITICAL_SINCE_CATALOG)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SOURCE)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SNAPSHOT)
+        .add(&crate::cfg::ENABLE_SCHEMA_BRANCHING)
         .add(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS)
         .add(&COMPACTION_HEURISTIC_MIN_INPUTS)
         .add(&COMPACTION_HEURISTIC_MIN_PARTS)
@@ -494,6 +495,17 @@ pub const USE_CRITICAL_SINCE_SNAPSHOT: Config<bool> = Config::new(
     "persist_use_critical_since_snapshot",
     false,
     "Use the critical since (instead of the overall since) when taking snapshots in the controller or in fast-path peeks.",
+);
+
+/// Gates the persist-layer machinery for schema branching, including
+/// `place_read_hold` / `recover_read_hold` in [`crate::branch`]. When false,
+/// the branch primitives refuse to run. The SQL layer has a separate
+/// session var (`enable_schema_branching_sql`) that gates user-facing DDL.
+pub const ENABLE_SCHEMA_BRANCHING: Config<bool> = Config::new(
+    "persist_enable_schema_branching",
+    false,
+    "Whether the persist primitives backing schema branching are enabled. \
+     When false, branch read holds cannot be placed or recovered.",
 );
 
 /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]

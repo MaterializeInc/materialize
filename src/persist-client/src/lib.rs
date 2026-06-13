@@ -55,6 +55,7 @@ use crate::write::{WriteHandle, WriterId};
 
 pub mod async_runtime;
 pub mod batch;
+pub mod branch;
 pub mod cache;
 pub mod cfg;
 pub mod cli {

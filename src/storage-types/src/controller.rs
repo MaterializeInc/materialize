@@ -28,6 +28,23 @@ use crate::errors::{CollectionMissing, DataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::SourceData;
 
+/// The source shard and branch timestamp for a forked table.
+///
+/// When set on [`CollectionMetadata`], reads merge `source_shard@branch_ts`
+/// with `data_shard@as_of` to produce the correct forked-table view.
+///
+/// `Serialize`/`Deserialize` exist because [`CollectionMetadata`] crosses
+/// the controller-to-clusterd RPC boundary inside storage commands. The
+/// field is never persisted in the durable catalog; the coordinator sets
+/// it transiently when building peek/render targets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForkSource {
+    /// The persist shard of the source (upstream) table.
+    pub source_shard: ShardId,
+    /// The timestamp at which the source shard is frozen for this fork.
+    pub branch_ts: Timestamp,
+}
+
 /// Metadata required by a storage instance to read a storage collection
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
@@ -40,6 +57,12 @@ pub struct CollectionMetadata {
     /// The shard id of the txn-wal shard, if `self.data_shard` is managed
     /// by the txn-wal system, or None if it's not.
     pub txns_shard: Option<ShardId>,
+    /// For forked tables: merge `source_shard@branch_ts` with `data_shard@as_of`.
+    /// `None` for normal (non-forked) tables.
+    ///
+    /// This field is set transiently by the coordinator when building peek
+    /// targets; it is never stored in the durable catalog.
+    pub source_for_fork: Option<ForkSource>,
 }
 
 impl crate::AlterCompatible for CollectionMetadata {
@@ -56,6 +79,9 @@ impl crate::AlterCompatible for CollectionMetadata {
             data_shard,
             relation_desc,
             txns_shard,
+            // source_for_fork is transient (set by the coordinator at peek time)
+            // and must not be compared for alter-compatibility.
+            source_for_fork: _,
         } = self;
 
         let compatibility_checks = [

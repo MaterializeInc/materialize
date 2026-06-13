@@ -268,6 +268,7 @@ mod tests {
             data_shard: shard,
             relation_desc: RelationDesc::empty(),
             txns_shard: None,
+            source_for_fork: None,
         };
 
         let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));

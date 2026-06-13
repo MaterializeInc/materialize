@@ -84,6 +84,9 @@ pub enum InvalidUsage<T> {
     CodecMismatch(Box<CodecMismatch>),
     /// An invalid usage of [crate::batch::Batch::rewrite_ts].
     InvalidRewrite(String),
+    /// A persist API gated by a dyncfg was called while the flag is off.
+    /// The string identifies the disabled feature.
+    FeatureDisabled(&'static str),
 }
 
 impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
@@ -134,6 +137,9 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
             }
             InvalidUsage::CodecMismatch(err) => std::fmt::Display::fmt(err, f),
             InvalidUsage::InvalidRewrite(err) => write!(f, "invalid rewrite: {err}"),
+            InvalidUsage::FeatureDisabled(feature) => {
+                write!(f, "{feature} is disabled by dyncfg")
+            }
         }
     }
 }

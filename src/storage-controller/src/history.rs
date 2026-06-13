@@ -277,6 +277,7 @@ mod tests {
                             Vec::<String>::new(),
                         ),
                         txns_shard: Default::default(),
+                        source_for_fork: None,
                     },
                     details: SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
                         output: LoadGeneratorOutput::Default,
@@ -316,6 +317,7 @@ mod tests {
                     Vec::<String>::new(),
                 ),
                 txns_shard: Default::default(),
+                source_for_fork: None,
             },
             source_exports,
             instance_id: StorageInstanceId::system(0).expect("0 is a valid ID"),
@@ -384,6 +386,7 @@ mod tests {
                     Vec::<String>::new(),
                 ),
                 txns_shard: Default::default(),
+                source_for_fork: None,
             },
             to_storage_metadata: CollectionMetadata {
                 persist_location: PersistLocation {
@@ -399,6 +402,7 @@ mod tests {
                     Vec::<String>::new(),
                 ),
                 txns_shard: Default::default(),
+                source_for_fork: None,
             },
             commit_interval: Default::default(),
         }

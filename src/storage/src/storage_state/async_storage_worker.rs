@@ -229,6 +229,10 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                                 data_shard,
                                 relation_desc,
                                 txns_shard,
+                                // Not relevant for source ingestion (sources are never
+                                // forked); explicitly ignored so the destructure stays
+                                // exhaustive.
+                                source_for_fork: _,
                             } = &export.storage_metadata;
                             assert_eq!(
                                 txns_shard, &None,
