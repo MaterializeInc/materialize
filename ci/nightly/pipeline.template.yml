@@ -1492,6 +1492,17 @@ steps:
               composition: launchdarkly-flag-consistency
         branches: "main"
 
+      - id: launchdarkly-reconnect
+        label: "LaunchDarkly reconnect"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        agents:
+          # Uses a mock LaunchDarkly server; needs no real credentials.
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: launchdarkly-reconnect
+
   - group: E2E
     key: e2e
     steps:
