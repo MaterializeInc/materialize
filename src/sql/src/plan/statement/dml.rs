@@ -2119,8 +2119,17 @@ pub fn plan_copy(
             if options.quote.is_some() {
                 sql_bail!("COPY TO does not support QUOTE option yet");
             }
+            if options.escape.is_some() {
+                sql_bail!("COPY TO does not support ESCAPE option yet");
+            }
             if options.null.is_some() {
                 sql_bail!("COPY TO does not support NULL option yet");
+            }
+            // `HEADER false` is the default and already honored; only an
+            // enabled header is unimplemented. Silently accepting it would
+            // make clients strip the first data row as a presumed header.
+            if options.header == Some(true) {
+                sql_bail!("COPY TO does not support HEADER option yet");
             }
             match relation {
                 CopyRelation::Named { .. } => sql_bail!("named with COPY TO STDOUT unsupported"),

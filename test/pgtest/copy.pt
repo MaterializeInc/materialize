@@ -74,3 +74,50 @@ CopyData "6,\n"
 CopyDone
 CommandComplete {"tag":"COPY 4"}
 ReadyForQuery {"status":"I"}
+
+# HEADER and ESCAPE are not implemented for COPY TO STDOUT. Ensure they error
+# rather than being silently ignored: a client that requested a header would
+# otherwise strip the first data row as a presumed header.
+send
+Query {"query": "COPY (VALUES (1, '2')) TO STDOUT WITH (FORMAT csv, HEADER)"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY TO does not support HEADER option yet"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY (VALUES (1, '2')) TO STDOUT WITH (FORMAT csv, HEADER true)"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY TO does not support HEADER option yet"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY (VALUES (1, '2')) TO STDOUT WITH (FORMAT csv, ESCAPE 'x')"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY TO does not support ESCAPE option yet"}]}
+ReadyForQuery {"status":"I"}
+
+# HEADER false is the default behavior and remains accepted.
+send
+Query {"query": "COPY (VALUES (1, '2')) TO STDOUT WITH (FORMAT csv, HEADER false)"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text","text"]}
+CopyData "1,2\n"
+CopyDone
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
