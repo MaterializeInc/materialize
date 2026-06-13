@@ -10,7 +10,6 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow.workspace = true
 aws-sdk-glue.workspace = true
 aws-smithy-runtime-api.workspace = true
 aws-types.workspace = true

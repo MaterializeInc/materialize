@@ -5846,7 +5846,6 @@ dependencies = [
 name = "mz-aws-glue-schema-registry"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "aws-sdk-glue",
  "aws-smithy-runtime-api",
  "aws-types",
