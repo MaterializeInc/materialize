@@ -266,9 +266,12 @@ Once connected to the MCP server, you can ask natural language questions like:
 | **What can I optimize to save costs?** | Queries the index advisor for materialized views that can be dematerialized and indexes that can be dropped. |
 
 The agent translates natural language questions into the appropriate system
-catalog queries, uses the [`query_system_catalog`
-tool](/integrations/mcp-server/mcp-developer-tools/#query_system_catalog) to run
-those queries, and synthesizes the results.
+catalog queries and runs them via either the
+[`query_system_catalog`](/integrations/mcp-server/mcp-developer-tools/#query_system_catalog)
+tool (catalog lookups with no cluster needed) or the
+[`query`](/integrations/mcp-server/mcp-developer-tools/#query) tool
+(`EXPLAIN ANALYZE` and read-only queries against user objects, both of which
+require a cluster), then synthesizes the results.
 
 ## Privileges
 

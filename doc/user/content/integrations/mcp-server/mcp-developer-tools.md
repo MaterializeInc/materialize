@@ -14,7 +14,8 @@ menu:
 ### `query_system_catalog`
 
 Execute a read-only SQL query restricted to system catalog tables (`mz_*`,
-`pg_catalog`, `information_schema`).
+`pg_catalog`, `information_schema`). No cluster argument; prefer this for
+catalog lookups that do not need a cluster to run on.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -34,6 +35,43 @@ Only one statement per call is allowed. Write operations (`INSERT`, `UPDATE`,
       {
         "type": "text",
         "text": "[\n  [\n    \"quickstart\",\n    \"ready\"\n  ],\n  [\n    \"mcp_cluster\",\n    \"ready\"\n  ]\n]"
+      }
+    ],
+    "isError": false
+  }
+}
+```
+
+### `query`
+
+Execute a read-only SQL query (`SELECT`, `SHOW`, or `EXPLAIN`) against any
+object the role can access, including system catalog and user objects. A
+cluster is required, which is what enables `EXPLAIN ANALYZE` and queries
+against indexed user objects.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `cluster` | string | Yes | Exact cluster name the query should run on. |
+| `sql_query` | string | Yes | `SELECT`, `SHOW`, or `EXPLAIN` statement. |
+
+Only one statement per call is allowed. Write operations (`INSERT`, `UPDATE`,
+`CREATE`, etc.) are rejected. The tool is hidden when the operator has
+disabled it via [`enable_mcp_developer_query_tool`](/integrations/mcp-server/mcp-developer-config/).
+
+For pure system catalog lookups that do not need a cluster, prefer
+[`query_system_catalog`](#query_system_catalog).
+
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    \"Explained Query (fast path):\\n  →Constant (1 rows)\\n\\nTarget cluster: quickstart\\n\"\n  ]\n]"
       }
     ],
     "isError": false
