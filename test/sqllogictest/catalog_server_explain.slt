@@ -71,7 +71,7 @@ query T multiline
 EXPLAIN INDEX "mz_catalog"."mz_cluster_replica_frontiers_ind";
 ----
 mz_catalog.mz_cluster_replica_frontiers_ind:
-  →Arrange (#0{object_id})
+  →Arrange (#0{object_id}, #1{replica_id})
     →Stream mz_catalog.mz_cluster_replica_frontiers
 
 Source mz_catalog.mz_cluster_replica_frontiers
@@ -1003,14 +1003,16 @@ mz_internal.mz_hydration_statuses:
               →Arranged mz_internal.mz_compute_hydration_times
                 Key: (#0{replica_id})
           →Differential Join %0:l0[#0{id}] » %1:mz_cluster_replica_frontiers[#0{object_id}]
-            after %1:
-              Project: #0, #10
-              Filter: (#11{write_frontier}) IS NULL
             Final closure:
               Project: #0..=#2
               Map: true
             →Arranged l0
-            →Arranged mz_catalog.mz_cluster_replica_frontiers
+            →Arrange (#0{object_id})
+              →Fused with Child Map/Filter/Project
+                Project: #0, #1
+                Filter: (#2{write_frontier}) IS NULL
+                  →Arranged mz_catalog.mz_cluster_replica_frontiers
+                    Key: (#0{object_id}, #1{replica_id})
     cte l2 =
       →Differential Join %0:mz_indexes[#0{id}] » %1:l1[#0{object_id}]
         →Arranged mz_catalog.mz_indexes
@@ -1065,10 +1067,9 @@ mz_internal.mz_hydration_statuses:
       →Arrange (#0{id}, #2{id})
         →Stream l7
     cte l9 =
-      →Differential Join %0:l8[#0{id}, #2{id}] » %1:mz_cluster_replica_frontiers[#0{object_id}, #1{replica_id}]
+      →Differential Join %1:mz_cluster_replica_frontiers[#0{object_id}, #1{replica_id}] » %0:l8[#0{id}, #2{id}]
         →Arranged l8
-        →Arrange (#0{object_id}, #1{replica_id})
-          →Arranged mz_catalog.mz_cluster_replica_frontiers
+        →Arranged mz_catalog.mz_cluster_replica_frontiers
   →Return
     →Union
       →Map/Filter/Project
@@ -6881,18 +6882,20 @@ Explained Query:
         →Arranged mz_internal.mz_compute_hydration_times
           Key: (#0{replica_id})
     →Differential Join %0:mz_materialized_views[#0{id}] » %1:mz_cluster_replica_frontiers[#0{object_id}]
-      after %1:
-        Project: #0, #10
-        Filter: (#11{write_frontier}) IS NULL
       Final closure:
         Project: #0..=#3
         Map: true, null
       →Arranged mz_catalog.mz_materialized_views
-      →Arranged mz_catalog.mz_cluster_replica_frontiers
+      →Arrange (#0{object_id})
+        →Fused with Child Map/Filter/Project
+          Project: #0, #1
+          Filter: (#2{write_frontier}) IS NULL
+            →Arranged mz_catalog.mz_cluster_replica_frontiers
+              Key: (#0{object_id}, #1{replica_id})
 
 Used Indexes:
   - mz_catalog.mz_materialized_views_ind (differential join)
-  - mz_catalog.mz_cluster_replica_frontiers_ind (differential join)
+  - mz_catalog.mz_cluster_replica_frontiers_ind (*** full scan ***)
   - mz_internal.mz_compute_hydration_times_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
