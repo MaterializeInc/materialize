@@ -69,6 +69,27 @@ const STASH_CAP: usize = 2;
 /// ones.
 const MAX_RECYCLE_BYTES: usize = 1 << 22;
 
+/// Chains shorter than this (in chunks) keep their entries resident instead
+/// of routing them through the pager.
+///
+/// The rebalancing cascade in [`ColumnMergeBatcher::insert_chain`] merges
+/// short chains almost immediately after they form, so paging their chunks
+/// schedules work the next merge cancels: the chunk pays an insert into the
+/// pool, an eviction nomination, and (under pressure) a spill-queue slot,
+/// then dies before compression starts. Measured under hydration load, this
+/// churn ran the spill queue to its cap with cancellation rates of hundreds
+/// per second. Chunks enter the pager only once they land in a chain long
+/// enough to sit out a few rebalance rounds.
+///
+/// The resident overhead is bounded by the chain-stack shape: rebalancing
+/// keeps the youngest chain under half its predecessor, so chains below
+/// this threshold hold fewer than `MIN_PAGED_CHAIN_LEN` chunks between
+/// them — at the ~2-4 MiB chunk band, single-digit MiB per batcher, paid
+/// per worker per consumer. The value balances cancellation coverage
+/// (chains of n chunks live roughly n push intervals before the cascade
+/// consumes them) against that unevictable floor.
+const MIN_PAGED_CHAIN_LEN: usize = 4;
+
 /// Recycle `chunk` only if the stash isn't already at [`STASH_CAP`] and the
 /// chunk isn't oversize per [`MAX_RECYCLE_BYTES`]. `length_in_bytes` is
 /// measured before clear, so it reflects the data the chunk was carrying
@@ -207,7 +228,8 @@ where
 /// `BatcherEvent` feeds the `mz_arrangement_batcher_*_raw` introspection
 /// tables, which downstream surface as memory-resource dashboards. Bytes
 /// living on swap or in a pager file aren't part of RSS and shouldn't be
-/// reported there.
+/// reported there. Pooled chunks likewise contribute zero: the buffer pool
+/// budgets and accounts its own resident bytes.
 fn account_chunk<C: Columnar>(entry: &PagedColumn<C>) -> (usize, usize, usize, usize) {
     match entry {
         PagedColumn::Resident(col, _) => {
@@ -215,7 +237,9 @@ fn account_chunk<C: Columnar>(entry: &PagedColumn<C>) -> (usize, usize, usize, u
             let bytes = col.length_in_bytes();
             (records, bytes, bytes, 1)
         }
-        PagedColumn::Paged { .. } | PagedColumn::Compressed { .. } => (0, 0, 0, 0),
+        PagedColumn::Paged { .. } | PagedColumn::Compressed { .. } | PagedColumn::Pooled { .. } => {
+            (0, 0, 0, 0)
+        }
     }
 }
 
@@ -250,6 +274,35 @@ where
         &mut self,
         upper: Antichain<Self::Time>,
     ) -> (Vec<Self::Output>, Description<Self::Time>) {
+        let (chunks, description) = self.seal_paged(upper);
+        (chunks.collect(), description)
+    }
+
+    fn frontier(&mut self) -> AntichainRef<'_, Self::Time> {
+        self.frontier.borrow()
+    }
+}
+
+impl<D, T, R> ColumnMergeBatcher<D, T, R>
+where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Timestamp + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    for<'a> columnar::Ref<'a, R>: Ord,
+{
+    /// Seals like [`Batcher::seal`], but returns the ship side as
+    /// [`SealedChunks`]: chunk handles that stay paged until iterated,
+    /// rehydrating one chunk per `next` call.
+    ///
+    /// [`Batcher::seal`] materializes every shipped chunk into one `Vec`, so a
+    /// seal's transient memory is the full uncompressed ship side — unbounded
+    /// when a frontier advance releases a large backlog at once. A consumer
+    /// that processes chunks sequentially and drops each before the next keeps
+    /// that footprint to a single chunk by sealing through this method
+    /// instead.
+    pub fn seal_paged(&mut self, upper: Antichain<T>) -> (SealedChunks<D, T, R>, Description<T>) {
         let pager = self.pager();
         // Merge all remaining chains into one.
         while self.chains.len() > 1 {
@@ -260,10 +313,9 @@ where
         }
         let merged = self.chain_pop().unwrap_or_default();
 
-        // Extract `merged` into `readied` (ship side, materialized for the
-        // builder) and `kept_chain` (keep side, stays paged for the next
-        // round).
-        let mut readied: Vec<Column<(D, T, R)>> = Vec::new();
+        // Extract `merged` into `readied` (ship side, still paged) and
+        // `kept_chain` (keep side, stays paged for the next round).
+        let mut readied: Vec<PagedColumn<(D, T, R)>> = Vec::new();
         let mut kept_chain: VecDeque<PagedColumn<(D, T, R)>> = VecDeque::new();
         self.frontier.clear();
         {
@@ -274,7 +326,7 @@ where
                 FetchIter::new(merged, pager),
                 upper.borrow(),
                 frontier,
-                |paged| readied.push(pager.take(paged)),
+                |paged| readied.push(paged),
                 |paged| kept_chain.push_back(paged),
                 stash,
             );
@@ -299,13 +351,38 @@ where
         // may be a quiet stretch.
         self.stash.clear();
 
-        (readied, description)
-    }
-
-    fn frontier(&mut self) -> AntichainRef<'_, Self::Time> {
-        self.frontier.borrow()
+        let chunks = SealedChunks {
+            chunks: readied.into_iter(),
+            pager,
+        };
+        (chunks, description)
     }
 }
+
+/// The ship side of a [`ColumnMergeBatcher::seal_paged`] call: sorted,
+/// consolidated chunks that stay paged until iterated.
+///
+/// Each `next` call rehydrates exactly one chunk, so a consumer that drops
+/// each chunk before requesting the next holds at most one chunk resident,
+/// however large the sealed backlog.
+pub struct SealedChunks<D: Columnar, T: Columnar, R: Columnar> {
+    chunks: std::vec::IntoIter<PagedColumn<(D, T, R)>>,
+    pager: ColumnPager,
+}
+
+impl<D: Columnar, T: Columnar, R: Columnar> Iterator for SealedChunks<D, T, R> {
+    type Item = Column<(D, T, R)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.chunks.next().map(|paged| self.pager.take(paged))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.chunks.size_hint()
+    }
+}
+
+impl<D: Columnar, T: Columnar, R: Columnar> ExactSizeIterator for SealedChunks<D, T, R> {}
 
 impl<D, T, R> PushInto<Column<(D, T, R)>> for ColumnMergeBatcher<D, T, R>
 where
@@ -315,11 +392,14 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
-    /// Accept an already-consolidated chunk from the upstream chunker, route
-    /// it through the pager, and insert it as a singleton chain.
+    /// Accept an already-consolidated chunk from the upstream chunker and
+    /// insert it as a singleton chain. The chunk stays resident — a
+    /// singleton is the shortest possible chain (see
+    /// [`MIN_PAGED_CHAIN_LEN`]), and the rebalance that follows consumes it
+    /// almost immediately; it reaches the pager once it lands in a chain
+    /// long enough to survive a few rounds.
     fn push_into(&mut self, mut chunk: Column<(D, T, R)>) {
-        let pager = self.pager();
-        let paged = pager.page(&mut chunk);
+        let paged = ColumnPager::disabled().page(&mut chunk);
         self.insert_chain(VecDeque::from([paged]));
     }
 }
@@ -359,7 +439,16 @@ where
         b: VecDeque<PagedColumn<(D, T, R)>>,
     ) -> VecDeque<PagedColumn<(D, T, R)>> {
         let mut output: VecDeque<PagedColumn<(D, T, R)>> = VecDeque::new();
-        let pager = self.pager();
+        // Short result chains keep their outputs resident: the cascade
+        // consumes them almost immediately, and paging chunks that die
+        // younger than the spill path's latency only schedules cancelled
+        // work (see MIN_PAGED_CHAIN_LEN). `take` is variant-driven, so the
+        // disabled pager rehydrates paged inputs just as well.
+        let pager = if a.len() + b.len() < MIN_PAGED_CHAIN_LEN {
+            ColumnPager::disabled()
+        } else {
+            self.pager()
+        };
         let pager = &pager;
         let stash = &mut self.stash;
         merge_chains(
@@ -964,6 +1053,89 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn short_chains_stay_resident() {
+        let policy = ForcePagePolicy::new();
+        let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
+            differential_dataflow::trace::Batcher::new(None, 0);
+        b.set_pager(ColumnPager::new(policy.clone()));
+
+        // Singleton pushes form chains far below MIN_PAGED_CHAIN_LEN;
+        // despite the force-page pager, every entry stays resident because
+        // short chains never route through it.
+        for i in 0..3u64 {
+            b.push_into(col(&[((i, 0), 0, 1)]));
+        }
+        for entry in b.chains.iter().flatten() {
+            assert!(
+                matches!(entry, PagedColumn::Resident(..)),
+                "short chains stay resident",
+            );
+        }
+
+        let chain = |range: std::ops::Range<u64>| -> VecDeque<PagedColumn<KvUpdate>> {
+            range
+                .map(|i| {
+                    let mut c = col(&[((i, 0), 0, 1)]);
+                    ColumnPager::disabled().page(&mut c)
+                })
+                .collect()
+        };
+
+        // A merge whose combined input is below the threshold keeps its
+        // outputs resident; one at the threshold routes them through the
+        // (force-page) pager.
+        let k: u64 = mz_ore::cast::CastFrom::cast_from(MIN_PAGED_CHAIN_LEN);
+        let out = b.merge_by(chain(0..1), chain(1..k - 1));
+        assert!(
+            out.iter().all(|e| matches!(e, PagedColumn::Resident(..))),
+            "below-threshold merges keep outputs resident",
+        );
+        let out = b.merge_by(chain(0..k / 2), chain(k / 2..k));
+        assert!(
+            out.iter().any(|e| !matches!(e, PagedColumn::Resident(..))),
+            "at-threshold merges page their outputs",
+        );
+    }
+
+    #[mz_ore::test]
+    fn seal_paged_ships_lazily() {
+        let policy = ForcePagePolicy::new();
+        let pager = ColumnPager::new(policy.clone());
+
+        let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
+            differential_dataflow::trace::Batcher::new(None, 0);
+        b.set_pager(pager);
+
+        let n: u64 = 200;
+        for i in 0..n {
+            b.push_into(col(&[((i, 0), i % 10, 1)]));
+        }
+
+        let upper = Antichain::from_elem(5u64);
+        let (chunks, _description) = b.seal_paged(upper);
+
+        // The ship side must come out paged; rehydration happens per `next`.
+        for paged in chunks.chunks.as_slice() {
+            assert!(
+                !matches!(paged, PagedColumn::Resident(..)),
+                "ship side must stay paged until iterated",
+            );
+        }
+
+        let mut out: Vec<KvUpdate> = Vec::new();
+        for chunk in chunks {
+            out.extend(collect_column(&chunk));
+        }
+        out.sort();
+        let mut expected: Vec<KvUpdate> = (0..n)
+            .filter(|i| i % 10 < 5)
+            .map(|i| ((i, 0), i % 10, 1))
+            .collect();
+        expected.sort();
+        assert_eq!(out, expected);
+    }
+
+    #[mz_ore::test]
     fn account_chunk_resident_vs_paged() {
         let policy = ForcePagePolicy::new();
         let pager_paged = ColumnPager::new(policy.clone());
@@ -1021,6 +1193,10 @@ mod tests {
                     let _ = meta;
                     1
                 }
+                PagedColumn::Pooled { meta, .. } => {
+                    let _ = meta;
+                    1
+                }
                 PagedColumn::Resident(_, _) => {
                     panic!("kept chain entry was Resident under ForcePagePolicy");
                 }
@@ -1030,5 +1206,44 @@ mod tests {
         assert!(kept_records > 0, "expected at least one kept paged entry");
         assert!(policy.out.load(std::sync::atomic::Ordering::Relaxed) > 0);
         let _ = n;
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn batcher_seal_round_trip_pooled() {
+        // Zero-budget pool: every inserted chunk is evicted to its extent as
+        // soon as it lands, so the merge / seal path must fault everything
+        // back in from extents rather than reading pool slots.
+        let pool = mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig {
+            budget_bytes: 0,
+            class_capacity_bytes: 64 << 20,
+        })
+        .expect("pool creation");
+
+        let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
+            differential_dataflow::trace::Batcher::new(None, 0);
+        b.set_pager(ColumnPager::pooled(pool.clone()));
+
+        let n: u64 = 200;
+        for i in 0..n {
+            b.push_into(col(&[((i, 0), 0, 1)]));
+        }
+        let upper = Antichain::from_elem(u64::MAX);
+        let (chain, _description) = differential_dataflow::trace::Batcher::seal(&mut b, upper);
+        let mut out: Vec<KvUpdate> = chain.iter().flat_map(collect_column).collect();
+        out.sort();
+        let expected: Vec<KvUpdate> = (0..n).map(|i| ((i, 0u64), 0u64, 1i64)).collect();
+        assert_eq!(out, expected);
+
+        // The data really round-tripped through extents: the zero budget
+        // forced compressing evictions, and reading the chains back faulted
+        // chunks in from those extents.
+        let stats = pool.stats();
+        assert!(stats.inserts > 0, "expected pool inserts: {stats:?}");
+        assert!(
+            stats.evictions_compress > 0,
+            "expected compressing evictions: {stats:?}"
+        );
+        assert!(stats.faults > 0, "expected extent fault-ins: {stats:?}");
     }
 }

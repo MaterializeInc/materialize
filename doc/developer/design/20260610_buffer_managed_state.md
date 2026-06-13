@@ -1,0 +1,671 @@
+# Buffer-managed dataflow state
+
+* Associated: [20260504_pager.md](20260504_pager.md) (the explicit pager this design succeeds), [CLU-65](https://linear.app/materializeinc/issue/CLU-65/pager).
+
+## The problem
+
+Materialize keeps dataflow state — merge-batcher chains, arrangement batches, upsert state — in resident memory, and treats disk as a reactive spill target.
+The current mechanism is `mz_ore::pager`: a blob store that serializes a whole ~2 MiB columnar chunk and either hints it cold to the kernel (`Swap` backend) or writes it to a per-chunk scratch file (`File` backend).
+
+Production experience with this design surfaced four structural problems.
+
+First, the pager is a blob store, and the blob model caps what it can do.
+Chunks page out whole and rehydrate whole; the partial-read API (`read_at_many`) has no production consumer.
+Every page-in is a full deserialize-and-copy even when the reader needed a fraction of the data, and a resident chunk and its paged form are different types (`PagedColumn::Resident` vs `Paged` vs `Compressed`), so residency decisions are baked in at pageout time by a policy that can see only the chunk's size.
+
+Second, the file backend pays filesystem metadata per chunk.
+One named file per 2 MiB chunk means create, writev, open, pread, unlink per chunk per merge generation.
+Profiling showed the hot cost is unlink and inode eviction — journaled extent deallocation plus page-cache invalidation under the inode lock — at 35.6 s versus 4.3 s for opens in the measured workload.
+This is structural: the cost scales with chunk turnover, and merge-heavy workloads turn chunks over constantly.
+
+Third, the swap backend trades control for laziness.
+It wins when the working set mostly fits (data re-read before reclaim never touches disk, and translation is free) but under real pressure the kernel pages synchronously, per 4 KiB, on the worker thread: the pager design doc measured 64 s of sys time in a 65 s single-threaded merge, with TLB shootdowns and direct reclaim as user-visible latency.
+The kernel also cannot know that a chunk consumed by a merge is dead, so it dutifully writes garbage to disk.
+
+Fourth, and most importantly, on the columnar path only the pre-seal batcher stash spills at all.
+Sealed spine batches — the arrangements proper, the dominant long-lived memory — are fully resident and invisible to any spill budget.
+Columnation-era arrangements retain a transparent disk story through lgalloc's file-backed mappings (see Background), but the columnar containers removed lgalloc by design, and nothing replaced it past the batcher.
+Hydration of a large arrangement holds the entire state in RSS regardless of how much of it is actively needed.
+
+Buffer management for larger-than-memory state is an old and intensely studied problem in the database literature — not a solved one, as a decade of successive buffer-manager redesigns attests, but one rich in measured designs and documented failure modes to build on.
+This design replaces the spill-a-blob model with a buffer-managed architecture in the style of Umbra and vmcache, adapted to the properties that make Materialize's problem easier than the general one: state is immutable once sealed, recreatable from persist (no durability requirement), and its lifecycle (just-built, sealed, queued-for-merge, dead) is known to the engine rather than guessed by a cache.
+
+## Success criteria
+
+The design succeeds when:
+
+* Resident access to a chunk costs one atomic load; no hash-table translation, no serialization, no copy.
+* A chunk that dies before pressure forces it out never touches disk.
+* Workers never enter kernel direct reclaim on the state path, and any state-path I/O a worker performs is explicit, bounded, and chunk-granular at a point the engine chose — never an unscheduled page fault.
+  Whether write-back runs on workers or dedicated spill threads is a measured choice (see I/O execution).
+* Chunk turnover performs no per-chunk filesystem metadata operations: no create, no unlink, no inode churn.
+* Sealed arrangement batches can be paged: a merge of two batches holds a bounded resident window rather than both batches; an arrangement cursor faults at most one leaf page per cold seek.
+* Hydration of an arrangement larger than the memory budget completes with RSS bounded by the budget, not by state size.
+* One budget pool covers batcher chains and arrangement batches; exceeding it triggers eviction of cold chunks rather than gating pageout decisions per chunk.
+* The swap and file backends of `mz_ore::pager`, and the `PagedColumn` residency enum, are deleted at the end of the migration.
+
+## Out of scope
+
+* Durability and crash consistency.
+  State is recreatable from persist; the scratch volume is a cache.
+  No WAL, no manifest, no fsync anywhere in this design.
+* Async restructuring of timely operators.
+  Cursors and containers stay synchronous; cold accesses stall the worker for one NVMe read.
+  ForSt-style asynchronous state access is a separate project.
+* Warm restart (reattaching to scratch state across process restarts) ships as a follow-up, not in the initial milestones.
+  The design keeps it reachable: the eager-backed format is versioned and self-describing from day one.
+* Sharing on-disk format with persist parts.
+  A north star (see Future work), not a requirement.
+* Key-value separation (WiscKey-style out-of-line values).
+  The value container stays abstract enough to add it; see Open questions.
+* Non-Linux production support, as with the existing pager.
+
+## Background
+
+### Three generations of disk offload
+
+Materialize has approached larger-than-memory state three times.
+
+The first generation was [lgalloc](https://crates.io/crates/lgalloc) (integrated October 2023): a size-classed allocator that serves large allocations from memory-mapped files on the scratch volume.
+Columnation-backed arrangement regions and persist's arrow buffers allocate through it (`enable_columnation_lgalloc`, default on), which is why columnation-era arrangements have a disk story today — but a transparent one: the kernel owns writeback and reclaim of the file-backed pages, including dirty-page writeback at its own discretion.
+Operating it has meant approximating policy from below the allocation boundary: a background worker returning freed memory, eager-return and file-growth-dampener knobs, and eventually a disk usage limiter (May 2025) — all compensating for the fact that an allocator sees only `alloc` and `free`, never "this region is cold", "this run will be read sequentially next", or "this data is dead".
+
+The second generation was kernel swap: provision swap on the cluster nodes and let the kernel page anonymous heap memory under pressure.
+Swap subsumes the allocator seam — every allocation is implicitly offloadable, nothing opts in — but it conflates dataflow state with arbitrary heap allocations and hands eviction to the kernel at anonymous-page granularity.
+The pager design doc records the endpoint: direct reclaim running on worker threads, `pgscan_direct` spikes during hydration, synchronous per-4 KiB faults serializing single-threaded merges.
+
+The third generation is the explicit pager of [20260504_pager.md](20260504_pager.md): the application marks cold data and chooses a backend.
+The columnar end-to-end project deliberately removed lgalloc from the columnar containers ([CLU-64](https://linear.app/materializeinc/issue/CLU-64/remove-lgalloc-from-columnar): `Column::Aligned` becomes a plain `Vec<u64>`) to create the seam the pager plugs into; the lgalloc copies in persist's arrow path are being removed in parallel.
+The pager fixed the control problem at blob granularity but inherited the ceilings described under The problem.
+
+This trajectory matters to the present design in two ways.
+First, the first two generations differ only in where the kernel's transparency attaches — file-backed mappings versus anonymous memory — and share the failure mode, which the third generation answers only partially: the entity that owns eviction must be the entity that knows data lifecycle, and neither the kernel nor a size-only pageout policy can know it.
+Second, lgalloc's address-space layout — size-classed regions over a scratch volume — is structurally Layer 2's layout; what changes is the direction of control, from file-backed mmap with kernel paging to anonymous memory with engine-scheduled explicit I/O.
+In that sense Layer 2 is less a new mechanism than lgalloc with the kernel taken out of the loop.
+
+### The workload, from first principles
+
+The state this design serves has properties a general-purpose storage engine cannot assume:
+
+* **Immutable after seal.** Columnar chunks and arrangement batches never mutate; the only state transitions are residency transitions.
+  This deletes dirty tracking, write-back ordering, reader/writer latching on content, and torn-read hazards.
+* **Recreatable.** Everything can be rebuilt from persisted sources, so every durability mechanism is deletable.
+* **Lifecycle known to the engine.** The merge batcher knows which chains merge next; a consumed chunk is dead; hydration output is write-once-read-rarely by construction.
+  A generic buffer manager spends real machinery (LeanStore's cooling stage, LRU approximations) guessing at coldness the engine here simply knows.
+* **Maintenance is sequential; the update path is random and delta-proportional.**
+  Merges, extraction, and hydration are linear scans and dominate bytes moved.
+  The latency-critical path has the opposite shape: incremental operators do work proportional to arriving deltas — a join probes arrangements at exactly the updated keys, upsert reads back the keys in the input batch — and interactive peeks are fully random.
+  How much each side matters is workload-dependent, and this is the assumption in this document most likely to draw disagreement: a design that follows the sequential framing too closely becomes a batch processor.
+  Several choices below (per-arrangement residency policy, per-arrangement leaf sizes, uncompressed lookup tiers, the record-cache open question) exist specifically to keep per-key probes cheap; see "Access patterns, read amplification, and policy" under Layer 3.
+* **Already log-structured.** A differential spine is a tiered LSM: batches are immutable sorted runs, the fueled merge scheduler is the compactor, batcher chains are L0.
+  The design question is not "adopt an LSM" but "give the existing LSM a paged run format and a buffer manager."
+
+Tuning within the current blob model has continued, and its best-known endpoint is instructive.
+The strongest measured swap-backend strategy ([#36948](https://github.com/MaterializeInc/materialize/pull/36948), benchmarked in [CLU-108](https://linear.app/materializeinc/issue/CLU-108/correctionv2-pager-lz4-compress-spilled-chunks-madv-pageout-swap)) couples lz4 compression with an eager `MADV_PAGEOUT` over the compressed bytes at spill time: peak RSS holds at the budget (0.40 GiB versus 0.97 GiB with lazy hints, where RSS drifts to the cgroup cap and is relieved only at the kernel's pressure cliff).
+The eager eviction pays precisely because compression shrinks the re-fault volume ~5.6×; on the uncompressed path the same hint is a measured net loss.
+That result is this design's thesis expressed through kernel primitives — compress at the spill boundary, release physical memory eagerly, keep RSS honest against the budget — and it simultaneously marks the blob model's ceiling: re-access still faults synchronously per 4 KiB on worker threads, a chunk consumed moments after spill was evicted (and must be re-faulted) anyway because the kernel cannot know it was about to die, and the compress-and-evict decision remains irrevocable at pageout time.
+Layer 2 keeps the converged policy — cold data compressed past the memory boundary, physical memory released eagerly — while replacing the mechanism with one the engine schedules, prioritizes, and can cancel.
+
+The disk-versus-memory question is not binary.
+Treating disk as the first-class home of all state (every chunk written at seal) buys pressure-free eviction and warm restart but imposes a write-bandwidth floor proportional to merge traffic — fatal for young data that dies in seconds, and for EBS-class disks.
+Treating disk as a pure spill target avoids the floor but makes pressure handling a write storm at the worst moment and leaves nothing on disk to reattach to.
+The resolution is that both modes share one mechanism and differ in a single policy bit — when must a chunk be backed — and the spine's geometric level structure supplies a principled threshold: lazy backing for young, churning data; eager backing for sealed, deep, long-lived data.
+
+## Solution proposal
+
+Three layers, built bottom-up, each independently shippable.
+
+```mermaid
+flowchart TB
+  subgraph L3["Layer 3: paged sealed batches"]
+    Header["resident header: fence keys, page table"]
+    Pages["column pages (leaves)"]
+  end
+  subgraph L2["Layer 2: buffer manager"]
+    Pool["size-class VM regions, pin-mediated access"]
+    State["per-chunk state word + epochs"]
+    IO["spill threads: write-behind, prefetch"]
+  end
+  subgraph L1["Layer 1: extent store"]
+    Extents["extent allocator: file extents or swap-backed anonymous"]
+  end
+  Batcher["merge batcher chains"] --> L2
+  L3 --> L2
+  L2 --> L1
+```
+
+### Layer 1: extent store
+
+The extent store is an interface — allocate, write, read, free, in chunk-class-sized extents — not a single mechanism.
+It needs two implementations, because production nodes today provision the entire disk as swap and mount no scratch filesystem: file extents have nowhere to live until volume topology changes, and the design must not wait for that.
+
+#### File extents
+
+Replace per-chunk scratch files with a few large preallocated files per worker (or `O_TMPFILE` inodes) and a userspace extent allocator.
+
+* Allocation rounds to the chunk size classes (see Layer 2), so the free list is per-class and fragmentation is bounded by construction.
+* Free is a free-list push.
+  No unlink, no journal transaction, no inode eviction — the measured 35.6 s cost class becomes pointer arithmetic.
+  Space is returned to the filesystem lazily and batched via `fallocate(FALLOC_FL_PUNCH_HOLE)` only if scratch-volume pressure demands it.
+* I/O is `O_DIRECT`: the buffer pool (Layer 2) is the cache, and the kernel page cache would be a second copy of everything plus unpredictable writeback.
+  Aligned buffers are natural for the paged format.
+* The DuckDB temp-file model is precedent: slotted, recycled temp files in native block format rather than create-unlink per object.
+
+This implementation is shippable behind the existing `Handle` API as a drop-in replacement for the file backend's storage, before any of Layer 2 exists.
+
+#### Swap-backed extents
+
+Where no filesystem exists, the extent store is anonymous memory the engine deliberately hands to kernel swap.
+An extent is an extent-sized anonymous allocation: "write" compresses the evicted chunk into it and issues `MADV_PAGEOUT`, pushing the pages to the swap device; "read" issues `MADV_WILLNEED` ahead of need — asynchronous swap-in, the backend's readahead mechanism — then decompresses into the chunk's freshly allocated slot; "free" is a plain deallocation, with any swapped copy discarded for free.
+
+This is the lz4 + `MADV_PAGEOUT` strategy of [#36948](https://github.com/MaterializeInc/materialize/pull/36948) generalized from a spill-path special case into the pool's backing layer: the same measured costs, the same ~5.6× reduction in swap traffic from compression, now with the pool's write elision and lifecycle policy above it and the Layer 3 format readable through it.
+The I/O executor choice applies unchanged — compress-plus-madvise runs on the evicting worker or on spill threads.
+
+The backend has no metadata costs at all; its weakness is the read path, where the kernel owns fault servicing and the old reclaim ceilings apply at low thread counts — mitigated by compression (5.6× fewer bytes to fault) and `MADV_WILLNEED` prefetch, but not eliminated.
+Where both backends are available, the choice is a config knob over the same interface; milestone 2 benches them head to head.
+
+### Layer 2: buffer manager
+
+#### Address space and translation
+
+Reserve large anonymous virtual-memory regions per size class (Umbra's design): a 2 MiB class for batcher chunks and large column pages, hugepage-aligned, plus one or two smaller classes for Layer 3 pages and headers.
+Virtual reservation is `MAP_NORESERVE`-cheap; physical memory materializes on use and is released on eviction with batched `MADV_DONTNEED`.
+The pool memory is not file-backed: the pool is a cache over the extent store, not a view of it, and data moves between the two only through explicit, engine-scheduled I/O — the kernel never transfers a byte in either direction, unlike both lgalloc (where the mapping is the file) and swap (where anonymous memory is implicitly device-backed).
+
+Slots are scoped to residency: eviction returns a chunk's slot to a free list along with its physical pages, and fault-in allocates a fresh slot, so a chunk's address is stable only between a fault-in and the next eviction.
+Pointers into a chunk are valid only under a pin (or within an epoch), which blocks eviction; nothing may cache a raw pointer across pins — the same discipline the borrow-safety rules below already require.
+This is the classical buffer-manager position (frame and page identity decoupled, all access latch-mediated) rather than vmcache's, and the divergence is deliberate.
+vmcache fixes every page's address for the lifetime of the *database* in order to serve two consumers Materialize does not have: optimistic lock-free readers (which must be restartable — differential's cursors hand out borrows that cannot retry, and timely's worker-sharded arrangements make reader-side contention structurally absent anyway) and arbitrary reference graphs without pointer fix-up (all access here re-derives from the handle under a pin).
+What lifetime-stable addresses would cost is decisive at Materialize's scale: slot demand would track the *live* set — for backlog-shaped consumers, an unbounded un-drained backlog — putting a virtual-address ceiling on backlog size and, worse, accreting ~0.2% of peak backlog as unevictable page-table memory (vmcache budgets exactly this, ~2 GB DRAM per TB, and accepts it because its mapped entity is a bounded, purchased database; a transient queue inverts that economics).
+Residency-scoped slots make slot demand track the budget instead: touched address space, and therefore page tables, are bounded by peak residency, and reservations can be absurdly generous (the prototype reserves 1 TiB per class) without ever costing anything.
+Should an optimistic-read tier ever be wanted, relocation does not preclude it: regions stay mapped, so a speculative read of a reused slot returns wrong-but-safe bytes, and validation needs one slot-ownership check beyond the version compare.
+
+Translation while resident is arithmetic on the chunk handle.
+There is no page table, no hash map, no latch on the resident path.
+
+#### Chunk states
+
+Residency is a state, not a type.
+Each chunk carries one atomic state word (the vmcache per-page word, minus the dirty states immutability deletes):
+
+* `UnbackedResident` — lives only in the pool; no disk copy exists.
+* `WriteInFlight` — write to an extent has been enqueued or issued; the chunk remains readable.
+* `BackedResident` — clean; a disk copy exists; eviction is free (release physical pages, no I/O).
+* `Evicted` — disk copy only; access faults it back in.
+* `Faulting` — read in flight; concurrent accessors wait or retry.
+
+The `PagedColumn` enum and its `Resident`/`Paged`/`Compressed` variants disappear; callers hold a chunk handle and access it uniformly.
+
+#### Write-behind, and never writing dead data
+
+"Page out" becomes a state transition, not an I/O.
+Under budget pressure (or eager-backing policy, below) a chunk transitions to `WriteInFlight` and its write-back is performed by the evicting worker or queued to spill threads (see I/O execution); on completion it is `BackedResident`; physical pages are released only when the budget actually demands it.
+
+This captures what makes the swap backend fast — laziness, free re-access before reclaim — while keeping what makes the file backend controllable, and adds the one thing neither backend can do: freeing an `UnbackedResident` chunk is a pure memory operation, and freeing a `WriteInFlight` chunk cancels the write.
+In a merge-heavy workload most chunks die young; avoided writes are the largest available win, and only the engine knows liveness.
+
+#### Eviction policy
+
+Lifecycle hints drive eviction; a small second-chance FIFO is the backstop for unannotated chunks.
+
+* Dead chunks are freed immediately (not evicted — there is nothing to keep).
+* Chunks in chains scheduled to merge soon are pinned-equivalent hot.
+* Chunks in long chains awaiting more input are cold.
+* Hydration-era output is write-once-read-rarely: eager-evict FIFO.
+
+LeanStore's cooling stage exists because a generic buffer manager must speculate about coldness; the engine here knows it, so the speculation machinery reduces to a backstop.
+The budget is the existing `TieredPolicy` atomic pool reinterpreted: it bounds resident bytes, and exceeding it selects eviction victims rather than gating pageout decisions per chunk.
+
+#### Borrow safety: epochs
+
+Readers take no per-access locks.
+Workers advance an epoch counter at operator yield points; the evictor releases physical pages only for chunks unpinned for a full epoch.
+Borrows into pool memory never cross a yield (cursor positions stored across activations are indices; re-access goes through the container, which re-faults if needed), so epoch protection is sound with zero reader-side cost beyond the state-word load.
+
+This deliberately departs from Umbra's optimistic versioned latches: optimistic validate-and-restart requires restartable readers, and differential cursor consumers dereference borrows in arbitrary downstream code that cannot be re-executed.
+The trade is explicit: we give up evicting a page out from under an active reader — which we do not need, because borrows are yield-bounded — for zero per-access synchronization.
+
+#### I/O execution
+
+Common to every option: transfers are chunk-granular `pread`/`pwrite` with `O_DIRECT`, and a worker that needs evicted data immediately faults it in synchronously (one bounded NVMe read, ~100 µs–1 ms for 2 MiB-class transfers depending on device).
+The Haas/Leis NVMe results size the stack: io_uring with deep queues matters at 4 KiB OLTP page sizes; at ≥256 KiB transfers, synchronous calls at modest concurrency saturate the device, so 2 MiB chunks need no exotic submission machinery either way.
+
+Who performs write-back and readahead is a design choice with two candidates, decided by measurement at milestone 2.
+
+**Synchronous, on-worker — Umbra's model.**
+The evicting worker writes the victim chunk itself; merge code prefetches by issuing reads early.
+Published Umbra works exactly this way — synchronous `pread`/`pwrite` from worker threads throughout, chosen explicitly for simplicity — and the simplicity is just as real here: no queues, no completion tracking, no cross-thread chunk-state transitions, and natural backpressure, since the worker causing spill pays for spill.
+The stall arithmetic may well be acceptable: a 2 MiB `O_DIRECT` write at device speed is roughly a millisecond (plus sub-millisecond lz4), bounded, chunk-granular, and taken at a point the engine chose — categorically different from swap's unbounded per-4 KiB fault storms even though both are "synchronous".
+The structural weakness is the read side: one thread cannot overlap I/O with compute, so a cold merge serializes read-then-process per chunk and runs at device latency rather than device bandwidth — a gap kernel readahead used to hide on the buffered path and `O_DIRECT` forfeits.
+
+**Asynchronous, off-worker — LeanStore's page-provider model.**
+A small pool of dedicated spill threads consumes a write-behind queue and services readahead, so workers never perform eviction I/O and merges overlap fault-in with compute.
+This is the LeanStore 2018 pattern; io_uring (which LeanStore adopted only in its 2024 NVMe redesign) stays deferred behind the same interface until transfer sizes shrink enough to need it.
+The costs are the machinery — queues, completions, sizing knobs, cross-thread state-word transitions — and a longer cancellation path for dead chunks with writes in flight.
+
+A middle path exists if measurement splits the difference: workers take write stalls synchronously but submit their own readahead through a small per-worker io_uring, checking completions at access time — read-side overlap without dedicated threads.
+The chunk state machine is identical in all three shapes; only the executor of the `WriteInFlight` and `Faulting` transitions differs, so the choice is contained behind one interface and revisitable.
+
+The staging prototype supplies the first data point (see Measured under Performance estimates): on the swap-backed store, where eviction cost is `MADV_PAGEOUT` page-table work rather than a device write, unguarded on-worker enforcement pinned CPUs, and off-worker spill threads behind single-flight enforcement and a bounded queue resolved it.
+The on-worker option remains live for the file-extent backend, where the write is a single bounded `pwrite`.
+
+Eviction throughput is bounded by `madvise` page-table work and TLB shootdowns (the vmcache paper's measured ceiling; their fix, the exmap kernel module, is not shippable here).
+Mitigation is granularity: 2 MiB chunks are ~500× fewer page-table operations per byte than 4 KiB pages, and `MADV_DONTNEED` calls are batched.
+
+#### Compression
+
+Compression is a property of the extent, not the residency state.
+Resident form is always uncompressed in its slot; lz4 (or stronger, see BtrBlocks under Prior art) is applied at write time by whichever thread performs the write (see I/O execution) and reversed at fault-in.
+This keeps codec CPU off the access path — and off worker threads entirely in the off-worker option — and removes today's oddity where `CompressedInner::Memory` holds lz4 bytes in resident memory — softened by the eager `MADV_PAGEOUT` of [#36948](https://github.com/MaterializeInc/materialize/pull/36948), but still kernel-managed on the way back in.
+
+### Layer 3: paged sealed batches
+
+#### The integration seam
+
+Differential batch storage is generic over containers: `OrdValBatch` is parameterized by a `Layout` whose `KeyContainer`, `ValContainer`, offset, time, and diff containers each implement `BatchContainer`, and Materialize already substitutes its own containers in `mz_row_spine`.
+A paged container — elements stored across Layer 2 chunks plus a small resident header — implements `BatchContainer` without forking `OrdValBatch` or cursor logic.
+Pin/epoch protection makes this sound: `index` returns a borrow into pool memory, valid because eviction cannot reclaim or relocate a page mid-borrow, and accessors re-derive their view from the handle rather than caching pointers across borrows.
+Differential's pending `Chunk` abstraction offers a cleaner, chunk-granular seam that this design prefers where available; see "Integration with differential's `Chunk` abstraction" below.
+
+#### What is free to vary, and what is not
+
+The index-structure literature is a zoo: update-in-place B+-trees, LSM variants, hybrids that buffer writes in tree leaves (Bf-Tree), record-granular hot/cold migration (2-Tree, anti-caching), key-value separation, per-run filters, learned indexes.
+This design does not adjudicate the zoo, and its choices should not be mistaken for a claim to have done so.
+The narrowing principle is that differential's spine semantics are load-bearing: operators rely on batches being immutable, sorted, timestamped, consolidated, and merged under frontier control, so the macro-structure — immutable sorted runs compacted by the fueled scheduler — is an input to this design, not a choice it gets to make.
+Replacing it with an update-in-place tree or a record-migrating hybrid is a differential redesign, out of scope here.
+
+What remains genuinely free, per arrangement, and where the zoo maps onto it:
+
+* **Within-run layout**: leaf page size; key representation — inline, prefix-truncated, or out-of-line (`UpsertKey` is already an out-of-line key: a fixed-width hash standing in for the real key); value placement (inline vs WiscKey-style extents).
+* **Cross-run read path**: resident fence keys always; per-run filters where probe traffic warrants them, with the LSM filter-allocation results (Monkey) applying directly since spine runs are levels; the record-granular hot cache as the explicitly open question.
+* **Hot/cold mechanism**: page-granular residency is the committed mechanism; record-granular migration is the deferred alternative if probe traffic defeats page granularity.
+
+This narrowing is also the precise answer to "why not a B+-tree": not because B-trees lose some abstract benchmark, but because the spine already fixes the macro-structure, and a static B+-tree per run is simply what falls out of indexing an immutable sorted run.
+
+#### Run format
+
+A paged batch is, structurally, a static bulk-loaded B+-tree:
+
+* **Resident header** (small, never evicted): fence keys — the first key of each page, owned — a page table mapping logical index ranges to chunk handles, and optionally a filter.
+  Resident overhead is tens of bytes per 2 MiB page, four orders of magnitude below the data.
+* **Column pages** (leaves): the batch's parallel columns split at aligned boundaries.
+  Size classes per column density: small pages for offsets/times/diffs, large pages for key and val data.
+
+`seek_key` binary-searches fence keys with zero I/O and faults at most one leaf page.
+This is Umbra's B+-tree read path with the write path amputated: because batches are immutable and built bottom-up at seal, there are no structure-modification operations, no latch coupling, no insert path — every hard problem in the mutable-tree literature is absent by construction.
+
+#### Access patterns, read amplification, and policy
+
+* **Spine compaction**: two linear scans; readahead keeps a bounded resident window, making GB-scale batch merges RSS-bounded.
+* **Joins**: probe traffic is delta-proportional — each input batch probes the arrangement at its updated keys.
+  Probes arrive in key order but may touch an arbitrarily sparse subset of pages; dense probe sets approximate scans, sparse ones are point lookups in disguise.
+* **Upsert feedback**: point lookups, batched and sortable before issue.
+* **Interactive peeks**: genuinely random and latency-sensitive.
+
+Read amplification is the central tension for everything except compaction.
+A cold probe faults a whole leaf page to read one row: at 2 MiB pages that is roughly four orders of magnitude of amplification, plus a decompress if the page carried a codec — "decode a megabyte to read a row" is exactly the failure mode a page-granular design courts, and a design tuned only for scan throughput would court it constantly.
+Four mechanisms bound it, in escalating order:
+
+* Leaf size is a per-arrangement choice, not a constant: lookup-heavy arrangements use small leaves (64 KiB-class, ~30× less worst-case amplification) at the cost of more header entries; scan-heavy arrangements keep large leaves.
+* Compression is per-page policy, not format: lookup-serving tiers skip the codec, so a faulted page is readable without decode.
+* Per-run filters reject absent keys without faulting anything.
+* The residency policy is per-arrangement, and the safety valve is total: an arrangement whose probe traffic makes paging a net loss is simply kept resident — exactly today's behavior.
+  The design degrades to the status quo, not below it.
+
+Batched seeks convert most sparse probes into anticipated reads.
+Probe traffic arrives in batches — upsert feedback reads back the keys of an input batch, a join processes a batch of updates against the arrangement — and a cursor that receives the whole batch can see its future: plan against the resident fence keys and filters (zero I/O; a linear merge of two sorted sequences) the exact page set the probes touch, prefetch that set in one pass (pages in flight concurrently rather than faulted serially per key), then drain key by key against resident pages.
+Differential's pending `Chunk` work plans exactly such a batched-key cursor variant, and the probe input being itself a sorted chunk makes the planning phase a chunk-against-fences merge.
+This moves batched probe traffic out of the demand-miss bucket entirely and narrows the residency-policy burden to genuinely interactive single-key peeks.
+
+If sparse cold probes remain on the hot path after all of the above, page granularity itself is the wrong caching unit for that traffic, and the remaining option is record-granular caching above the page layer (the Bf-Tree mini-page idea) — an open question, not a committed mechanism.
+Arrangements serving interactive peeks additionally keep recent batches and headers resident under a priority-aware budget (see Open questions).
+
+#### Hydration
+
+Build pages during hydration, seal, write-behind, evict eagerly.
+Arrangement hydration proceeds with RSS bounded by the budget regardless of state size — the co-tenancy problem the stash-merge fueling work attacks from the demand side, solved from the supply side.
+
+#### Values
+
+Large `Row` values dominate some arrangements and are rewritten by every merge.
+WiscKey-style full key-value separation conflicts with differential consolidation — merges compare `(key, val)` pairs, and out-of-line values would cost a dereference per comparison — but values are only compared when keys and times tie, so with mostly-unique keys the dereference rate may be low enough that separation wins for large rows.
+The template is Umbra's string layout: small values inline in the leaf page, large values out-of-line in write-once extents referenced by pointer, threshold chosen by measurement.
+The initial format keeps the val container abstract enough to add this without a format break.
+
+### Integration with differential's `Chunk` abstraction
+
+Differential [PR #744](https://github.com/TimelyDataflow/differential-dataflow/pull/744) introduces `trait Chunk`: a consolidated, sorted, `Rc`-shared run of `(data, time, diff)` updates with a size bound and a maximal-packing ("grading") invariant, designed so one abstraction backs the containers collections transit, the merge batcher's chains, and — as a `Vec<Chunk>` plus a time description — a whole batch (`ChunkBatch`).
+The harness code (binary merger, fueled batch merger, compaction queue, builder) is generic; all layout-aware work lives behind the trait.
+If it lands, it is the natural differential-side landing zone for Layer 3, and several pieces of this design simplify into it.
+
+#### The mapping
+
+* **`ChunkBatch` is the run format of this design, minus the paging.**
+  It carries per-chunk `first_keys` / `last_keys` / `first_vals` / `last_vals` containers — the resident header's fence keys, including the val-level fences that boundary-straddling `(key, val)` runs need — and its cursor binary-searches that index before opening a within-chunk cursor, handling boundary spills explicitly without touching chunk contents.
+* **The fault boundary is the trait.**
+  Everything a seek needs is resident in the `ChunkBatch` (fence containers are copied out of chunks at construction), and all data access funnels through `Chunk::cursor` and the inner cursor's accessors.
+  Chunk-granular paging therefore matches the pool's unit exactly, and is a cleaner seam than paging inside `BatchContainer`: the integration-seam subsection above describes the container-level fallback, but `Chunk` is the preferred target.
+* **The fueled batch merger is the bounded-window consumer.**
+  It reads sources by cloning chunks (refcount bumps, never consuming), holds at most two heads plus graded output, and its source indices announce exactly which chunks fault next — the readahead driver comes for free.
+  Its implementor contract (output bounded by input consumed; recycle drained-input storage as output buffers) is the write-behind and pool-slot-recycling discipline of Layer 2, stated independently.
+* **Batched-seek cursors are the probe prefetch story.**
+  A planned cursor variant accepting a whole chunk of probe keys lines up exactly with the paged read path's plan/prefetch/drain shape: the resident fence containers answer which chunks the entire probe set touches without I/O, prefetch covers that set in one pass, and the drain proceeds against resident data (see "Access patterns, read amplification, and policy" above).
+* **One representation across the lifecycle.**
+  The same chunk transits the collection, sits in batcher chains, and lands in the sealed batch as an `Rc` move — eliminating the re-serialization at seal that today's pipeline pays between batcher and spine containers, and making Layer 2's zero-copy end state (builders filling pool memory directly) reachable across the whole path.
+* **The trait formalizes "what is free to vary."**
+  Within-chunk layout is opaque to the harness, so the index-structure zoo is contested per-implementor, exactly as the narrowing argument above wants.
+
+#### A `PagedChunk` implementor
+
+The integration is a third `Chunk` implementor whose backing is a Layer 2 pool handle rather than `Rc<Vec>`:
+
+* `Clone` is a handle refcount bump, satisfying the cheap-clone contract.
+* `cursor()` and the inner accessors fault evicted backing in through interior mutability and return borrows tied to `&self` — sound because pin/epoch protection blocks eviction and relocation during the borrow, and every access re-derives from the handle; this consumer is what makes that machinery earn its keep.
+* `bounds()` serves from an owned resident copy captured at seal time (the trait already demands cheap endpoint access, and `ChunkBatch::new` calls it while the chunk is naturally resident); after construction, seeks touch no evicted chunk until an inner cursor opens.
+* `prune` overrides the default copy-merge with a range adjustment over shared storage, which the trait documentation already anticipates.
+
+#### Frictions
+
+* **Grading counts updates; paging wants bytes.**
+  `TARGET` is an update count serving merge-suspension granularity and index size; a paged chunk wants byte-targeted sizing for I/O efficiency, and variable-size rows make the two diverge.
+  The columnar implementor already tolerates oversized chunks at val boundaries, so the invariant bends; byte-based grading is feedback for the PR rather than a blocker.
+* **The columnar implementor's v1 merge decompresses and recompresses**, materializing owned keys and vals — flagged in the PR as a known limitation.
+  Paged columnar chunks want range-copy merging for the same reason `ord_neu`'s merger has it; one fix serves both.
+* **Boundary spill-walks fault mid-iteration.**
+  `map_times` and val-stepping open cursors on neighbor chunks inside operator closures — accesses the readahead API cannot easily predict.
+  Acceptable under synchronous fault-in; they belong on the fault-point inventory that milestone 3 audits.
+
+The consequence for sequencing: milestone 3 re-targets from a paged `BatchContainer` to a paged `Chunk`, shrinking from "prototype a paged container and audit borrow lifetimes across the cursor stack" to "implement one trait and audit the inner-cursor fault points."
+
+### Backing policy: lazy and eager
+
+One policy bit per chunk — when must it be backed — with the data's position in the implicit LSM choosing the value:
+
+* **Batcher chunks and young/small spine batches**: lazy.
+  Write-behind under pressure only, with die-young elision.
+  This is the memtable/L0 of the LSM; eager backing here is waste, and even maximally disk-first storage engines keep their write buffers in memory.
+* **Sealed batches past a size or level threshold**: eager.
+  A deep batch survives long, is read sporadically, and merges rarely; one write at seal is cheap against its lifetime, it is exactly the data that should leave RSS, and it is what makes warm restart cover the bytes that matter.
+  The spine's geometric structure supplies the threshold.
+* **Hydration-era output**: eager, always.
+
+Eager backing converts pressure response from a write storm at the worst moment into "release clean pages," a pure memory operation: the degradation curve goes from a cliff to a slope.
+
+### Configuration
+
+Dyncfg-driven, mirroring the existing pager flags:
+
+* enable flags per consumer (compute batchers, storage upsert stash, paged sealed batches), so rollout is independent per surface;
+* resident-bytes budget (the reinterpreted `TieredPolicy` pool);
+* eager-backing threshold (batch size or spine level);
+* I/O executor selection (and spill-thread count where applicable), codec, scratch sizing.
+
+The existing `ColumnPager`/`PagingPolicy` seam is the Layer 2 integration point for batchers; live reconfiguration semantics carry over.
+
+## Performance estimates
+
+Measured numbers come from the pager design doc's benches ([20260504_pager.md](20260504_pager.md), reproduced where load-bearing), the CLU-108 benchmarks behind [#36948](https://github.com/MaterializeInc/materialize/pull/36948), and the upsert-hydration profile that motivated Layer 1.
+Estimates for this design derive from device arithmetic and are marked as such; milestone 2 exists to replace them with measurements.
+
+### Cost model
+
+Per 2 MiB chunk, on the pager doc's two reference boxes (single encrypted NVMe at ~1.4 GB/s sustained; r8gd striped instance NVMe at ~7 GB/s):
+
+* `O_DIRECT` read or write: ~0.3 ms (striped) to ~1.4 ms (encrypted single disk).
+* lz4: ~2–3 ms to compress (≈0.7–1 GB/s per core), ~0.4–0.5 ms to decompress (≈4–5 GB/s); CLU-108 measured ~5.6× ratio on arrangement data.
+  Note the asymmetry: on-worker compression costs more than the write itself, which weights the codec decision toward the off-worker executor or toward compressing only eager-backed (cold) tiers.
+* Kernel swap path for the same 2 MiB: 512 synchronous 4 KiB faults; the pager doc measured 2.12 M page-ins for an 8 GiB working set with 64 of 65 wall-seconds spent in the kernel.
+* Per-chunk filesystem metadata (today's file backend): dominant at scale — 35.6 s of unlink/inode-eviction against 4.3 s of opens over one measured hydration; the extent allocator's equivalent is a free-list push, effectively zero.
+
+### Headline comparison
+
+"Swap" is the current swap backend (`MADV_COLD`, plus the lz4+`MADV_PAGEOUT` variant of #36948 where noted); "lgalloc" is kernel-paged file-backed mmap; "file" is today's per-chunk scratch files; "this design" is Layer 2 with extents.
+
+| Dimension | Swap | lgalloc | File (today) | This design (estimate) |
+|---|---|---|---|---|
+| Hot re-access, resident | memory speed, unless already reclaimed (refault) | memory speed | full round trip every time (~1–4 ms/chunk) | pointer deref + one atomic load |
+| Merge throughput, 1 thread, 2–4× pressure | 0.12–0.15 GiB/s (measured) | ≈ swap (same fault path) | 0.36–0.50 GiB/s (measured) | ~0.6 GiB/s sync executor; ~0.7 GiB/s (device/2) with read overlap |
+| Merge throughput, 16–64 threads, fast disk | ~1.5 GiB/s overall, ~2.5 merge-phase (measured) | ≈ swap | 1.73 GiB/s, disk-bound (measured) | ≥ file; same disk ceiling raised by write elision and, where data compresses, by the lz4 ratio (5.6× measured) on disk traffic |
+| RSS under pressure | pins to cgroup cap; 0.40 GiB with lz4+PAGEOUT (measured) | kernel-managed, opaque | working window, ~376 MB at 64 threads (measured) | budget, by construction |
+| Worker stall profile | unbounded; 97% sys time single-threaded (measured) | ≈ swap, plus dirty-page writeback at kernel discretion | bounded but eager: every pageout pays serialize+write | ≤ ~1 ms bounded per eviction (sync executor); ~0 (off-worker) |
+| Per-chunk metadata | none | none | dominant at scale (measured, see model) | none (free-list) |
+| Cold point lookup into sealed state | n/a today (resident); per-touched-4 KiB fault if it paged | per-touched-4 KiB fault | whole-chunk rehydrate minimum | one page read, ~0.1–1 ms (Layer 3) |
+| Hydration RSS | working set (kernel may lag) | working set, kernel-paced relief | unbounded on the columnar path | budget, with build at device write bandwidth (Layer 3) |
+
+No dedicated lgalloc benchmarks exist in our record; its column is inferred from sharing the kernel fault path with swap, with the added caveat of file-backed dirty writeback.
+Treat it as qualitatively-swap rather than independently measured.
+
+The "this design" column assumes file extents.
+On the swap-backed extent store (see Layer 1), write costs match the measured lz4+`MADV_PAGEOUT` line (compress plus synchronous reclaim of the compressed range), and the read path replaces the `O_DIRECT` `pread` with `MADV_WILLNEED`-prefetched swap-in over 5.6× fewer bytes — kernel-serviced, so the low-thread reclaim ceilings soften the merge-throughput rows toward the swap column while the RSS, stall-bounding, metadata, and elision rows hold.
+
+### What the estimates assume, and where they could be wrong
+
+* **Write elision rate.**
+  The merge-throughput gains assume a meaningful fraction of chunks die unbacked (lazy tier).
+  In steady-state merging this fraction is high (chains turn over continuously); under eager backing it is zero by definition.
+  The staging prototype observed the mechanism directly (see Measured, below): early-hydration churn produced spill-cancellation rates of 100–400/s, each an avoided compress-and-pageout.
+* **Compression ratio.**
+  The 5.6× figure is one workload's arrangement data; the disk-ceiling multiplier scales directly with it and drops to 1× on incompressible data.
+* **Eviction overhead.**
+  Batched `MADV_DONTNEED` at 2 MiB granularity is assumed cheap; the vmcache results say page-table work serializes at high eviction rates, and our margin comes from chunk granularity (~500× fewer operations per byte than 4 KiB paging).
+  A workload that thrashes the budget boundary could still expose this.
+* **Epoch latency.**
+  Eviction waits one epoch (one yield cycle) per chunk; a worker stuck in a long-running operator step delays reclaim process-wide.
+  This is an accounting hazard, not a throughput one, but it can transiently overshoot the budget.
+* **Single-thread sync-executor estimate.**
+  The ~0.6 GiB/s figure assumes read-process-write serialization per chunk with no overlap; it degrades toward the file backend's numbers if compression runs on-worker (see cost model) and improves toward device/2 with the io_uring middle path.
+
+### Measured: the staging prototype (June 2026)
+
+Milestone 2's swap-backed prototype ran on staging under the upsert-v2 source stash — a hydration workload that accumulates backlog while persist catches up — and replaced several estimates above with measurements.
+
+* **Bounded accumulation holds, at ~3000× past the budget.**
+  The workload accumulated ~395 GiB of logical stash (70.6 GiB of lz4 extents on the swap device; the 5.6× ratio reproduced on production-shaped data) while pool residency held at the configured 128 MiB floor and the process's anonymous RSS stayed under ~8.5 GiB.
+  Of that, ~3 GiB is the merge engine's working set, flat as the backlog grew — it scales with chunk size and concurrency, not state size.
+* **The kernel never reclaimed.**
+  Cgroup `pgscan` stayed zero across the run, and the pool VMAs showed `Swap: 0` throughout: the engine evicts ahead of pressure by construction, and slots are only ever discarded, never kernel-paged.
+* **Page tables tracked the compressed ledger at ~0.2–0.4%** (82–250 MiB against 20–70 GiB of extents) — the slot-per-resident economics the Address space section argues for, observed.
+* **Die-young elision is real and visible.**
+  Early in hydration the chains are small and merge constantly, so chunks die younger than the spill queue's latency: cancellations ran at 100–400/s — each an avoided write — decaying to zero as chains matured and lifetimes stretched.
+  The same churn saturated the bounded spill queue and pushed eviction inline onto workers; growable spill-thread counts and churn-aware victim selection (skip the youngest chains) are the identified follow-ups.
+* **Eviction must not run on workers unguarded.**
+  A first cut let every worker attempt budget enforcement concurrently; `madvise` plus lock contention pinned CPUs.
+  Single-flight enforcement over a resident-only queue plus dedicated spill threads resolved it — for the swap-backed store, where page-table work dominates eviction cost, the off-worker executor is the prototype's de facto answer to the I/O execution question.
+* **Extents must be sized to the compressed payload.**
+  Allocating lz4's worst case inflated swap writeback ~5.6×; at hydration eviction rates this backed up device writeback and bloated the working set with in-flight pages.
+  Compressing into reused scratch and allocating exact (page-rounded) extents fixed it.
+* **Size classes must cover the chunk shapes the ship heuristic actually produces.**
+  The batcher's capacity heuristic yields bimodal chunks (≈1.8–2.0 and 3.6–4.0 MiB serialized); without 4 and 8 MiB classes the large mode silently fell back to unpageable heap.
+* **Boundedness is phase-scoped, and drains are the sharp edge.**
+  Accumulation is budget-bounded; the drain initially was not: `Batcher::seal` materialized the entire ship side before the drain consumed it, an O(backlog) rehydration observed live at ~80 GiB RSS when persist caught up.
+  The stash drain now rehydrates sealed chunks one at a time; the arrangement-build path inside `arrange_core` retains the same materialization (see Open questions).
+* **Working-set metrics misread this architecture.**
+  `MADV_PAGEOUT` leaves clean swap-cache copies that the kernel, absent pressure, never drops; cgroup working-set charges them, so dashboards show the ledger as linear "memory growth" that is actually droppable cache.
+  Anonymous RSS is the honest health signal.
+  The cache also earns its keep: ~99% of observed fault-ins were served from it as minor faults — an accidental free middle tier between the pool and the device.
+
+## Minimal viable prototype and milestones
+
+1. **Extent store under the existing file backend.**
+   Same `Handle` API; per-chunk files replaced by pooled extents.
+   Validates: inode-churn elimination (re-run the workload that measured 35.6 s of unlink), `O_DIRECT` alignment plumbing, allocator fragmentation under merge churn.
+   Exercisable in CI and on dev boxes regardless of production volume topology; production nodes today mount no filesystem (the whole disk is swap), so this backend deploys per cluster class as scratch volumes appear, and milestone 2's initial production backend is the swap-backed store.
+2. **Buffer pool under the batcher.**
+   Size-class regions, state words, write-behind, lifecycle eviction; integrated behind `ColumnPager` so the merge batcher is unchanged above the seam.
+   Initial production backend is the swap-backed extent store, generalizing the measured lz4+`MADV_PAGEOUT` path; the file backend benches head to head wherever hardware allows.
+   Validates: RSS bounded by budget under the pager design doc's merge benches; dead-chunk write elision rate; worker threads never in reclaim (`pgscan_direct` flat); throughput at least matching the better of today's two backends at 1, 16, and 64 threads.
+   Also decides the I/O execution model: run the same benches under the on-worker and off-worker executors, measuring operator-step time inflation from on-worker stalls and cold-merge throughput with and without read overlap.
+   At this milestone the pager's swap and file backends are deletable — its only two consumers route through this seam.
+   Node-level swap is unaffected; it remains the backstop for everything outside the pool (see "Incremental migration: coexisting with swap").
+3. **Borrow-safety prototype for Layer 3.**
+   A paged `BatchContainer` for one container type plus an audit (and assertion machinery) that no consumer holds a container borrow across a yield.
+   If differential's `Chunk` abstraction lands first, this milestone re-targets to a paged `Chunk` implementor and the audit narrows to the inner-cursor fault points (see "Integration with differential's `Chunk` abstraction").
+   This is the step most likely to send the design back for revision; do it before committing to the full format.
+4. **Paged sealed batches for one spine.**
+   `ValRowSpine` (upsert feedback) first: single consumer, batched lookups, no interactive peeks.
+   Validates: bounded-RSS hydration end to end; merge throughput with readahead; cold-seek latency.
+5. **General arrangements and peek-aware policy.**
+   Eager-backing thresholds, per-dataflow priorities, rollout to compute indexes.
+
+## Incremental migration: coexisting with swap
+
+"Swap" names two different things, and the migration story differs for each.
+
+The *pager's swap backend* is an implementation detail with exactly two consumers (the compute batchers and the storage upsert stash), both already behind the `ColumnPager` seam and per-consumer flags.
+The pool replaces it consumer by consumer, each flip independent, dyncfg-driven, and reversible; the backend is deletable when the last consumer flips.
+
+*Node-level swap* is the process-wide backstop under every anonymous allocation: lgalloc-backed columnation arrangements, persist's arrow buffers, operator heap state, allocator headroom.
+It must remain provisioned until every source of large allocations has a different mechanism — a long tail that includes projects outside this design's scope, and one this design must coexist with rather than wait for.
+Nothing here assumes swap is absent; nothing here breaks when it is present.
+
+### Coexistence semantics
+
+Pool-resident pages are ordinary anonymous memory, so under global pressure the kernel may swap them — engine-managed and kernel-managed reclaim overlap, with two consequences.
+
+The first is wasted swap write-out: the kernel may page out pool-resident chunks the engine would have dropped (dead soon) or written more cheaply (compressed, to an extent).
+This is bounded by keeping the pool budget comfortably under the container limit, so kswapd rarely finds pool pages in its reclaim scans; pressure signals (PSI, `pgscan` rates) feed the existing dyncfg machinery to shrink the budget when the rest of the process grows.
+
+The second would be double I/O on fault-in — a `pread` into pages the kernel swapped out triggers swap-in of data about to be overwritten — but fault-in is overwrite-by-construction, so the engine issues `MADV_DONTNEED` on the destination range first: any swap copy is discarded, the range refills as zero pages, and no swap-in occurs.
+The lifecycle-knowledge advantage survives coexistence intact.
+
+`mlock`ing the pool would partition cleanly — pool memory engine-managed only, everything else kernel-managed — at the cost of a `RLIMIT_MEMLOCK`/capability dependency in the container environment.
+It is a hardening option, not a requirement; budget headroom plus pre-fault `MADV_DONTNEED` covers the common case without it.
+
+Swap also keeps a role this design is glad to have: defense in depth.
+A misconfigured budget degrades into kernel paging rather than an OOM kill, and operators retain the existing knob while confidence in the pool's accounting builds.
+
+### No filesystem yet: deployment starts swap-backed
+
+Production nodes currently provision the entire disk as swap, so the file extent store has nowhere to live on day one, and the deployment order inverts the layer order: Layers 2 and 3 ship first on the swap-backed extent store, and file extents light up per cluster class as scratch volumes appear.
+This is less of a detour than it looks.
+The swap-backed store is a refactor and generalization of the already-measured lz4+`MADV_PAGEOUT` strategy, not new I/O infrastructure, and everything above the extent interface — the pool, the state machine, the policy, the Layer 3 format — is backend-agnostic by construction.
+Switching a cluster from swap-backed to file extents is a configuration change, not a migration; the bytes are recreatable, so the switch does not even need to preserve them.
+It also reframes the volume-topology question for operators: provisioning a scratch filesystem becomes a per-cluster-class performance decision (buying the explicit read path and `O_DIRECT` writes) rather than a prerequisite for the architecture.
+
+### What shrinks, and when
+
+Each consumer the pool absorbs leaves the swap working set: first the batcher chunks (milestone 2), then sealed columnar batches (milestones 3–5).
+Columnation-era arrangements stay on lgalloc until the columnar path subsumes them — a separate project — and persist's buffers and operator heap state have their own timelines.
+Swap provisioning shrinks correspondingly, from working-set-sized toward insurance-sized; turning it off is a per-cluster operational decision for when monitoring shows negligible swap traffic, not a milestone of this design.
+
+## Remote extents: the object-store direction
+
+The extent store's contract — write compressed bytes, get an opaque handle; explicit, non-faulting reads; free — is already an object-store contract, and nothing in Layers 2–3 assumes the backing device is local.
+An S3-backed extent store is therefore an extension point of this design rather than a successor to it.
+This section records where the literature sits so the option stays deliberately reachable; none of it is committed work.
+
+The relevant literature splits into four veins.
+
+* **Cloud-native database tiering** (Snowflake, NSDI 2020; Socrates/SQL Hyperscale, SIGMOD 2019; Neon) is unanimous on architecture: object storage is never placed directly behind a synchronous miss; a local cache tier — Snowflake's ephemeral SSD file cache, Socrates' RBPEX buffer-pool extension — always sits between.
+  Translated here: S3 extents would not replace swap or file extents but sit below them, a third rung on the ladder (RAM pool → local extents → object segments).
+* **Object-store I/O economics** (AnyBlob — Durner, Leis & Neumann, VLDB 2023) quantifies the device: ~10–30 ms first-byte latency regardless of size, bandwidth effectively free, requests priced.
+  Saturating throughput takes ~8–16 MiB requests at dozens-to-hundreds of concurrent in-flight GETs under an engine-integrated download scheduler.
+  Two consequences: compressed extents are far too small to be objects and must coalesce into multi-extent **segments** with an extent → (segment, offset) indirection; and the batched-seek cursor (see Layer 3) stops being an optimization and becomes the API that lets a download manager turn a probe set into few, large, parallel requests.
+* **Far memory** (Infiniswap, NSDI 2017; Fastswap; Hermit, NSDI 2023; versus AIFM, OSDI 2020) settles the interface question: transparent page-granular remote paging amplifies unacceptably over high-latency links, and application-integrated, object-granular access with explicit dereference scopes wins decisively.
+  AIFM's deref scope is this design's pin, one network hop further out — the handle-and-pin discipline adopted in Layer 2 (and unavailable to lgalloc-style always-valid pointers) is precisely what makes a remote backend viable at all.
+* **Log-structured lifecycle** (LFS and its cleaning literature; RAMCloud's log cleaner; RocksDB-Cloud) names the new problem the tier brings: immutable remote segments turn `free` from a deallocation into garbage accumulation, so live-ratio tracking and segment compaction — machinery the swap backend's plain `dealloc` made unnecessary — arrive with the tier.
+
+What changes if this ships: the synchronous executor dies (a 10+ ms remote stall is not a 100 µs decompress, so the asynchronous prefetch path stops being a measured choice and becomes mandatory), and `free` becomes refcounted segment GC.
+What does not change: the pool, the budget, the chunk states, pins, and the extent seam itself.
+
+Two pragmatics temper the ambition.
+First, a zero-code intermediate exists: swapping to network block storage (EBS-class) extends capacity past the local device with no engine changes at all — the kernel does not care that the swap device is network-attached — and should be benched before any of this is built.
+Second, Materialize already operates an S3-backed, locally-cached, compacted store of immutable blobs: persist.
+Remote extents would reconstruct persist's bottom half (blob interface, cache, GC) for pre-consolidation state, so the load-bearing design question is not how to talk to S3 but whether cold extents become a tenant of persist's blob and cache layers or a deliberately separate mini-store.
+The prize that makes the question worth eventually answering is durability of state across process death: today a restart re-ingests the backlog from the source, where re-attaching to remote segments would turn restart into cache warming — the Snowflake/Neon elasticity story, and the reason warm restart sits in Out of scope as a follow-up rather than a non-goal.
+
+## Prior art
+
+The design is an application of the modern buffer-manager literature to a workload with unusually favorable properties; the mapping is deliberate and close.
+
+* **Umbra** (Neumann & Freitag, CIDR 2020, [pdf](https://db.in.tum.de/~freitag/papers/p29-neumann-cidr20.pdf)).
+  Size-class anonymous VM regions, `MADV_DONTNEED` release, variable-size pages so large objects stay contiguous, and the stance that all data structures share one buffer-managed budget — Layers 1–2 adopt all four.
+  Umbra's versioned latches and pointer swizzling are replaced by pins/epochs over residency-scoped slots, because immutability and yield-bounded borrows make them unnecessary.
+* **LeanStore** (Leis et al., ICDE 2018, [pdf](https://db.in.tum.de/~leis/papers/leanstore.pdf); NVMe redesign VLDB 2024).
+  The governing insight: make the resident path free and pay translation only at the disk boundary.
+  Its cooling-FIFO replacement policy survives here only as a backstop, because the engine has lifecycle knowledge LeanStore must speculate about.
+* **vmcache** (Leis et al., SIGMOD 2023, [pdf](https://www.cs.cit.tum.de/fileadmin/w00cfj/dis/_my_direct_uploads/vmcache.pdf)).
+  Per-page atomic state words and explicit fault/evict over anonymous memory; Layer 2's chunk model is vmcache minus dirty states.
+  Its lifetime-stable page addresses, however, are deliberately *not* adopted: vmcache maps virtual memory one-to-one with storage (paying a budgeted ~2 GB of page tables per TB) to serve optimistic restartable readers and pointer graphs, neither of which exists here, and backlog-shaped state inverts the economics — see "Address space and translation".
+  Its companion measurement — eviction throughput ceilinged by `madvise`/TLB-shootdown costs, fixed there by the exmap kernel module — is the constraint our 2 MiB granularity is designed around.
+* **mmap critique** (Crotty et al., CIDR 2022, [pdf](https://db.cs.cmu.edu/papers/2022/cidr2022-p13-crotty.pdf)).
+  Why kernel-controlled paging (including our swap backend) fails: unschedulable synchronous faults, single-threaded reclaim, TLB shootdowns.
+  The pager design doc's swap-backend measurements are an independent reproduction.
+* **NVMe I/O stack** (Haas & Leis, VLDB 2023, [pdf](https://vldb.org/pvldb/vol16/p2090-haas.pdf)).
+  `O_DIRECT` plus engine-managed buffering; deep async queues matter at 4 KiB pages, synchronous threads suffice at large transfers.
+  Grounds the spill-thread choice and the io_uring deferral.
+* **LSM design space** (Dong et al., CIDR 2017; Dayan & Idreos, *Dostoevsky*, SIGMOD 2018; Lu et al., *WiscKey*, FAST 2016, [pdf](https://www.usenix.org/system/files/conference/fast16/fast16-papers-lu.pdf)).
+  Compaction math and key-value separation.
+  With durability deleted, an LSM reduces to exactly what a differential spine already is; WiscKey informs the value-separation option, tempered by the consolidation conflict noted above.
+* **DuckDB** ([memory management](https://duckdb.org/2024/07/09/memory-management)).
+  Native-format spill (eviction = unpin, no serialization) and recycled temp-file slots — Layer 1's direct precedent.
+* **Flink on RocksDB** ([guide](https://flink.apache.org/2021/01/18/using-rocksdb-state-backend-in-apache-flink-when-and-how/)); **ForSt** (Mei et al., VLDB 2025, [pdf](https://www.vldb.org/pvldb/vol18/p4846-mei.pdf)).
+  The negative example: a byte-API KV store under a dataflow engine pays serialization on every access and fights two compaction schedulers and two caches.
+  ForSt's disaggregated architecture (durable state remote, local disk a cache) is the architecture Materialize already has with persist; its async state access is out of scope here.
+* **BtrBlocks** (Kuschewski et al., SIGMOD 2023).
+  Compression applied at the pool/storage boundary with hot data uncompressed in buffer-managed pages; grounds the compression placement and is the natural format conversation for the persist-alignment north star.
+* **B-tree alternatives** (LMDB; Wang et al. on the Bw-tree, SIGMOD 2018; Callaghan's amplification framework; Hao & Chandramouli, *Bf-Tree*, VLDB 2024, [pdf](https://vldb.org/pvldb/vol17/p3442-hao.pdf)).
+  An update-in-place or COW disk B-tree pays random-write amplification to buy point-read latency that immutable runs plus resident fence-key indexes can serve at one read per cold seek.
+  Bf-Tree's variable-length mini-pages — simultaneously a record cache and a write buffer — are the precedent for the record-granular caching open question.
+* **Hot/cold hybrids and filter sizing** (Zhou et al., *2-Tree*, CIDR 2023; DeBrabant et al., *Anti-Caching*, VLDB 2013; Dayan, Athanassoulis & Idreos, *Monkey*, SIGMOD 2017).
+  Record-granular hot/cold migration (2-Tree, anti-caching) is the deferred alternative if probe traffic defeats page-granular residency; Monkey's optimal per-level filter allocation applies directly to per-run filters, since spine runs are LSM levels in all but name.
+
+## Alternatives
+
+### Embed RocksDB (or any general-purpose KV store)
+
+Rejected.
+Flink's experience is the controlled experiment: per-access serialization across a byte-oriented API, a second compaction scheduler fighting differential's fueled merges, a second cache (block cache) double-buffering against ours, and opaque memory accounting.
+Differential already owns sorted-run maintenance; the missing piece is run storage, not a storage engine.
+
+### File-backed mmap of scratch files (the lgalloc architecture)
+
+This alternative is not hypothetical: lgalloc is its production-tested instance, and it still backs columnation arrangements today (see Background).
+Rejected for new work per Crotty et al., our own swap-backend data, and the operational record: faults are synchronous and unschedulable on worker threads, reclaim is kernel-paced, writeback timing is invisible, and policy has to be approximated from below the allocation boundary with an accumulating set of knobs.
+This design keeps what lgalloc got right — size-classed regions over a scratch volume — and keeps virtual memory as a translation mechanism (anonymous regions, explicit I/O) while rejecting kernel-controlled paging: the vmcache position.
+
+### Keep the two-backend pager and optimize it
+
+Extent pooling (Layer 1) fixes the file backend's inode churn, and `MADV_PAGEOUT` batching could soften swap's reclaim storms, but the blob model itself caps the ceiling: whole-chunk rehydration on every access, residency decided irrevocably at pageout time, no path to paging sealed batches, and two backends each accidentally good at half the workload.
+Layer 2 subsumes both backends' strengths in one mechanism.
+
+### Pure disk-first (every chunk written at seal)
+
+Rejected as a universal policy, adopted as a per-level policy.
+Universal eager backing imposes a write floor proportional to merge traffic — most batcher chunks die in seconds, and differential rewrites each record O(log n) times — which is unaffordable on EBS-class scratch and wasteful everywhere.
+The eager/lazy threshold (see Backing policy) keeps disk-first's benefits where they are real: deep, sealed, long-lived state.
+
+### Optimistic latches instead of epochs
+
+Umbra's readers validate a version counter and restart on conflict, which permits eviction under active readers.
+Differential cursor consumers receive borrows and cannot be restarted, so validation has nowhere to jump back to.
+Epochs cost nothing on the read path and only delay eviction by one yield cycle; the flexibility lost is flexibility this workload cannot use.
+
+## Open questions
+
+* **Epoch mechanics.**
+  Per-worker epoch counters advanced at yield, with the evictor taking a min — or a pin-count fallback for any consumer found to hold borrows across yields?
+  Milestone 3 exists to answer this empirically; the assertion machinery should ship regardless.
+* **Owned vs. pinned API for the first cut of Layer 2.**
+  Keeping `take`-style owned rehydration (one memcpy out of the pool) eases migration; pinned borrows are the end state; builders allocating pool memory directly (zero-copy seal) is the end-end state.
+  Recommend owned-first, with the chunk handle designed so pinning is additive.
+* **Budget topology.**
+  One global pool with per-dataflow priorities, or partitioned pools per cluster replica role?
+  Peek-serving arrangements need protection from hydration floods either way; the simplest sufficient mechanism is preferred.
+* **I/O execution model.**
+  On-worker synchronous (Umbra's simplicity), dedicated spill threads (LeanStore's page provider), or the middle path of on-worker io_uring readahead with synchronous writes?
+  Milestone 2 decides on measured operator-step inflation and cold-merge throughput; if threads win, count and placement (per-process vs per-worker, NUMA) follow as second-order questions.
+* **Eager-backing threshold.**
+  Spine level, batch byte size, or batch age?
+  Level is the principled choice; byte size is the robust one when spines are shallow.
+* **Value separation threshold.**
+  Inline-vs-out-of-line cutoff for large rows, pending the dereference-rate measurement during merges of real upsert state.
+* **Record-granular hot caching.**
+  If sparse cold probes dominate some workloads even with small leaves, filters, and uncompressed lookup tiers, the page is the wrong caching unit for that traffic, and a record cache above the pool (Bf-Tree's mini-pages are the precedent) becomes worth its complexity.
+  Decide on milestone 4 evidence rather than speculation.
+* **Drain-side materialization in `arrange_core`.**
+  Differential's `Batcher::seal` returns a materialized `Vec` of chunks and `Builder::seal` consumes it whole, so arrangement construction rehydrates an entire sealed run at once — measured on staging as the dominant drain-phase RSS spike once the stash drain went chunk-at-a-time.
+  Bounding it requires an iterator-shaped seam between batcher and builder in differential's trait pair (or the `Chunk`-based path, where a paged chunk transits by handle and nothing rehydrates); sizing data from the fixed-stash runs decides urgency.
+* **Scratch exhaustion.**
+  When the extent store fills: stop evicting and let RSS grow (current behavior, in effect), or backpressure ingestion?
+  Needs an answer before eager backing ships, since eager mode writes more.

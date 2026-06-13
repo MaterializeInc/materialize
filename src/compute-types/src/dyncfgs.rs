@@ -75,8 +75,9 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
 pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
     "column_paged_batcher_budget_fraction",
     0.05,
-    "Fraction of replica memory the column-paged batcher's tiered policy may hold resident \
-     before spilling to the backend. Total budget = max(mem_limit * fraction, 128 MiB).",
+    "Fraction of physical RAM the column-paged batcher may hold resident before spilling \
+     (resident budgets derive from RAM, never from announced limits that include swap). \
+     Total budget = max(ram * fraction, 128 MiB).",
 );
 
 /// Compress chunks the column-paged batcher spills, using lz4. Only
@@ -113,6 +114,70 @@ pub const COLUMN_PAGED_BATCHER_SWAP_PAGEOUT: Config<bool> = Config::new(
     "Eagerly evict the column-paged batcher's lz4-compressed swap-backend spill chunks from RSS \
      via `MADV_PAGEOUT` (they otherwise receive no madvise and are reclaimed only lazily). Only \
      meaningful when `column_paged_batcher_lz4 = true` and the swap backend is active.",
+);
+
+/// Route column-paged batcher spill through the buffer pool
+/// (`mz_ore::pool`, swap-backed extents) instead of the tiered pager
+/// backends. The pool owns residency: chunks stay resident at stable
+/// addresses until its budget (the same fraction-derived total as the
+/// tiered policy's) forces compression into swap-backed extents, and
+/// chunks consumed before eviction never cost a write at all. The backend
+/// and lz4 configs are ignored in pool mode; the pool always compresses at
+/// the eviction boundary. Falls back to the tiered path if the pool's
+/// virtual reservation fails.
+pub const COLUMN_PAGED_BATCHER_USE_POOL: Config<bool> = Config::new(
+    "column_paged_batcher_use_pool",
+    false,
+    "Route column-paged batcher spill through the buffer pool (swap-backed extents) instead of \
+     the tiered pager backends. Only meaningful when `enable_column_paged_batcher_spill = true`.",
+);
+
+/// Number of buffer-pool spill threads performing eviction I/O (lz4
+/// compression plus the synchronous-reclaim `MADV_PAGEOUT`) off the threads
+/// that trip the budget. Zero evicts inline on the calling thread, which
+/// measurably convoys workers behind eviction I/O at hydration eviction
+/// rates. Thread spawning is once per process: raising the value later has
+/// no effect beyond re-enabling, and lowering it to zero falls back to
+/// inline eviction while spawned threads idle.
+pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT: Config<usize> = Config::new(
+    "column_paged_batcher_spill_worker_count",
+    2,
+    "Buffer-pool spill threads for off-worker eviction I/O; 0 evicts inline on the caller.",
+);
+
+/// Eagerly compress unbacked buffer-pool chunks to `BackedResident` on idle
+/// spill threads (write-behind). The chunk stays readable in its slot while
+/// a compressed extent accumulates on the swap device, so budget-driven
+/// eviction becomes a pure page release instead of a compression. Trades
+/// background CPU (compression of chunks that may die before pressure
+/// reaches them) for near-free pressure response.
+pub const COLUMN_PAGED_BATCHER_EAGER_BACKING: Config<bool> = Config::new(
+    "column_paged_batcher_eager_backing",
+    false,
+    "Eagerly compress buffer-pool chunks to compressed-but-resident on idle spill threads, so \
+     budget-driven eviction is a pure page release. Only meaningful in pool mode with spill \
+     workers.",
+);
+
+/// Ceiling on the buffer pool's total RSS, as a fraction of *physical RAM*
+/// (never the announced limit, which includes swap on swap-provisioned
+/// nodes). The compressed-but-resident extent tier is the headroom above the
+/// slot budget and warm cap: chunks evicted from the budget stay in RAM
+/// compressed (~5.6x denser; reads decompress without faulting) until this
+/// ceiling forces the oldest extents out to the swap device via
+/// `MADV_PAGEOUT`. Zero collapses the tier: extents page out as soon as
+/// they are written.
+///
+/// The default pairs with the 0.05 budget default to leave ~20% of RAM for
+/// the compressed tier — the same share zswap's default compressed pool
+/// takes, and roughly RAM-sized logical coverage at the measured ~5.6x
+/// ratio — while keeping three quarters of RAM for everything else in the
+/// process.
+pub const COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION: Config<f64> = Config::new(
+    "column_paged_batcher_pool_rss_target_fraction",
+    0.25,
+    "Ceiling on the buffer pool's total RSS as a fraction of physical RAM; the headroom above \
+     the slot budget holds compressed-but-resident extents. Zero pages extents out immediately.",
 );
 
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
@@ -536,4 +601,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_LZ4)
         .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
+        .add(&COLUMN_PAGED_BATCHER_USE_POOL)
+        .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
+        .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
+        .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
 }
