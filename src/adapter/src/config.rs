@@ -53,6 +53,11 @@ pub enum SystemParameterSyncClientConfig {
     LaunchDarkly {
         /// The LaunchDarkly SDK key
         sdk_key: String,
+        /// Overrides the LaunchDarkly streaming, polling, and events endpoints
+        /// with a single base URL (as for a relay proxy). `None` uses
+        /// LaunchDarkly's default endpoints. Primarily for pointing the SDK at
+        /// a mock server in tests.
+        base_uri: Option<String>,
         /// Function to return the current time.
         now_fn: NowFn,
     },

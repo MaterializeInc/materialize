@@ -75,9 +75,14 @@ impl SystemParameterFrontend {
                 key_map: sync_config.key_map.clone(),
                 metrics: sync_config.metrics.clone(),
             }),
-            SystemParameterSyncClientConfig::LaunchDarkly { sdk_key, now_fn } => Ok(Self {
+            SystemParameterSyncClientConfig::LaunchDarkly {
+                sdk_key,
+                base_uri,
+                now_fn,
+            } => Ok(Self {
                 client: SystemParameterFrontendClient::LaunchDarkly {
-                    client: ld_client(sdk_key, &sync_config.metrics, now_fn).await?,
+                    client: ld_client(sdk_key, base_uri.as_deref(), &sync_config.metrics, now_fn)
+                        .await?,
                     ctx: ld_ctx(&sync_config.env_id, sync_config.build_info)?,
                 },
                 metrics: sync_config.metrics.clone(),
@@ -183,7 +188,12 @@ impl<T: HttpTransport> HttpTransport for MetricsTransport<T> {
     }
 }
 
-fn ld_config(api_key: &str, metrics: &Metrics, now_fn: &NowFn) -> ld::Config {
+fn ld_config(
+    api_key: &str,
+    base_uri: Option<&str>,
+    metrics: &Metrics,
+    now_fn: &NowFn,
+) -> ld::Config {
     let transport = launchdarkly_sdk_transport::HyperTransport::builder()
         .connect_timeout(Duration::from_secs(10))
         .read_timeout(Duration::from_secs(300))
@@ -207,19 +217,24 @@ fn ld_config(api_key: &str, metrics: &Metrics, now_fn: &NowFn) -> ld::Config {
     let mut data_source = ld::StreamingDataSourceBuilder::new();
     data_source.transport(data_source_transport);
 
-    ld::ConfigBuilder::new(api_key)
+    let mut config = ld::ConfigBuilder::new(api_key)
         .event_processor(&event_processor)
-        .data_source(&data_source)
-        .build()
-        .expect("valid config")
+        .data_source(&data_source);
+    if let Some(base_uri) = base_uri {
+        let mut endpoints = ld::ServiceEndpointsBuilder::new();
+        endpoints.relay_proxy(base_uri);
+        config = config.service_endpoints(&endpoints);
+    }
+    config.build().expect("valid config")
 }
 
 async fn ld_client(
     api_key: &str,
+    base_uri: Option<&str>,
     metrics: &Metrics,
     now_fn: &NowFn,
 ) -> Result<ld::Client, anyhow::Error> {
-    let ld_client = ld::Client::build(ld_config(api_key, metrics, now_fn))?;
+    let ld_client = ld::Client::build(ld_config(api_key, base_uri, metrics, now_fn))?;
     tracing::info!("waiting for SystemParameterFrontend to initialize");
     ld_client.start_with_default_executor();
 
