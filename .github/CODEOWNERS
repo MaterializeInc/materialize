@@ -80,6 +80,7 @@
 /src/metabase
 /src/mysql-util                     @MaterializeInc/cluster
 /src/mz                             @MaterializeInc/integrations
+/src/mz-deploy                      @sjwiesman
 /src/npm
 /src/orchestrator                   @MaterializeInc/cloud
 /src/orchestrator-kubernetes        @MaterializeInc/cloud

@@ -58,6 +58,7 @@ members = [
     "src/mysql-util",
     "src/mz",
     "src/mz-debug",
+    "src/mz-deploy",
     "src/npm",
     "src/oidc-mock",
     "src/orchestrator",
@@ -184,6 +185,7 @@ default-members = [
     "src/mysql-util",
     "src/mz",
     "src/mz-debug",
+    "src/mz-deploy",
     "src/npm",
     "src/oidc-mock",
     "src/orchestrator",
@@ -267,6 +269,7 @@ rust-version = "1.96.0"
 ahash = { version = "0.8.12", default-features = false }
 aho-corasick = "1.1.4"
 allocation-counter = "0"
+annotate-snippets = "0.12.15"
 anyhow = "1.0.102"
 array-concat = "0.5.5"
 arrayvec = "0.7.6"
@@ -311,6 +314,7 @@ cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["case-insensitive", "serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
+clap_complete = "4.6.2"
 columnar = "0.13.0"
 columnation = "0.1.2"
 compact_bytes = "0.2.1"
@@ -320,6 +324,7 @@ crc32fast = "1.5.0"
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5.15"
+crossterm = { version = "0.28.1", default-features = false }
 csv = "1.4.0"
 csv-async = { version = "1.3.1", features = ["tokio"] }
 csv-core = "0.1.13"
@@ -419,6 +424,7 @@ opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["experimental_trace_batch_span_processor_with_async_runtime", "rt-tokio"] }
 ordered-float = { version = "5.1.0", features = ["serde"] }
 os_info = "3.11.0"
+owo-colors = "4.3.0"
 parquet = { version = "57", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
 paste = "1.0.15"
 pem = "3.0.6"
@@ -453,6 +459,7 @@ quote = "1.0.45"
 rand = "0.9.4"
 rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
 rand_chacha = "0.9.0"
+rayon = "1.12.0"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = "1.12.3"
@@ -464,6 +471,7 @@ rlimit = "0.11.0"
 rocksdb = { version = "0.24.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rpassword = "7.5.1"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 ryu = "1.0.23"
 schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
@@ -495,6 +503,7 @@ stacker = "0.1.24"
 static_assertions = "1.1"
 strsim = "0.11.1"
 subtle = "2.6.1"
+supports-color = "3.0.2"
 syn = { version = "2.0.117", features = ["extra-traits", "full", "parsing", "printing"] }
 sysctl = "0.7.1"
 sysinfo = "0.29.11"
@@ -582,6 +591,20 @@ lto = "thin"
 # and ship it separately to an s3 bucket before building their
 # docker containers.
 debug = 2
+
+# Optimized-for-size profile for mz-deploy. The workspace release profile
+# targets environmentd/clusterd which need debug info for core dump analysis.
+# mz-deploy is a CLI tool distributed via
+# Homebrew, so we optimize for binary size instead:
+#
+#   - debug = false:      no debug info (saves ~16MB vs debug = 2)
+#   - lto = "fat":        full cross-crate dead code elimination
+#   - codegen-units = 1:  better inlining/DCE at cost of compile time
+[profile.release-mz-deploy]
+inherits = "release"
+debug = false
+lto = "fat"
+codegen-units = 1
 
 [profile.optimized]
 inherits = "release"
