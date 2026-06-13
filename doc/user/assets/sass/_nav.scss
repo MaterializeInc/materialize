@@ -52,15 +52,15 @@
     }
 
     a:not([class*="btn"]) {
+        font-weight: 400;
         text-decoration: none;
-        border-bottom: 1px solid transparent;
+        border-bottom: none;
 
         &:hover,
         &:focus,
         &.active {
             text-decoration: none;
-            color: var(--important);
-            border-color: var(--important);
+            color: var(--highlight);
         }
     }
 

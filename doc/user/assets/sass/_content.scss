@@ -32,6 +32,33 @@ h1 {
     margin-bottom: var(--xx-small);
 }
 
+.title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--milli);
+
+    .btn-ghost {
+        flex: 0 0 auto;
+        margin-top: rem(0.45);
+
+        svg {
+            width: rem(1.8);
+            height: auto;
+        }
+    }
+
+    @media(max-width: 850px) {
+        flex-direction: column;
+        align-items: flex-start;
+
+        .btn-ghost {
+            margin-top: calc(-1 * var(--micro));
+            margin-bottom: var(--micro);
+        }
+    }
+}
+
 h2 {
     font-size: var(--h2);
     margin: var(--medium) 0 var(--nano);
@@ -215,10 +242,9 @@ p+p {
     }
 
     .callout {
-        background: var(--brand);
-        border-radius: 3px;
-        padding: 1px;
+        background: var(--card-light);
         border-radius: rem(1.2);
+        border: 1px solid var(--divider-light);
         box-shadow: var(--shadow-default);
 
         &:not(.bottom) {
@@ -340,7 +366,7 @@ p+p {
 
     th {
         color: var(--important);
-        border-bottom: 1px var(--highlight) solid;
+        border-bottom: 1px solid var(--th-border, var(--highlight));
         text-align: left;
         padding: 8px;
         font-size: rem(1.3);
@@ -384,7 +410,7 @@ p+p {
     }
 
     code {
-        font-family: "Fira Code", Courier, monospace;
+        font-family: "Geist Mono", Courier, monospace;
         font-variant-ligatures: none;
         font-size: rem(1.3);
         font-weight: 500;
@@ -885,7 +911,7 @@ p+p {
         top: 0;
 
         &:after {
-            border-bottom: 1px var(--highlight) solid;
+            border-bottom: 1px solid var(--th-border, var(--highlight));
             content: "";
             bottom: -1px;
             left: 0;
@@ -947,7 +973,7 @@ p+p {
     border-radius: $border-radius;
     white-space: nowrap;
     line-height: 2;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Geist', sans-serif;
 
     &.success {
         opacity: 0.8;

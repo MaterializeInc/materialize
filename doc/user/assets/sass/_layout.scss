@@ -247,7 +247,7 @@ table.inline-headings {
     }
 
     code {
-        font-family: "Fira Code", Courier, monospace;
+        font-family: "Geist Mono", Courier, monospace;
     }
 
     .no-children>a,
@@ -278,7 +278,7 @@ table.inline-headings {
     li.level-1 {
         &>a {
             font-weight: 500;
-            color: var(--highlight);
+            color: var(--important);
         }
 
         &>ul {
@@ -417,7 +417,7 @@ table.inline-headings {
     }
 
     code {
-        font-family: "Fira Code", Courier, monospace;
+        font-family: "Geist Mono", Courier, monospace;
         font-variant-ligatures: none;
     }
 }
