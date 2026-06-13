@@ -7,12 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import base64
+import json
 import os
 from textwrap import dedent
 from urllib.parse import quote
 
 import psycopg
 
+from materialize.biglake import bootstrap_namespace
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -59,6 +62,12 @@ CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME = os.getenv(
 CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD = os.getenv(
     "CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD"
 )
+
+# Base64-encoded GCP service account key JSON with access to the GCS bucket,
+# defined in the i2 repository (i2/buildkite.py). The bucket is dedicated to
+# the canary (no age-based object expiry, unlike ICEBERG_GCS_BUCKET).
+QA_CANARY_ICEBERG_GCP_SA_JSON_B64 = os.getenv("QA_CANARY_ICEBERG_GCP_SA_JSON_B64")
+QA_CANARY_ICEBERG_GCS_BUCKET = os.getenv("QA_CANARY_ICEBERG_GCS_BUCKET")
 
 
 SERVICES = [
@@ -130,6 +139,19 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
               URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg',
               WAREHOUSE = 'arn:aws:s3tables:us-east-1:400121260767:bucket/qa-canary-environment',
               AWS CONNECTION = qa_canary_aws_connection
+              )
+
+            > CREATE SECRET IF NOT EXISTS gcp_service_account_key AS decode('{QA_CANARY_ICEBERG_GCP_SA_JSON_B64}', 'base64')
+
+            > CREATE CONNECTION IF NOT EXISTS qa_canary_gcp_connection TO GCP (
+              SERVICE ACCOUNT KEY = SECRET gcp_service_account_key
+              )
+
+            > CREATE CONNECTION IF NOT EXISTS qa_canary_gcs_iceberg_catalog TO ICEBERG CATALOG (
+              CATALOG TYPE = 'rest',
+              URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
+              WAREHOUSE = 'gs://{QA_CANARY_ICEBERG_GCS_BUCKET}',
+              GCP CONNECTION = qa_canary_gcp_connection
               )
         """))
 
@@ -354,6 +376,20 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
               (99, 10, 'Bench Canopy', 'Canopy for providing shade to the bench area', 99.99),
               (100, 10, 'Team Shelter', 'Shelter for the team during games', 199.99);
             """))
+
+    # The Materialize Iceberg sink creates tables but not namespaces, and
+    # BigLake does not auto-create them on first commit (unlike the S3 Tables
+    # bucket, whose `qa_canary_environment` namespace is provisioned alongside
+    # the bucket). Create the BigLake catalog + namespace out of band before
+    # `dbt run` creates the GCS Iceberg sinks, or they fail at runtime with
+    # "Tried to create a table under a namespace that does not exist".
+    assert QA_CANARY_ICEBERG_GCP_SA_JSON_B64 is not None
+    assert QA_CANARY_ICEBERG_GCS_BUCKET is not None
+    bootstrap_namespace(
+        json.loads(base64.b64decode(QA_CANARY_ICEBERG_GCP_SA_JSON_B64)),
+        QA_CANARY_ICEBERG_GCS_BUCKET,
+        "qa_canary_environment",
+    )
 
     c.exec(
         "dbt",
