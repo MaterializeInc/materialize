@@ -78,7 +78,7 @@ struct Catalog {
 }
 
 /// A single `metric!` definition.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct MetricDoc {
     name: String,
     help: String,
@@ -99,10 +99,10 @@ struct MetricDoc {
 
 /// Parses the token body of a `metric!` invocation. Mirrors the grammar in
 /// `mz_ore::metric!`.
-/// Only `name`, `help`, `subsystem`, `visibility`, `tags`, and the label keys
-/// (`var_labels` and the keys of `const_labels`) are retained; the remaining
-/// fields are consumed but discarded so token parsing stays in sync with the
-/// real macro grammar.
+/// Only `name`, `help`, `subsystem`, `visibility`, `tags`, the label keys
+/// (`var_labels` and the keys of `const_labels`), and whether `buckets:` is
+/// present are retained; the remaining fields are consumed but discarded so
+/// token parsing stays in sync with the real macro grammar.
 struct MetricArgs {
     name: Option<Expr>,
     help: Option<Expr>,
@@ -115,6 +115,8 @@ struct MetricArgs {
     const_label_keys: Vec<Expr>,
     /// The `var_labels` names.
     var_labels: Vec<Expr>,
+    /// Whether the metric declares `buckets:`, which makes it a histogram.
+    is_histogram: bool,
 }
 
 impl Parse for MetricArgs {
@@ -127,6 +129,7 @@ impl Parse for MetricArgs {
             tags: Vec::new(),
             const_label_keys: Vec::new(),
             var_labels: Vec::new(),
+            is_histogram: false,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -163,6 +166,11 @@ impl Parse for MetricArgs {
                     let tags = Punctuated::<Expr, Token![,]>::parse_terminated(&content)?;
                     args.tags.extend(tags);
                 }
+                // The presence of `buckets:` is what makes a metric a histogram.
+                "buckets" => {
+                    let _: Expr = input.parse()?;
+                    args.is_histogram = true;
+                }
                 _ => {
                     // Unknown field; consume one expression to stay in sync.
                     let _: Expr = input.parse()?;
@@ -176,8 +184,45 @@ impl Parse for MetricArgs {
     }
 }
 
+/// Expands a histogram metric into the three [`MetricDoc`]s that Prometheus generates.
+/// For each Histogram metric, the Prometheus library generates three series:
+/// * `_bucket`, the cumulative per-bucket counters, which carry an additional `le` label
+/// * `_sum`, the running sum of observed values
+/// * `_count`, the running count of observations
+fn into_histogram_docs(
+    name: &str,
+    help: &str,
+    labels: Vec<String>,
+    source: &str,
+    visibility: MetricVisibility,
+    tags: Vec<MetricTag>,
+) -> Vec<MetricDoc> {
+    let mut bucket_labels = labels.clone();
+    // The `_bucket` series carries the additional synthetic `le` label
+    bucket_labels.push("le".into());
+    bucket_labels.sort();
+    bucket_labels.dedup();
+    let series = [
+        (format!("{name}_bucket"), bucket_labels),
+        (format!("{name}_count"), labels.clone()),
+        (format!("{name}_sum"), labels),
+    ];
+    series
+        .into_iter()
+        .map(|(name, labels)| MetricDoc {
+            name,
+            help: help.to_owned(),
+            labels,
+            source: source.to_owned(),
+            visibility,
+            tags: tags.clone(),
+        })
+        .collect()
+}
+
 impl MetricArgs {
-    fn into_doc(self, source: &str) -> MetricDoc {
+    /// Converts a metric into its YAML representation used for user documentation.
+    fn into_docs(self, source: &str) -> Vec<MetricDoc> {
         let name = self
             .name
             .as_ref()
@@ -190,6 +235,7 @@ impl MetricArgs {
             Some(subsystem) => format!("{}_{name}", subsystem_to_string(subsystem)),
             None => name,
         };
+        let help = self.help.as_ref().map(expr_to_string).unwrap_or_default();
         let visibility = visibility_from_expr(self.visibility.as_ref());
         // A metric's labels are the union of its `var_labels` and the keys of
         // its `const_labels`.
@@ -202,19 +248,24 @@ impl MetricArgs {
         labels.sort();
         labels.dedup();
 
-        let tags = self
+        let tags: Vec<MetricTag> = self
             .tags
             .iter()
             .map(|tag| tag_from_expr(tag, source))
             .collect();
-        MetricDoc {
-            name,
-            help: self.help.as_ref().map(expr_to_string).unwrap_or_default(),
-            labels,
-            source: source.to_owned(),
-            visibility,
-            tags,
+
+        if !self.is_histogram {
+            return vec![MetricDoc {
+                name,
+                help,
+                labels,
+                source: source.to_owned(),
+                visibility,
+                tags,
+            }];
         }
+
+        into_histogram_docs(&name, &help, labels, source, visibility, tags)
     }
 }
 
@@ -358,7 +409,7 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     fn visit_macro(&mut self, mac: &'ast Macro) {
         if macro_named(mac, "metric") {
             match mac.parse_body::<MetricArgs>() {
-                Ok(args) => self.out.push(args.into_doc(self.source)),
+                Ok(args) => self.out.extend(args.into_docs(self.source)),
                 Err(e) => eprintln!("warn: failed to parse metric! in {}: {e}", self.source),
             }
         } else if macro_named(mac, "vec") {
@@ -514,13 +565,25 @@ mod tests {
     }
 
     /// Parses a full `metric!(..)` invocation through the same `MetricArgs`
-    /// path the collector uses, then renders it to a [`MetricDoc`].
-    fn parse_metric(invocation: &str) -> MetricDoc {
+    /// path the collector uses, then renders it to its catalog entries.
+    fn parse_metric_docs(invocation: &str) -> Vec<MetricDoc> {
         let mac: Macro = syn::parse_str(invocation).expect("valid macro invocation");
         let args = mac
             .parse_body::<MetricArgs>()
             .expect("valid metric! arguments");
-        args.into_doc("test.rs")
+        args.into_docs("test.rs")
+    }
+
+    /// Like [`parse_metric_docs`], for the common case of a non-histogram metric
+    /// that yields exactly one [`MetricDoc`].
+    fn parse_metric(invocation: &str) -> MetricDoc {
+        let mut docs = parse_metric_docs(invocation);
+        assert_eq!(
+            docs.len(),
+            1,
+            "expected a single metric doc for {invocation}"
+        );
+        docs.pop().unwrap()
     }
 
     /// The bare minimum: just the required `name` and `help`.
@@ -541,10 +604,11 @@ mod tests {
 
     /// Every optional field present, in canonical macro order, across multiple
     /// lines — mirrors how real metrics are written in the tree. The literal
-    /// `subsystem` is prepended to the name (`<subsystem>_<name>`).
+    /// `subsystem` is prepended to the name (`<subsystem>_<name>`), and because
+    /// `buckets:` is present the metric expands into its histogram series.
     #[mz_ore::test]
     fn parses_realistic_multiline_invocation() {
-        let doc = parse_metric(
+        let docs = parse_metric_docs(
             r#"metric!(
                 name: "step_duration_seconds",
                 help: "The time spent in each compute step_or_park call",
@@ -555,10 +619,34 @@ mod tests {
                 rules: [rule_a(), rule_b()],
             )"#,
         );
-        assert_eq!(doc.name, "compute_step_duration_seconds");
-        assert_eq!(doc.help, "The time spent in each compute step_or_park call");
-        // `var_labels` plus the keys of `const_labels`, sorted.
-        assert_eq!(doc.labels, vec!["cluster", "worker_id"]);
+        let mut names: Vec<_> = docs.iter().map(|d| d.name.clone()).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "compute_step_duration_seconds_bucket",
+                "compute_step_duration_seconds_count",
+                "compute_step_duration_seconds_sum",
+            ]
+        );
+        // The help is carried onto every derived series.
+        assert!(
+            docs.iter()
+                .all(|d| d.help == "The time spent in each compute step_or_park call")
+        );
+        // The `_bucket` series carries `le` alongside the base labels
+        // (`var_labels` plus the keys of `const_labels`); `_sum`/`_count` keep
+        // just the base labels.
+        let labels_of = |suffix: &str| {
+            docs.iter()
+                .find(|d| d.name.ends_with(suffix))
+                .unwrap()
+                .labels
+                .clone()
+        };
+        assert_eq!(labels_of("_bucket"), vec!["cluster", "le", "worker_id"]);
+        assert_eq!(labels_of("_sum"), vec!["cluster", "worker_id"]);
+        assert_eq!(labels_of("_count"), vec!["cluster", "worker_id"]);
     }
 
     /// Each optional `metric!` field parses on its own alongside the required
@@ -569,15 +657,70 @@ mod tests {
         let optionals = [
             r#"const_labels: {"cluster" => "compute"}"#,
             r#"var_labels: ["worker_id", "command_type"]"#,
-            "buckets: histogram_seconds_buckets(0.1, 1.0)",
             "rules: [rule_a(), rule_b()]",
         ];
         for opt in optionals {
             let invocation = format!(r#"metric!(name: "mz_foo", help: "a foo metric", {opt})"#);
-            let doc = parse_metric(&invocation);
-            assert_eq!(doc.name, "mz_foo", "failed for: {invocation}");
-            assert_eq!(doc.help, "a foo metric", "failed for: {invocation}");
+
+            // `buckets:` expands into the
+            // histogram series (`mz_foo_bucket`/`_sum`/`_count`), so we only assert the
+            // shared name prefix and help here; the expansion itself is covered by the
+            // dedicated histogram tests below.
+            let docs = parse_metric_docs(&invocation);
+            assert!(!docs.is_empty(), "no docs for: {invocation}");
+            for doc in docs {
+                assert!(
+                    doc.name.starts_with("mz_foo"),
+                    "unexpected name {} for: {invocation}",
+                    doc.name
+                );
+                assert_eq!(doc.help, "a foo metric", "failed for: {invocation}");
+            }
         }
+        let histogram_invocation =
+            r#"metric!(name: "mz_foo", help: "a foo metric", buckets: histogram_seconds_buckets(0.1, 1.0))"#
+                .to_string();
+
+        let docs = parse_metric_docs(&histogram_invocation);
+        assert_eq!(docs.len(), 3, "got {docs:?}");
+        assert_eq!(docs[0].name, "mz_foo_bucket");
+        assert_eq!(docs[1].name, "mz_foo_count");
+        assert_eq!(docs[2].name, "mz_foo_sum");
+        assert_eq!(docs[0].help, "a foo metric");
+        assert_eq!(docs[1].help, "a foo metric");
+        assert_eq!(docs[2].help, "a foo metric");
+    }
+
+    /// A label-less histogram still produces a `_bucket` series with the lone
+    /// `le` label, while `_sum`/`_count` have no labels at all.
+    #[mz_ore::test]
+    fn histogram_without_labels_still_gets_le_on_bucket() {
+        let docs = parse_metric_docs(
+            r#"metric!(name: "mz_foo", help: "h", buckets: histogram_seconds_buckets(0.1, 1.0))"#,
+        );
+        let by_suffix = |suffix: &str| docs.iter().find(|d| d.name.ends_with(suffix)).unwrap();
+        assert_eq!(by_suffix("_bucket").labels, vec!["le"]);
+        assert!(by_suffix("_count").labels.is_empty());
+        assert!(by_suffix("_sum").labels.is_empty());
+    }
+
+    /// The histogram suffixes are appended after the `subsystem` prefix, so the
+    /// derived names match Prometheus' fully-qualified naming.
+    #[mz_ore::test]
+    fn histogram_expansion_respects_subsystem() {
+        let docs = parse_metric_docs(
+            r#"metric!(name: "duration_seconds", help: "h", subsystem: "compute", buckets: b())"#,
+        );
+        let mut names: Vec<_> = docs.iter().map(|d| d.name.clone()).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "compute_duration_seconds_bucket",
+                "compute_duration_seconds_count",
+                "compute_duration_seconds_sum",
+            ]
+        );
     }
 
     /// Empty `var_labels`/`rules` collections parse, and yield no labels.

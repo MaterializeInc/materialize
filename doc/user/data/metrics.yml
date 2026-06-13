@@ -29,7 +29,22 @@ metrics:
   help: times a connection was recycled due to ttl
   source: src/postgres-client/src/metrics.rs
   visibility: internal
-- name: '*_request_duration_seconds'
+- name: '*_request_duration_seconds_bucket'
+  help: How long it takes for a request to complete in seconds.
+  labels:
+  - le
+  - path
+  - source
+  source: src/environmentd/src/http/metrics.rs
+  visibility: internal
+- name: '*_request_duration_seconds_count'
+  help: How long it takes for a request to complete in seconds.
+  labels:
+  - path
+  - source
+  source: src/environmentd/src/http/metrics.rs
+  visibility: internal
+- name: '*_request_duration_seconds_sum'
   help: How long it takes for a request to complete in seconds.
   labels:
   - path
@@ -107,11 +122,31 @@ metrics:
   visibility: public
   tags:
   - environment
-- name: mz_append_table_duration_seconds
+- name: mz_append_table_duration_seconds_bucket
+  help: Latency for appending to any (user or system) table.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_append_table_duration_seconds_count
   help: Latency for appending to any (user or system) table.
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_apply_catalog_implications_seconds
+- name: mz_append_table_duration_seconds_sum
+  help: Latency for appending to any (user or system) table.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_apply_catalog_implications_seconds_bucket
+  help: The time it takes to apply catalog implications.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_apply_catalog_implications_seconds_count
+  help: The time it takes to apply catalog implications.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_apply_catalog_implications_seconds_sum
   help: The time it takes to apply catalog implications.
   source: src/adapter/src/metrics.rs
   visibility: internal
@@ -129,7 +164,17 @@ metrics:
   visibility: public
   tags:
   - compute
-- name: mz_arrangement_sizes_collection_time_seconds
+- name: mz_arrangement_sizes_collection_time_seconds_bucket
+  help: Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_arrangement_sizes_collection_time_seconds_count
+  help: Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_arrangement_sizes_collection_time_seconds_sum
   help: Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.
   source: src/adapter/src/metrics.rs
   visibility: internal
@@ -148,7 +193,20 @@ metrics:
   - status
   source: src/frontegg-auth/src/metrics.rs
   visibility: internal
-- name: mz_auth_request_duration_seconds
+- name: mz_auth_request_duration_seconds_bucket
+  help: How long it takes for a request to Frontegg to complete in seconds.
+  labels:
+  - le
+  - path
+  source: src/frontegg-auth/src/metrics.rs
+  visibility: internal
+- name: mz_auth_request_duration_seconds_count
+  help: How long it takes for a request to Frontegg to complete in seconds.
+  labels:
+  - path
+  source: src/frontegg-auth/src/metrics.rs
+  visibility: internal
+- name: mz_auth_request_duration_seconds_sum
   help: How long it takes for a request to Frontegg to complete in seconds.
   labels:
   - path
@@ -223,7 +281,17 @@ metrics:
   help: The total number of canceled peeks since process start.
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_catalog_allocate_id_seconds
+- name: mz_catalog_allocate_id_seconds_bucket
+  help: The time it takes to allocate IDs in the durable catalog.
+  labels:
+  - le
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_allocate_id_seconds_count
+  help: The time it takes to allocate IDs in the durable catalog.
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_allocate_id_seconds_sum
   help: The time it takes to allocate IDs in the durable catalog.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
@@ -233,7 +301,17 @@ metrics:
   - collection
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
-- name: mz_catalog_info_metrics_reconcile_seconds
+- name: mz_catalog_info_metrics_reconcile_seconds_bucket
+  help: Time taken to rebuild the catalog info metrics from a catalog snapshot.
+  labels:
+  - le
+  source: src/adapter/src/coord/info_metrics.rs
+  visibility: internal
+- name: mz_catalog_info_metrics_reconcile_seconds_count
+  help: Time taken to rebuild the catalog info metrics from a catalog snapshot.
+  source: src/adapter/src/coord/info_metrics.rs
+  visibility: internal
+- name: mz_catalog_info_metrics_reconcile_seconds_sum
   help: Time taken to rebuild the catalog info metrics from a catalog snapshot.
   source: src/adapter/src/coord/info_metrics.rs
   visibility: internal
@@ -249,7 +327,20 @@ metrics:
   help: High-water mark of entries in the unconsolidated in-memory snapshot since process start.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
-- name: mz_catalog_snapshot_seconds
+- name: mz_catalog_snapshot_seconds_bucket
+  help: The time it takes to run `catalog_snapshot` when fetching the catalog.
+  labels:
+  - context
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_catalog_snapshot_seconds_count
+  help: The time it takes to run `catalog_snapshot` when fetching the catalog.
+  labels:
+  - context
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_catalog_snapshot_seconds_sum
   help: The time it takes to run `catalog_snapshot` when fetching the catalog.
   labels:
   - context
@@ -267,7 +358,20 @@ metrics:
   help: Count of catalog syncs.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
-- name: mz_catalog_transact_seconds
+- name: mz_catalog_transact_seconds_bucket
+  help: The time it takes to run various catalog transact methods.
+  labels:
+  - le
+  - method
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_catalog_transact_seconds_count
+  help: The time it takes to run various catalog transact methods.
+  labels:
+  - method
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_catalog_transact_seconds_sum
   help: The time it takes to run various catalog transact methods.
   labels:
   - method
@@ -285,14 +389,46 @@ metrics:
   help: Total number of started transactions.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
-- name: mz_check_scheduling_policies_seconds
+- name: mz_check_scheduling_policies_seconds_bucket
+  help: The time each policy in `check_scheduling_policies` takes.
+  labels:
+  - le
+  - policy
+  - thread
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_check_scheduling_policies_seconds_count
   help: The time each policy in `check_scheduling_policies` takes.
   labels:
   - policy
   - thread
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_cluster_handle_command_duration_seconds
+- name: mz_check_scheduling_policies_seconds_sum
+  help: The time each policy in `check_scheduling_policies` takes.
+  labels:
+  - policy
+  - thread
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_cluster_handle_command_duration_seconds_bucket
+  help: Time spent in handling commands.
+  labels:
+  - cluster
+  - command_type
+  - le
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_cluster_handle_command_duration_seconds_count
+  help: Time spent in handling commands.
+  labels:
+  - cluster
+  - command_type
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_cluster_handle_command_duration_seconds_sum
   help: Time spent in handling commands.
   labels:
   - cluster
@@ -482,7 +618,26 @@ metrics:
   - instance_id
   source: src/compute-client/src/metrics.rs
   visibility: internal
-- name: mz_compute_peek_duration_seconds
+- name: mz_compute_peek_duration_seconds_bucket
+  help: A histogram of peek durations since restart.
+  labels:
+  - instance_id
+  - le
+  - result
+  source: src/compute-client/src/metrics.rs
+  visibility: public
+  tags:
+  - compute
+- name: mz_compute_peek_duration_seconds_count
+  help: A histogram of peek durations since restart.
+  labels:
+  - instance_id
+  - result
+  source: src/compute-client/src/metrics.rs
+  visibility: public
+  tags:
+  - compute
+- name: mz_compute_peek_duration_seconds_sum
   help: A histogram of peek durations since restart.
   labels:
   - instance_id
@@ -548,11 +703,31 @@ metrics:
   - status
   source: src/pgwire/src/metrics.rs
   visibility: internal
-- name: mz_coord_queue_busy_seconds
+- name: mz_coord_queue_busy_seconds_bucket
+  help: The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_coord_queue_busy_seconds_count
   help: The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_coordinator_message_batch_size
+- name: mz_coord_queue_busy_seconds_sum
+  help: The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_coordinator_message_batch_size_bucket
+  help: Message batch size handled by the coordinator.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_coordinator_message_batch_size_count
+  help: Message batch size handled by the coordinator.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_coordinator_message_batch_size_sum
   help: Message batch size handled by the coordinator.
   source: src/adapter/src/metrics.rs
   visibility: internal
@@ -618,45 +793,148 @@ metrics:
   - respond_immediately
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_group_commit_catalog_upper_seconds
+- name: mz_group_commit_catalog_upper_seconds_bucket
+  help: The time it takes to advance the catalog shard upper during group commit.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_group_commit_catalog_upper_seconds_count
   help: The time it takes to advance the catalog shard upper during group commit.
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_handle_scheduling_decisions_seconds
+- name: mz_group_commit_catalog_upper_seconds_sum
+  help: The time it takes to advance the catalog shard upper during group commit.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_handle_scheduling_decisions_seconds_bucket
+  help: The time `handle_scheduling_decisions` takes.
+  labels:
+  - altered_a_cluster
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_handle_scheduling_decisions_seconds_count
   help: The time `handle_scheduling_decisions` takes.
   labels:
   - altered_a_cluster
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_cursor_setup_seconds
+- name: mz_handle_scheduling_decisions_seconds_sum
+  help: The time `handle_scheduling_decisions` takes.
+  labels:
+  - altered_a_cluster
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_cursor_setup_seconds_bucket
+  help: Time setting up cursor and literal constraints.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_cursor_setup_seconds_count
   help: Time setting up cursor and literal constraints.
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_error_scan_seconds
+- name: mz_index_peek_cursor_setup_seconds_sum
+  help: Time setting up cursor and literal constraints.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_error_scan_seconds_bucket
+  help: Time scanning the error trace for errors.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_error_scan_seconds_count
   help: Time scanning the error trace for errors.
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_frontier_check_seconds
+- name: mz_index_peek_error_scan_seconds_sum
+  help: Time scanning the error trace for errors.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_frontier_check_seconds_bucket
+  help: Time checking trace frontiers.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_frontier_check_seconds_count
   help: Time checking trace frontiers.
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_result_sort_seconds
+- name: mz_index_peek_frontier_check_seconds_sum
+  help: Time checking trace frontiers.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_result_sort_seconds_bucket
+  help: Time sorting intermediate results during peek collection.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_result_sort_seconds_count
   help: Time sorting intermediate results during peek collection.
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_row_collection_seconds
+- name: mz_index_peek_result_sort_seconds_sum
+  help: Time sorting intermediate results during peek collection.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_collection_seconds_bucket
+  help: Time constructing RowCollection from peek results.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_collection_seconds_count
   help: Time constructing RowCollection from peek results.
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_row_iteration_seconds
+- name: mz_index_peek_row_collection_seconds_sum
+  help: Time constructing RowCollection from peek results.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_seconds_bucket
+  help: Time iterating rows and evaluating MFP.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_seconds_count
   help: Time iterating rows and evaluating MFP.
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_seek_fulfillment_seconds
+- name: mz_index_peek_row_iteration_seconds_sum
+  help: Time iterating rows and evaluating MFP.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_seek_fulfillment_seconds_bucket
+  help: Time in seek_fulfillment method including frontier checks and data collection.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_seek_fulfillment_seconds_count
   help: Time in seek_fulfillment method including frontier checks and data collection.
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_total_seconds
+- name: mz_index_peek_seek_fulfillment_seconds_sum
+  help: Time in seek_fulfillment method including frontier checks and data collection.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_total_seconds_bucket
+  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_total_seconds_count
+  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_total_seconds_sum
   help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
   source: src/compute/src/metrics.rs
   visibility: internal
@@ -668,7 +946,22 @@ metrics:
   - topic
   source: src/storage/src/metrics/source/kafka.rs
   visibility: internal
-- name: mz_linearize_message_seconds
+- name: mz_linearize_message_seconds_bucket
+  help: The number of seconds it takes to linearize strict serializable messages
+  labels:
+  - immediately_handled
+  - le
+  - type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_linearize_message_seconds_count
+  help: The number of seconds it takes to linearize strict serializable messages
+  labels:
+  - immediately_handled
+  - type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_linearize_message_seconds_sum
   help: The number of seconds it takes to linearize strict serializable messages
   labels:
   - immediately_handled
@@ -683,7 +976,22 @@ metrics:
   - status
   source: src/environmentd/src/http/mcp_metrics.rs
   visibility: internal
-- name: mz_mcp_tool_call_duration_seconds
+- name: mz_mcp_tool_call_duration_seconds_bucket
+  help: Duration of MCP tools/call invocations in seconds.
+  labels:
+  - endpoint_type
+  - le
+  - tool_name
+  source: src/environmentd/src/http/mcp_metrics.rs
+  visibility: internal
+- name: mz_mcp_tool_call_duration_seconds_count
+  help: Duration of MCP tools/call invocations in seconds.
+  labels:
+  - endpoint_type
+  - tool_name
+  source: src/environmentd/src/http/mcp_metrics.rs
+  visibility: internal
+- name: mz_mcp_tool_call_duration_seconds_sum
   help: Duration of MCP tools/call invocations in seconds.
   labels:
   - endpoint_type
@@ -702,7 +1010,17 @@ metrics:
   help: The remaining memory burst budget.
   source: src/compute/src/memory_limiter.rs
   visibility: internal
-- name: mz_memory_limiter_duration_seconds
+- name: mz_memory_limiter_duration_seconds_bucket
+  help: A histogram of the time it took to run the memory limiter.
+  labels:
+  - le
+  source: src/compute/src/memory_limiter.rs
+  visibility: internal
+- name: mz_memory_limiter_duration_seconds_count
+  help: A histogram of the time it took to run the memory limiter.
+  source: src/compute/src/memory_limiter.rs
+  visibility: internal
+- name: mz_memory_limiter_duration_seconds_sum
   help: A histogram of the time it took to run the memory limiter.
   source: src/compute/src/memory_limiter.rs
   visibility: internal
@@ -896,7 +1214,20 @@ metrics:
   help: user CPU time used
   source: src/metrics/src/rusage.rs
   visibility: internal
-- name: mz_metrics_update_duration
+- name: mz_metrics_update_duration_bucket
+  help: The time it took to update lgalloc stats
+  labels:
+  - le
+  - name
+  source: src/metrics/src/lib.rs
+  visibility: internal
+- name: mz_metrics_update_duration_count
+  help: The time it took to update lgalloc stats
+  labels:
+  - name
+  source: src/metrics/src/lib.rs
+  visibility: internal
+- name: mz_metrics_update_duration_sum
   help: The time it took to update lgalloc stats
   labels:
   - name
@@ -977,7 +1308,20 @@ metrics:
   - notice_type
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_optimizer_e2e_optimization_time_seconds
+- name: mz_optimizer_e2e_optimization_time_seconds_bucket
+  help: A histogram of end-to-end optimization times since restart.
+  labels:
+  - le
+  - object_type
+  source: src/sql/src/optimizer_metrics.rs
+  visibility: internal
+- name: mz_optimizer_e2e_optimization_time_seconds_count
+  help: A histogram of end-to-end optimization times since restart.
+  labels:
+  - object_type
+  source: src/sql/src/optimizer_metrics.rs
+  visibility: internal
+- name: mz_optimizer_e2e_optimization_time_seconds_sum
   help: A histogram of end-to-end optimization times since restart.
   labels:
   - object_type
@@ -999,7 +1343,17 @@ metrics:
   help: The number of parameter changes pulled from the LaunchDarkly frontend.
   source: src/adapter/src/config.rs
   visibility: internal
-- name: mz_parse_seconds
+- name: mz_parse_seconds_bucket
+  help: The time it takes to parse a SQL statement. (Works for both Simple Queries and the Extended Query protocol.)
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_parse_seconds_count
+  help: The time it takes to parse a SQL statement. (Works for both Simple Queries and the Extended Query protocol.)
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_parse_seconds_sum
   help: The time it takes to parse a SQL statement. (Works for both Simple Queries and the Extended Query protocol.)
   source: src/adapter/src/metrics.rs
   visibility: internal
@@ -1340,7 +1694,17 @@ metrics:
   help: count of blob delete calls that deleted a non-existent key
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_external_blob_sizes
+- name: mz_persist_external_blob_sizes_bucket
+  help: histogram of blob sizes at put time
+  labels:
+  - le
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_external_blob_sizes_count
+  help: histogram of blob sizes at put time
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_external_blob_sizes_sum
   help: histogram of blob sizes at put time
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
@@ -1360,7 +1724,20 @@ metrics:
   - op
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_external_op_latency
+- name: mz_persist_external_op_latency_bucket
+  help: rountrip latency observed by individual performance-critical operations
+  labels:
+  - le
+  - op
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_external_op_latency_count
+  help: rountrip latency observed by individual performance-critical operations
+  labels:
+  - op
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_external_op_latency_sum
   help: rountrip latency observed by individual performance-critical operations
   labels:
   - op
@@ -1480,13 +1857,36 @@ metrics:
   - format
   source: src/persist/src/metrics.rs
   visibility: internal
-- name: mz_persist_peek_seconds
+- name: mz_persist_peek_seconds_bucket
+  help: Time spent in (experimental) Persist fast-path peeks.
+  labels:
+  - le
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_persist_peek_seconds_count
   help: Time spent in (experimental) Persist fast-path peeks.
   labels:
   - worker_id
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_persist_pubsub_client_approx_diff_apply_latency_seconds
+- name: mz_persist_peek_seconds_sum
+  help: Time spent in (experimental) Persist fast-path peeks.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_persist_pubsub_client_approx_diff_apply_latency_seconds_bucket
+  help: histogram of (approximate) latency between sending a diff and applying it
+  labels:
+  - le
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_pubsub_client_approx_diff_apply_latency_seconds_count
+  help: histogram of (approximate) latency between sending a diff and applying it
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_pubsub_client_approx_diff_apply_latency_seconds_sum
   help: histogram of (approximate) latency between sending a diff and applying it
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
@@ -2257,19 +2657,58 @@ metrics:
   help: count of watch wait calls started
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_pgwire_ensure_transaction_seconds
+- name: mz_pgwire_ensure_transaction_seconds_bucket
+  help: The time it takes to run `ensure_transactions` when processing pgwire messages.
+  labels:
+  - le
+  - message_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_pgwire_ensure_transaction_seconds_count
   help: The time it takes to run `ensure_transactions` when processing pgwire messages.
   labels:
   - message_type
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_pgwire_message_processing_seconds
+- name: mz_pgwire_ensure_transaction_seconds_sum
+  help: The time it takes to run `ensure_transactions` when processing pgwire messages.
+  labels:
+  - message_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_pgwire_message_processing_seconds_bucket
+  help: The time it takes to process each of the pgwire message types, measured in the Adapter frontend
+  labels:
+  - le
+  - message_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_pgwire_message_processing_seconds_count
   help: The time it takes to process each of the pgwire message types, measured in the Adapter frontend
   labels:
   - message_type
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_pgwire_recv_scheduling_delay_ms
+- name: mz_pgwire_message_processing_seconds_sum
+  help: The time it takes to process each of the pgwire message types, measured in the Adapter frontend
+  labels:
+  - message_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_pgwire_recv_scheduling_delay_ms_bucket
+  help: The time between a pgwire connection's receiver task being woken up by incoming data and getting polled.
+  labels:
+  - le
+  - message_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_pgwire_recv_scheduling_delay_ms_count
+  help: The time between a pgwire connection's receiver task being woken up by incoming data and getting polled.
+  labels:
+  - message_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_pgwire_recv_scheduling_delay_ms_sum
   help: The time between a pgwire connection's receiver task being woken up by incoming data and getting polled.
   labels:
   - message_type
@@ -2350,7 +2789,20 @@ metrics:
   visibility: public
   tags:
   - compute
-- name: mz_result_rows_first_to_last_byte_seconds
+- name: mz_result_rows_first_to_last_byte_seconds_bucket
+  help: The time from just before sending the first result row to sending a final response message after having successfully flushed the last result row to the connection. (This can span multiple FETCH statements.) (This is never observed for unbounded SUBSCRIBEs, i.e., which have no last result row.)
+  labels:
+  - le
+  - statement_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_result_rows_first_to_last_byte_seconds_count
+  help: The time from just before sending the first result row to sending a final response message after having successfully flushed the last result row to the connection. (This can span multiple FETCH statements.) (This is never observed for unbounded SUBSCRIBEs, i.e., which have no last result row.)
+  labels:
+  - statement_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_result_rows_first_to_last_byte_seconds_sum
   help: The time from just before sending the first result row to sending a final response message after having successfully flushed the last result row to the connection. (This can span multiple FETCH statements.) (This is never observed for unbounded SUBSCRIBEs, i.e., which have no last result row.)
   labels:
   - statement_type
@@ -2362,11 +2814,31 @@ metrics:
   - source_id
   source: src/storage/src/metrics/source.rs
   visibility: internal
-- name: mz_row_set_finishing_seconds
+- name: mz_row_set_finishing_seconds_bucket
+  help: The time it takes to run RowSetFinishing::finish.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_row_set_finishing_seconds_count
   help: The time it takes to run RowSetFinishing::finish.
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_session_startup_table_writes_seconds
+- name: mz_row_set_finishing_seconds_sum
+  help: The time it takes to run RowSetFinishing::finish.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_session_startup_table_writes_seconds_bucket
+  help: If we had to wait for builtin table writes before processing a query, how long did we wait for.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_session_startup_table_writes_seconds_count
+  help: If we had to wait for builtin table writes before processing a query, how long did we wait for.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_session_startup_table_writes_seconds_sum
   help: If we had to wait for builtin table writes before processing a query, how long did we wait for.
   source: src/adapter/src/metrics.rs
   visibility: internal
@@ -2423,7 +2895,26 @@ metrics:
   visibility: public
   tags:
   - sink
-- name: mz_sink_iceberg_commit_duration_seconds
+- name: mz_sink_iceberg_commit_duration_seconds_bucket
+  help: Time spent committing batches to Iceberg in seconds
+  labels:
+  - le
+  - sink_id
+  - worker_id
+  source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: public
+  tags:
+  - sink
+- name: mz_sink_iceberg_commit_duration_seconds_count
+  help: Time spent committing batches to Iceberg in seconds
+  labels:
+  - sink_id
+  - worker_id
+  source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: public
+  tags:
+  - sink
+- name: mz_sink_iceberg_commit_duration_seconds_sum
   help: Time spent committing batches to Iceberg in seconds
   labels:
   - sink_id
@@ -2475,7 +2966,22 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/sink/iceberg.rs
   visibility: internal
-- name: mz_sink_iceberg_writer_close_duration_seconds
+- name: mz_sink_iceberg_writer_close_duration_seconds_bucket
+  help: Time spent closing Iceberg DeltaWriters in seconds
+  labels:
+  - le
+  - sink_id
+  - worker_id
+  source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: internal
+- name: mz_sink_iceberg_writer_close_duration_seconds_count
+  help: Time spent closing Iceberg DeltaWriters in seconds
+  labels:
+  - sink_id
+  - worker_id
+  source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: internal
+- name: mz_sink_iceberg_writer_close_duration_seconds_sum
   help: Time spent closing Iceberg DeltaWriters in seconds
   labels:
   - sink_id
@@ -2617,7 +3123,20 @@ metrics:
   - sink_id
   source: src/storage/src/metrics/sink/kafka.rs
   visibility: internal
-- name: mz_slow_message_handling
+- name: mz_slow_message_handling_bucket
+  help: Latency for ALL coordinator messages. 'slow' is in the name for legacy reasons, but is not accurate.
+  labels:
+  - le
+  - message_kind
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_slow_message_handling_count
+  help: Latency for ALL coordinator messages. 'slow' is in the name for legacy reasons, but is not accurate.
+  labels:
+  - message_kind
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_slow_message_handling_sum
   help: Latency for ALL coordinator messages. 'slow' is in the name for legacy reasons, but is not accurate.
   labels:
   - message_kind
@@ -2884,7 +3403,20 @@ metrics:
   - version
   source: src/environmentd/src/environmentd/main.rs
   visibility: internal
-- name: mz_stashed_peek_seconds
+- name: mz_stashed_peek_seconds_bucket
+  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
+  labels:
+  - le
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_stashed_peek_seconds_count
+  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_stashed_peek_seconds_sum
   help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
   labels:
   - worker_id
@@ -2974,7 +3506,20 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/upsert.rs
   visibility: internal
-- name: mz_storage_rocksdb_multi_get_latency
+- name: mz_storage_rocksdb_multi_get_latency_bucket
+  help: The latencies, in fractional seconds, of getting batches of values from RocksDB for this source.
+  labels:
+  - le
+  - source_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_rocksdb_multi_get_latency_count
+  help: The latencies, in fractional seconds, of getting batches of values from RocksDB for this source.
+  labels:
+  - source_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_rocksdb_multi_get_latency_sum
   help: The latencies, in fractional seconds, of getting batches of values from RocksDB for this source.
   labels:
   - source_id
@@ -3008,7 +3553,20 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/upsert.rs
   visibility: internal
-- name: mz_storage_rocksdb_multi_put_latency
+- name: mz_storage_rocksdb_multi_put_latency_bucket
+  help: The latencies, in fractional seconds, of putting batches of values into RocksDB for this source.
+  labels:
+  - le
+  - source_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_rocksdb_multi_put_latency_count
+  help: The latencies, in fractional seconds, of putting batches of values into RocksDB for this source.
+  labels:
+  - source_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_rocksdb_multi_put_latency_sum
   help: The latencies, in fractional seconds, of putting batches of values into RocksDB for this source.
   labels:
   - source_id
@@ -3070,7 +3628,20 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/upsert.rs
   visibility: internal
-- name: mz_storage_upsert_merge_snapshot_latency
+- name: mz_storage_upsert_merge_snapshot_latency_bucket
+  help: The latencies, in fractional seconds, of merging snapshot updates into upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
+  labels:
+  - le
+  - source_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_upsert_merge_snapshot_latency_count
+  help: The latencies, in fractional seconds, of merging snapshot updates into upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
+  labels:
+  - source_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_upsert_merge_snapshot_latency_sum
   help: The latencies, in fractional seconds, of merging snapshot updates into upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   labels:
   - source_id
@@ -3083,7 +3654,20 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/upsert.rs
   visibility: internal
-- name: mz_storage_upsert_multi_get_latency
+- name: mz_storage_upsert_multi_get_latency_bucket
+  help: The latencies, in fractional seconds, of getting values from the upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
+  labels:
+  - le
+  - source_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_upsert_multi_get_latency_count
+  help: The latencies, in fractional seconds, of getting values from the upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
+  labels:
+  - source_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_upsert_multi_get_latency_sum
   help: The latencies, in fractional seconds, of getting values from the upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   labels:
   - source_id
@@ -3110,7 +3694,20 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/upsert.rs
   visibility: internal
-- name: mz_storage_upsert_multi_put_latency
+- name: mz_storage_upsert_multi_put_latency_bucket
+  help: The latencies, in fractional seconds, of getting values into the upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
+  labels:
+  - le
+  - source_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_upsert_multi_put_latency_count
+  help: The latencies, in fractional seconds, of getting values into the upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
+  labels:
+  - source_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_upsert_multi_put_latency_sum
   help: The latencies, in fractional seconds, of getting values into the upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   labels:
   - source_id
@@ -3151,7 +3748,17 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/upsert.rs
   visibility: internal
-- name: mz_storage_usage_collection_time_seconds
+- name: mz_storage_usage_collection_time_seconds_bucket
+  help: The number of seconds the coord spends collecting usage metrics from storage.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_storage_usage_collection_time_seconds_count
+  help: The number of seconds the coord spends collecting usage metrics from storage.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_storage_usage_collection_time_seconds_sum
   help: The number of seconds the coord spends collecting usage metrics from storage.
   source: src/adapter/src/metrics.rs
   visibility: internal
@@ -3166,7 +3773,17 @@ metrics:
   help: The number of collection snapshots that were skipped by the subscribe snapshot optimization.
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_time_to_first_row_seconds
+- name: mz_time_to_first_row_seconds_bucket
+  help: Latency of an execute for a successful query from pgwire's perspective
+  labels:
+  - application_name
+  - instance_id
+  - isolation_level
+  - le
+  - strategy
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_time_to_first_row_seconds_count
   help: Latency of an execute for a successful query from pgwire's perspective
   labels:
   - application_name
@@ -3175,20 +3792,70 @@ metrics:
   - strategy
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_timely_step_duration_seconds
+- name: mz_time_to_first_row_seconds_sum
+  help: Latency of an execute for a successful query from pgwire's perspective
+  labels:
+  - application_name
+  - instance_id
+  - isolation_level
+  - strategy
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_timely_step_duration_seconds_bucket
+  help: The time spent in each compute step_or_park call
+  labels:
+  - cluster
+  - le
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_timely_step_duration_seconds_count
   help: The time spent in each compute step_or_park call
   labels:
   - cluster
   - worker_id
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_timestamp_difference_for_bounded_staleness_ms
+- name: mz_timely_step_duration_seconds_sum
+  help: The time spent in each compute step_or_park call
+  labels:
+  - cluster
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_timestamp_difference_for_bounded_staleness_ms_bucket
+  help: How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.
+  labels:
+  - compute_instance
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_timestamp_difference_for_bounded_staleness_ms_count
   help: How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.
   labels:
   - compute_instance
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_timestamp_difference_for_strict_serializable_ms
+- name: mz_timestamp_difference_for_bounded_staleness_ms_sum
+  help: How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.
+  labels:
+  - compute_instance
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_timestamp_difference_for_strict_serializable_ms_bucket
+  help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
+  labels:
+  - compute_instance
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_timestamp_difference_for_strict_serializable_ms_count
+  help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
+  labels:
+  - compute_instance
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_timestamp_difference_for_strict_serializable_ms_sum
   help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
   labels:
   - compute_instance
