@@ -398,7 +398,7 @@ md-5 = "0.10.6"
 mime = "0.3.16"
 murmur2 = "0.1.0"
 mysql_async = { version = "0.36.2", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
-mysql_common = { version = "0.35.5", default-features = false, features = ["chrono"] }
+mysql_common = { version = "0.37.2", default-features = false, features = ["chrono"] }
 # Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
 # 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
 # the `mz` CLI and with `system-configuration` (used by `hyper-util`).
