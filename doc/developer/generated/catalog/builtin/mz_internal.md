@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/mz_internal.rs
-revision: 4078f8a2c8
+revision: 554aab2461
 ---
 
 # catalog::builtin::mz_internal
@@ -21,5 +21,7 @@ This is the largest builtin submodule, exporting 186 public items: sources, tabl
 **Connections** (`BuiltinConnection`) — System-level connection definitions.
 
 **Indexes** (`BuiltinIndex`) — 55 index constants accelerating queries on frequently accessed `mz_internal` views and tables.
+
+The `mz_show_my_*` privilege views (`mz_show_my_system_privileges`, `mz_show_my_cluster_privileges`, `mz_show_my_database_privileges`, `mz_show_my_schema_privileges`, `mz_show_all_my_privileges`, `mz_show_my_default_privileges`) filter using `grantee = ANY(mz_internal.mz_session_role_memberships())` instead of `pg_has_role(grantee, 'USAGE')` to avoid loading the full role graph in restricted sessions.
 
 Many items carry `Ontology` annotations with `OntologyLink` relationships (foreign keys, union views, dependency edges) for the catalog ontology graph.
