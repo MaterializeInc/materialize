@@ -402,7 +402,7 @@ mysql_common = { version = "0.35.5", default-features = false, features = ["chro
 # Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
 # 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
 # the `mz` CLI and with `system-configuration` (used by `hyper-util`).
-native-tls = { version = "=0.2.15", features = ["alpn"] }
+native-tls = { version = "=0.2.18", features = ["alpn"] }
 nix = { version = "0.31.3", features = ["fs", "signal"] }
 num = "0.4.3"
 num-traits = "0.2.15"
