@@ -12,11 +12,14 @@ import React from "react";
 
 import { ShowCreateObjectType } from "~/api/materialize/showCreate";
 import { LoadingContainer } from "~/components/LoadingContainer";
-import { ShowCreateBlock } from "~/components/ShowCreateBlock";
 import { ObjectColumnsList } from "~/platform/object-explorer/ObjectColumns";
 
 import { MaintainedObjectListItem } from "./queries";
 import { SourceDiagnostics } from "./SourceDiagnostics";
+
+const ShowCreateBlock = React.lazy(
+  () => import("~/components/ShowCreateBlock"),
+);
 
 export interface ObjectMetadataProps {
   item: MaintainedObjectListItem;
