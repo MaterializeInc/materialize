@@ -20,9 +20,15 @@ pub mod sink;
 pub mod source;
 pub mod statistics;
 pub mod storage_state;
-pub(crate) mod upsert;
+// Exposed (rather than `pub(crate)`) only so the fuzz crate can reach the
+// upsert state machine (`upsert::types`); not a stable public API.
+#[doc(hidden)]
+pub mod upsert;
 mod upsert_continual_feedback;
-mod upsert_continual_feedback_v2;
+// `pub` (with `#[doc(hidden)]`) only so the fuzz crate can reach the v2 value
+// encoding helpers; not a stable public API.
+#[doc(hidden)]
+pub mod upsert_continual_feedback_v2;
 
 pub(crate) mod healthcheck;
 

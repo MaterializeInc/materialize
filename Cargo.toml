@@ -253,6 +253,19 @@ exclude = [
     "misc/wasm/*",
     # Ignore any Rust dependencies that python packages might pull in.
     "misc/python/venv/*",
+    # Fuzz crates require a nightly toolchain (libFuzzer) and are excluded so
+    # the workspace can build on stable. Run via `cargo +nightly fuzz run ...`
+    # or the repo-wide runner `ci/test/cargo-fuzz.sh`.
+    "src/sql-parser/fuzz",
+    "src/expr/fuzz",
+    "src/repr/fuzz",
+    "src/storage-types/fuzz",
+    "src/catalog-protos/fuzz",
+    "src/avro/fuzz",
+    "src/mysql-util/fuzz",
+    "src/postgres-util/fuzz",
+    "src/sql-server-util/fuzz",
+    "src/pgwire/fuzz",
 ]
 
 # Use Cargo's new feature resolver, which can handle target-specific features,

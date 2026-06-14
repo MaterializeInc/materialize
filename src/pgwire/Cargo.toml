@@ -45,3 +45,6 @@ uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = []
+# Re-exports internal types (`codec::Codec` etc.) so the fuzz crate can
+# drive the frontend-message decoder directly. Not for production use.
+fuzz = []

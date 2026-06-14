@@ -1,0 +1,44 @@
+# libFuzzer dictionary for the Avro reader_decode target.
+#
+# An Avro object-container file starts with the 4-byte magic "Obj\x01" followed
+# by a map of metadata (notably "avro.schema" and "avro.codec") and a 16-byte
+# sync marker. Without the magic the decoder bails immediately, so the most
+# valuable token by far is the magic itself; the rest let the mutator build
+# plausible headers and schemas.
+
+# Object-container magic.
+"Obj\x01"
+# Header metadata keys / codecs.
+"avro.schema"
+"avro.codec"
+"null"
+"deflate"
+"snappy"
+"zstandard"
+"bzip2"
+# Schema JSON tokens.
+"\"type\""
+"\"name\""
+"\"fields\""
+"\"record\""
+"\"enum\""
+"\"array\""
+"\"map\""
+"\"union\""
+"\"fixed\""
+"\"symbols\""
+"\"items\""
+"\"values\""
+"\"size\""
+"\"namespace\""
+"\"default\""
+"\"logicalType\""
+"\"string\""
+"\"bytes\""
+"\"int\""
+"\"long\""
+"\"float\""
+"\"double\""
+"\"boolean\""
+"decimal"
+"timestamp-millis"

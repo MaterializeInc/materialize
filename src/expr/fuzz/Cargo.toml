@@ -1,0 +1,105 @@
+# Fuzz crate for mz-expr proto round-trip properties.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+# Run via the repo-wide runner: `bin/ci-builder run nightly ci/test/cargo-fuzz.sh`,
+# or locally:
+#     cd src/expr/fuzz
+#     cargo +nightly fuzz run eval_error_proto_roundtrip -- -max_total_time=60
+
+[package]
+name = "mz-expr-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-expr = { path = "..", features = ["proptest"] }
+mz-repr = { path = "../../repr" }
+mz-pgtz = { path = "../../pgtz" }
+chrono = { version = "0.4", default-features = false }
+mz-proto = { path = "../../proto" }
+prost = "0.14.3"
+proptest = "1"
+
+[[bin]]
+name = "eval_error_proto_roundtrip"
+path = "fuzz_targets/eval_error_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "like_pattern_compile"
+path = "fuzz_targets/like_pattern_compile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mir_scalar_reduce"
+path = "fuzz_targets/mir_scalar_reduce.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mfp_optimize"
+path = "fuzz_targets/mfp_optimize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "agg_decompose"
+path = "fuzz_targets/agg_decompose.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "build_regex"
+path = "fuzz_targets/build_regex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "timezone_convert"
+path = "fuzz_targets/timezone_convert.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jsonb_get"
+path = "fuzz_targets/jsonb_get.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "like_pattern_escape"
+path = "fuzz_targets/like_pattern_escape.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cast_string"
+path = "fuzz_targets/cast_string.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jsonb_path"
+path = "fuzz_targets/jsonb_path.rs"
+test = false
+doc = false
+bench = false
