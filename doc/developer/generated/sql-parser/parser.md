@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: 5173c50671
+revision: e7094a29a8
 ---
 
 # mz-sql-parser::parser
@@ -15,3 +15,4 @@ The private method `parse_list_value<T, F>` optionally consumes `=`, then parses
 `CREATE CONNECTION ... TO AWS` dispatches on the next keyword: `PRIVATELINK` yields `CreateConnectionType::AwsPrivatelink`, `GLUE` (followed by `SCHEMA REGISTRY`) yields `CreateConnectionType::GlueSchemaRegistry`, and no keyword yields `CreateConnectionType::Aws`. `CREATE CONNECTION ... TO GCP` yields `CreateConnectionType::Gcp`.
 In connection option parsing, `GCP CONNECTION` is parsed as `ConnectionOptionName::GcpConnection` (with `parse_object_option_value`), and `SERVICE ACCOUNT KEY` is parsed as `ConnectionOptionName::ServiceAccountKey`.
 Iceberg sink parsing reads the catalog connection name, then optionally parses `USING AWS CONNECTION <name>` — if the keywords are absent, `aws_connection` is `None`.
+`parse_rows_from` uses `parse_windowless_function` (a private method) for each function inside `ROWS FROM (...)`. `parse_windowless_function` parses a function name and argument list without consuming `DISTINCT`, `FILTER`, or `OVER`, ensuring that table functions in `ROWS FROM` never carry those clauses.
