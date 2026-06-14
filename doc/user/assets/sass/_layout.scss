@@ -10,6 +10,8 @@
 .content-wrapper {
     display: flex;
     justify-content: center;
+    width: 100%;
+    box-sizing: border-box;
     padding-top: var(--nav-height);
 
     @media(max-width: 800px) {
@@ -30,7 +32,7 @@
     min-height: calc(100vh - 178px);
     // https://weblog.west-wind.com/posts/2016/Feb/15/Flexbox-Containers-PRE-tags-and-managing-Overflow
     min-width: 0;
-    max-width: 840px;
+    max-width: 900px;
     padding: var(--xx-small) var(--small);
 
     @media (max-width: 1260px) {
@@ -81,7 +83,24 @@ table.inline-headings {
         background: var(--card-light);
         border: 1px solid var(--divider-light);
         border-radius: 8px;
-        max-width: 230px;
+        max-width: none;
+
+        &:hover,
+        &:focus {
+            background: var(--card-light);
+            border-color: var(--divider-light);
+            color: var(--important);
+            box-shadow: none;
+
+            .DocSearch-Button-Placeholder,
+            .DocSearch-Search-Icon {
+                color: var(--important);
+            }
+
+            .DocSearch-Button-Key {
+                color: var(--body);
+            }
+        }
     }
 
     .DocSearch-Button-Keys {
@@ -97,6 +116,7 @@ table.inline-headings {
     }
 
     .DocSearch-Button-Placeholder {
+        color: var(--body);
         font-size: rem(1.6);
         font-weight: 300;
 
@@ -131,9 +151,18 @@ table.inline-headings {
 }
 
 .sidebar-wrapper {
-    flex: 1;
+    flex: 0 0 300px;
+    padding-left: var(--milli);
+    box-sizing: border-box;
+
+    @media (min-width: 1571px) {
+        flex-basis: calc(((100vw - 1400px) / 2) + 300px);
+        padding-left: calc((100vw - 1400px) / 2);
+    }
 
     @media(max-width: 850px) {
+        min-width: 0;
+        padding-left: 0;
         position: fixed;
         background: var(--bg);
         z-index: 100;
@@ -163,22 +192,23 @@ table.inline-headings {
 }
 
 .sidebar {
-    margin-left: auto;
     position: sticky;
     top: var(--nav-height);
-    padding: var(--xx-small) var(--small);
+    padding: var(--xx-small) var(--small) var(--xx-small) 0;
+    box-sizing: border-box;
     overflow-y: auto;
     height: calc(100vh - var(--nav-height));
     display: flex;
-    font-size: rem(1.3);
+    font-size: rem(1.45);
     overflow-x: hidden;
     overscroll-behavior: contain;
 
     &,
     ul {
+        box-sizing: border-box;
         width: 100%;
-        min-width: 200px;
-        max-width: 285px;
+        min-width: 0;
+        max-width: 100%;
 
         @media(max-width: 850px) {
             min-width: 260px;
@@ -186,7 +216,6 @@ table.inline-headings {
     }
 
     @media (max-width: 1570px) {
-        padding-left: var(--milli);
         padding-right: var(--nano);
     }
 
@@ -199,41 +228,64 @@ table.inline-headings {
         display: block;
         cursor: pointer;
         position: relative;
-        padding: 3px 30px 3px 15px;
-        margin-left: 5px;
+        padding: 5px 26px 5px 10px;
+        border-radius: 6px;
+        color: var(--sub);
+        font-weight: 300;
+        line-height: 1.35;
         text-decoration: none;
         word-wrap: break-word;
         white-space: initial;
 
         &.active {
-            font-weight: 500;
-            background: var(--tip);
+            color: var(--highlight);
+            background: rgba(129, 154, 123, 0.18);
+            font-weight: 400;
+
+            &::before {
+                content: "";
+                position: absolute;
+                top: rem(0.7);
+                bottom: rem(0.7);
+                left: rem(0.35);
+                width: 1px;
+                background: var(--highlight);
+            }
+        }
+
+        &:hover {
+            color: var(--important);
+            background: var(--card-light);
+            text-decoration: none;
+        }
+
+        &.active {
+            text-decoration: none;
         }
 
         &:hover,
         &.active {
-            color: var(--highlight);
-            text-decoration: none;
-
             svg {
-                color: var(--divider-light);
+                color: currentColor;
+                opacity: 1;
 
                 .darker {
-                    color: var(--highlight);
+                    color: currentColor;
                 }
             }
         }
 
         svg {
             position: absolute;
-            right: 6px;
+            right: 4px;
             top: 50%;
             transform: translateY(-50%);
-            color: var(--divider-light);
+            color: var(--gray-dark);
+            opacity: 0.75;
             transition: transform 0.2s ease-out;
 
             .darker {
-                color: var(--sub);
+                color: currentColor;
             }
 
             &:hover {
@@ -252,11 +304,8 @@ table.inline-headings {
 
     .no-children>a,
     .level-4 a {
-
-
-        &:hover,
-        &.active {
-            border-left: 2px solid  var(--highlight);
+        &:hover:not(.active) {
+            color: var(--important);
         }
     }
 
@@ -266,8 +315,14 @@ table.inline-headings {
         margin-top: 0;
         padding-left: 0;
 
+        ul {
+            margin: rem(0.25) 0 rem(0.6) 10px;
+            padding-left: 10px;
+            border-left: 1px solid var(--divider-light);
+        }
+
         ul ul {
-            margin-left: rem(0.8);
+            margin-left: 0;
         }
     }
 
@@ -277,15 +332,53 @@ table.inline-headings {
 
     li.level-1 {
         &>a {
-            font-weight: 500;
             color: var(--important);
+            font-size: rem(1.55);
+            font-weight: 300;
+            letter-spacing: 0;
+            text-transform: none;
+
+            &:hover {
+                color: var(--important);
+            }
+
+            &.active {
+                color: var(--important);
+            }
         }
 
         &>ul {
-            margin-bottom: rem(1.5);
+            margin-bottom: rem(1.25);
         }
-        padding: 4px 0;
-        border-bottom: 1px solid var(--gray-light);
+        padding: rem(0.2) 0;
+        margin-bottom: rem(0.85);
+    }
+
+    li.level-2>a {
+        padding-left: 10px;
+        margin-left: -10px;
+
+        &.active {
+            padding-left: 10px;
+        }
+    }
+
+    li.level-3>a {
+        padding-left: 10px;
+        margin-left: -10px;
+
+        &.active {
+            padding-left: 10px;
+        }
+    }
+
+    li.level-4>a {
+        padding-left: 10px;
+        margin-left: -10px;
+
+        &.active {
+            padding-left: 10px;
+        }
     }
 
     li.level-1,
@@ -341,11 +434,18 @@ table.inline-headings {
 }
 
 .toc-wrapper {
-    flex: 1;
+    flex: 0 0 240px;
     position: sticky;
     top: 90px;
     overflow-y: auto;
     height: 100vh;
+    padding-right: var(--nano);
+    box-sizing: border-box;
+
+    @media (min-width: 1571px) {
+        flex-basis: calc(((100vw - 1400px) / 2) + 240px);
+        padding-right: calc((100vw - 1400px) / 2);
+    }
 
     @media(max-width: 1050px) {
         display: none;
@@ -402,7 +502,7 @@ table.inline-headings {
 
             &,
             code {
-                font-weight: 500;
+                font-weight: 400;
             }
         }
 
