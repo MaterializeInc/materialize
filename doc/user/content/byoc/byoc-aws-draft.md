@@ -3,8 +3,8 @@ title: "Bring Your Own Cloud (BYOC) on AWS"
 description: "Run Materialize inside your own AWS account while Materialize manages provisioning, upgrades, and operations."
 menu:
   main:
-    parent: "installation"
-    name: "BYOC on AWS"
+    parent: "byoc"
+    name: "AWS"
     identifier: "byoc-aws"
     weight: 50
 ---
