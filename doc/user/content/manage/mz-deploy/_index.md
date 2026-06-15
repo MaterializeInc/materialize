@@ -18,6 +18,18 @@ menu:
 files in a git repository. It catches errors before they reach production, lets
 you test view logic locally, and deploys changes without downtime.
 
+## Installation
+
+On macOS and Linux, we recommend installing `mz-deploy` with
+[Homebrew](https://brew.sh/):
+
+```shell
+brew install materializeinc/materialize/mz-deploy
+```
+
+For direct downloads and other installation options, see
+[Get started](/manage/mz-deploy/get-started/#prerequisites-and-installation).
+
 ## Why mz-deploy
 
 ### Write plain SQL, deploy safely

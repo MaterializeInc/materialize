@@ -25,7 +25,7 @@ Before you begin, you need:
 - A running Materialize instance ([Materialize Cloud](https://materialize.com/register/) or [self-managed](/self-managed-deployments/)).
 
 On macOS and Linux, we recommend installing `mz-deploy` with
-[Homebrew](https://brew.sh/) from [our tap](https://github.com/MaterializeInc/homebrew-materialize):
+[Homebrew](https://brew.sh/):
 
 ```shell
 brew install materializeinc/materialize/mz-deploy
