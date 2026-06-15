@@ -202,11 +202,23 @@ def workflow_nightly(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_ci(c: Composition, _parser: WorkflowArgumentParser) -> None:
     """
-    Workflows to run during CI
+    Run all workflows during CI.
+
+    Every workflow is run except for the exceptions below, so that a newly
+    added regression test gets CI coverage automatically instead of silently
+    needing to be added to a hand-maintained allowlist:
+      - "default": meta-workflow that runs everything (would recurse).
+      - "ci": this workflow itself (would recurse).
+      - "nightly": heavy TPC-H suite run separately via the `nightly` pipeline
+        step (`run: nightly`), not here.
     """
-    for name in ["auth", "http", "copy-from-csv-header", "copy-from-ssrf-redirect"]:
+    excluded = {"default", "ci", "nightly"}
+
+    def process(name: str) -> None:
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts([name for name in c.workflows.keys() if name not in excluded], process)
 
 
 def workflow_auth(c: Composition) -> None:
@@ -374,18 +386,18 @@ def workflow_test_column_dedup(c: Composition):
         c.testdrive(dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
-                > CREATE SECRET aws_secret AS '${arg.aws-secret-access-key}'
-                > CREATE CONNECTION aws_conn
+                > CREATE SECRET aws_secret_column_dedup AS '${arg.aws-secret-access-key}'
+                > CREATE CONNECTION aws_conn_column_dedup
                   TO AWS (
                     ACCESS KEY ID = '${arg.aws-access-key-id}',
-                    SECRET ACCESS KEY = SECRET aws_secret,
+                    SECRET ACCESS KEY = SECRET aws_secret_column_dedup,
                     ENDPOINT = '${arg.aws-endpoint}',
                     REGION = 'us-east-1'
                   )
 
                 > COPY (SELECT 1::int4 AS a, 2::int4 AS a, 3::int4 AS a2, 4::int4 AS a)
                   TO 's3://copytos3/test/column_dedup/'
-                  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
+                  WITH (AWS CONNECTION = aws_conn_column_dedup, FORMAT = 'parquet');
 
                 $ s3-verify-data bucket=copytos3 key=test/column_dedup
                 1 2 3 4
@@ -406,17 +418,17 @@ def workflow_test_github_9627(c: Composition):
                 > CREATE TABLE t (a int)
                 > INSERT INTO t VALUES (1)
 
-                > CREATE SECRET aws_secret AS '${arg.aws-secret-access-key}'
-                > CREATE CONNECTION aws_conn
+                > CREATE SECRET aws_secret_github_9627 AS '${arg.aws-secret-access-key}'
+                > CREATE CONNECTION aws_conn_github_9627
                   TO AWS (
                     ACCESS KEY ID = '${arg.aws-access-key-id}',
-                    SECRET ACCESS KEY = SECRET aws_secret,
+                    SECRET ACCESS KEY = SECRET aws_secret_github_9627,
                     ENDPOINT = '${arg.aws-endpoint}',
                     REGION = 'us-east-1'
                   )
 
                 > COPY (SELECT * FROM t) TO 's3://copytos3/test/github_9627/'
-                  WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv');
+                  WITH (AWS CONNECTION = aws_conn_github_9627, FORMAT = 'csv');
                 """))
 
         # Check that the table's read frontier still advances.
@@ -534,7 +546,7 @@ def workflow_copy_from_csv_quoted_null(c: Composition) -> None:
         with cur.copy("COPY csv_null_default FROM STDIN WITH (FORMAT CSV)") as copy:
             copy.write('a,\nb,""\n"",c\n')
 
-        cur.execute("SELECT a, b FROM csv_null_default ORDER BY a NULLS LAST")
+        cur.execute("SELECT a, b FROM csv_null_default ORDER BY a IS NULL, a = '', a")
         rows = cur.fetchall()
         assert rows == [
             ("a", None),
@@ -550,7 +562,7 @@ def workflow_copy_from_csv_quoted_null(c: Composition) -> None:
         ) as copy:
             copy.write('a,NULL\nb,"NULL"\nNULL,c\n')
 
-        cur.execute("SELECT a, b FROM csv_null_custom ORDER BY a NULLS LAST")
+        cur.execute("SELECT a, b FROM csv_null_custom ORDER BY a IS NULL, a = '', a")
         rows = cur.fetchall()
         assert rows == [
             ("a", None),
@@ -627,7 +639,8 @@ def workflow_copy_from_csv_crlf(c: Composition) -> None:
             ) as copy:
                 copy.write(f'a,{eol}b,""{eol}"",c{eol}')
             cur.execute(
-                f"SELECT a, b FROM csv_{label}_null ORDER BY a NULLS LAST".encode()
+                f"SELECT a, b FROM csv_{label}_null "
+                "ORDER BY a IS NULL, a = '', a".encode()
             )
             rows = cur.fetchall()
             assert rows == [
@@ -703,7 +716,9 @@ def workflow_copy_from_csv_crlf_large_end_marker(c: Composition) -> None:
         )
 
 
-_NUM_IDLE_SESSIONS = 128
+# Must satisfy _NUM_IDLE_SESSIONS * effective_cores >= 512 (blocking-pool cap) to
+# re-starve SELECT 1 on a regression; 256 holds margin below the 4-core agent.
+_NUM_IDLE_SESSIONS = 256
 _SELECT_TIMEOUT_S = 30.0
 
 

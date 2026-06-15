@@ -441,8 +441,9 @@ impl Coordinator {
         let persist_client = self.persist_client.clone();
 
         // Create per-worker channels and spawn one async task per worker. Each
-        // worker offloads the CPU-intensive decode of a chunk to the blocking
-        // pool for the duration of that decode (see
+        // worker offloads the CPU-intensive processing of a chunk (decode plus
+        // the per-row transform/constraint-check/columnar encode) to the
+        // blocking pool for the duration of that chunk (see
         // `copy_from_stdin_batch_builder`), so workers run in parallel while
         // doing CPU work but hold no thread while idle between chunks.
         let mut batch_txs = Vec::with_capacity(num_workers);
@@ -562,10 +563,11 @@ impl Coordinator {
         let mut batch_bytes: usize = 0;
         let mut proto_batches = Vec::new();
 
+        let rt = tokio::runtime::Handle::current();
         let mut is_first_chunk = true;
         while let Some(raw_bytes) = batch_rx.recv().await {
-            // Decode raw bytes into rows. For the first chunk of worker 0,
-            // re-enable header skipping so the real CSV header line is skipped.
+            // For the first chunk of worker 0, re-enable header skipping so the
+            // real CSV header line is skipped.
             let chunk_params = if is_first_chunk && skip_header_on_first_chunk {
                 let mut p = params.clone();
                 if let CopyFormatParams::Csv(ref mut csv) = p {
@@ -577,41 +579,70 @@ impl Coordinator {
             };
             is_first_chunk = false;
             let raw_len = raw_bytes.len();
-            // Offload the CPU-bound decode to the blocking pool, holding a
-            // thread only for the decode itself rather than the whole COPY.
-            let decode_column_types = Arc::clone(&column_types);
-            let rows = mz_ore::task::spawn_blocking(
-                || "copy_from_stdin_decode",
+
+            // Offload the entire CPU-bound per-chunk pipeline -- decode, column
+            // transform, constraint checks, and the columnar persist encode
+            // (`BatchBuilder::add` -> `PartBuilder::push`) -- to the blocking
+            // pool. There is no yield point in the row loop until a batch fills
+            // (`add` only awaits `flush_part`, and only once an *encoded* part
+            // reaches `blob_target_size`, far beyond the 32 MiB *raw* batch
+            // boundary), so left on the async runtime each chunk's rows would
+            // run as one uninterrupted burst on a shared runtime worker thread,
+            // starving other connections. The blocking thread is held only
+            // while a chunk is in flight and released back to the pool between
+            // chunks (during `recv().await`), so idle workers still hold no
+            // thread. `block_on` is invoked once per chunk -- not per row -- to
+            // drive the row loop and the rare `flush_part` it may await.
+            let chunk_column_types = Arc::clone(&column_types);
+            let chunk_transform = Arc::clone(&column_transform);
+            let chunk_target_desc = Arc::clone(&target_desc);
+            let chunk_rt = rt.clone();
+            let (returned_builder, added_rows) = mz_ore::task::spawn_blocking(
+                || "copy_from_stdin_process_chunk",
                 move || {
-                    mz_pgcopy::decode_copy_format(&raw_bytes, &decode_column_types, chunk_params)
-                        .map_err(|e| AdapterError::CopyFormatError(e.to_string()))
+                    let rows = mz_pgcopy::decode_copy_format(
+                        &raw_bytes,
+                        &chunk_column_types,
+                        chunk_params,
+                    )
+                    .map_err(|e| AdapterError::CopyFormatError(e.to_string()))?;
+
+                    chunk_rt.block_on(async move {
+                        let mut added: u64 = 0;
+                        for row in rows {
+                            // Apply column transform if needed (add defaults, reorder).
+                            let full_row = if let Some(ref transform) = *chunk_transform {
+                                transform.apply(&row)
+                            } else {
+                                row
+                            };
+
+                            // Check constraints.
+                            for (i, datum) in full_row.iter().enumerate() {
+                                chunk_target_desc.constraints_met(i, &datum).map_err(|e| {
+                                    AdapterError::Unstructured(anyhow::anyhow!(
+                                        "constraint violation: {e}"
+                                    ))
+                                })?;
+                            }
+
+                            let data = SourceData(Ok(full_row));
+                            batch_builder
+                                .add(&data, &(), &lower, &1)
+                                .await
+                                .map_err(|e| {
+                                    AdapterError::Unstructured(anyhow::anyhow!("persist add: {e}"))
+                                })?;
+                            added += 1;
+                        }
+                        Ok::<_, AdapterError>((batch_builder, added))
+                    })
                 },
             )
             .await?;
-
-            for row in rows {
-                // Apply column transform if needed (add defaults, reorder).
-                let full_row = if let Some(ref transform) = *column_transform {
-                    transform.apply(&row)
-                } else {
-                    row
-                };
-
-                // Check constraints.
-                for (i, datum) in full_row.iter().enumerate() {
-                    target_desc.constraints_met(i, &datum).map_err(|e| {
-                        AdapterError::Unstructured(anyhow::anyhow!("constraint violation: {e}"))
-                    })?;
-                }
-
-                let data = SourceData(Ok(full_row));
-                batch_builder
-                    .add(&data, &(), &lower, &1)
-                    .await
-                    .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("persist add: {e}")))?;
-                row_count += 1;
-                row_count_in_batch += 1;
-            }
+            batch_builder = returned_builder;
+            row_count += added_rows;
+            row_count_in_batch += added_rows;
 
             batch_bytes = batch_bytes.saturating_add(raw_len);
             if batch_bytes >= COPY_FROM_STDIN_MAX_BATCH_BYTES {
