@@ -284,16 +284,29 @@ impl Ident {
         self.0.push_str(&suffix);
     }
 
-    /// An identifier can be printed in bare mode if
-    ///  * it matches the regex `[a-z_][a-z0-9_]*` and
-    ///  * it is not a "reserved keyword."
-    pub fn can_be_printed_bare(&self) -> bool {
+    /// Reports whether the identifier matches the regex `[a-z_][a-z0-9_]*`,
+    /// i.e. it is composed only of characters that never require quoting.
+    ///
+    /// This is the character-level half of [`Ident::can_be_printed_bare`]. It
+    /// deliberately does *not* consider keywords: whether a keyword-named
+    /// identifier needs quoting depends on the surrounding grammar (a
+    /// reparsing concern), not on its characters. Contexts that only need
+    /// legible, unambiguous output — rather than a SQL round-trip — should use
+    /// this instead (see `HumanizedExplain::humanize_ident`).
+    pub fn has_only_bare_chars(&self) -> bool {
         let mut chars = self.0.chars();
         chars
             .next()
             .map(|ch| matches!(ch, 'a'..='z' | '_'))
             .unwrap_or(false)
             && chars.all(|ch| matches!(ch, 'a'..='z' | '0'..='9' | '_'))
+    }
+
+    /// An identifier can be printed in bare mode if
+    ///  * it matches the regex `[a-z_][a-z0-9_]*` and
+    ///  * it is not a "reserved keyword."
+    pub fn can_be_printed_bare(&self) -> bool {
+        self.has_only_bare_chars()
             && !self
                 .as_keyword()
                 .map(|kw| {

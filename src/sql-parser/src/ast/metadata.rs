@@ -275,27 +275,7 @@ impl AstDisplay for RawDataType {
                     .0
                     .first()
                     .and_then(|id| id.as_keyword())
-                    .map(|kw| {
-                        use mz_sql_lexer::keywords::*;
-                        matches!(
-                            kw,
-                            MAP | STRING
-                                | BIGINT
-                                | SMALLINT
-                                | DEC
-                                | DECIMAL
-                                | DOUBLE
-                                | FLOAT
-                                | INT
-                                | INTEGER
-                                | REAL
-                                | BOOLEAN
-                                | BYTES
-                                | JSON
-                                | CHAR
-                                | CHARACTER
-                        )
-                    })
+                    .map(data_type_keyword_needs_quoting)
                     .unwrap_or(false);
                 if first_ident_clashes {
                     f.write_str(&name.to_ast_string_stable());
@@ -312,6 +292,38 @@ impl AstDisplay for RawDataType {
     }
 }
 impl_display!(RawDataType);
+
+/// Reports whether `kw`, as the first component of a data type name, would be
+/// reparsed differently by `Parser::parse_data_type` — either
+/// dispatched into a special grammar (`map[...]`) or canonicalized to a
+/// different spelling (`string` → `text`, `bigint` → `int8`, …). Such names
+/// must be emitted always-quoted to round-trip.
+///
+/// Keywords that `parse_data_type` parses back to themselves verbatim
+/// (`bpchar`, `varchar`, `time`, `timestamp`, `timestamptz`) round-trip
+/// unquoted and are intentionally excluded. Keep this in sync with the keyword
+/// arms of `parse_data_type`.
+fn data_type_keyword_needs_quoting(kw: mz_sql_lexer::keywords::Keyword) -> bool {
+    use mz_sql_lexer::keywords::*;
+    matches!(
+        kw,
+        MAP | STRING
+            | BIGINT
+            | SMALLINT
+            | DEC
+            | DECIMAL
+            | DOUBLE
+            | FLOAT
+            | INT
+            | INTEGER
+            | REAL
+            | BOOLEAN
+            | BYTES
+            | JSON
+            | CHAR
+            | CHARACTER
+    )
+}
 
 impl<T> FoldNode<Raw, T> for RawDataType
 where
