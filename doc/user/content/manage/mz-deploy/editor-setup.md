@@ -33,8 +33,16 @@ dependencies, column schemas, and Materialize-specific features.
 
 ## VS Code
 
-Install the `mz-deploy` VS Code extension. It activates automatically when
-your workspace contains a `project.toml`.
+Install the [Materialize mz-deploy extension](https://marketplace.visualstudio.com/items?itemName=MaterializeInc.mz-deploy)
+from the VS Code Marketplace — search for **mz-deploy** in the Extensions view,
+or install it from the command line:
+
+```shell
+code --install-extension MaterializeInc.mz-deploy
+```
+
+The extension activates automatically when your workspace contains a
+`project.toml`.
 
 The extension adds:
 
