@@ -243,7 +243,12 @@ pub async fn fetch_max_lsn(client: &Client) -> Result<PgLsn, PostgresError> {
     // <https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-BACKUP>
     // We may need to revisit this and use `pg_current_wal_flush_lsn`.
     let row = query_one(client, crate::sql!("SELECT pg_current_wal_lsn()"), &[]).await?;
-    let lsn: PgLsn = row.get(0);
+    let lsn: Option<PgLsn> = row.get(0);
+    if let Some(lsn) = lsn {
+        return Ok(lsn);
+    }
 
-    Ok(lsn)
+    Err(PostgresError::Generic(anyhow::anyhow!(
+        "pg_current_wal_lsn() mysteriously has no value"
+    )))
 }
