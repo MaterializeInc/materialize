@@ -220,6 +220,89 @@ mod tests {
             assert_eq!(decoded, Value::Array(vec![want; 10]));
         }
     }
+
+    #[mz_ore::test]
+    fn valid_null_array_falsely_rejected() {
+        // Materialize's encoder emits no element bytes for `null` array
+        // elements, so decoding must not assume each element consumes at least
+        // one byte of remaining input.
+        use std::str::FromStr;
+
+        use super::{AvroDeserializer, GeneralDeserializer};
+        use crate::encode::encode_to_vec;
+        use crate::types::Value;
+        use crate::{Schema, ValueDecoder};
+
+        let schema = Schema::from_str(r#"{"type": "array", "items": "null"}"#).unwrap();
+        let value = Value::Array(vec![Value::Null, Value::Null]);
+        let body = encode_to_vec(&value, &schema);
+
+        let dsr = GeneralDeserializer {
+            schema: schema.top_node(),
+        };
+        let mut reader: &[u8] = &body;
+        let res = dsr.deserialize(&mut reader, ValueDecoder);
+        assert!(
+            res.is_ok(),
+            "an encoder-produced array of nulls should round-trip, but got: {res:?}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn zero_width_array_elements_decode_across_blocks() {
+        // Zero-width arrays can be encoded as multiple blocks. The cumulative
+        // cap must not reject ordinary valid data below the limit.
+        use std::str::FromStr;
+
+        use super::{AvroDeserializer, GeneralDeserializer};
+        use crate::types::Value;
+        use crate::util::zig_i64;
+        use crate::{Schema, ValueDecoder};
+
+        let schema = Schema::from_str(r#"{"type": "array", "items": "null"}"#).unwrap();
+        let mut body = Vec::new();
+        zig_i64(4, &mut body);
+        zig_i64(6, &mut body);
+        body.push(0);
+
+        let dsr = GeneralDeserializer {
+            schema: schema.top_node(),
+        };
+        let mut reader: &[u8] = &body;
+        let decoded = dsr
+            .deserialize(&mut reader, ValueDecoder)
+            .expect("zero-width arrays may span multiple blocks below the cap");
+        assert_eq!(decoded, Value::Array(vec![Value::Null; 10]));
+    }
+
+    #[mz_ore::test]
+    fn zero_width_array_total_len_bounded_across_blocks() {
+        // A zero-width element type has no input-proportional per-block bound.
+        // Keep a cumulative cap so repeated legal-size blocks cannot drive an
+        // unbounded decode. Seed the array access at the cap to test the edge
+        // without walking 16M null elements first.
+        use std::str::FromStr;
+
+        use super::{AvroArrayAccess, MAX_BLOCK_ELEMENTS, SimpleArrayAccess};
+        use crate::util::zig_i64;
+        use crate::{Schema, TrivialDecoder};
+
+        let schema = Schema::from_str(r#""null""#).unwrap();
+        let mut body = Vec::new();
+        zig_i64(1, &mut body);
+
+        let mut reader: &[u8] = &body;
+        let mut access = SimpleArrayAccess::new(&mut reader, schema.top_node());
+        access.total = MAX_BLOCK_ELEMENTS;
+
+        let err = access
+            .decode_next(TrivialDecoder)
+            .expect_err("a new block past the cumulative array limit must be rejected");
+        assert!(
+            err.to_string().contains("Avro array total length"),
+            "unexpected error: {err}"
+        );
+    }
 }
 
 /// A convenience function to build timestamp values from underlying longs.
@@ -585,12 +668,12 @@ impl<'a, R: AvroRead> AvroMapAccess for SimpleMapAccess<'a, R> {
                 }
                 _ => unreachable!(),
             };
-            // See `SimpleArrayAccess::decode_next` — same `MAX_BLOCK_LEN`
+            // See `SimpleArrayAccess::decode_next` — same `MAX_BLOCK_ELEMENTS`
             // bound applies; a wire-claimed block length above the cap
             // would let the decode loop OOM / overflow allocation.
-            if len > MAX_BLOCK_LEN {
+            if len > MAX_BLOCK_ELEMENTS {
                 return Err(AvroError::Decode(DecodeError::Custom(format!(
-                    "Avro map block length {len} exceeds limit {MAX_BLOCK_LEN}"
+                    "Avro map block length {len} exceeds limit {MAX_BLOCK_ELEMENTS}"
                 ))));
             }
             // A block can't hold more entries than there are bytes left to
@@ -631,6 +714,7 @@ struct SimpleArrayAccess<'a, R: AvroRead> {
     r: &'a mut R,
     schema: SchemaNode<'a>,
     remaining: usize,
+    total: usize,
     done: bool,
 }
 
@@ -640,6 +724,7 @@ impl<'a, R: AvroRead> SimpleArrayAccess<'a, R> {
             r,
             schema,
             remaining: 0,
+            total: 0,
             done: false,
         }
     }
@@ -669,11 +754,12 @@ impl<'a> AvroArrayAccess for ValueArrayAccess<'a> {
     }
 }
 
-/// Sanity cap on the per-block element count an Avro array/map can claim
-/// from the wire. Without it, a malicious or corrupt file can claim up
-/// to `i64::MAX` items and the generic array/map decode loop will run
-/// until it eventually OOMs or hits `Vec` capacity-overflow.
-const MAX_BLOCK_LEN: usize = 1 << 24;
+/// Sanity cap on the element count Avro arrays/maps can claim from the wire.
+/// Arrays apply this both per block and cumulatively; maps apply it per block.
+/// Without it, a malicious or corrupt file can claim up to `i64::MAX` items and
+/// the generic array/map decode loop will run until it eventually OOMs or hits
+/// `Vec` capacity-overflow.
+const MAX_BLOCK_ELEMENTS: usize = 1 << 24;
 
 /// A *lower* bound on the number of bytes any value of `schema` encodes to on
 /// the wire.
@@ -689,7 +775,8 @@ const MAX_BLOCK_LEN: usize = 1 << 24;
 /// record of only such fields — because those genuinely encode to no bytes.
 /// Materialize's own writer emits a ten-element `array<null>` as `[20, 0]`, so a
 /// blanket "count must not exceed remaining bytes" rule would reject valid
-/// input. For zero-width element types the caller falls back to `MAX_BLOCK_LEN`.
+/// input. For zero-width element types the caller falls back to the cumulative
+/// array `MAX_BLOCK_ELEMENTS` cap.
 fn min_encoded_len(schema: SchemaNode) -> usize {
     let mut visited = BTreeSet::new();
     min_encoded_len_piece(schema.root, schema.inner, &mut visited)
@@ -787,9 +874,15 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
                 }
                 _ => unreachable!(),
             };
-            if len > MAX_BLOCK_LEN {
+            if len > MAX_BLOCK_ELEMENTS {
                 return Err(AvroError::Decode(DecodeError::Custom(format!(
-                    "Avro array block length {len} exceeds limit {MAX_BLOCK_LEN}"
+                    "Avro array block length {len} exceeds limit {MAX_BLOCK_ELEMENTS}"
+                ))));
+            }
+            let total = self.total.saturating_add(len);
+            if total > MAX_BLOCK_ELEMENTS {
+                return Err(AvroError::Decode(DecodeError::Custom(format!(
+                    "Avro array total length {total} exceeds limit {MAX_BLOCK_ELEMENTS}"
                 ))));
             }
             // A block of `len` items occupies at least `len * min_elem` bytes,
@@ -799,9 +892,10 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
             // at least a one-byte key-length varint — an array item can encode to
             // zero bytes (`null`, an empty record), so this bound only applies
             // when the element type has a proven positive byte floor. For
-            // zero-width element types (`min_elem == 0`) we rely on
-            // `MAX_BLOCK_LEN` alone; otherwise a valid datum such as a ten-element
-            // `array<null>` (encoded as `[20, 0]`) would be wrongly rejected.
+            // zero-width element types (`min_elem == 0`) we rely on the
+            // cumulative `MAX_BLOCK_ELEMENTS` cap; otherwise a valid datum such as a
+            // ten-element `array<null>` (encoded as `[20, 0]`) would be wrongly
+            // rejected.
             if let Some(remaining) = self.r.remaining_input() {
                 let min_elem = min_encoded_len(self.schema);
                 if min_elem > 0 && len.saturating_mul(min_elem) > remaining {
@@ -810,6 +904,7 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
                     ))));
                 }
             }
+            self.total = total;
             self.remaining = len;
         }
         assert!(self.remaining > 0);
