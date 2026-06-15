@@ -101,23 +101,29 @@ Common errors during staging:
 
 ## Iterate against production data
 
-`dev` is the inner-loop command for developers. It creates a
-per-developer overlay database (`<db>__<profile>`) containing only the
-views and materialized views you've changed, with references rewritten
-so unchanged dependencies resolve to production. External dependencies
-and `IN CLUSTER` clauses pass through unchanged.
+`dev` deploys a personal, throwaway copy of your changes to your remote
+Materialize so you can validate them against real production data. It
+creates a per-developer overlay database (`<db>__<profile>`) containing
+only the views and materialized views you've changed, with references
+rewritten so unchanged dependencies resolve to production. External
+dependencies pass through unchanged.
+
+You pass the cluster every overlay materialized view and index runs on;
+the `IN CLUSTER` clause in your source is rewritten to it. `dev` refuses
+to target a cluster that hosts a promoted deployment, so provision a
+dedicated dev cluster and reuse it:
 
 ```bash
-mz-deploy dev
+mz-deploy dev <cluster>
 ```
 
-Every run drops the overlay and rebuilds it from scratch, so iterations
-are seconds and there's no state to manage.
+Every run drops the overlay and rebuilds it from scratch, so there's no
+state to manage.
 
 Show the plan without executing any DDL:
 
 ```bash
-mz-deploy dev --dry-run
+mz-deploy dev <cluster> --dry-run
 ```
 
 Tear down the overlay when you're done:
