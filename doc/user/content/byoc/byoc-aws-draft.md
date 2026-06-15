@@ -62,7 +62,7 @@ you want Materialize to run. The CloudFormation form is already populated, so yo
 review it and launch the stack (about 5 to 10 minutes). It creates exactly two
 objects:
 
-- **An IAM role** (`MaterializeBYOC`) that Materialize assumes to manage your
+- **An IAM role** (`MaterializeBYOCRole`) that Materialize assumes to manage your
   environment.
 - **A permission boundary** (`MaterializeBYOCBoundary`) that caps what that role
   can ever do.
