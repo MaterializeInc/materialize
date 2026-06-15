@@ -42,6 +42,8 @@ a permission boundary you control. Only operational telemetry (logs and metrics,
 with sensitive values redacted) leaves your account so Materialize can monitor
 and support the deployment.
 
+![BYOC on AWS architecture](/images/byoc-aws-architecture.svg)
+
 ## Prerequisites
 
 - An AWS account, and the AWS region you want to run in.
