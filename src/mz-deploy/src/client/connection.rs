@@ -38,11 +38,10 @@
 use crate::client::errors::ConnectionError;
 use crate::config::{Profile, SslMode};
 use crate::info;
+use mz_postgres_util::Sql;
 use std::collections::BTreeMap;
 use tokio_postgres::types::ToSql;
-use tokio_postgres::{
-    Client as PgClient, NoTls, Row, SimpleQueryMessage, ToStatement, Transaction,
-};
+use tokio_postgres::{Client as PgClient, NoTls, Row, SimpleQueryMessage, Transaction};
 
 /// Database client for interacting with Materialize.
 ///
@@ -242,48 +241,48 @@ impl Client {
     }
 
     /// Execute a SQL statement that doesn't return rows.
-    pub async fn execute<T>(
+    pub async fn execute(
         &self,
-        statement: &T,
+        statement: &str,
         params: &[&(dyn ToSql + Sync)],
-    ) -> Result<u64, ConnectionError>
-    where
-        T: ?Sized + ToStatement,
-    {
-        self.client
-            .execute(statement, params)
-            .await
-            .map_err(ConnectionError::Query)
+    ) -> Result<u64, ConnectionError> {
+        mz_postgres_util::execute(
+            &self.client,
+            Sql::raw_unchecked(statement.to_string()),
+            params,
+        )
+        .await
+        .map_err(ConnectionError::from)
     }
 
     /// Execute a SQL query and return the resulting rows.
-    pub async fn query_one<T>(
+    pub async fn query_one(
         &self,
-        statement: &T,
+        statement: &str,
         params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Row, ConnectionError>
-    where
-        T: ?Sized + ToStatement,
-    {
-        self.client
-            .query_one(statement, params)
-            .await
-            .map_err(ConnectionError::Query)
+    ) -> Result<Row, ConnectionError> {
+        mz_postgres_util::query_one(
+            &self.client,
+            Sql::raw_unchecked(statement.to_string()),
+            params,
+        )
+        .await
+        .map_err(ConnectionError::from)
     }
 
     /// Execute a SQL query and return the resulting rows.
-    pub async fn query<T>(
+    pub async fn query(
         &self,
-        statement: &T,
+        statement: &str,
         params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Vec<Row>, ConnectionError>
-    where
-        T: ?Sized + ToStatement,
-    {
-        self.client
-            .query(statement, params)
-            .await
-            .map_err(ConnectionError::Query)
+    ) -> Result<Vec<Row>, ConnectionError> {
+        mz_postgres_util::query(
+            &self.client,
+            Sql::raw_unchecked(statement.to_string()),
+            params,
+        )
+        .await
+        .map_err(ConnectionError::from)
     }
 
     /// Execute a SQL statement using the simple query protocol (text-only, no binary encoding).
@@ -291,18 +290,16 @@ impl Client {
         &self,
         query: &str,
     ) -> Result<Vec<SimpleQueryMessage>, ConnectionError> {
-        self.client
-            .simple_query(query)
+        mz_postgres_util::simple_query(&self.client, Sql::raw_unchecked(query.to_string()))
             .await
-            .map_err(ConnectionError::Query)
+            .map_err(ConnectionError::from)
     }
 
     /// Execute one or more SQL statements that don't return rows, using the simple query protocol.
     pub async fn batch_execute(&self, query: &str) -> Result<(), ConnectionError> {
-        self.client
-            .batch_execute(query)
+        mz_postgres_util::batch_execute(&self.client, Sql::raw_unchecked(query.to_string()))
             .await
-            .map_err(ConnectionError::Query)
+            .map_err(ConnectionError::from)
     }
 }
 

@@ -71,6 +71,7 @@ use crate::project::ir::object_id::ObjectId;
 use async_stream::try_stream;
 use chrono::{DateTime, Utc};
 use futures::Stream;
+use mz_postgres_util::Sql;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use tokio_postgres::types::ToSql;
@@ -1541,10 +1542,10 @@ impl DeploymentsClientMut<'_> {
                     "DECLARE c CURSOR FOR SUBSCRIBE ({query})"
                 );
 
-                txn.execute(&subscribe_sql, &[&pattern]).await?;
+                mz_postgres_util::execute(&txn, Sql::raw_unchecked(subscribe_sql), &[&pattern]).await?;
 
                 loop {
-                    let rows = txn.query("FETCH ALL c", &[]).await?;
+                    let rows = mz_postgres_util::query(&txn, Sql::new("FETCH ALL c"), &[]).await?;
                     if rows.is_empty() {
                         continue;
                     }

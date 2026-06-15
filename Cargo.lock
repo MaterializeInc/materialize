@@ -6552,6 +6552,7 @@ dependencies = [
  "mz-controller-types",
  "mz-expr",
  "mz-ore",
+ "mz-postgres-util",
  "mz-repr",
  "mz-secrets",
  "mz-sql",

@@ -20,6 +20,7 @@ rayon = { workspace = true }
 junit-report = { workspace = true }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
+mz-postgres-util = { path = "../postgres-util" }
 mz-aws-util = { path = "../aws-util", default-features = false }
 mz-catalog = { path = "../catalog" }
 mz-controller-types = { path = "../controller-types" }
