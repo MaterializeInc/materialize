@@ -39,6 +39,34 @@ Update to the latest version later with:
 npx -y skills update
 ```
 
+## Claude Code on the web
+
+[Claude Code on the web](https://code.claude.com/docs/en/claude-code-on-the-web)
+runs each session in a fresh, Anthropic-managed cloud sandbox. The sandbox
+doesn't have `mz-deploy` installed, so install it with a **setup script** — a
+Bash script that runs once, as root, before Claude Code starts.
+
+In the cloud environment settings, set the **Setup script** field to:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+ARCH=$(uname -m)
+curl -L "https://binaries.materialize.com/mz-deploy-latest-$ARCH-unknown-linux-gnu.tar.gz" \
+| tar -xzC /usr/local --strip-components=1
+```
+
+The sandbox runs Ubuntu on Linux, so this always uses the `unknown-linux-gnu`
+build and resolves the architecture (`x86_64` or `aarch64`) at runtime. The
+binary lands in `/usr/local/bin`, which is already on `PATH`. The script runs as
+root, so no `sudo` is needed. Setup scripts have network access under the
+default **Trusted** network mode; if your environment uses **None**, the
+download will fail.
+
+To configure the language server in the sandbox as well, commit the
+`.claude/settings.json` from [Configuring for Claude Code](#configuring-for-claude-code)
+to your repository — it carries over to cloud sessions automatically.
+
 ## Agent-optimized help
 
 ```bash

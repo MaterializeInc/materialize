@@ -20,9 +20,35 @@ Before you begin, you need:
 
 - A running Materialize instance ([Materialize Cloud](https://materialize.com/register/) or [self-managed](/self-managed-deployments/)).
 
-{{< note >}}
-Installation instructions will be added when the distribution mechanism is finalized.
-{{< /note >}}
+Install `mz-deploy` by downloading the latest release for your platform:
+
+{{< tabs >}}
+
+{{< tab "macOS" >}}
+
+```shell
+ARCH=$(uname -m)
+sudo echo "Preparing to extract mz-deploy..."
+curl -L "https://binaries.materialize.com/mz-deploy-latest-$ARCH-apple-darwin.tar.gz" \
+| sudo tar -xzC /usr/local --strip-components=1
+```
+{{</ tab >}}
+{{< tab "Linux" >}}
+
+```shell
+ARCH=$(uname -m)
+sudo echo "Preparing to extract mz-deploy..."
+curl -L "https://binaries.materialize.com/mz-deploy-latest-$ARCH-unknown-linux-gnu.tar.gz" \
+| sudo tar -xzC /usr/local --strip-components=1
+```
+{{</ tab >}}
+{{</ tabs >}}
+
+Verify the installation:
+
+```shell
+mz-deploy --version
+```
 
 Docker is required for `mz-deploy test` and `mz-deploy explain` (see [Local development](/manage/mz-deploy/local-development/)).
 
