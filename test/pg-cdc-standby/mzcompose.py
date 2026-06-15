@@ -245,6 +245,11 @@ def workflow_default(c: Composition) -> None:
         # snapshot record, exactly like initial slot creation, so keep nudging.
         c.run_testdrive_files("verify-rebuild-stalls.td")
 
+    # Dropping the source must clean up its logical slot on the standby, even
+    # though the source stalled. Dropping a slot (unlike creating one) does not
+    # block on a standby snapshot, so this runs outside the nudger.
+    _verify_slot_cleaned_up_on_drop(c)
+
 
 def _verify_reading_from_standby(c: Composition) -> None:
     """Prove Materialize really decoded from the standby, not the primary."""
@@ -276,3 +281,37 @@ def _verify_reading_from_standby(c: Composition) -> None:
         assert not in_recovery, "expected pg-primary to be the primary"
     finally:
         conn.close()
+
+
+def _count_logical_slots(c: Composition) -> int:
+    conn = _pg_connect(c, "pg-standby")
+    try:
+        return _query_scalar(
+            conn,
+            "SELECT count(*) FROM pg_replication_slots WHERE slot_type = 'logical'",
+        )
+    finally:
+        conn.close()
+
+
+def _verify_slot_cleaned_up_on_drop(c: Composition) -> None:
+    """Assert dropping the source removes its logical slot from the standby.
+
+    Slot cleanup runs in a best-effort background task in the coordinator that
+    retries for up to ~60s, so it is not synchronous with DROP SOURCE returning.
+    Poll the standby until the slot is gone.
+    """
+    # Sanity check: a logical slot exists before the drop.
+    assert (
+        _count_logical_slots(c) >= 1
+    ), "expected a logical slot on the standby before dropping the source"
+
+    c.run_testdrive_files("drop-source.td")
+
+    for _ in range(90):
+        if _count_logical_slots(c) == 0:
+            return
+        threading.Event().wait(1)
+    raise RuntimeError(
+        "logical slot was not cleaned up on the standby after dropping the source"
+    )
