@@ -22,6 +22,7 @@
 // of which can be found in the LICENSE file at the root of this repository.
 
 use std::cmp;
+use std::collections::BTreeSet;
 use std::fmt::{self, Display};
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
@@ -31,8 +32,8 @@ use flate2::read::MultiGzDecoder;
 
 use crate::error::{DecodeError, Error as AvroError};
 use crate::schema::{
-    RecordField, ResolvedDefaultValueField, ResolvedRecordField, SchemaNode, SchemaPiece,
-    SchemaPieceOrNamed,
+    RecordField, ResolvedDefaultValueField, ResolvedRecordField, Schema, SchemaNode, SchemaPiece,
+    SchemaPieceOrNamed, SchemaPieceRefOrNamed,
 };
 use crate::types::{Scalar, Value};
 use crate::util::{TsUnit, safe_len, zag_i32, zag_i64};
@@ -181,6 +182,43 @@ mod tests {
             res.is_err(),
             "an array block longer than the remaining input must be rejected, not allocated"
         );
+    }
+
+    #[mz_ore::test]
+    fn zero_width_array_elements_decode() {
+        // The remaining-input bound must not reject valid arrays whose elements
+        // encode to zero bytes. `null` and empty records have no per-element byte
+        // floor, so a ten-element block legitimately follows its count with no
+        // element bytes at all (Materialize's own writer emits `array<null>` of
+        // ten as `[20, 0]`: block count 10, then the terminating zero block).
+        use std::str::FromStr;
+
+        use super::{AvroDeserializer, GeneralDeserializer};
+        use crate::types::Value;
+        use crate::util::zig_i64;
+        use crate::{Schema, ValueDecoder};
+
+        for (items, want) in [
+            (r#""null""#, Value::Null),
+            (
+                r#"{"type": "record", "name": "Empty", "fields": []}"#,
+                Value::Record(vec![]),
+            ),
+        ] {
+            let schema =
+                Schema::from_str(&format!(r#"{{"type": "array", "items": {items}}}"#)).unwrap();
+            let mut body = Vec::new();
+            zig_i64(10, &mut body); // ten elements...
+            body.push(0); // ...then the terminating zero block. No element bytes.
+            let dsr = GeneralDeserializer {
+                schema: schema.top_node(),
+            };
+            let mut reader: &[u8] = &body;
+            let decoded = dsr
+                .deserialize(&mut reader, ValueDecoder)
+                .expect("a zero-width array element type must decode, not be rejected");
+            assert_eq!(decoded, Value::Array(vec![want; 10]));
+        }
     }
 }
 
@@ -558,6 +596,9 @@ impl<'a, R: AvroRead> AvroMapAccess for SimpleMapAccess<'a, R> {
             // A block can't hold more entries than there are bytes left to
             // decode them from; reject a count that claims otherwise rather than
             // letting it drive an unbounded allocation (see `Skip::remaining_input`).
+            // Unlike an array item, every map entry encodes at least a one-byte
+            // key-length varint, so each entry has a guaranteed one-byte floor and
+            // a count above the remaining input is always bogus.
             if let Some(remaining) = self.r.remaining_input() {
                 if len > remaining {
                     return Err(AvroError::Decode(DecodeError::Custom(format!(
@@ -634,6 +675,102 @@ impl<'a> AvroArrayAccess for ValueArrayAccess<'a> {
 /// until it eventually OOMs or hits `Vec` capacity-overflow.
 const MAX_BLOCK_LEN: usize = 1 << 24;
 
+/// A *lower* bound on the number of bytes any value of `schema` encodes to on
+/// the wire.
+///
+/// Used to reject an array block whose claimed element count could not possibly
+/// fit in the remaining input: a block of `len` elements occupies at least
+/// `len * min_encoded_len` bytes. Only an under-estimate is ever safe here — an
+/// over-estimate would reject valid data — so anything whose floor we can't
+/// prove (schema-resolution pieces, named-type recursion cycles) contributes
+/// `0`, which simply relaxes the bound.
+///
+/// Crucially this returns `0` for zero-width types — `null`, an empty record, a
+/// record of only such fields — because those genuinely encode to no bytes.
+/// Materialize's own writer emits a ten-element `array<null>` as `[20, 0]`, so a
+/// blanket "count must not exceed remaining bytes" rule would reject valid
+/// input. For zero-width element types the caller falls back to `MAX_BLOCK_LEN`.
+fn min_encoded_len(schema: SchemaNode) -> usize {
+    let mut visited = BTreeSet::new();
+    min_encoded_len_piece(schema.root, schema.inner, &mut visited)
+}
+
+/// Resolves a (possibly named) schema reference, guarding against named-type
+/// cycles, then defers to [`min_encoded_len_piece`].
+fn min_encoded_len_or_named(
+    root: &Schema,
+    node: SchemaPieceRefOrNamed,
+    visited: &mut BTreeSet<usize>,
+) -> usize {
+    match node {
+        SchemaPieceRefOrNamed::Piece(piece) => min_encoded_len_piece(root, piece, visited),
+        SchemaPieceRefOrNamed::Named(idx) => {
+            // A named-type cycle can only close through a record field; treat
+            // the back-edge as zero-width so we never over-estimate.
+            if !visited.insert(idx) {
+                return 0;
+            }
+            let len = min_encoded_len_piece(root, &root.lookup(idx).piece, visited);
+            visited.remove(&idx);
+            len
+        }
+    }
+}
+
+fn min_encoded_len_piece(
+    root: &Schema,
+    piece: &SchemaPiece,
+    visited: &mut BTreeSet<usize>,
+) -> usize {
+    match piece {
+        // Encodes to nothing at all.
+        SchemaPiece::Null => 0,
+        // A single byte (zig-zag varint of 0 is one byte; a bool is one byte).
+        SchemaPiece::Boolean
+        | SchemaPiece::Int
+        | SchemaPiece::Long
+        | SchemaPiece::Date
+        | SchemaPiece::TimestampMilli
+        | SchemaPiece::TimestampMicro => 1,
+        SchemaPiece::Float => 4,
+        SchemaPiece::Double => 8,
+        // `fixed`-backed decimals are exactly their size; `bytes`-backed ones,
+        // like `bytes`/`string`, carry at least a one-byte length varint.
+        SchemaPiece::Decimal {
+            fixed_size: Some(size),
+            ..
+        } => *size,
+        SchemaPiece::Decimal {
+            fixed_size: None, ..
+        }
+        | SchemaPiece::Bytes
+        | SchemaPiece::String
+        | SchemaPiece::Json
+        | SchemaPiece::Uuid => 1,
+        // An empty array/map encodes as a single zero-count byte regardless of
+        // the element type, so don't recurse into it.
+        SchemaPiece::Array(_) | SchemaPiece::Map(_) => 1,
+        // A union always writes at least its one-byte branch index.
+        SchemaPiece::Union(_) => 1,
+        // An enum writes a one-byte symbol index.
+        SchemaPiece::Enum { .. } => 1,
+        SchemaPiece::Fixed { size } => *size,
+        // A record's encoding is its fields' encodings concatenated, so its
+        // floor is the sum of the fields' floors — which can be `0` (the empty
+        // record, or a record of only `null`/empty-record fields).
+        SchemaPiece::Record { fields, .. } => fields.iter().fold(0, |acc, field| {
+            acc.saturating_add(min_encoded_len_or_named(
+                root,
+                field.schema.as_ref(),
+                visited,
+            ))
+        }),
+        // Schema-resolution pieces only arise on the reader/writer-mismatch
+        // path; we don't try to prove a floor for them.
+        _ => 0,
+    }
+}
+
 impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
     fn decode_next<D: AvroDecode>(&mut self, d: D) -> Result<Option<D::Out>, AvroError> {
         if self.done {
@@ -655,11 +792,19 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
                     "Avro array block length {len} exceeds limit {MAX_BLOCK_LEN}"
                 ))));
             }
-            // A block can't hold more items than there are bytes left to decode
-            // them from; reject a count that claims otherwise rather than letting
-            // it drive an unbounded allocation (see `Skip::remaining_input`).
+            // A block of `len` items occupies at least `len * min_elem` bytes,
+            // so a count needing more than the remaining input can't be honest;
+            // reject it rather than let it drive an unbounded allocation (see
+            // `Skip::remaining_input`). Unlike a map entry — which always carries
+            // at least a one-byte key-length varint — an array item can encode to
+            // zero bytes (`null`, an empty record), so this bound only applies
+            // when the element type has a proven positive byte floor. For
+            // zero-width element types (`min_elem == 0`) we rely on
+            // `MAX_BLOCK_LEN` alone; otherwise a valid datum such as a ten-element
+            // `array<null>` (encoded as `[20, 0]`) would be wrongly rejected.
             if let Some(remaining) = self.r.remaining_input() {
-                if len > remaining {
+                let min_elem = min_encoded_len(self.schema);
+                if min_elem > 0 && len.saturating_mul(min_elem) > remaining {
                     return Err(AvroError::Decode(DecodeError::Custom(format!(
                         "Avro array block length {len} exceeds remaining input ({remaining} bytes)"
                     ))));
