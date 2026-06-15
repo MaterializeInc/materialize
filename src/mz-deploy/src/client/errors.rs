@@ -154,6 +154,15 @@ impl From<tokio_postgres::Error> for ConnectionError {
     }
 }
 
+impl From<mz_postgres_util::PostgresError> for ConnectionError {
+    fn from(error: mz_postgres_util::PostgresError) -> Self {
+        match error {
+            mz_postgres_util::PostgresError::Postgres(error) => ConnectionError::Query(error),
+            other => ConnectionError::Message(other.to_string()),
+        }
+    }
+}
+
 /// Errors that can occur during project validation against the database.
 #[derive(Debug)]
 pub enum DatabaseValidationError {
