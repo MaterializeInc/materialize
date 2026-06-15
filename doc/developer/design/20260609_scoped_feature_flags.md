@@ -199,24 +199,29 @@ the controller (to resolve a given replica's family at dyncfg-push time), and it
 versions and deploys with the rest of the size configuration rather than living
 in a second place that could drift.
 
-The `family` field need not be populated for every size up front:
-`ReplicaAllocation::family()` falls back to deriving `cc` (via `is_cc`) or
-`legacy` when no explicit family is set, so the `legacy` and `cc` families are
-targetable immediately, before the new families (`M`, `D`) get explicit `family`
-entries. Explicit values are required only where the fallback is wrong.
+The `family` field need not be populated for every size up front, but the
+fallback must **fail safe**. A family should be assigned only when *positively
+identified* — `cc` via `is_cc`, `legacy` via membership in the known legacy set —
+and a size that matches neither (an unannotated new size, or an operator-defined
+one) must default to a **neutral family string** such as `other` that matches *no*
+curated rule. The tempting `is_cc ? "cc" : "legacy"` fallback is a footgun: it
+makes `legacy` the catch-all, so a brand-new size would silently match the
+motivating `replica_size_family = "legacy"` rule (e.g. "legacy keeps lgalloc") and
+inherit behavior it was never meant to have. Defaulting unknowns to a
+no-rule-matches `other` means an unannotated size gets only the environment-wide
+value until someone deliberately assigns its family.
 
-This fallback must always yield a **sensible default family string**, never fail
-or leave the attribute unset, because we do not control size (or cluster) naming
-everywhere. In **self-managed**, operators define their own replica sizes via
+The default must always yield a well-defined string, never fail or leave the
+attribute unset, because we do not control size (or cluster) naming everywhere. In
+**self-managed**, operators define their own replica sizes via
 `--cluster-replica-sizes`, with names we have never seen; `family()` must still
-return a well-defined string for them so the `replica` context is always
-complete. In practice this is harmless there: the scoped mechanism is LD-driven,
-and self-managed deployments use the file-based system-parameter frontend
-(`SystemParameterFrontendClient::File`) or none — so they produce no scoped
-overrides and resolve to environment-wide defaults regardless of how sizes are
-named. The feature is effectively a cloud-fleet operability mechanism that
-degrades gracefully to env-wide elsewhere; the only hard requirement self-managed
-imposes is that the family derivation has a sensible default for unknown names.
+return a string for them (`other`, per the above) so the `replica` context is
+always complete. In practice this is harmless there: the scoped mechanism is
+LD-driven, and self-managed deployments use the file-based system-parameter
+frontend (`SystemParameterFrontendClient::File`) or none — so they produce no
+scoped overrides and resolve to environment-wide defaults regardless of how sizes
+are named. The feature is effectively a cloud-fleet operability mechanism that
+degrades gracefully to env-wide elsewhere.
 
 We deliberately do **not** ask LD rule authors to derive the family from the
 size string with `startsWith` / `endsWith` operators. The family is a *curated
@@ -346,6 +351,14 @@ Lifecycle:
 - **Cold cache + LD unavailable** (first-ever startup, object never yet
   evaluated): fall back to the environment-wide value — unavoidable, since we
   have never observed LD for it.
+- **Newly-created object:** a cluster/replica created mid-interval runs with
+  environment-wide values until the next sync tick evaluates it (an
+  eventual-consistency window). This interacts with the plan-time consumption of
+  cluster-coherent flags (§Resolution): a freshly created cluster may plan its
+  first dataflows under environment-wide optimizer features and only pick up its
+  intended cluster-scoped features on later replanning. If first-plan correctness
+  for a known cluster matters, evaluate its scope synchronously at creation rather
+  than waiting for the tick.
 
 Crucially, persisting does **not** reintroduce the recreate ambiguity that sank
 the `ALTER SYSTEM ... FOR CLUSTER` DDL alternative, because of the monotonic id
@@ -367,6 +380,7 @@ The entire scoped-parameter mechanism is gated behind a new
 With the gate off, behavior is exactly today's environment-wide-only resolution, so the feature is strictly opt-in.
 The gate is checked at the single sync-loop chokepoint, `sync_scoped_params`.
 When off, no cluster or replica contexts are evaluated, and any overrides that a previously-enabled run persisted are cleared once, so resolution falls back to the environment-wide value everywhere.
+This clearing is conditional on the sync loop running with the gate off: if the frontend is disabled entirely (self-managed, or no LD), a previously-enabled run's persisted overrides are not actively cleared, so a one-time prune on the gate-off path (independent of LD reachability) is needed to make the guarantee unconditional.
 When on, cluster/replica evaluation begins with no deploy, since every dyncfg is mirrored as an LD-synced, `ALTER SYSTEM`-settable system var.
 It is a dyncfg rather than a `feature_flags!` entry because the latter carries the catalog item-parsing rehydration contract for SQL/syntax features, which this runtime subsystem toggle has no part in.
 
@@ -405,6 +419,20 @@ re-optimization closure, and both of those hold only a catalog snapshot, not the
 coordinator. Threading the working copy through the catalog is what makes it
 visible at *every* cluster-aware resolution site rather than just the sequencing
 path.
+
+**Timing: the two boundaries are not symmetric, and this is operationally
+significant.** Replica-local flags take effect **live** — a changed value is
+pushed to running replicas via dyncfg on the next sync tick, no recreation
+needed. Cluster-coherent (optimizer) flags are consumed **at plan time**, so
+changing one in LD affects only *subsequent* planning: existing indexes,
+materialized views, and subscribes keep their already-optimized plans until they
+are recreated or the environment reboots and re-optimizes. This is the same
+behavior as `ALTER SYSTEM` not re-optimizing existing objects, and it is
+defensible — but it means "flip an optimizer flag on `mz_catalog_server` from LD"
+does **not** retroactively change installed dataflows. An operator who needs the
+change to apply to existing objects must trigger replanning (recreate the object,
+or reboot the environment). The doc calls this out explicitly because the two
+paths read as symmetric ("resolution at existing boundaries") but are not.
 
 Precedence for replica-local flags, lowest to highest:
 `Global < ReplicaSizeFamily < Replica(id)` (a specific replica pin beats a size
@@ -454,6 +482,13 @@ opinion and the manual `FEATURES` pin stands. This is the same `differs from
 env-wide` test used at replica scope (which has no manual layer), so the recording
 rule is **uniform across both scopes** — there is no need to special-case
 `FALLTHROUGH` per scope.
+
+The comparison must be on the **resolved, typed value**, not the raw serialized
+form: both the env-wide and scoped values must be run through the *identical*
+evaluation-and-parse path before comparing, so that LD's raw `"true"` and the
+var-formatted `"on"` (or `100ms` vs `"100ms"`, etc.) are recognized as equal. A
+naive comparison of LD's raw string against the formatted system-var value will
+spuriously report a difference and record a no-op override for every object.
 
 The one behavior this does *not* support is reasserting the env-wide value on a
 cluster purely to clear a `FEATURES` pin (LD value equal to env-wide cannot
@@ -510,9 +545,13 @@ Ordered to de-risk the cleaner boundary first:
    kind (replica-free evaluation); feed the resolved cluster layer into
    `OptimizerFeatureOverrides`. Demonstrate an optimizer feature differing on
    `mz_catalog_server` vs. user clusters.
-4. **Introspection.** Expose resolved scoped values via `mz_internal` relations
-   for debugging (e.g. `mz_cluster_system_parameters`,
-   `mz_replica_system_parameters`).
+4. **Introspection.** Expose scoped values via `mz_internal` relations (e.g.
+   `mz_cluster_system_parameters`, `mz_replica_system_parameters`). These expose
+   the **raw stored override** per scope, not the effective value after precedence
+   (manual `FEATURES`, `EXPLAIN WITH`). That is a deliberate choice for a first
+   cut, but note that for debugging "why is this cluster behaving this way?" an
+   operator usually wants the *effective* value; surfacing the resolved value
+   (or both) is a worthwhile follow-up.
 
 Extend `test/launchdarkly/mzcompose.py` (which already targets by `contextKind`)
 with `contextKind = "cluster"` and `"replica"` cases.
@@ -551,10 +590,19 @@ with `contextKind = "cluster"` and `"replica"` cases.
 
 ## Open questions
 
-Both remaining items are **deferrable** — they are operational tuning concerns,
-not design decisions, and neither blocks the MVP. Both can be revisited once the
-mechanism is in use and we have real numbers.
+One pre-launch checkbox, one operational guardrail, and two deferrable tuning
+concerns. None is a design decision that blocks the MVP.
 
+- **LD billing/contract model (pre-launch checkbox).** Confirm with the LD account
+  owner that we are on the standard service-connections model, not a custom
+  contract with per-context metering, before the gate is enabled (see §Billing).
+  Not deferrable — it gates turning the feature on.
+- **Blast radius of builtin-targeted optimizer rules.** `mz_catalog_server` is the
+  headline target and is critical infrastructure; a bad `is_builtin = true`
+  optimizer rule degrades the catalog-server fleet environment-wide. Worth
+  rollout discipline (narrow targeting, staged rollout, a quick disable path) for
+  builtin-cluster-scoped flags — the gate is the coarse kill-switch, but a bad
+  *rule* under an enabled gate still needs an operational guardrail.
 - **User-cluster context-list growth (deferred).** Billing is unaffected, but
   keying cluster contexts by id means resized/recreated objects accumulate in the
   dashboard Contexts list over time. `anonymous` contexts are likely enough; if
