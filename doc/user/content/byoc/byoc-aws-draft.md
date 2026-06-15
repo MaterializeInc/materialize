@@ -110,7 +110,7 @@ privately.
 Your data stays in your account. Operational telemetry is collected so
 Materialize can monitor and support your deployment, and sensitive values in logs
 are redacted before anything leaves your account. A copy of your metrics and logs
-is also kept in your account (CloudWatch for logs and a Prometheus-compatible
+is also kept in your account (Loki for logs and a Prometheus-compatible
 store for metrics) so you can query it with your own tools.
 
 ## Upgrades
