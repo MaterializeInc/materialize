@@ -10,6 +10,10 @@ menu:
     name: "Manage with mz-deploy"
 ---
 
+{{< warning >}}
+`mz-deploy` is a v0.1 release and is not yet recommended for production use.
+{{< /warning >}}
+
 `mz-deploy` is a CLI that manages your Materialize deployment from plain SQL
 files in a git repository. It catches errors before they reach production, lets
 you test view logic locally, and deploys changes without downtime.

@@ -38,7 +38,7 @@ mz-deploy apply secrets
 
 ```sql
 -- clusters/orders.sql
-CREATE CLUSTER orders (SIZE = 'xsmall');
+CREATE CLUSTER orders (SIZE = '25cc');
 ```
 
 `apply` creates missing clusters and alters drifted configuration. Grants and comments are applied idempotently.

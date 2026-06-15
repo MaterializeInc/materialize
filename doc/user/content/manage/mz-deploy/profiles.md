@@ -103,17 +103,19 @@ Variables parameterize values that differ across profiles. Define them in
 
 ```toml
 [profiles.staging.variables]
-cluster_size = "xsmall"
+compute_cluster = "staging_compute"
 
 [profiles.production.variables]
-cluster_size = "xlarge"
+compute_cluster = "production_compute"
 ```
 
 Reference variables in SQL using psql-compatible syntax:
 
 ```sql
--- clusters/orders.sql
-CREATE CLUSTER orders (SIZE = :'cluster_size');
+-- models/materialize/public/order_summary.sql
+CREATE MATERIALIZED VIEW order_summary
+    IN CLUSTER :"compute_cluster" AS
+SELECT ...;
 ```
 
 Three substitution forms are available:
