@@ -70,6 +70,7 @@ members = [
     "src/ore-proc",
     "src/persist",
     "src/persist-cli",
+    "src/persist-load-gen",
     "src/persist-client",
     "src/persist-proc",
     "src/persist-types",

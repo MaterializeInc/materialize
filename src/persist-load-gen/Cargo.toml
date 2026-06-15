@@ -1,0 +1,34 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+
+[package]
+name = "mz-persist-load-gen"
+description = "Standalone load generator for persist shards against a consensus backend."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+autobins = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "persist-load-gen"
+path = "src/main.rs"
+bench = false
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["env"] }
+mz-dyncfg = { path = "../dyncfg" }
+mz-ore = { path = "../ore", features = ["async", "bytes", "metrics", "network", "panic", "tracing"] }
+mz-persist = { path = "../persist" }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-types = { path = "../persist-types" }
+timely.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
