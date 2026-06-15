@@ -19,7 +19,7 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::{ALL, ANY, AS, Keyword, LIST, PREPARE, SOME, WHEN};
+use mz_sql_lexer::keywords::{ALL, ANY, AS, DISTINCT, Keyword, LIST, PREPARE, SOME, WHEN};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -306,9 +306,16 @@ impl Ident {
                         // `ANY`/`ALL`/`SOME` after a comparison operator start a
                         // quantified-comparison (`x op ANY (...)`), so a bare such
                         // identifier — e.g. `0 # some` — reparses as the start of a
-                        // quantifier rather than an identifier. (`ALL` is already
-                        // always-reserved; the others are not.)
+                        // quantifier rather than an identifier.
                         || matches!(kw, ANY | ALL | SOME)
+                        // `ALL`/`DISTINCT` right after `SELECT` are consumed as the
+                        // projection quantifier, so a bare `"all"` / `"distinct"`
+                        // column reference reparses to a quantifier with an empty
+                        // projection instead of an identifier. (`ALL` is already
+                        // covered above; quoting these keeps display-only — unlike
+                        // marking them always-reserved, which also rejects `WHERE
+                        // distinct = 1` at parse time.)
+                        || kw == DISTINCT
                         // `LIST` followed by `[` re-lexes as a `LIST[...]` literal
                         // (`list[1]` is a valid one-element list), so a bare `list`
                         // identifier that gets subscripted — `"list"[1]` — would
