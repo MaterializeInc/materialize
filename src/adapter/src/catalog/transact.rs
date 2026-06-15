@@ -3010,31 +3010,33 @@ impl ObjectsToDrop {
 
                 // Implicitly drop materialized views that target this replica.
                 // When the target replica is gone, no replica advances the
-                // persist shard's upper frontier, causing reads to hang.
+                // persist shard's upper frontier, causing reads to hang. Cascade
+                // to anything depending on the implicitly-dropped MV so we don't
+                // leave dangling references in the catalog.
                 //
-                // Also cascade to anything depending on the implicitly-dropped
-                // MV so we don't leave dangling references in the catalog.
-                // Plan-driven drops already include these via
-                // `cluster_replica_dependents`; this branch handles internal
-                // callers that build `Op::DropObjects` directly without going
-                // through the plan stage.
+                // Plan-driven drops already include these dependents as their
+                // own `DropObjectInfo::Item` entries (the plan stage expands
+                // them via `cluster_replica_dependents`), so each one's comment
+                // is recorded by the top-of-function `self.comments` insert.
+                // This branch handles internal callers that build
+                // `Op::DropObjects` directly with only the replica, so we expand
+                // the dependents and record their comments ourselves.
+                //
+                // `seen` is seeded from the items already collected so that the
+                // plan-driven path (where the dependents are processed before
+                // the replica, in reverse-dependency order) does not re-add them
+                // here.
                 let mut seen: BTreeSet<ObjectId> =
                     self.items.iter().copied().map(ObjectId::Item).collect();
-                for item_id in &cluster.bound_objects {
-                    let entry = state.get_entry(item_id);
-                    if let CatalogItem::MaterializedView(mv) = entry.item()
-                        && mv.target_replica == Some(replica_id)
-                        && !seen.contains(&ObjectId::Item(*item_id))
-                    {
+                for dep in state.cluster_replica_dependents(cluster_id, replica_id, &mut seen) {
+                    if let ObjectId::Item(dep_id) = dep {
                         info!(
-                            "implicitly dropping materialized view {} because target replica was dropped",
-                            entry.name().item,
+                            "implicitly dropping {} because target replica was dropped",
+                            state.get_entry(&dep_id).name().item,
                         );
-                        for dep in state.item_dependents(*item_id, &mut seen) {
-                            if let ObjectId::Item(dep_id) = dep {
-                                self.items.push(dep_id);
-                            }
-                        }
+                        self.comments
+                            .insert(state.get_comment_id(ObjectId::Item(dep_id)));
+                        self.items.push(dep_id);
                     }
                 }
             }

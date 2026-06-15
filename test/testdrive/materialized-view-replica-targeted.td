@@ -193,9 +193,44 @@ contains:unknown catalog item 'mv_r1'
 r2 true
 
 # ---------------------------------------------------------------------------
+# Regression test for CLU-118: resizing a managed cluster that hosts a
+# replica-targeted MV with a COMMENT must not leave a dangling comment behind
+# (which previously tripped the coordinator consistency check and panicked).
+# ---------------------------------------------------------------------------
+
+> CREATE CLUSTER managed (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> CREATE MATERIALIZED VIEW mv_managed IN CLUSTER managed REPLICA r1 AS SELECT sum(a) AS s FROM t
+
+> COMMENT ON MATERIALIZED VIEW mv_managed IS 'pinned to r1'
+
+> SELECT * FROM mv_managed
+10
+
+# Resizing tears down and recreates the replica, which implicitly drops the
+# targeted MV and must also drop its comment.
+> ALTER CLUSTER managed SET (SIZE 'scale=1,workers=2')
+
+# The targeted MV is gone.
+! SELECT * FROM mv_managed
+contains:unknown catalog item 'mv_managed'
+
+# No dangling comment is left behind.
+> SELECT count(*) FROM mz_internal.mz_comments c
+  JOIN mz_materialized_views mv ON (mv.id = c.id)
+  WHERE mv.name = 'mv_managed'
+0
+
+# The cluster is still usable after the resize.
+> CREATE MATERIALIZED VIEW mv_after IN CLUSTER managed AS SELECT sum(a) AS s FROM t
+> SELECT * FROM mv_after
+10
+
+# ---------------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------------
 
 > DROP MATERIALIZED VIEW mv_all
 > DROP TABLE t CASCADE
 > DROP CLUSTER test CASCADE
+> DROP CLUSTER managed CASCADE
