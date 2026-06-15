@@ -323,7 +323,11 @@ pub(crate) fn render<'scope>(
             // Note that we need to fetch the probe LSN _after_ having created the replication
             // slot, to make sure the fetched LSN will be included in the replication stream.
             let probe_ts = (config.now_fn)().into();
-            let max_lsn = mz_postgres_util::fetch_max_lsn(&*metadata_client).await?;
+            let max_lsn = mz_postgres_util::fetch_max_lsn(
+                &*metadata_client,
+                connection.publication_details.get_is_physical_replica(),
+            )
+            .await?;
             let probe = Probe {
                 probe_ts,
                 upstream_frontier: Antichain::from_elem(MzOffset::from(max_lsn)),
@@ -385,6 +389,7 @@ pub(crate) fn render<'scope>(
                 committed_uppers.as_mut(),
                 &probe_output,
                 &probe_cap[0],
+                connection.publication_details.is_physical_replica,
             )
             .await?;
 
@@ -628,6 +633,7 @@ async fn raw_stream<'a>(
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
     probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
+    is_physical_replica: Option<bool>,
 ) -> Result<
     Result<impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a, DefiniteError>,
     TransientError,
@@ -648,6 +654,14 @@ async fn raw_stream<'a>(
         )
         .await?
         {
+            return Ok(Err(err));
+        }
+    }
+
+    // Ensure the upstream server's physical replica status hasn't changed since the source was
+    // created. We use the metadata client here for the same reason as "SHOW wal_sender_timeout" below.
+    if let Some(is_physical_replica) = is_physical_replica {
+        if let Err(err) = ensure_physical_replica(&*metadata_client, is_physical_replica).await? {
             return Ok(Err(err));
         }
     }
@@ -741,12 +755,13 @@ async fn raw_stream<'a>(
 
             while !probe_tx.is_closed() {
                 let probe_ts = probe_ticker.tick().await;
-                let probe_or_err = mz_postgres_util::fetch_max_lsn(&*metadata_client)
-                    .await
-                    .map(|lsn| Probe {
-                        probe_ts,
-                        upstream_frontier: Antichain::from_elem(MzOffset::from(lsn)),
-                    });
+                let probe_or_err =
+                    mz_postgres_util::fetch_max_lsn(&*metadata_client, is_physical_replica.unwrap_or_else(false))
+                        .await
+                        .map(|lsn| Probe {
+                            probe_ts,
+                            upstream_frontier: Antichain::from_elem(MzOffset::from(lsn)),
+                        });
                 let _ = probe_tx.send(Some(probe_or_err));
             }
         })
@@ -1095,6 +1110,25 @@ async fn ensure_replication_timeline_id(
             );
             Ok(Ok(()))
         }
+    }
+}
+
+/// Ensure the upstream server's physical replica status matches the one we observed when the
+/// source was created such that we can safely resume replication. A change (e.g. a physical
+/// replica being promoted to a primary) can introduce data loss. It returns an outer transient
+/// error in case of connection issues and an inner definite error if the status does not match.
+async fn ensure_physical_replica(
+    metadata_client: &Client,
+    expected_is_physical_replica: bool,
+) -> Result<Result<(), DefiniteError>, TransientError> {
+    let is_physical_replica = mz_postgres_util::get_is_in_recovery(metadata_client).await?;
+    if is_physical_replica == expected_is_physical_replica {
+        Ok(Ok(()))
+    } else {
+        Ok(Err(DefiniteError::InvalidPhysicalReplica {
+            expected: expected_is_physical_replica,
+            actual: is_physical_replica,
+        }))
     }
 }
 

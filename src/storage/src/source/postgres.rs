@@ -347,6 +347,10 @@ pub enum DefiniteError {
     )]
     InvalidTimelineId { expected: u64, actual: u64 },
     #[error(
+        "unsupported action: upstream physical replica status changed (e.g. a physical replica was promoted to a primary). Expected pg_is_in_recovery()={expected} but got {actual}"
+    )]
+    InvalidPhysicalReplica { expected: bool, actual: bool },
+    #[error(
         "TOASTed value missing from old row. Did you forget to set REPLICA IDENTITY to FULL for your table?"
     )]
     MissingToast,
@@ -378,6 +382,9 @@ impl From<DefiniteError> for DataflowError {
                 DefiniteError::MissingColumn => SourceErrorDetails::Other(m),
                 DefiniteError::InvalidCopyInput => SourceErrorDetails::Other(m),
                 DefiniteError::InvalidTimelineId { .. } => SourceErrorDetails::Initialization(m),
+                DefiniteError::InvalidPhysicalReplica { .. } => {
+                    SourceErrorDetails::Initialization(m)
+                }
                 DefiniteError::MissingToast => SourceErrorDetails::Other(m),
                 DefiniteError::DefaultReplicaIdentity => SourceErrorDetails::Other(m),
                 DefiniteError::IncompatibleSchema(_) => SourceErrorDetails::Other(m),

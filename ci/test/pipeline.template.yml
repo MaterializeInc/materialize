@@ -393,6 +393,17 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: pg-cdc-standby
+        label: Postgres CDC against a physical standby
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-cdc-standby]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-standby
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
   - group: Connection
     key: connection-tests
     steps:
