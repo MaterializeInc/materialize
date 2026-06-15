@@ -15,6 +15,7 @@ pub mod avro;
 pub mod confluent;
 pub mod encode;
 pub mod envelopes;
+pub mod glue;
 pub mod json;
 pub mod protobuf;
 pub mod text_binary;
