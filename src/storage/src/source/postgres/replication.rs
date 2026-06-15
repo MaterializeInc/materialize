@@ -323,10 +323,10 @@ pub(crate) fn render<'scope>(
             // Note that we need to fetch the probe LSN _after_ having created the replication
             // slot, to make sure the fetched LSN will be included in the replication stream.
             let probe_ts = (config.now_fn)().into();
-            let max_lsn = super::fetch_max_lsn(&*metadata_client).await?;
+            let max_lsn = mz_postgres_util::fetch_max_lsn(&*metadata_client).await?;
             let probe = Probe {
                 probe_ts,
-                upstream_frontier: Antichain::from_elem(max_lsn),
+                upstream_frontier: Antichain::from_elem(MzOffset::from(max_lsn)),
             };
             probe_output.give(&probe_cap[0], probe);
 
@@ -741,11 +741,11 @@ async fn raw_stream<'a>(
 
             while !probe_tx.is_closed() {
                 let probe_ts = probe_ticker.tick().await;
-                let probe_or_err = super::fetch_max_lsn(&*metadata_client)
+                let probe_or_err = mz_postgres_util::fetch_max_lsn(&*metadata_client)
                     .await
                     .map(|lsn| Probe {
                         probe_ts,
-                        upstream_frontier: Antichain::from_elem(lsn),
+                        upstream_frontier: Antichain::from_elem(MzOffset::from(lsn)),
                     });
                 let _ = probe_tx.send(Some(probe_or_err));
             }

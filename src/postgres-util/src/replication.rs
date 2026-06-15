@@ -237,7 +237,11 @@ pub async fn get_timeline_id(client: &Client) -> Result<u64, PostgresError> {
     }
 }
 
-pub async fn get_current_wal_lsn(client: &Client) -> Result<PgLsn, PostgresError> {
+pub async fn fetch_max_lsn(client: &Client) -> Result<PgLsn, PostgresError> {
+    // Based on the documentation, it appears that `pg_current_wal_lsn` has
+    // the same "upper" semantics of `confirmed_flush_lsn`:
+    // <https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-BACKUP>
+    // We may need to revisit this and use `pg_current_wal_flush_lsn`.
     let row = query_one(client, crate::sql!("SELECT pg_current_wal_lsn()"), &[]).await?;
     let lsn: PgLsn = row.get(0);
 
