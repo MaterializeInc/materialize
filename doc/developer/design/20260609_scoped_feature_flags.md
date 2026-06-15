@@ -118,6 +118,16 @@ Introduce **scoped system parameters**: a synced parameter can carry, in
 addition to its environment-wide value, overrides resolved per cluster and per
 replica. We keep the existing data-flow shape and extend it to be scope-aware.
 
+### Feature gate
+
+The entire scoped-parameter mechanism is gated behind a new `enable_scoped_system_parameters` dyncfg defined in `mz_adapter_types::dyncfgs`, default `false`.
+The default behavior is therefore exactly today's environment-wide-only resolution, and the feature is strictly opt-in.
+The gate is checked at the single sync-loop chokepoint, `sync_scoped_params`.
+When off, no cluster or replica contexts are evaluated, and any overrides a previously-enabled run persisted are cleared once, so resolution falls back to the environment-wide value everywhere.
+This clearing is conditional on the sync loop running with the gate off: if the frontend is disabled entirely (self-managed, or no LD), those persisted overrides are not actively cleared, so a one-time prune on the gate-off path (independent of LD reachability) is needed to make the guarantee unconditional.
+When on, evaluation begins with no deploy, since every dyncfg is mirrored as a LaunchDarkly-synced, `ALTER SYSTEM`-settable system var.
+It is a dyncfg rather than a `feature_flags!` entry because the latter carries the catalog item-parsing rehydration contract for SQL/syntax features, which this runtime subsystem toggle has no part in.
+
 ### Two context kinds, because there are two scopes of coherence
 
 Not every flag can be resolved at the same granularity. There are two distinct
@@ -351,14 +361,8 @@ Lifecycle:
 - **Cold cache + LD unavailable** (first-ever startup, object never yet
   evaluated): fall back to the environment-wide value — unavoidable, since we
   have never observed LD for it.
-- **Newly-created object:** a cluster/replica created mid-interval runs with
-  environment-wide values until the next sync tick evaluates it (an
-  eventual-consistency window). This interacts with the plan-time consumption of
-  cluster-coherent flags (§Resolution): a freshly created cluster may plan its
-  first dataflows under environment-wide optimizer features and only pick up its
-  intended cluster-scoped features on later replanning. If first-plan correctness
-  for a known cluster matters, evaluate its scope synchronously at creation rather
-  than waiting for the tick.
+- **Newly-created object:** a cluster or replica created between ticks does **not** wait for the next tick — it resolves its scoped overrides synchronously at creation.
+  See §Resolution, "Synchronous create-time resolution", for why (render-frozen flags make the window a correctness problem, not just a delay) and how (inline `variation` evaluation at the two scope boundaries), including the sub-tick restart residual for replica-local persistence.
 
 Crucially, persisting does **not** reintroduce the recreate ambiguity that sank
 the `ALTER SYSTEM ... FOR CLUSTER` DDL alternative, because of the monotonic id
@@ -373,29 +377,17 @@ reconcile after startup**, and on each successful reconcile thereafter — there
 no separate startup-time prune pass. This is the same non-reuse property the
 dual-identity scheme already relies on (§Identity & recreate semantics).
 
-#### Feature gate
-
-The entire scoped-parameter mechanism is gated behind a new
-`enable_scoped_system_parameters` dyncfg (defined in `mz_adapter_types::dyncfgs`, default `false`).
-With the gate off, behavior is exactly today's environment-wide-only resolution, so the feature is strictly opt-in.
-The gate is checked at the single sync-loop chokepoint, `sync_scoped_params`.
-When off, no cluster or replica contexts are evaluated, and any overrides that a previously-enabled run persisted are cleared once, so resolution falls back to the environment-wide value everywhere.
-This clearing is conditional on the sync loop running with the gate off: if the frontend is disabled entirely (self-managed, or no LD), a previously-enabled run's persisted overrides are not actively cleared, so a one-time prune on the gate-off path (independent of LD reachability) is needed to make the guarantee unconditional.
-When on, cluster/replica evaluation begins with no deploy, since every dyncfg is mirrored as an LD-synced, `ALTER SYSTEM`-settable system var.
-It is a dyncfg rather than a `feature_flags!` entry because the latter carries the catalog item-parsing rehydration contract for SQL/syntax features, which this runtime subsystem toggle has no part in.
-
 ### Resolution: two existing per-scope boundaries
 
 We do **not** rewrite `SystemVars` into a universally scope-aware store. Both use
 cases resolve at boundaries that already carry the right context:
 
-**(a) The compute & storage controllers' per-replica config push — replica-local
-flags (use case 2).** environmentd already pushes a dyncfg `ConfigSet` /
-`ConfigUpdates` to each replica through the controllers, and knows each replica's
-cluster, size, and size family at push time. We resolve there:
-`effective = global ⊕ replica_local_override` for that replica. **`clusterd`
-needs no changes** — it keeps reading its dyncfg set and simply receives
-size/replica-appropriate values.
+**(a) The compute controller's per-replica config push — replica-local flags (use case 2).**
+environmentd already pushes a dyncfg `ConfigSet` / `ConfigUpdates` to each replica through the controller, and knows each replica's cluster, size, and size family at push time.
+We resolve there: `effective = global ⊕ replica_local_override` for that replica, and **`clusterd` needs no changes** — it keeps reading its dyncfg set and simply receives size/replica-appropriate values.
+Only the *compute* controller's per-replica dyncfg layer is pushed, but on `clusterd` that reaches storage too: compute and storage share one process, and the compute worker's configuration handler applies the pushed updates both to compute's worker `ConfigSet` and to the shared persist client `ConfigSet` that the co-located storage server reads.
+So the replica-local examples (persist pager, LZ4, persist client tuning, `lgalloc`) take effect on storage as well.
+The only thing this would miss is a future `Replica`-scoped config realized solely in the storage worker's own `ConfigSet` (applied only via the storage controller), which does not exist today.
 
 **(b) The optimizer's per-cluster feature set — cluster-coherent flags (use case
 1).** The optimizer already takes `OptimizerFeatures` derived from `SystemVars`
@@ -433,6 +425,21 @@ does **not** retroactively change installed dataflows. An operator who needs the
 change to apply to existing objects must trigger replanning (recreate the object,
 or reboot the environment). The doc calls this out explicitly because the two
 paths read as symmetric ("resolution at existing boundaries") but are not.
+
+#### Synchronous create-time resolution
+
+A cluster or replica created between sync ticks must resolve its scoped overrides synchronously at creation, not on the next tick.
+This is a correctness requirement, not a latency nicety: render-frozen flags — optimizer features baked into immutable dataflows, and any replica-local flag consumed only at dataflow-render time — turn the tick-latency window into a window in which the object renders permanently under the wrong values.
+It is feasible at no cost on the DDL path because `launchdarkly_server_sdk::Client::variation` is a synchronous, local evaluation against the SDK's streamed flag cache, with no network call, so an arbitrary new-object context evaluates correctly inline.
+The frontend is shared with the coordinator, and resolution happens at the two boundaries that match the two scopes:
+
+* Replica-local overrides are pushed into the compute controller's per-replica layer *before* the controller installs the replica, so the replica's first configuration already carries them.
+* Cluster-coherent overrides are resolved right after the create transaction — the cluster id is known pre-transaction — so the cluster's first plan, a later and separately sequenced command, uses them.
+
+The periodic sync loop remains the authoritative full-state writer.
+Replica-local persistence still lands on the next reconcile (≤ 1 tick), so an `environmentd` restart in that sub-tick window re-hydrates a just-created replica under environment-wide values until the first post-restart tick — an acknowledged, self-healing residual.
+Cluster-coherent overrides are persisted synchronously through reconcile and so do not have this gap.
+Both paths no-op when the gate is off or before the frontend is installed (the cold-cache environment-wide fallback).
 
 Precedence for replica-local flags, lowest to highest:
 `Global < ReplicaSizeFamily < Replica(id)` (a specific replica pin beats a size
