@@ -10,7 +10,7 @@
 //! Functions that convert SQL AST nodes to pretty Docs.
 
 use itertools::Itertools;
-use mz_sql_parser::ast::display::{AstDisplay, escape_single_quote_string};
+use mz_sql_parser::ast::display::{AstDisplay, FormatMode, escape_single_quote_string};
 use mz_sql_parser::ast::*;
 use pretty::{Doc, RcDoc};
 
@@ -636,14 +636,18 @@ impl Pretty {
         v: &'a SubscribeStatement<T>,
     ) -> RcDoc<'a> {
         let doc = match &v.relation {
-            // Always emit the optional `TO` keyword so a relation named with the
-            // bare keyword `to` round-trips (see `SubscribeStatement` display).
             SubscribeRelation::Name(name) => {
-                nest_title("SUBSCRIBE TO", self.doc_display_pass(name))
+                let title = if v.relation.needs_explicit_to(matches!(
+                    self.config.format_mode,
+                    FormatMode::Simple | FormatMode::SimpleRedacted
+                )) {
+                    "SUBSCRIBE TO"
+                } else {
+                    "SUBSCRIBE"
+                };
+                nest_title(title, self.doc_display_pass(name))
             }
-            SubscribeRelation::Query(query) => {
-                bracket("SUBSCRIBE TO (", self.doc_query(query), ")")
-            }
+            SubscribeRelation::Query(query) => bracket("SUBSCRIBE (", self.doc_query(query), ")"),
         };
         let mut docs = vec![doc];
         if !v.options.is_empty() {

@@ -37,7 +37,7 @@ Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Sim
 parse-statement
 COPY (subscribe (SELECT 1)) TO STDOUT
 ----
-COPY (SUBSCRIBE TO (SELECT 1)) TO STDOUT
+COPY (SUBSCRIBE (SELECT 1)) TO STDOUT
 =>
 Copy(CopyStatement { relation: Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None, output: Diffs }), direction: To, target: Stdout, options: [] })
 

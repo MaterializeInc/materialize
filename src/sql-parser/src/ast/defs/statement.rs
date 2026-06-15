@@ -3921,11 +3921,14 @@ pub struct SubscribeStatement<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        // Always emit the optional `TO` keyword. Without it, a relation whose
-        // name is the bare keyword `to` (e.g. `SUBSCRIBE TO to`) would display
-        // as `SUBSCRIBE to`, which re-parses with `to` consumed as the optional
-        // keyword, dropping the relation name.
-        f.write_str("SUBSCRIBE TO ");
+        f.write_str("SUBSCRIBE ");
+        if self.relation.needs_explicit_to(f.simple()) {
+            // Without the optional `TO` keyword, a relation whose first name
+            // component is the bare keyword `to` (e.g. `SUBSCRIBE TO to`) would
+            // display as `SUBSCRIBE to`, which re-parses with `to` consumed as
+            // the optional keyword, dropping the relation name.
+            f.write_str("TO ");
+        }
         f.write_node(&self.relation);
         if !self.options.is_empty() {
             f.write_str(" WITH (");
@@ -3949,6 +3952,25 @@ impl_display_t!(SubscribeStatement);
 pub enum SubscribeRelation<T: AstInfo> {
     Name(T::ItemName),
     Query(Query<T>),
+}
+
+impl<T: AstInfo> SubscribeRelation<T> {
+    /// Reports whether printing this relation after `SUBSCRIBE` requires the
+    /// optional `TO` keyword to avoid reparsing the first name component as that
+    /// keyword instead of as part of the relation name.
+    pub fn needs_explicit_to(&self, bare_identifiers: bool) -> bool {
+        let SubscribeRelation::Name(name) = self else {
+            return false;
+        };
+        bare_identifiers && name_starts_with_bare_to(&name.to_ast_string_simple())
+    }
+}
+
+fn name_starts_with_bare_to(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("to") else {
+        return false;
+    };
+    rest.is_empty() || rest.starts_with('.')
 }
 
 impl<T: AstInfo> AstDisplay for SubscribeRelation<T> {

@@ -88,9 +88,11 @@ fn materialized_view_as_of_preserved() {
 #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn subscribe_relation_named_to_preserved() {
     // `to` is the optional `SUBSCRIBE TO` keyword, so a relation literally
-    // named `to` must keep emitting the keyword or the name is dropped on
-    // reparse (displayed as `SUBSCRIBE to` -> `SUBSCRIBE TO <missing>`).
+    // named `to`, or whose first component is `to`, must keep emitting the
+    // keyword or the name is dropped on reparse (displayed as `SUBSCRIBE to` ->
+    // `SUBSCRIBE TO <missing>`).
     assert_lossless("SUBSCRIBE TO to");
+    assert_lossless("SUBSCRIBE TO to.foo");
     assert_lossless("SUBSCRIBE t");
     assert_lossless("SUBSCRIBE (SELECT 1)");
 }
