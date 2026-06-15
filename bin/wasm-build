@@ -29,7 +29,7 @@ Builds a WASM32 target and NPM metadata for the specified crate
 fi
 crate=$1
 
-exec "$(dirname "$0")"/xcompile \
+"$(dirname "$0")"/xcompile \
     tool \
     --no-name-target-prefix \
     wasm-pack \
@@ -39,3 +39,9 @@ exec "$(dirname "$0")"/xcompile \
     "$crate" \
     -- \
     --no-default-features
+
+test_script="$crate/test.mjs"
+if [[ -f "$test_script" ]]
+then
+    node --experimental-wasm-modules "$test_script"
+fi

@@ -1276,12 +1276,12 @@ fn humanize_sql_for_show_create(
     Ok(mz_sql_pretty::to_pretty(
         &resolved,
         PrettyConfig {
-            width: mz_sql_pretty::DEFAULT_WIDTH,
             format_mode: if redacted {
                 FormatMode::SimpleRedacted
             } else {
                 FormatMode::Simple
             },
+            ..Default::default()
         },
     ))
 }

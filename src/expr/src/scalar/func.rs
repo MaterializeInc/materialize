@@ -46,7 +46,7 @@ use mz_repr::{
     ArrayRustType, Datum, DatumList, DatumMap, ExcludeNull, FromDatum, InputDatumType, Row,
     RowArena, SqlScalarType, strconv,
 };
-use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_pretty::{PrettyConfig, pretty_str};
 use num::traits::CheckedNeg;
 
@@ -2346,7 +2346,7 @@ fn pretty_sql<'a>(sql: &str, width: i32, temp_storage: &'a RowArena) -> Result<&
         sql,
         PrettyConfig {
             width,
-            format_mode: FormatMode::Simple,
+            ..Default::default()
         },
     )
     .map_err(|e| EvalError::PrettyError(e.to_string().into()))?;
