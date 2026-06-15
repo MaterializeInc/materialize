@@ -16,7 +16,7 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz-deploy.linux
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64-small
+      queue: linux-x86_64
     concurrency: 1
     concurrency_group: deploy-mz-deploy/linux/x86_64
 
@@ -25,7 +25,7 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz-deploy.linux
     timeout_in_minutes: 30
     agents:
-      queue: linux-aarch64-small
+      queue: linux-aarch64
     concurrency: 1
     concurrency_group: deploy-mz-deploy/linux/aarch64
 
