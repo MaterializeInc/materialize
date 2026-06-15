@@ -20,6 +20,14 @@ ALTER SYSTEM SET enable_managed_cluster_availability_zones TO true;
 ----
 COMPLETE 0
 
+# Normalize quickstart's REPLICATION FACTOR so assertions about the default
+# user cluster pass regardless of mzcompose --replicas overrides (nightly
+# runs slow-tests with --replicas=2).
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR 1);
+----
+COMPLETE 0
+
 # --- Schema -------------------------------------------------------------------
 
 # Lock down: 11 columns, canonical order, types, and nullability.

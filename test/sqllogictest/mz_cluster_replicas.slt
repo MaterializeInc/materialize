@@ -13,6 +13,14 @@ mode cockroach
 
 reset-server
 
+# Normalize quickstart's REPLICATION FACTOR so assertions about its replicas
+# pass regardless of mzcompose --replicas overrides (nightly runs slow-tests
+# with --replicas=2).
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR 1);
+----
+COMPLETE 0
+
 # --- Schema -------------------------------------------------------------------
 
 # Lock down: 7 columns, canonical order, types, and nullability.
