@@ -1542,7 +1542,8 @@ impl DeploymentsClientMut<'_> {
                     "DECLARE c CURSOR FOR SUBSCRIBE ({query})"
                 );
 
-                mz_postgres_util::execute(&txn, Sql::raw_unchecked(subscribe_sql), &[&pattern]).await?;
+                let subscribe_sql = Sql::raw_unchecked(subscribe_sql);
+                mz_postgres_util::execute(&txn, subscribe_sql, &[&pattern]).await?;
 
                 loop {
                     let rows = mz_postgres_util::query(&txn, Sql::new("FETCH ALL c"), &[]).await?;
