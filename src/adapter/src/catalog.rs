@@ -1030,17 +1030,24 @@ impl Catalog {
         location: mz_catalog::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
+        allow_disabled: bool,
     ) -> Result<ReplicaLocation, Error> {
-        self.state
-            .concretize_replica_location(location, allowed_sizes, allowed_availability_zones)
+        self.state.concretize_replica_location(
+            location,
+            allowed_sizes,
+            allowed_availability_zones,
+            allow_disabled,
+        )
     }
 
     pub(crate) fn ensure_valid_replica_size(
         &self,
         allowed_sizes: &[String],
         size: &String,
+        allow_disabled: bool,
     ) -> Result<(), Error> {
-        self.state.ensure_valid_replica_size(allowed_sizes, size)
+        self.state
+            .ensure_valid_replica_size(allowed_sizes, size, allow_disabled)
     }
 
     pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {

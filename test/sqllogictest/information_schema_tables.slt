@@ -118,11 +118,11 @@ BASE TABLE
 materialize
 mz_catalog
 mz_cluster_replicas
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_clusters
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_columns
@@ -321,6 +321,10 @@ mz_cluster_replica_name_history
 VIEW
 materialize
 mz_internal
+mz_cluster_replica_size_internal
+BASE TABLE
+materialize
+mz_internal
 mz_cluster_replica_status_history
 SOURCE
 materialize
@@ -338,7 +342,7 @@ VIEW
 materialize
 mz_internal
 mz_cluster_schedules
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_cluster_workload_classes
