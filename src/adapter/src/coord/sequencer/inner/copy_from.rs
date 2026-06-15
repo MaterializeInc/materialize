@@ -43,6 +43,12 @@ use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 /// unbounded in-memory growth in a single giant batch.
 const COPY_FROM_STDIN_MAX_BATCH_BYTES: usize = 32 * 1024 * 1024;
 
+/// Cap on the number of parallel decode workers spawned per COPY FROM STDIN.
+/// A single network-bound stream sees marginal gains past a handful of
+/// decoders, and capping bounds how much of the blocking pool any one COPY can
+/// occupy while actively decoding.
+const COPY_FROM_STDIN_MAX_WORKERS: usize = 8;
+
 impl Coordinator {
     pub(crate) async fn sequence_copy_from(
         &mut self,
@@ -415,10 +421,14 @@ impl Coordinator {
             .collect::<Vec<_>>()
             .into();
 
-        // Determine number of parallel workers.
-        let num_workers = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
+        // Determine number of parallel workers, capped so that a single COPY
+        // cannot reserve an unbounded share of the shared blocking pool.
+        let num_workers = std::cmp::min(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1),
+            COPY_FROM_STDIN_MAX_WORKERS,
+        );
         tracing::info!(
             %target_id, num_workers,
             "starting parallel COPY FROM STDIN batch builders"
@@ -430,11 +440,11 @@ impl Coordinator {
         let collection_desc = Arc::new(collection_desc);
         let persist_client = self.persist_client.clone();
 
-        // Create per-worker channels and spawn workers on blocking threads.
-        // Each worker does CPU-intensive TSV decoding + columnar encoding,
-        // so they need dedicated OS threads (not tokio async tasks) for
-        // true parallelism.
-        let rt_handle = tokio::runtime::Handle::current();
+        // Create per-worker channels and spawn one async task per worker. Each
+        // worker offloads the CPU-intensive decode of a chunk to the blocking
+        // pool for the duration of that decode (see
+        // `copy_from_stdin_batch_builder`), so workers run in parallel while
+        // doing CPU work but hold no thread while idle between chunks.
         let mut batch_txs = Vec::with_capacity(num_workers);
         let mut worker_handles = Vec::with_capacity(num_workers);
 
@@ -464,24 +474,21 @@ impl Coordinator {
             // Only worker 0 receives the first chunk (round-robin), so only
             // it needs to skip the CSV header on its first chunk.
             let skip_header_on_first_chunk = worker_id == 0 && first_chunk_has_header;
-            let rt = rt_handle.clone();
 
-            let handle = mz_ore::task::spawn_blocking(
+            let handle = mz_ore::task::spawn(
                 || format!("copy_from_stdin_worker:{target_id}:{worker_id}"),
-                move || {
-                    rt.block_on(Self::copy_from_stdin_batch_builder(
-                        persist_client,
-                        shard_id,
-                        collection_id,
-                        collection_desc,
-                        target_desc,
-                        column_transform,
-                        column_types,
-                        params,
-                        skip_header_on_first_chunk,
-                        batch_rx,
-                    ))
-                },
+                Self::copy_from_stdin_batch_builder(
+                    persist_client,
+                    shard_id,
+                    collection_id,
+                    collection_desc,
+                    target_desc,
+                    column_transform,
+                    column_types,
+                    params,
+                    skip_header_on_first_chunk,
+                    batch_rx,
+                ),
             );
             worker_handles.push(handle);
         }
@@ -569,8 +576,18 @@ impl Coordinator {
                 params.clone()
             };
             is_first_chunk = false;
-            let rows = mz_pgcopy::decode_copy_format(&raw_bytes, &column_types, chunk_params)
-                .map_err(|e| AdapterError::CopyFormatError(e.to_string()))?;
+            let raw_len = raw_bytes.len();
+            // Offload the CPU-bound decode to the blocking pool, holding a
+            // thread only for the decode itself rather than the whole COPY.
+            let decode_column_types = Arc::clone(&column_types);
+            let rows = mz_ore::task::spawn_blocking(
+                || "copy_from_stdin_decode",
+                move || {
+                    mz_pgcopy::decode_copy_format(&raw_bytes, &decode_column_types, chunk_params)
+                        .map_err(|e| AdapterError::CopyFormatError(e.to_string()))
+                },
+            )
+            .await?;
 
             for row in rows {
                 // Apply column transform if needed (add defaults, reorder).
@@ -596,7 +613,7 @@ impl Coordinator {
                 row_count_in_batch += 1;
             }
 
-            batch_bytes = batch_bytes.saturating_add(raw_bytes.len());
+            batch_bytes = batch_bytes.saturating_add(raw_len);
             if batch_bytes >= COPY_FROM_STDIN_MAX_BATCH_BYTES {
                 let batch = batch_builder.finish(upper.clone()).await.map_err(|e| {
                     AdapterError::Unstructured(anyhow::anyhow!("persist finish: {e}"))

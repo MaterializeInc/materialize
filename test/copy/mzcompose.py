@@ -17,6 +17,7 @@ import csv
 import json
 import random
 import string
+import threading
 import time
 from io import BytesIO, StringIO
 from textwrap import dedent
@@ -700,3 +701,79 @@ def workflow_copy_from_csv_crlf_large_end_marker(c: Composition) -> None:
             f"expected count={rows_each_side}, max_id={rows_each_side - 1} "
             "(rows after the bare \\. leaked through parallel workers)"
         )
+
+
+_NUM_IDLE_SESSIONS = 128
+_SELECT_TIMEOUT_S = 30.0
+
+
+def _select_1_responsive(c: Composition, timeout_s: float) -> bool:
+    box: dict[str, object] = {}
+
+    def run() -> None:
+        try:
+            conn = c.sql_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchall()
+                box["ok"] = True
+            finally:
+                conn.close()
+        except Exception as e:
+            box["err"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        return False
+    if box.get("ok"):
+        return True
+    raise AssertionError(f"SELECT 1 probe errored unexpectedly: {box.get('err')!r}")
+
+
+def _open_idle_copy(c: Composition) -> tuple:
+    conn = c.sql_connection()
+    cur = conn.cursor()
+    cm = cur.copy("COPY copy_idle_target FROM STDIN")
+    cm.__enter__()
+    return (conn, cur, cm)
+
+
+def _close_idle_copies(held: list) -> None:
+    for conn, _cur, cm in held:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        gen = getattr(cm, "gen", None)
+        if gen is not None:
+            try:
+                gen.close()
+            except Exception:
+                pass
+    held.clear()
+
+
+def workflow_copy_from_stdin_many_idle_sessions(c: Composition) -> None:
+    """Many idle COPY FROM STDIN sessions must not prevent other queries from
+    running."""
+    c.up("materialized")
+
+    setup_conn = c.sql_connection()
+    with setup_conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS copy_idle_target")
+        cur.execute("CREATE TABLE copy_idle_target (a int4)")
+    setup_conn.close()
+
+    held: list[tuple] = []
+    try:
+        for _ in range(_NUM_IDLE_SESSIONS):
+            held.append(_open_idle_copy(c))
+        assert _select_1_responsive(c, _SELECT_TIMEOUT_S), (
+            f"SELECT 1 did not return within {_SELECT_TIMEOUT_S}s while "
+            f"{len(held)} idle COPY FROM STDIN sessions were open"
+        )
+    finally:
+        _close_idle_copies(held)
