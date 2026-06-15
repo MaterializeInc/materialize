@@ -451,13 +451,20 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 .map(|(id, desc)| pop_batch(id, desc))
                 .collect::<Result<Vec<_>, _>>()?;
             // A spine batch's parts tile its id range (`SpineBatch::id`
-            // `debug_assert`s this). Real batches always have at least one
-            // part: an empty batch still carries an empty hollow batch.
+            // `debug_assert`s the endpoints). Real batches always have at least
+            // one part: an empty batch still carries an empty hollow batch.
+            // Validate the full tiling, not just the endpoints: downstream
+            // maintenance (`fueled_merge_reqs_before_ms` -> `id_range` in
+            // compaction, `apply_merge_res_checked`) `assert_eq!`s that the
+            // collected part ids are contiguous, so non-adjacent parts that
+            // happen to hit the right endpoints would panic later instead of
+            // here.
             if parts.first().map(|x| x.id.0) != Some(id.0)
                 || parts.last().map(|x| x.id.1) != Some(id.1)
+                || parts.windows(2).any(|w| w[0].id.1 != w[1].id.0)
             {
                 return Err(format!(
-                    "spine batch {id:?} parts do not cover the batch's id range"
+                    "spine batch {id:?} parts do not tile the batch's id range"
                 ));
             }
             let len = parts.iter().map(|p| (*p).batch.len).sum();

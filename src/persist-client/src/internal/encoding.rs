@@ -2412,7 +2412,37 @@ mod tests {
             });
         });
         let err = rollup_decode_err(proto);
-        assert!(err.contains("do not cover"), "{err}");
+        assert!(err.contains("do not tile"), "{err}");
+    }
+
+    /// A spine batch whose parts hit the right endpoints but overlap in the
+    /// middle (id `[0, 3)` tiled by parts `[0, 2)` and `[1, 3)`) passes the
+    /// endpoint check but is not a valid tiling. Such parts reach compaction's
+    /// `id_range`, whose contiguity `assert_eq!` would panic later, so decoding
+    /// must reject them here instead.
+    #[mz_ore::test]
+    fn rollup_proto_with_noncontiguous_spine_parts_is_rejected() {
+        let outer = SpineId(0, 3);
+        let part_ids = [SpineId(0, 2), SpineId(1, 3)];
+        let proto = rollup_proto_with_trace(|trace| {
+            trace.spine_batches.push(ProtoIdSpineBatch {
+                id: Some(outer.into_proto()),
+                batch: Some(ProtoSpineBatch {
+                    level: 0,
+                    desc: Some(u64_desc_proto(0, 3, 0)),
+                    parts: part_ids.iter().map(|id| id.into_proto()).collect(),
+                    descs: vec![],
+                }),
+            });
+            for id in part_ids {
+                trace.hollow_batches.push(ProtoIdHollowBatch {
+                    id: Some(id.into_proto()),
+                    batch: Some(legacy_batch_proto(0, 1, 0)),
+                });
+            }
+        });
+        let err = rollup_decode_err(proto);
+        assert!(err.contains("do not tile"), "{err}");
     }
 
     /// Three spine batches at one level overflow the two-batch layer, which
