@@ -1,0 +1,5 @@
+[default.variables]
+compute_cluster = "compute"
+
+[dev.variables]
+compute_cluster = "compute_dev"

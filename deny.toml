@@ -143,6 +143,13 @@ skip = [
     { name = "untrusted", version = "0.7.1" },
     # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
     { name = "spin", version = "0.5.2" },
+    # held back by tower-lsp 0.20 (mz-deploy LSP server)
+    { name = "dashmap", version = "5.5.3" },
+    { name = "tower", version = "0.4.13" },
+    # held back by rusqlite 0.32 (mz-deploy build cache)
+    { name = "hashlink", version = "0.9.1" },
+    # held back by owo-colors 4.3 (mz-deploy terminal styling)
+    { name = "supports-color", version = "2.1.0" },
 ]
 
 [[bans.deny]]
