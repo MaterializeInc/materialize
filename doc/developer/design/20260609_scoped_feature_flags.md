@@ -108,8 +108,9 @@ populate the LD *Contexts list* in the dashboard. (That, not billing, is why the
 existing dev-mode path uses `anonymous(true)` + fixed keys.) We mark the
 cluster/replica contexts `anonymous` for the same dashboard-cleanliness reason.
 
-> Action item: confirm with the LD account owner that we are on the standard
-> service-connections model and not a custom contract with per-context metering.
+> **Pre-launch checkbox (must be confirmed before enabling the gate):** confirm
+> with the LD account owner that we are on the standard service-connections model
+> and not a custom contract with per-context metering.
 
 ## Solution Proposal
 
