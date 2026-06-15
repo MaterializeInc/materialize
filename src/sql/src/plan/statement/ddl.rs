@@ -166,7 +166,7 @@ use crate::plan::{
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
     ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
-    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
+    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
 };
 use crate::{names, parse};
 
@@ -4446,12 +4446,25 @@ impl PlannedRoleVariable {
     }
 }
 
-fn plan_role_variable(variable: SetRoleVar) -> Result<PlannedRoleVariable, PlanError> {
+fn plan_role_variable(
+    scx: &StatementContext,
+    variable: SetRoleVar,
+) -> Result<PlannedRoleVariable, PlanError> {
     let plan = match variable {
-        SetRoleVar::Set { name, value } => PlannedRoleVariable::Set {
-            name: name.to_string(),
-            value: scl::plan_set_variable_to(value)?,
-        },
+        SetRoleVar::Set { name, value } => {
+            let name = name.to_string();
+            let value = scl::plan_set_variable_to(value)?;
+            // Gate feature-flagged isolation levels, matching the `SET` and
+            // connection-option paths in `SessionVars::set`.
+            if let VariableValue::Values(values) = &value {
+                vars::check_transaction_isolation_feature_flag(
+                    &name,
+                    VarInput::SqlSet(values),
+                    scx.catalog.system_vars(),
+                )?;
+            }
+            PlannedRoleVariable::Set { name, value }
+        }
         SetRoleVar::Reset { name } => PlannedRoleVariable::Reset {
             name: name.to_string(),
         },
@@ -7438,7 +7451,7 @@ pub fn plan_alter_role(
             PlannedAlterRoleOption::Attributes(attrs)
         }
         AlterRoleOption::Variable(variable) => {
-            let var = plan_role_variable(variable)?;
+            let var = plan_role_variable(scx, variable)?;
             PlannedAlterRoleOption::Variable(var)
         }
     };

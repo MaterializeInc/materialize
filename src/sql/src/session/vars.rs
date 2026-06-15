@@ -584,6 +584,8 @@ impl SessionVars {
     ) -> Result<(), VarError> {
         let (name, input) = compat_translate(name, input);
 
+        check_transaction_isolation_feature_flag(name, input, system_vars)?;
+
         let name = UncasedStr::new(name);
         self.check_read_only(name)?;
 
@@ -983,6 +985,36 @@ fn compat_translate<'a, 'b>(name: &'a str, input: VarInput<'b>) -> (&'a str, Var
 fn compat_translate_name(name: &str) -> &str {
     let (name, _) = compat_translate(name, VarInput::Flat(""));
     name
+}
+
+/// Enforces feature-flag gating for `transaction_isolation` levels that sit
+/// behind a flag (`bounded staleness <duration>` and
+/// `strong session serializable`).
+///
+/// Returns `Ok(())` for any other variable, and for an unparseable value
+/// (parse errors surface on the actual set). This is shared by every path that
+/// assigns `transaction_isolation` — `SET`, `SET TRANSACTION`,
+/// `ALTER ROLE ... SET`, and connection options — so that the gate cannot be
+/// bypassed by choosing a different syntax or letter case.
+pub fn check_transaction_isolation_feature_flag(
+    name: &str,
+    input: VarInput,
+    system_vars: &SystemVars,
+) -> Result<(), VarError> {
+    if UncasedStr::new(name) != UncasedStr::new(TRANSACTION_ISOLATION_VAR_NAME) {
+        return Ok(());
+    }
+    // Ignore parse failures here; the actual set surfaces them.
+    let Ok(level) = IsolationLevel::parse(input) else {
+        return Ok(());
+    };
+    match level {
+        IsolationLevel::StrongSessionSerializable => ENABLE_SESSION_TIMELINES.require(system_vars),
+        IsolationLevel::BoundedStaleness(_) => {
+            ENABLE_BOUNDED_STALENESS_ISOLATION.require(system_vars)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// A `SystemVar` is persisted on disk value for a configuration parameter. If unset,
@@ -2468,5 +2500,56 @@ impl Var for User {
 
     fn visible(&self, _: &User, _: &SystemVars) -> Result<(), VarError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod isolation_feature_flag_tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn gates_bounded_staleness_value() {
+        let mut system_vars = SystemVars::new();
+
+        // Default-on: the value passes the gate.
+        check_transaction_isolation_feature_flag(
+            TRANSACTION_ISOLATION_VAR_NAME,
+            VarInput::Flat("bounded staleness 5s"),
+            &system_vars,
+        )
+        .expect("flag on by default");
+
+        // Turn the flag off: the value is rejected regardless of the letter case
+        // of the variable name. This covers `SET`, `SET "TRANSACTION_ISOLATION"`,
+        // `ALTER ROLE ... SET`, and connection options, which all route through
+        // `SessionVars::set` and this shared check.
+        system_vars
+            .set("enable_bounded_staleness_isolation", VarInput::Flat("off"))
+            .expect("set flag");
+        for name in ["transaction_isolation", "TRANSACTION_ISOLATION"] {
+            let err = check_transaction_isolation_feature_flag(
+                name,
+                VarInput::Flat("bounded staleness 5s"),
+                &system_vars,
+            )
+            .expect_err("flag off rejects bounded staleness");
+            assert!(matches!(err, VarError::RequiresFeatureFlag { .. }));
+        }
+
+        // Non-gated levels are unaffected.
+        check_transaction_isolation_feature_flag(
+            TRANSACTION_ISOLATION_VAR_NAME,
+            VarInput::Flat("serializable"),
+            &system_vars,
+        )
+        .expect("serializable always allowed");
+
+        // Unrelated variables are ignored, even with a gated-looking value.
+        check_transaction_isolation_feature_flag(
+            CLUSTER.name(),
+            VarInput::Flat("bounded staleness 5s"),
+            &system_vars,
+        )
+        .expect("unrelated var ignored");
     }
 }

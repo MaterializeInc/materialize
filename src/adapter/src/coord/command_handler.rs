@@ -52,7 +52,8 @@ use mz_sql::rbac;
 use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
-    EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE, Value, Var,
+    EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE,
+    TRANSACTION_ISOLATION_VAR_NAME, Value, Var, check_transaction_isolation_feature_flag,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -958,6 +959,23 @@ impl Coordinator {
                 .vars()
                 .map(|(name, val)| (name.to_string(), val.clone())),
         );
+
+        // If the resolved `transaction_isolation` default names a feature-flagged
+        // isolation level whose flag is now disabled (e.g. a role default set
+        // while `bounded staleness` was enabled, then the flag turned off), drop
+        // it so the session falls back to the built-in default rather than
+        // silently using a gated level.
+        if let Some(value) = session_defaults.get(TRANSACTION_ISOLATION_VAR_NAME) {
+            if check_transaction_isolation_feature_flag(
+                TRANSACTION_ISOLATION_VAR_NAME,
+                value.borrow(),
+                system_config,
+            )
+            .is_err()
+            {
+                session_defaults.remove(TRANSACTION_ISOLATION_VAR_NAME);
+            }
+        }
 
         // Validate network policies for external users. Internal users can only connect on the
         // internal interfaces (internal HTTP/ pgwire). It is up to the person deploying the system
