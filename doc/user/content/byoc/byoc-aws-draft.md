@@ -4,6 +4,8 @@ description: "Run Materialize inside your own AWS account while Materialize mana
 menu:
   main:
     parent: "installation"
+    name: "BYOC on AWS"
+    identifier: "byoc-aws"
     weight: 50
 ---
 
@@ -62,13 +64,12 @@ you want Materialize to run. The CloudFormation form is already populated, so yo
 review it and launch the stack (about 5 to 10 minutes). It creates exactly two
 objects:
 
-- **An IAM role** (`MaterializeBYOCRole`) that Materialize assumes to manage your
-  environment.
-- **A permission boundary** (`MaterializeBYOCBoundary`) that caps what that role
-  can ever do.
+- **An IAM role** that Materialize assumes to manage your environment.
+- **A permission boundary** that caps what that role can ever do.
 
-When the stack finishes, return the role ARN and permission boundary ARN to
-Materialize.
+Both are created with the name prefix supplied in the link, so you do not choose
+their names. When the stack finishes, return the role ARN and permission boundary
+ARN to Materialize.
 
 {{< note >}}
 The quick-create link only works when you are signed in to the intended AWS
