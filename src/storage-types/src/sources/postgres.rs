@@ -79,7 +79,7 @@ impl PostgresSourceConnection {
             .await?;
         let client = config
             .connect(
-                "get_postgres_lsn",
+                "postgres_wal_lsn",
                 &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
@@ -268,8 +268,8 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
             (database == &other.database, "database"),
             (
                 match (is_physical_replica, &other.is_physical_replica) {
-                    // The value will change if a physical replica is promoted to primary. This will break alter table source
-                    // statements. This is expected and aligns with the current behavior of the source failing on timeline ID changes.
+                    // The value will change if a physical replica is promoted to primary. This will break alter statements.
+                    // This is expected and aligns with the current behavior of the source failing on timeline ID changes.
                     (Some(is_physical_replica), Some(is_physical_replica_other)) => {
                         is_physical_replica == is_physical_replica_other
                     }

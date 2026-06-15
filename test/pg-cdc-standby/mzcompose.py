@@ -140,20 +140,18 @@ def nudge_standby_snapshots(c: Composition) -> Iterator[None]:
         thread.join()
 
 
-def setup_standby(c: Composition) -> None:
-    """Bring up the primary, seed it, then clone it into a physical standby."""
-    c.down(destroy_volumes=True)
+def _basebackup_standby(c: Composition) -> None:
+    """Clone the primary into the standby's data volume via pg_basebackup.
 
-    # testdrive connects to materialized at startup, so it must be up before we
-    # run any testdrive files -- even ones that only touch Postgres.
-    c.up("materialized", "pg-primary")
-    _allow_replication(c, "pg-primary")
-    c.run_testdrive_files("configure-primary.td")
+    Runs as a one-off container *before* the standby's postgres serves, so the
+    data directory is fully seeded first. `-R` writes standby.signal +
+    primary_conninfo so it comes up in recovery. Runs as root to chown the fresh
+    volume, then steps down to postgres since the server refuses a data dir it
+    does not own.
 
-    # Clone the primary into the standby's data volume *before* postgres starts.
-    # `-R` writes standby.signal + primary_conninfo so it comes up in recovery.
-    # Runs as root to chown the fresh volume, then steps down to postgres since
-    # the server refuses a data dir it does not own.
+    A base backup never copies replication slots, so any logical slot that lived
+    on the standby (including one Materialize created) is gone afterwards.
+    """
     c.run(
         "pg-standby",
         "-c",
@@ -169,10 +167,54 @@ def setup_standby(c: Composition) -> None:
         entrypoint="bash",
     )
 
+
+def setup_standby(c: Composition) -> None:
+    """Bring up the primary, seed it, then clone it into a physical standby."""
+    c.down(destroy_volumes=True)
+
+    # testdrive connects to materialize at startup, so it must be up before we
+    # run any testdrive files -- even ones that only touch Postgres.
+    c.up("materialized", "pg-primary")
+    _allow_replication(c, "pg-primary")
+    c.run_testdrive_files("configure-primary.td")
+
+    _basebackup_standby(c)
+
     c.up("pg-standby")
     _wait_for_standby(c)
     # The standby reads its own pg_hba.conf; allow Materialize's replication
     # connection (slot creation + START_REPLICATION) to it.
+    _allow_replication(c, "pg-standby")
+
+
+def rebuild_standby(c: Composition) -> None:
+    """Re-seed the standby from a now-advanced primary, as an operator would when
+    rebuilding a replica with a fresh base backup.
+
+    This is the destructive scenario: the base backup destroys the logical slot
+    Materialize created on the standby. When the source resumes it recreates the
+    slot at the rebuilt standby's *current* LSN -- which we deliberately push far
+    ahead of the LSN Materialize has durably committed. The slot can no longer
+    serve the data Materialize still needs, so the source stalls permanently.
+    """
+    # Advance the primary well past Materialize's committed LSN so the rebuilt
+    # standby's fresh slot starts from a definitively later position.
+    conn = _pg_connect(c, "pg-primary")
+    try:
+        conn.execute(
+            "INSERT INTO t SELECT g, 'post-rebuild' FROM generate_series(2001, 5000) AS g"
+        )
+        # Force a WAL rotation so the base backup's start LSN is clearly ahead.
+        conn.execute("SELECT pg_switch_wal()")
+    finally:
+        conn.close()
+
+    # Stop the serving standby so we can overwrite its data directory, then clone
+    # the (advanced) primary again from scratch.
+    c.kill("pg-standby")
+    _basebackup_standby(c)
+    c.up("pg-standby")
+    _wait_for_standby(c)
     _allow_replication(c, "pg-standby")
 
 
@@ -188,7 +230,20 @@ def workflow_default(c: Composition) -> None:
         # Materialize (logical decoding on the standby).
         c.run_testdrive_files("insert-update-delete.td", "verify-cdc.td")
 
+        # Validate real-time-recency queries work with CDC data from the standby.
+        c.run_testdrive_files("verify-rtr.td")
+
     _verify_reading_from_standby(c)
+
+    # Finally, demonstrate the hazard: rebuilding the standby from a later version
+    # of the primary destroys the slot Materialize depends on and stalls the
+    # source. This must run after _verify_reading_from_standby, which asserts the
+    # (about to be destroyed) slot still exists.
+    rebuild_standby(c)
+    with nudge_standby_snapshots(c):
+        # Recreating the logical slot on the rebuilt standby blocks on a standby
+        # snapshot record, exactly like initial slot creation, so keep nudging.
+        c.run_testdrive_files("verify-rebuild-stalls.td")
 
 
 def _verify_reading_from_standby(c: Composition) -> None:
@@ -211,6 +266,12 @@ def _verify_reading_from_standby(c: Composition) -> None:
     # The primary must NOT carry Materialize's logical slot.
     conn = _pg_connect(c, "pg-primary")
     try:
+        logical_slots = _query_scalar(
+            conn,
+            "SELECT count(*) FROM pg_replication_slots WHERE slot_type = 'logical'",
+        )
+        assert logical_slots == 0, "expected no logical slots on primary"
+
         in_recovery = _query_scalar(conn, "SELECT pg_is_in_recovery()")
         assert not in_recovery, "expected pg-primary to be the primary"
     finally:

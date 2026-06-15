@@ -261,14 +261,19 @@ pub async fn fetch_max_lsn(
     }
 
     Err(PostgresError::Generic(anyhow::anyhow!(
-        "pg_current_wal_lsn() mysteriously has no value"
+        "WAL LSN mysteriously has no value"
     )))
 }
 
 /// Returns whether the server is in recovery, i.e. is a physical replica.
 pub async fn get_is_in_recovery(client: &Client) -> Result<bool, PostgresError> {
     let row = query_one(client, crate::sql!("SELECT pg_is_in_recovery()"), &[]).await?;
-    let is_in_recovery: bool = row.get(0);
+    let is_in_recovery: Option<bool> = row.get(0);
+    if let Some(is_in_recovery) = is_in_recovery {
+        return Ok(is_in_recovery);
+    }
 
-    Ok(is_in_recovery)
+    Err(PostgresError::Generic(anyhow::anyhow!(
+        "pg_is_in_recovery() mysteriously has no value"
+    )))
 }
