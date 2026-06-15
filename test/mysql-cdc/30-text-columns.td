@@ -24,10 +24,7 @@ $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-pass
 
 # Insert data into MySQL that can't be decoded using native types and must be decoded
 # as a TEXT COLUMN. DATE-type coverage lives in text-columns-date.td;
-# TIMESTAMP/DATETIME coverage lives in text-columns-timestamp.td;
-# YEAR coverage (including the zero-year sentinel) lives in text-columns-year.td.
-# The YEAR usage retained below is intentional, as part of the multi-column
-# TEXT COLUMNS integration check (combined-clause SHOW CREATE TABLE rewrite).
+# TIMESTAMP/DATETIME coverage lives in text-columns-timestamp.td.
 
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;

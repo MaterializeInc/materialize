@@ -68,20 +68,6 @@
     - Use the [`EXCLUDE COLUMNS`](/sql/create-source/mysql/#excluding-columns)
     option to exclude any columns that contain unsupported data types.
 
-    #### Zero values for `date`, `datetime`, and `timestamp`
-
-    MySQL allows the special "zero" values `0000-00-00`, `0000-00-00
-    00:00:00` in `date`, `datetime`, and `timestamp` columns when the server
-    `sql_mode` does not include `NO_ZERO_DATE` or `NO_ZERO_IN_DATE`. These
-    values are not representable in Materialize's corresponding native types,
-    so they will cause ingestion to fail for the affected column.
-
-    To ingest columns that contain zero values, use [`TEXT
-    COLUMNS`](/sql/create-source/mysql/#handling-unsupported-types) to
-    decode the affected columns as `text`. The zero values for `date`,
-    `datetime`, `timestamp`, and `year` are preserved verbatim as strings
-    (e.g. `"0000-00-00 00:00:00"`, `"0000"`).
-
 - name: mysql-truncation-restriction
   content: |
     Avoid truncating upstream tables that are being replicated into Materialize.
