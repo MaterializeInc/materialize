@@ -359,6 +359,16 @@ reconcile after startup**, and on each successful reconcile thereafter — there
 no separate startup-time prune pass. This is the same non-reuse property the
 dual-identity scheme already relies on (§Identity & recreate semantics).
 
+#### Feature gate
+
+The entire scoped-parameter mechanism is gated behind a new
+`enable_scoped_system_parameters` dyncfg (defined in `mz_adapter_types::dyncfgs`, default `false`).
+With the gate off, behavior is exactly today's environment-wide-only resolution, so the feature is strictly opt-in.
+The gate is checked at the single sync-loop chokepoint, `sync_scoped_params`.
+When off, no cluster or replica contexts are evaluated, and any overrides that a previously-enabled run persisted are cleared once, so resolution falls back to the environment-wide value everywhere.
+When on, cluster/replica evaluation begins with no deploy, since every dyncfg is mirrored as an LD-synced, `ALTER SYSTEM`-settable system var.
+It is a dyncfg rather than a `feature_flags!` entry because the latter carries the catalog item-parsing rehydration contract for SQL/syntax features, which this runtime subsystem toggle has no part in.
+
 ### Resolution: two existing per-scope boundaries
 
 We do **not** rewrite `SystemVars` into a universally scope-aware store. Both use
@@ -483,6 +493,7 @@ Ordered to de-risk the cleaner boundary first:
    Annotate the parameters the two use cases need (the target optimizer features
    as `Cluster`; `lgalloc` / pager / LZ4 as `Replica`). This is a prerequisite
    for the evaluation steps below, since the sync loop keys off the class.
+   - **Kill-switch (step 0's companion).** Add the `enable_scoped_system_parameters` dyncfg (default `false`) and gate `sync_scoped_params` on it, so the mechanism ships dark and the default behavior stays environment-wide-only until it is turned on with no deploy.
 1. **Replica-local dyncfg push (use case 2), in-memory first.** Add the `replica`
    context kind and per-replica evaluation; compute per-replica/size override maps
    in `environmentd` (in-memory, not yet persisted); resolve at the controller's
