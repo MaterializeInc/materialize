@@ -2523,14 +2523,22 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
         ontology: None,
     });
 
-pub static MZ_CLUSTER_REPLICA_FRONTIERS_IND: LazyLock<BuiltinIndex> =
-    LazyLock::new(|| BuiltinIndex {
+// Keyed on `(object_id, replica_id)` rather than just `object_id` so that the
+// `(object_id, replica_id)` join in `mz_hydration_statuses` reuses this index
+// instead of building its own full-relation arrangement of
+// `mz_cluster_replica_frontiers` (which grows very large under replica churn;
+// see CLU-112). The remaining `object_id`-only consumers all filter to
+// `write_frontier IS NULL`, so their own arrangements stay small. Do not narrow
+// this key back to `object_id` without re-checking that join.
+pub static MZ_CLUSTER_REPLICA_FRONTIERS_IND: LazyLock<BuiltinIndex> = LazyLock::new(|| {
+    BuiltinIndex {
         name: "mz_cluster_replica_frontiers_ind",
         schema: MZ_CATALOG_SCHEMA,
         oid: oid::INDEX_MZ_CLUSTER_REPLICA_FRONTIERS_IND_OID,
-        sql: "IN CLUSTER mz_catalog_server ON mz_catalog.mz_cluster_replica_frontiers (object_id)",
+        sql: "IN CLUSTER mz_catalog_server ON mz_catalog.mz_cluster_replica_frontiers (object_id, replica_id)",
         is_retained_metrics_object: false,
-    });
+    }
+});
 
 pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_default_privileges",
