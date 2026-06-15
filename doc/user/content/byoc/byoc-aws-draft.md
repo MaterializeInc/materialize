@@ -50,7 +50,7 @@ and support the deployment.
 
 Materialize sends you a **pre-filled CloudFormation quick-create link**. Opening
 it loads the CloudFormation console in your own AWS account with the required
-values (your Materialize account ID, an external ID, and a deployer role ARN)
+values (Materialize's AWS account ID, an external ID, a deployer role ARN, and a name prefix)
 already populated, so there is nothing to copy by hand. You confirm your target
 region, VPC CIDR, and availability zones with your Materialize contact for
 provisioning.
