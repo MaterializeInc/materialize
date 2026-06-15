@@ -229,6 +229,14 @@ COMPLETE 0
 statement error the `bounded staleness <duration>` transaction isolation level is not available
 SET transaction_isolation TO 'bounded staleness 5s'
 
+# The gate must not be bypassable via a quoted, upper-cased variable name.
+statement error the `bounded staleness <duration>` transaction isolation level is not available
+SET "TRANSACTION_ISOLATION" TO 'bounded staleness 5s'
+
+# ... nor via `ALTER ROLE ... SET`.
+statement error the `bounded staleness <duration>` transaction isolation level is not available
+ALTER ROLE materialize SET transaction_isolation = 'bounded staleness 5s'
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_bounded_staleness_isolation = true;
 ----
@@ -239,3 +247,39 @@ SET transaction_isolation TO 'bounded staleness 5s'
 
 statement ok
 RESET transaction_isolation
+
+# --- role-default fallback when the flag is later disabled --------------------
+#
+# A role default set while the flag is on must not silently take effect once the
+# flag is turned off; fresh sessions fall back to the built-in default.
+
+statement ok
+ALTER ROLE materialize SET transaction_isolation = 'bounded staleness 5s'
+
+# A fresh session picks up the role default while the flag is on.
+simple conn=role_on,user=materialize
+SHOW transaction_isolation
+----
+bounded staleness 5s
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_bounded_staleness_isolation = false;
+----
+COMPLETE 0
+
+# With the flag off, a fresh session falls back to the built-in default rather
+# than applying the gated role default.
+simple conn=role_off,user=materialize
+SHOW transaction_isolation
+----
+strict serializable
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_bounded_staleness_isolation = true;
+----
+COMPLETE 0
+
+statement ok
+ALTER ROLE materialize RESET transaction_isolation
