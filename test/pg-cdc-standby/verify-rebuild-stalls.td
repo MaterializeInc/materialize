@@ -25,5 +25,13 @@ stalled true
 
 # The rows inserted on the primary just before the rebuild never reach
 # Materialize -- the source is stuck at the pre-rebuild contents.
+#
+# Read under SERIALIZABLE: the default STRICT SERIALIZABLE isolation anchors the
+# read timestamp to the global timeline oracle (real time), then waits for the
+# source's write frontier to catch up -- which never happens once it stalls, so
+# the query would hang until timeout. SERIALIZABLE reads the freshest timestamp
+# the stalled source can actually serve, surfacing the frozen contents instead.
+> SET TRANSACTION_ISOLATION = 'SERIALIZABLE'
+
 > SELECT count(*) FROM t
 1250
