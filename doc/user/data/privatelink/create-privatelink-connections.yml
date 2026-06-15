@@ -1,0 +1,52 @@
+# Shared snippets for the AWS PrivateLink ingestion guides.
+#
+# Rendered via the `include-from-yaml` shortcode, e.g.:
+#   {{% include-from-yaml data="privatelink/create-privatelink-connections" name="connection-examples" %}}
+#
+# Snippets are stored de-indented (column 0); `include-from-yaml` renders them
+# with RenderString, so they can be reused regardless of the caller's list nesting.
+rows:
+  - name: connection-examples
+    content: |
+      ↕️ **In-region connections**
+
+      To connect to an AWS PrivateLink endpoint service in the **same region** as your
+      Materialize environment:
+
+        ```mzsql
+        CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+          SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
+          AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
+        );
+        ```
+
+      - Replace the `SERVICE NAME` value with the service name you noted earlier.
+
+      - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
+        zones in your AWS account. For in-region connections the availability
+        zones of the NLB and the consumer VPC **must match**.
+
+        To find your availability zone IDs, select your database in the RDS
+        Console and click the subnets under **Connectivity & security**. For each
+        subnet, look for **Availability Zone ID** (e.g., `use1-az6`),
+        not **Availability Zone** (e.g., `us-east-1d`).
+
+      ↔️ **Cross-region connections**
+
+      To connect to an AWS PrivateLink endpoint service in a **different region** to
+      the one where your Materialize environment is deployed:
+
+        ```mzsql
+        CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+          SERVICE NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-<endpoint_service_id>',
+          -- For now, the AVAILABILITY ZONES clause **is** required, but will be
+          -- made optional in a future release.
+          AVAILABILITY ZONES ()
+        );
+        ```
+
+      - Replace the `SERVICE NAME` value with the service name you noted earlier.
+
+      - The service name region refers to where the endpoint service was created.
+        You **do not need** to specify `AVAILABILITY ZONES` manually — these will
+        be optimally auto-assigned when none are provided.
