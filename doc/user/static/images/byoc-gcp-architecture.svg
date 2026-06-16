@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">BYOC on GCP: what runs where</title>
+  <desc id="d">Your Materialize environment runs inside a dedicated GCP project. The Materialize control plane manages your environment using a service account you grant admin on that project, while redacted telemetry flows back to Materialize.</desc>
+
+  <rect x="0" y="0" width="900" height="520" fill="#FFFFFF"/>
+
+  <text x="28" y="36" font-size="19" font-weight="700" fill="#15202B">BYOC on GCP: what runs where</text>
+  <text x="28" y="58" font-size="12.5" fill="#5B6472">Materialize manages the deployment across the project boundary. Your data stays in your project.</text>
+
+  <!-- Your GCP project -->
+  <rect x="28" y="78" width="496" height="416" rx="12" fill="#F1F6FF" stroke="#2D6CDF" stroke-width="1.5"/>
+  <text x="48" y="106" font-size="15" font-weight="700" fill="#2D6CDF">Your GCP project (dedicated)</text>
+
+  <!-- VPC -->
+  <rect x="48" y="120" width="456" height="296" rx="10" fill="#FFFFFF" stroke="#9DB6E8" stroke-width="1.1" stroke-dasharray="5 3"/>
+  <text x="64" y="141" font-size="12" font-weight="600" fill="#3A4658">VPC network</text>
+
+  <!-- GKE -->
+  <rect x="66" y="152" width="420" height="74" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
+  <text x="82" y="178" font-size="13.5" font-weight="700" fill="#15202B">Google Kubernetes Engine</text>
+  <text x="82" y="200" font-size="11.5" fill="#4A5568">Runs your Materialize instance + console</text>
+
+  <!-- Cloud SQL -->
+  <rect x="66" y="238" width="200" height="62" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
+  <text x="82" y="264" font-size="13.5" font-weight="700" fill="#15202B">Cloud SQL</text>
+  <text x="82" y="284" font-size="11.5" fill="#4A5568">Metadata database</text>
+
+  <!-- Cloud Storage -->
+  <rect x="286" y="238" width="200" height="62" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
+  <text x="302" y="264" font-size="13.5" font-weight="700" fill="#15202B">Cloud Storage</text>
+  <text x="302" y="284" font-size="11.5" fill="#4A5568">Object storage</text>
+
+  <!-- Observability -->
+  <rect x="66" y="312" width="420" height="60" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
+  <text x="82" y="338" font-size="13.5" font-weight="700" fill="#15202B">Observability</text>
+  <text x="82" y="357" font-size="11.5" fill="#4A5568">In-project logs + metrics</text>
+
+  <!-- notes -->
+  <text x="48" y="444" font-size="11.5" font-style="italic" fill="#2D6CDF">Your data never leaves your project.</text>
+  <text x="48" y="464" font-size="11.5" fill="#5B6472">Apps connect privately over Private Service Connect.</text>
+
+  <!-- Materialize control plane -->
+  <rect x="672" y="170" width="200" height="180" rx="12" fill="#F4EEFF" stroke="#7F4EFF" stroke-width="1.5"/>
+  <text x="692" y="200" font-size="15" font-weight="700" fill="#7F4EFF">Materialize</text>
+  <text x="692" y="222" font-size="12" font-weight="600" fill="#3A4658">Control plane</text>
+  <text x="692" y="250" font-size="11.5" fill="#4A5568">Provisioning</text>
+  <text x="692" y="270" font-size="11.5" fill="#4A5568">Upgrades</text>
+  <text x="692" y="290" font-size="11.5" fill="#4A5568">Monitoring</text>
+  <text x="692" y="310" font-size="11.5" fill="#4A5568">Billing</text>
+
+  <defs>
+    <marker id="ap" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#7F4EFF"/>
+    </marker>
+    <marker id="ag" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#5B6472"/>
+    </marker>
+  </defs>
+
+  <!-- manage: control plane -> project -->
+  <line x1="672" y1="226" x2="528" y2="226" stroke="#7F4EFF" stroke-width="2" marker-end="url(#ap)"/>
+  <text x="600" y="216" font-size="10.5" fill="#7F4EFF" text-anchor="middle">manages your environment</text>
+  <text x="600" y="240" font-size="9.5" fill="#8A77C9" text-anchor="middle">admin on a dedicated project</text>
+
+  <!-- telemetry: project -> control plane -->
+  <line x1="528" y1="300" x2="670" y2="300" stroke="#5B6472" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="600" y="292" font-size="10.5" fill="#5B6472" text-anchor="middle">redacted</text>
+  <text x="600" y="316" font-size="9.5" fill="#7A828F" text-anchor="middle">logs + metrics</text>
+</svg>
