@@ -1,0 +1,50 @@
+[package]
+name = "mz-clusterd-test-driver"
+description = "Headless frontend to clusterd for scripted compute tests."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+mz-compute-client = { path = "../compute-client" }
+mz-compute-types = { path = "../compute-types" }
+mz-dyncfg = { path = "../dyncfg" }
+mz-expr = { path = "../expr" }
+# default-features = false to avoid pulling mz-ore's default `tokio-console`
+# feature (pulled transitively via mz-compute-client); the harness only needs the
+# async, tracing, and metrics helpers.
+mz-ore = { path = "../ore", default-features = false, features = [
+    "async",
+    "tracing",
+    "metrics",
+] }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-types = { path = "../persist-types" }
+mz-repr = { path = "../repr" }
+mz-service = { path = "../service" }
+mz-storage-types = { path = "../storage-types" }
+# Optional MIR dataflow optimizer, run only by `DataflowBuilder::optimize`. Needed
+# for shapes that don't lower from raw MIR (notably joins, whose `implementation`
+# defaults to `Unimplemented`); the default path lowers faithfully without it.
+mz-transform = { path = "../transform" }
+timely.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tokio-stream.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# The `test` feature provides the `#[mz_ore::test]` macro; it is only needed
+# when building tests, so keep it out of the non-test feature set (see the
+# [dependencies] mz-ore comment).
+mz-ore = { path = "../ore", features = ["test"] }
+tempfile.workspace = true
+
+[package.metadata.cargo-udeps.ignore]
+normal = []

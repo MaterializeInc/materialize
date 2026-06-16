@@ -6391,6 +6391,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-clusterd-test-driver"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "mz-compute-client",
+ "mz-compute-types",
+ "mz-dyncfg",
+ "mz-expr",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-repr",
+ "mz-service",
+ "mz-storage-types",
+ "mz-transform",
+ "tempfile",
+ "timely",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mz-compute"
 version = "0.0.0"
 dependencies = [
