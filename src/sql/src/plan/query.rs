@@ -4578,7 +4578,7 @@ fn plan_subscript_jsonb(
             // Integers are converted to a string here and then re-parsed as an
             // integer by `JsonbGetPath`. Weird, but this is how PostgreSQL says to
             // do it.
-            typeconv::to_string(ecx, subscript)
+            typeconv::to_string(ecx, subscript)?
         } else {
             sql_bail!("jsonb subscript type must be coercible to integer or text");
         };
