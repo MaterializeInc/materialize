@@ -28,12 +28,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
-use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
-use ipnet::IpNet;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -636,22 +634,13 @@ pub enum ReplicaConfig {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-pub enum ClusterSchedule {
-    /// The system won't automatically turn the cluster On or Off.
-    Manual,
-    /// The cluster will be On when a REFRESH materialized view on it needs to refresh.
-    /// `hydration_time_estimate` determines how much time before a refresh to turn the
-    /// cluster On, so that it can rehydrate already before the refresh time.
-    Refresh { hydration_time_estimate: Duration },
-}
-
-impl Default for ClusterSchedule {
-    fn default() -> Self {
-        // (Has to be consistent with `impl Default for ClusterScheduleOptionValue`.)
-        ClusterSchedule::Manual
-    }
-}
+// `ClusterSchedule`, the network-policy rule types, and `PolicyAddress` live in
+// `mz-sql-types` so lower-level crates can use them without depending on all of
+// `mz-sql`. Re-exported here at their original paths.
+pub use mz_sql_types::plan::{
+    ClusterSchedule, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection,
+    PolicyAddress,
+};
 
 #[derive(Debug)]
 pub struct CreateSourcePlan {
@@ -1739,101 +1728,6 @@ impl ConnectionDetails {
             )],
             _ => vec![],
         }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub struct NetworkPolicyRule {
-    pub name: String,
-    pub action: NetworkPolicyRuleAction,
-    pub address: PolicyAddress,
-    pub direction: NetworkPolicyRuleDirection,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Serialize,
-    Deserialize,
-    PartialEq,
-    Eq,
-    Ord,
-    PartialOrd,
-    Hash
-)]
-pub enum NetworkPolicyRuleAction {
-    Allow,
-}
-
-impl std::fmt::Display for NetworkPolicyRuleAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Allow => write!(f, "allow"),
-        }
-    }
-}
-impl TryFrom<&str> for NetworkPolicyRuleAction {
-    type Error = PlanError;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value.to_uppercase().as_str() {
-            "ALLOW" => Ok(Self::Allow),
-            _ => Err(PlanError::Unstructured(
-                "Allow is the only valid option".into(),
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub enum NetworkPolicyRuleDirection {
-    Ingress,
-}
-impl std::fmt::Display for NetworkPolicyRuleDirection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Ingress => write!(f, "ingress"),
-        }
-    }
-}
-impl TryFrom<&str> for NetworkPolicyRuleDirection {
-    type Error = PlanError;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value.to_uppercase().as_str() {
-            "INGRESS" => Ok(Self::Ingress),
-            _ => Err(PlanError::Unstructured(
-                "Ingress is the only valid option".into(),
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub struct PolicyAddress(pub IpNet);
-impl std::fmt::Display for PolicyAddress {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.0.to_string())
-    }
-}
-impl From<String> for PolicyAddress {
-    fn from(value: String) -> Self {
-        Self(IpNet::from_str(&value).expect("expected value to be IpNet"))
-    }
-}
-impl TryFrom<&str> for PolicyAddress {
-    type Error = PlanError;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let net = IpNet::from_str(value)
-            .map_err(|_| PlanError::Unstructured("Value must be valid IPV4 or IPV6 CIDR".into()))?;
-        Ok(Self(net))
-    }
-}
-
-impl Serialize for PolicyAddress {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&format!("{}", &self.0))
     }
 }
 

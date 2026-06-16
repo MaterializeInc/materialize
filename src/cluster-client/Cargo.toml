@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+mz-cluster-types = { path = "../cluster-types" }
 mz-ore = { path = "../ore", features = ["tracing"] }
 mz-repr = { path = "../repr" }
 prometheus.workspace = true

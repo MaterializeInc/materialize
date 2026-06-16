@@ -318,7 +318,7 @@ trufflehog_jq_filter_files() {
     .Raw != "{SqlSe" and
     .Raw != "{SqlServe" and
     .Raw != "ghp_9fK8sL3x7TqR1vEzYm2pDaN4WjXbQzUtV0aN" and
-    (.SourceMetadata.Data.Filesystem.file | startswith("src/catalog/src/durable/upgrade/snapshots") | not)
+    (.SourceMetadata.Data.Filesystem.file | startswith("src/catalog-durable/src/durable/upgrade/snapshots") | not)
   )'
 }
 

@@ -30,18 +30,17 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion};
-use mz_sql::catalog::{
+use mz_sql_parser::ast::QualifiedReplica;
+use mz_sql_types::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, PasswordAction,
     RoleAttributesRaw, RoleMembership, RoleVars,
 };
-use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
-use mz_sql::plan::NetworkPolicyRule;
-use mz_sql_parser::ast::QualifiedReplica;
+use mz_sql_types::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
+use mz_sql_types::plan::NetworkPolicyRule;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::StorageError;
 use tracing::warn;
 
-use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{
     ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY,
     WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
@@ -68,7 +67,8 @@ use crate::durable::{
     SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration, USER_ITEM_ALLOC_KEY,
     USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
-use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+use mz_catalog_types::builtin::BuiltinLog;
+use mz_catalog_types::memory::{StateDiff, StateUpdate, StateUpdateKind};
 
 type Timestamp = u64;
 
@@ -391,7 +391,7 @@ impl<'a> Transaction<'a> {
             RoleKey { id },
             RoleValue {
                 name: name.clone(),
-                attributes: attributes.into(),
+                attributes: mz_sql_types::catalog::role_attributes_from_raw(attributes),
                 membership,
                 vars,
                 oid,
@@ -3471,7 +3471,7 @@ mod tests {
     use semver::Version;
 
     use crate::durable::{TestCatalogStateBuilder, test_bootstrap_args};
-    use crate::memory;
+    use mz_catalog_types::memory;
 
     #[mz_ore::test]
     fn test_table_transaction_simple() {
@@ -4047,7 +4047,7 @@ mod tests {
         assert_eq!(update.diff, StateDiff::Addition);
 
         let db = match update.kind {
-            memory::objects::StateUpdateKind::Database(db) => db,
+            memory::StateUpdateKind::Database(db) => db,
             update => panic!("unexpected update: {update:?}"),
         };
 

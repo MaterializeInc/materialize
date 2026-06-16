@@ -7,9 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Types related to storage instances.
+//! Session-related leaf data types.
 
-// `StorageInstanceId` now lives in the bottom-level `mz-cluster-types` crate so that
-// identifier-only consumers need not depend on `mz-storage-types`. It is re-exported here
-// under its historical path.
-pub use mz_cluster_types::StorageInstanceId;
+pub mod user;
+pub mod vars;

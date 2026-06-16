@@ -25,8 +25,8 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
 use mz_repr::CatalogItemId;
 use mz_repr::adt::numeric::Numeric;
-use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_sql::catalog::EnvironmentId;
+use mz_sql_types::catalog::CatalogError as SqlCatalogError;
+use mz_sql_types::catalog::EnvironmentId;
 use serde::Serialize;
 
 use crate::durable::{CatalogError, DurableCatalogState};

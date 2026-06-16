@@ -10,7 +10,6 @@
 //! Compute configuration types.
 
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -19,30 +18,4 @@ pub struct ComputeReplicaConfig {
     pub logging: ComputeReplicaLogging,
 }
 
-/// Logging configuration of a replica.
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Serialize,
-    Deserialize
-)]
-pub struct ComputeReplicaLogging {
-    /// Whether to enable logging for the logging dataflows.
-    pub log_logging: bool,
-    /// The interval at which to log.
-    ///
-    /// A `None` value indicates that logging is disabled.
-    pub interval: Option<Duration>,
-}
-
-impl ComputeReplicaLogging {
-    /// Return whether logging is enabled.
-    pub fn enabled(&self) -> bool {
-        self.interval.is_some()
-    }
-}
+pub use mz_cluster_types::ComputeReplicaLogging;

@@ -15,7 +15,6 @@ use mz_repr::role_id::RoleId;
 use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
 use serde::Serialize;
 
-pub const SYSTEM_USER_NAME: &str = "mz_system";
 pub static SYSTEM_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SYSTEM_USER_NAME.into(),
     external_metadata: None,
@@ -24,7 +23,6 @@ pub static SYSTEM_USER: LazyLock<User> = LazyLock::new(|| User {
     groups: None,
 });
 
-pub const SUPPORT_USER_NAME: &str = "mz_support";
 pub static SUPPORT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SUPPORT_USER_NAME.into(),
     external_metadata: None,
@@ -33,7 +31,6 @@ pub static SUPPORT_USER: LazyLock<User> = LazyLock::new(|| User {
     groups: None,
 });
 
-pub const ANALYTICS_USER_NAME: &str = "mz_analytics";
 pub static ANALYTICS_USER: LazyLock<User> = LazyLock::new(|| User {
     name: ANALYTICS_USER_NAME.into(),
     external_metadata: None,
@@ -156,15 +153,14 @@ pub enum UserKind {
     Superuser,
 }
 
-pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
-pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
-pub const MZ_ANALYTICS_ROLE_ID: RoleId = RoleId::System(3);
-/// Sentinel role ID for JWT group-sync-managed role memberships.
-/// Not a login role — exists only to distinguish sync grants from manual grants.
-pub const MZ_JWT_SYNC_ROLE_ID: RoleId = RoleId::System(4);
-pub const JWT_SYNC_ROLE_NAME: &str = "mz_jwt_sync";
-pub const MZ_MONITOR_ROLE_ID: RoleId = RoleId::Predefined(1);
-pub const MZ_MONITOR_REDACTED_ROLE_ID: RoleId = RoleId::Predefined(2);
+// The built-in role IDs and user names live in `mz-sql-types` so that
+// lower-level crates (e.g. the catalog) can reference them without depending on
+// all of `mz-sql`. Re-exported here at their original paths.
+pub use mz_sql_types::session::user::{
+    ANALYTICS_USER_NAME, JWT_SYNC_ROLE_NAME, MZ_ANALYTICS_ROLE_ID, MZ_JWT_SYNC_ROLE_ID,
+    MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID,
+    SUPPORT_USER_NAME, SYSTEM_USER_NAME,
+};
 
 /// Metadata about a Session's role.
 ///

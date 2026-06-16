@@ -12,21 +12,20 @@
 //!
 //! The key-value objects are a one-to-one mapping of the protobuf objects used to save catalog
 //! data durably. They can be converted to and from protobuf via the [`mz_proto::RustType`] trait.
-//! These objects should not be exposed anywhere outside the [`crate::durable`] module.
+//! These objects should not be exposed anywhere outside the `mz_catalog::durable` module.
 //!
 //! The other type of objects combine the information from keys and values into a single struct,
 //! but are still a direct representation of the data stored on disk. They can be converted to and
 //! from the key-value objects via the [`DurableType`] trait. These objects are used to pass
 //! information to other modules in this crate and other catalog related code.
 //!
-//! All non-catalog code should interact with the objects in [`crate::memory::objects`] and never
+//! All non-catalog code should interact with the objects in `mz_catalog::memory::objects` and never
 //! directly interact with the objects in this module.
 //!
 //! As an example, [`DatabaseKey`] and [`DatabaseValue`] are key-value objects, while [`Database`]
 //! is the non-key-value counterpart.
 
 pub mod serialization;
-pub(crate) mod state_update;
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -39,18 +38,18 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
-use mz_sql::catalog::{
+use mz_sql_types::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
 };
-use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
-use mz_sql::plan::{ClusterSchedule, NetworkPolicyRule};
-#[cfg(test)]
+use mz_sql_types::names::{CommentObjectId, DatabaseId, SchemaId};
+use mz_sql_types::plan::{ClusterSchedule, NetworkPolicyRule};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 
-use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
-use crate::durable::Epoch;
-use crate::durable::objects::serialization::proto;
+use crate::Epoch;
+use crate::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
+use crate::objects::serialization::proto;
 
 // Structs used to pass information to outside modules.
 
@@ -255,7 +254,7 @@ pub struct NetworkPolicy {
     pub oid: u32,
     pub rules: Vec<NetworkPolicyRule>,
     pub owner_id: RoleId,
-    pub(crate) privileges: Vec<MzAclItem>,
+    pub privileges: Vec<MzAclItem>,
 }
 
 impl DurableType for NetworkPolicy {
@@ -588,7 +587,7 @@ pub struct SourceReferences {
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SourceReference {
     pub name: String,
     pub namespace: Option<String>,
@@ -1175,10 +1174,10 @@ impl Snapshot {
 /// Every time a new process takes over, the `epoch` should be incremented.
 /// Every time a new version is deployed, the `deploy` generation should be incremented.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct FenceToken {
-    pub(crate) deploy_generation: u64,
-    pub(crate) epoch: Epoch,
+    pub deploy_generation: u64,
+    pub epoch: Epoch,
 }
 
 impl PartialOrd for FenceToken {
@@ -1197,138 +1196,138 @@ impl Ord for FenceToken {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SettingKey {
-    pub(crate) name: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct SettingValue {
-    pub(crate) value: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct IdAllocKey {
-    pub(crate) name: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct IdAllocValue {
-    pub(crate) next_id: u64,
+    pub next_id: u64,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct GidMappingKey {
-    pub(crate) schema_name: String,
-    pub(crate) object_type: CatalogItemType,
-    pub(crate) object_name: String,
+    pub schema_name: String,
+    pub object_type: CatalogItemType,
+    pub object_name: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct GidMappingValue {
-    pub(crate) catalog_id: SystemCatalogItemId,
-    pub(crate) global_id: SystemGlobalId,
-    pub(crate) fingerprint: String,
+    pub catalog_id: SystemCatalogItemId,
+    pub global_id: SystemGlobalId,
+    pub fingerprint: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterKey {
-    pub(crate) id: ClusterId,
+    pub id: ClusterId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterValue {
-    pub(crate) name: String,
-    pub(crate) owner_id: RoleId,
-    pub(crate) privileges: Vec<MzAclItem>,
-    pub(crate) config: ClusterConfig,
+    pub name: String,
+    pub owner_id: RoleId,
+    pub privileges: Vec<MzAclItem>,
+    pub config: ClusterConfig,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterIntrospectionSourceIndexKey {
-    pub(crate) cluster_id: ClusterId,
-    pub(crate) name: String,
+    pub cluster_id: ClusterId,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
-    pub(crate) catalog_id: IntrospectionSourceIndexCatalogItemId,
-    pub(crate) global_id: IntrospectionSourceIndexGlobalId,
-    pub(crate) oid: u32,
+    pub catalog_id: IntrospectionSourceIndexCatalogItemId,
+    pub global_id: IntrospectionSourceIndexGlobalId,
+    pub oid: u32,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterReplicaKey {
-    pub(crate) id: ReplicaId,
+    pub id: ReplicaId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterReplicaValue {
-    pub(crate) cluster_id: ClusterId,
-    pub(crate) name: String,
-    pub(crate) config: ReplicaConfig,
-    pub(crate) owner_id: RoleId,
+    pub cluster_id: ClusterId,
+    pub name: String,
+    pub config: ReplicaConfig,
+    pub owner_id: RoleId,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct DatabaseKey {
-    pub(crate) id: DatabaseId,
+    pub id: DatabaseId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct DatabaseValue {
-    pub(crate) name: String,
-    pub(crate) owner_id: RoleId,
-    pub(crate) privileges: Vec<MzAclItem>,
-    pub(crate) oid: u32,
+    pub name: String,
+    pub owner_id: RoleId,
+    pub privileges: Vec<MzAclItem>,
+    pub oid: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SourceReferencesKey {
-    pub(crate) source_id: CatalogItemId,
+    pub source_id: CatalogItemId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SourceReferencesValue {
-    pub(crate) references: Vec<SourceReference>,
-    pub(crate) updated_at: u64,
+    pub references: Vec<SourceReference>,
+    pub updated_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SchemaKey {
-    pub(crate) id: SchemaId,
+    pub id: SchemaId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SchemaValue {
-    pub(crate) database_id: Option<DatabaseId>,
-    pub(crate) name: String,
-    pub(crate) owner_id: RoleId,
-    pub(crate) privileges: Vec<MzAclItem>,
-    pub(crate) oid: u32,
+    pub database_id: Option<DatabaseId>,
+    pub name: String,
+    pub owner_id: RoleId,
+    pub privileges: Vec<MzAclItem>,
+    pub oid: u32,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ItemKey {
-    pub(crate) id: CatalogItemId,
+    pub id: CatalogItemId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ItemValue {
-    pub(crate) schema_id: SchemaId,
-    pub(crate) name: String,
-    pub(crate) create_sql: String,
-    pub(crate) owner_id: RoleId,
-    pub(crate) privileges: Vec<MzAclItem>,
-    pub(crate) oid: u32,
-    pub(crate) global_id: GlobalId,
-    pub(crate) extra_versions: BTreeMap<RelationVersion, GlobalId>,
+    pub schema_id: SchemaId,
+    pub name: String,
+    pub create_sql: String,
+    pub owner_id: RoleId,
+    pub privileges: Vec<MzAclItem>,
+    pub oid: u32,
+    pub global_id: GlobalId,
+    pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl ItemValue {
@@ -1370,118 +1369,118 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 pub struct CommentKey {
-    pub(crate) object_id: CommentObjectId,
-    pub(crate) sub_component: Option<usize>,
+    pub object_id: CommentObjectId,
+    pub sub_component: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
-#[cfg_attr(test, derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct CommentValue {
-    pub(crate) comment: String,
+    pub comment: String,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
 pub struct RoleKey {
-    pub(crate) id: RoleId,
+    pub id: RoleId,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct RoleValue {
-    pub(crate) name: String,
-    pub(crate) attributes: RoleAttributes,
-    pub(crate) membership: RoleMembership,
-    pub(crate) vars: RoleVars,
-    pub(crate) oid: u32,
+    pub name: String,
+    pub attributes: RoleAttributes,
+    pub membership: RoleMembership,
+    pub vars: RoleVars,
+    pub oid: u32,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
 pub struct NetworkPolicyKey {
-    pub(crate) id: NetworkPolicyId,
+    pub id: NetworkPolicyId,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct NetworkPolicyValue {
-    pub(crate) name: String,
-    pub(crate) rules: Vec<NetworkPolicyRule>,
-    pub(crate) owner_id: RoleId,
-    pub(crate) privileges: Vec<MzAclItem>,
-    pub(crate) oid: u32,
+    pub name: String,
+    pub rules: Vec<NetworkPolicyRule>,
+    pub owner_id: RoleId,
+    pub privileges: Vec<MzAclItem>,
+    pub oid: u32,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ConfigKey {
-    pub(crate) key: String,
+    pub key: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ConfigValue {
-    pub(crate) value: u64,
+    pub value: u64,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct AuditLogKey {
-    pub(crate) event: VersionedEvent,
+    pub event: VersionedEvent,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageCollectionMetadataKey {
-    pub(crate) id: GlobalId,
+    pub id: GlobalId,
 }
 
 /// This value is stored transparently, however, it should only ever be
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct StorageCollectionMetadataValue {
-    pub(crate) shard: ShardId,
+    pub shard: ShardId,
 }
 
 /// This value is stored transparently, however, it should only ever be
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct UnfinalizedShardKey {
-    pub(crate) shard: ShardId,
+    pub shard: ShardId,
 }
 
 /// This value is stored transparently, however, it should only ever be
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct TxnWalShardValue {
-    pub(crate) shard: ShardId,
+    pub shard: ShardId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ServerConfigurationKey {
-    pub(crate) name: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ServerConfigurationValue {
-    pub(crate) value: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DefaultPrivilegesKey {
-    pub(crate) role_id: RoleId,
-    pub(crate) database_id: Option<DatabaseId>,
-    pub(crate) schema_id: Option<SchemaId>,
-    pub(crate) object_type: ObjectType,
-    pub(crate) grantee: RoleId,
+    pub role_id: RoleId,
+    pub database_id: Option<DatabaseId>,
+    pub schema_id: Option<SchemaId>,
+    pub object_type: ObjectType,
+    pub grantee: RoleId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DefaultPrivilegesValue {
-    pub(crate) privileges: AclMode,
+    pub privileges: AclMode,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SystemPrivilegesKey {
-    pub(crate) grantee: RoleId,
-    pub(crate) grantor: RoleId,
+    pub grantee: RoleId,
+    pub grantor: RoleId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SystemPrivilegesValue {
-    pub(crate) acl_mode: AclMode,
+    pub acl_mode: AclMode,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -1489,13 +1488,13 @@ pub struct RoleAuthKey {
     // TODO(auth): Depending on what the future holds, here is where
     // we might also want to key by a `version` field.
     // That way we can store password versions or what have you.
-    pub(crate) role_id: RoleId,
+    pub role_id: RoleId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct RoleAuthValue {
-    pub(crate) password_hash: Option<String>,
-    pub(crate) updated_at: u64,
+    pub password_hash: Option<String>,
+    pub updated_at: u64,
 }
 
 #[cfg(test)]
@@ -1506,7 +1505,7 @@ mod test {
     use super::{
         DatabaseKey, DatabaseValue, FenceToken, ItemKey, ItemValue, SchemaKey, SchemaValue,
     };
-    use crate::durable::Epoch;
+    use crate::Epoch;
 
     proptest! {
         #[mz_ore::test]

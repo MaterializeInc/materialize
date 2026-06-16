@@ -1,0 +1,37 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+[package]
+name = "mz-sql-types"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+mz-audit-log = { path = "../audit-log" }
+mz-auth = { path = "../auth" }
+mz-cloud-provider = { path = "../cloud-provider" }
+mz-cluster-types = { path = "../cluster-types" }
+mz-ore = { path = "../ore" }
+mz-repr = { path = "../repr" }
+ipnet.workspace = true
+proptest.workspace = true
+proptest-derive.workspace = true
+regex.workspace = true
+serde.workspace = true
+uncased.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["test"] }

@@ -910,7 +910,7 @@ impl Catalog {
                 let scram_iterations = attributes
                     .scram_iterations
                     .unwrap_or_else(|| state.system_config().scram_iterations());
-                existing_role.attributes = attributes.into();
+                existing_role.attributes = mz_sql::catalog::role_attributes_from_raw(attributes);
                 existing_role.vars = vars;
                 let password_action = if nopassword {
                     PasswordAction::Clear

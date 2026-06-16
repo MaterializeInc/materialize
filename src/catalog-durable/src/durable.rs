@@ -10,7 +10,6 @@
 //! This crate is responsible for durably storing and modifying the catalog contents.
 
 use std::fmt::Debug;
-use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,7 +22,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
 use mz_persist_types::ShardId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlScalarType};
-use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_sql_types::catalog::CatalogError as SqlCatalogError;
 use uuid::Uuid;
 
 use crate::config::ClusterReplicaSizeMap;
@@ -46,7 +45,7 @@ use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
 pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
 pub use crate::durable::upgrade::CATALOG_VERSION;
-use crate::memory;
+use mz_catalog_types::memory;
 
 pub mod debug;
 mod error;
@@ -84,7 +83,7 @@ pub struct BootstrapArgs {
     pub bootstrap_role: Option<String>,
 }
 
-pub type Epoch = NonZeroI64;
+pub use mz_catalog_types::Epoch;
 
 /// An API for opening a durable catalog state.
 ///
@@ -263,9 +262,7 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// IMPORTANT: This excludes updates to storage usage.
     ///
     /// Returns an error if this instance has been fenced out.
-    async fn sync_to_current_updates(
-        &mut self,
-    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
+    async fn sync_to_current_updates(&mut self) -> Result<Vec<memory::StateUpdate>, CatalogError>;
 
     // TODO(jkosh44) The fact that the timestamp argument is an exclusive upper bound makes
     // it difficult to use for readers. For now it's correct and easy to implement, but we should
@@ -278,7 +275,7 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     async fn sync_updates(
         &mut self,
         target_upper: Timestamp,
-    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
+    ) -> Result<Vec<memory::StateUpdate>, CatalogError>;
 
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp;
@@ -433,12 +430,12 @@ impl AuditLogIterator {
             .map(|(kind, ts)| {
                 // Each event will be deserialized lazily on a call to `next`.
                 let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
-                let kind: Option<memory::objects::StateUpdateKind> = (&kind)
+                let kind: Option<memory::StateUpdateKind> = (&kind)
                     .try_into()
                     .expect("invalid persisted update: {update:#?}");
                 let kind = kind.expect("audit log always produces im-memory updates");
                 let audit_log = match kind {
-                    memory::objects::StateUpdateKind::AuditLog(audit_log) => audit_log,
+                    memory::StateUpdateKind::AuditLog(audit_log) => audit_log,
                     kind => unreachable!("invalid kind: {kind:?}"),
                 };
                 (audit_log, ts)

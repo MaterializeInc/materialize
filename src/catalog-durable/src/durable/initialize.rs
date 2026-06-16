@@ -31,18 +31,17 @@ use mz_pgrepr::oid::{
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{
+use mz_sql_types::catalog::{
     DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributesRaw, RoleMembership,
     RoleVars, SystemObjectType,
 };
-use mz_sql::names::{
+use mz_sql_types::names::{
     DatabaseId, ObjectId, PUBLIC_ROLE_NAME, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
-use mz_sql::plan::{NetworkPolicyRule, PolicyAddress};
-use mz_sql::rbac;
-use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use mz_sql_types::plan::{NetworkPolicyRule, PolicyAddress};
+use mz_sql_types::rbac;
+use mz_sql_types::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 
-use crate::builtin::BUILTIN_ROLES;
 use crate::durable::upgrade::CATALOG_VERSION;
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, BootstrapArgs,
@@ -53,6 +52,7 @@ use crate::durable::{
     SYSTEM_REPLICA_ID_ALLOC_KEY, Schema, Transaction, USER_CLUSTER_ID_ALLOC_KEY,
     USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
+use mz_catalog_types::builtin::BUILTIN_ROLES;
 
 /// The key within the "config" Collection that stores the version of the catalog.
 pub const USER_VERSION_KEY: &str = "user_version";
@@ -110,13 +110,13 @@ pub const DEFAULT_USER_NETWORK_POLICY_ID: NetworkPolicyId = NetworkPolicyId::Use
 pub const DEFAULT_USER_NETWORK_POLICY_NAME: &str = "default";
 pub const DEFAULT_USER_NETWORK_POLICY_RULES: &[(
     &str,
-    mz_sql::plan::NetworkPolicyRuleAction,
-    mz_sql::plan::NetworkPolicyRuleDirection,
+    mz_sql_types::plan::NetworkPolicyRuleAction,
+    mz_sql_types::plan::NetworkPolicyRuleDirection,
     &str,
 )] = &[(
     "open_ingress",
-    mz_sql::plan::NetworkPolicyRuleAction::Allow,
-    mz_sql::plan::NetworkPolicyRuleDirection::Ingress,
+    mz_sql_types::plan::NetworkPolicyRuleAction::Allow,
+    mz_sql_types::plan::NetworkPolicyRuleDirection::Ingress,
     "0.0.0.0/0",
 )];
 
@@ -129,13 +129,13 @@ static DEFAULT_USER_NETWORK_POLICY_PRIVILEGES: LazyLock<Vec<MzAclItem>> = LazyLo
 
 static SYSTEM_SCHEMA_PRIVILEGES: LazyLock<Vec<MzAclItem>> = LazyLock::new(|| {
     vec![
-        rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema),
+        rbac::default_builtin_object_privilege(mz_sql_types::catalog::ObjectType::Schema),
         MzAclItem {
             grantee: MZ_SUPPORT_ROLE_ID,
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: AclMode::USAGE,
         },
-        rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
+        rbac::owner_privilege(mz_sql_types::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
     ]
 });
 
@@ -317,7 +317,7 @@ pub(crate) async fn initialize(
         Some(Role {
             id,
             name: role.to_string(),
-            attributes: attributes.into(),
+            attributes: mz_sql_types::catalog::role_attributes_from_raw(attributes),
             membership,
             vars,
             oid,
@@ -334,7 +334,7 @@ pub(crate) async fn initialize(
                 role_id: RoleId::Public,
                 database_id: None,
                 schema_id: None,
-                object_type: mz_sql::catalog::ObjectType::Cluster,
+                object_type: mz_sql_types::catalog::ObjectType::Cluster,
             },
             acl_item: DefaultPrivilegeAclItem {
                 grantee: MZ_SUPPORT_ROLE_ID,
@@ -346,7 +346,7 @@ pub(crate) async fn initialize(
                 role_id: RoleId::Public,
                 database_id: None,
                 schema_id: None,
-                object_type: mz_sql::catalog::ObjectType::Database,
+                object_type: mz_sql_types::catalog::ObjectType::Database,
             },
             acl_item: DefaultPrivilegeAclItem {
                 grantee: MZ_SUPPORT_ROLE_ID,
@@ -358,7 +358,7 @@ pub(crate) async fn initialize(
                 role_id: RoleId::Public,
                 database_id: None,
                 schema_id: None,
-                object_type: mz_sql::catalog::ObjectType::Schema,
+                object_type: mz_sql_types::catalog::ObjectType::Schema,
             },
             acl_item: DefaultPrivilegeAclItem {
                 grantee: MZ_SUPPORT_ROLE_ID,
@@ -370,7 +370,7 @@ pub(crate) async fn initialize(
                 role_id: RoleId::Public,
                 database_id: None,
                 schema_id: None,
-                object_type: mz_sql::catalog::ObjectType::Type,
+                object_type: mz_sql_types::catalog::ObjectType::Type,
             },
             acl_item: DefaultPrivilegeAclItem {
                 grantee: RoleId::Public,
@@ -424,7 +424,10 @@ pub(crate) async fn initialize(
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: AclMode::USAGE,
         },
-        rbac::owner_privilege(mz_sql::catalog::ObjectType::Database, MZ_SYSTEM_ROLE_ID),
+        rbac::owner_privilege(
+            mz_sql_types::catalog::ObjectType::Database,
+            MZ_SYSTEM_ROLE_ID,
+        ),
     ];
     // Optionally add a privilege for the bootstrap role.
     if let Some(role) = &bootstrap_role {
@@ -432,7 +435,7 @@ pub(crate) async fn initialize(
             grantee: role.id.clone(),
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: rbac::all_object_privileges(SystemObjectType::Object(
-                mz_sql::catalog::ObjectType::Database,
+                mz_sql_types::catalog::ObjectType::Database,
             )),
         })
     };
@@ -476,7 +479,7 @@ pub(crate) async fn initialize(
                 grantee_id: role_id.to_string(),
                 grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
                 privileges: rbac::all_object_privileges(SystemObjectType::Object(
-                    mz_sql::catalog::ObjectType::Database,
+                    mz_sql_types::catalog::ObjectType::Database,
                 ))
                 .to_string(),
             }),
@@ -501,7 +504,7 @@ pub(crate) async fn initialize(
                 grantor: MZ_SYSTEM_ROLE_ID,
                 acl_mode: AclMode::USAGE,
             },
-            rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
+            rbac::owner_privilege(mz_sql_types::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
         ]
         .into_iter()
         // Optionally add the bootstrap role to the public schema.
@@ -509,7 +512,7 @@ pub(crate) async fn initialize(
             grantee: role.id.clone(),
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: rbac::all_object_privileges(SystemObjectType::Object(
-                mz_sql::catalog::ObjectType::Schema,
+                mz_sql_types::catalog::ObjectType::Schema,
             )),
         }))
         .collect(),
@@ -548,7 +551,7 @@ pub(crate) async fn initialize(
                 grantee_id: role_id.to_string(),
                 grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
                 privileges: rbac::all_object_privileges(SystemObjectType::Object(
-                    mz_sql::catalog::ObjectType::Schema,
+                    mz_sql_types::catalog::ObjectType::Schema,
                 ))
                 .to_string(),
             }),
@@ -566,7 +569,10 @@ pub(crate) async fn initialize(
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: AclMode::USAGE,
         },
-        rbac::owner_privilege(mz_sql::catalog::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
+        rbac::owner_privilege(
+            mz_sql_types::catalog::ObjectType::Cluster,
+            MZ_SYSTEM_ROLE_ID,
+        ),
     ];
 
     // Optionally add a privilege for the bootstrap role.
@@ -575,7 +581,7 @@ pub(crate) async fn initialize(
             grantee: role.id.clone(),
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: rbac::all_object_privileges(SystemObjectType::Object(
-                mz_sql::catalog::ObjectType::Cluster,
+                mz_sql_types::catalog::ObjectType::Cluster,
             )),
         });
     };
@@ -654,7 +660,7 @@ pub(crate) async fn initialize(
                 grantee_id: role_id.to_string(),
                 grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
                 privileges: rbac::all_object_privileges(SystemObjectType::Object(
-                    mz_sql::catalog::ObjectType::Cluster,
+                    mz_sql_types::catalog::ObjectType::Cluster,
                 ))
                 .to_string(),
             }),

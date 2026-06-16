@@ -12,7 +12,7 @@ use std::fmt::Debug;
 use mz_persist_client::error::UpperMismatch;
 use mz_proto::TryFromProtoError;
 use mz_repr::Timestamp;
-use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_sql_types::catalog::CatalogError as SqlCatalogError;
 use mz_storage_types::controller::StorageError;
 
 use crate::durable::Epoch;

@@ -65,7 +65,7 @@ use crate::durable::{
     DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
     ReadOnlyDurableCatalogState, Transaction, initialize, persist_desc,
 };
-use crate::memory;
+use mz_catalog_types::memory;
 
 /// New-type used to represent timestamps in persist.
 pub(crate) type Timestamp = mz_repr::Timestamp;
@@ -1578,7 +1578,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 #[derive(Debug)]
 struct CatalogStateInner {
     /// A trace of all catalog updates that can be consumed by some higher layer.
-    updates: VecDeque<memory::objects::StateUpdate>,
+    updates: VecDeque<memory::StateUpdate>,
 }
 
 impl CatalogStateInner {
@@ -1604,7 +1604,7 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
         }
 
         {
-            let update: Option<memory::objects::StateUpdate> = (&update)
+            let update: Option<memory::StateUpdate> = (&update)
                 .try_into()
                 .expect("invalid persisted update: {update:#?}");
             if let Some(update) = update {
@@ -1717,9 +1717,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn sync_to_current_updates(
-        &mut self,
-    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
+    async fn sync_to_current_updates(&mut self) -> Result<Vec<memory::StateUpdate>, CatalogError> {
         let upper = self.current_upper().await;
         self.sync_updates(upper).await
     }
@@ -1728,7 +1726,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     async fn sync_updates(
         &mut self,
         target_upper: mz_repr::Timestamp,
-    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
+    ) -> Result<Vec<memory::StateUpdate>, CatalogError> {
         self.sync(target_upper).await?;
         let mut updates = Vec::new();
         while let Some(update) = self.update_applier.updates.front() {

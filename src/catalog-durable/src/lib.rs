@@ -12,17 +12,12 @@
 // Latest Rust beta complains: queries overflow the depth limit!
 #![recursion_limit = "256"]
 
-//! Persistent metadata storage for the coordinator.
+//! Durable, persist-backed catalog storage.
+//!
+//! This crate holds the durable catalog implementation (persist read/write,
+//! transactions, and version upgrades), split out from `mz-catalog` so that its
+//! heavy serialization codegen does not serialize the compilation of
+//! `mz-catalog`.
 
-use mz_adapter_types::connection::ConnectionId;
-
-pub mod builtin;
-pub mod expr_cache;
-pub mod memory;
-
-// The durable catalog and its config live in `mz-catalog-durable`. Re-export
-// them under their historical paths so consumers of `mz_catalog::durable` and
-// `mz_catalog::config` need no changes.
-pub use mz_catalog_durable::{config, durable};
-
-pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);
+pub mod config;
+pub mod durable;

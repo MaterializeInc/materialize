@@ -17,14 +17,12 @@ use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::str::StrExt;
 use mz_repr::CatalogItemId;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
 use mz_sql_parser::ast::{Ident, QualifiedReplica};
 use tracing::debug;
 
-use crate::catalog::{
-    CatalogItemType, ErrorMessageObjectDescription, ObjectType, SessionCatalog, SystemObjectType,
-};
+use crate::catalog::{CatalogItemType, ErrorMessageObjectDescription, ObjectType, SessionCatalog};
 use crate::names::{
     CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     SchemaSpecifier, SystemObjectId,
@@ -34,7 +32,7 @@ use crate::plan::{
     DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, UpdatePrivilege,
 };
 use crate::session::metadata::SessionMetadata;
-use crate::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
+use crate::session::user::{SUPPORT_USER, SYSTEM_USER};
 use crate::session::vars::SystemVars;
 
 /// Common checks that need to be performed before we can start checking a role's privileges.
@@ -1868,81 +1866,11 @@ fn check_object_privileges(
     Ok(())
 }
 
-pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
-    const TABLE_ACL_MODE: AclMode = AclMode::INSERT
-        .union(AclMode::SELECT)
-        .union(AclMode::UPDATE)
-        .union(AclMode::DELETE);
-    const USAGE_CREATE_ACL_MODE: AclMode = AclMode::USAGE.union(AclMode::CREATE);
-    const ALL_SYSTEM_PRIVILEGES: AclMode = AclMode::CREATE_ROLE
-        .union(AclMode::CREATE_DB)
-        .union(AclMode::CREATE_CLUSTER)
-        .union(AclMode::CREATE_NETWORK_POLICY);
-
-    const EMPTY_ACL_MODE: AclMode = AclMode::empty();
-    match object_type {
-        SystemObjectType::Object(ObjectType::Table) => TABLE_ACL_MODE,
-        SystemObjectType::Object(ObjectType::View) => AclMode::SELECT,
-        SystemObjectType::Object(ObjectType::MaterializedView) => AclMode::SELECT,
-        SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
-        SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
-        SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
-        SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
-        SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
-        SystemObjectType::Object(ObjectType::Cluster) => USAGE_CREATE_ACL_MODE,
-        SystemObjectType::Object(ObjectType::ClusterReplica) => EMPTY_ACL_MODE,
-        SystemObjectType::Object(ObjectType::Secret) => AclMode::USAGE,
-        SystemObjectType::Object(ObjectType::NetworkPolicy) => AclMode::USAGE,
-        SystemObjectType::Object(ObjectType::Connection) => AclMode::USAGE,
-        SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
-        SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
-        SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
-        SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
-    }
-}
-
-pub const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAclItem {
-    MzAclItem {
-        grantee: owner_id,
-        grantor: owner_id,
-        acl_mode: all_object_privileges(SystemObjectType::Object(object_type)),
-    }
-}
-
-const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
-    match object_type {
-        ObjectType::Table
-        | ObjectType::View
-        | ObjectType::MaterializedView
-        | ObjectType::Source => AclMode::SELECT,
-        ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
-        ObjectType::Sink
-        | ObjectType::Index
-        | ObjectType::Role
-        | ObjectType::Cluster
-        | ObjectType::ClusterReplica
-        | ObjectType::Secret
-        | ObjectType::Connection
-        | ObjectType::Database
-        | ObjectType::Func
-        | ObjectType::NetworkPolicy => AclMode::empty(),
-    }
-}
-
-pub const fn support_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
-    let acl_mode = default_builtin_object_acl_mode(object_type);
-    MzAclItem {
-        grantee: MZ_SUPPORT_ROLE_ID,
-        grantor: MZ_SYSTEM_ROLE_ID,
-        acl_mode,
-    }
-}
-
-pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
-    let acl_mode = default_builtin_object_acl_mode(object_type);
-    MzAclItem {
-        grantee: RoleId::Public,
-        grantor: MZ_SYSTEM_ROLE_ID,
-        acl_mode,
-    }
-}
+// The privilege-computation helpers below are pure `const fn`s with no planner
+// dependencies, so they live in `mz-sql-types` where lower-level crates (e.g. the
+// catalog) can use them without depending on all of `mz-sql`. Re-exported here at
+// their original paths.
+pub use mz_sql_types::rbac::{
+    all_object_privileges, default_builtin_object_privilege, owner_privilege,
+    support_builtin_object_privilege,
+};

@@ -58,6 +58,7 @@ mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-pretty = { path = "../sql-pretty" }
+mz-sql-types = { path = "../sql-types" }
 mz-sql-lexer = { path = "../sql-lexer" }
 mz-sql-server-util = { path = "../sql-server-util" }
 mz-ssh-util = { path = "../ssh-util" }

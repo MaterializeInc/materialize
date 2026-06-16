@@ -12,8 +12,7 @@
 use mz_ore::cast::CastFrom;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
-use crate::durable::objects::state_update::StateUpdateKindJson;
-use crate::durable::objects::{
+use crate::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
@@ -25,7 +24,7 @@ use crate::durable::objects::{
     StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
     SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
-use crate::durable::{
+use crate::objects::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
 };
 
@@ -33,20 +32,6 @@ use super::{RoleAuthKey, RoleAuthValue};
 
 pub mod proto {
     pub use mz_catalog_protos::objects::*;
-}
-
-impl From<proto::StateUpdateKind> for StateUpdateKindJson {
-    fn from(value: proto::StateUpdateKind) -> Self {
-        StateUpdateKindJson::from_serde(value)
-    }
-}
-
-impl TryFrom<StateUpdateKindJson> for proto::StateUpdateKind {
-    type Error = String;
-
-    fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
-        value.try_to_serde::<Self>().map_err(|err| err.to_string())
-    }
 }
 
 impl RustType<proto::ClusterConfig> for ClusterConfig {

@@ -1,0 +1,46 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+[package]
+name = "mz-catalog-types"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-adapter-types = { path = "../adapter-types" }
+mz-audit-log = { path = "../audit-log" }
+mz-catalog-protos = { path = "../catalog-protos" }
+mz-compute-client = { path = "../compute-client" }
+mz-controller = { path = "../controller" }
+mz-controller-types = { path = "../controller-types" }
+mz-ore = { path = "../ore" }
+mz-persist-types = { path = "../persist-types" }
+mz-pgrepr = { path = "../pgrepr" }
+mz-proto = { path = "../proto" }
+mz-repr = { path = "../repr" }
+mz-sql-types = { path = "../sql-types" }
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
+serde.workspace = true
+
+[dev-dependencies]
+mz-catalog-types = { path = ".", features = ["proptest"] }
+mz-ore = { path = "../ore", features = ["test"] }
+mz-repr = { path = "../repr", features = ["proptest"] }
+proptest.workspace = true
+proptest-derive.workspace = true
+
+[features]
+default = []
+proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest"]
