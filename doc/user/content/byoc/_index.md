@@ -1,6 +1,7 @@
 +++
 title = "Bring Your Own Cloud (BYOC)"
 description = "Run Materialize in your own cloud account, managed by Materialize."
+disable_list = true
 
 [menu.main]
 parent = "byoc"
@@ -17,3 +18,4 @@ BYOC is a good fit if you need data residency, network isolation, compliance (SO
 ## Guides
 
 - [BYOC on AWS](/byoc/byoc-aws-draft/)
+- [BYOC on GCP](/byoc/byoc-gcp-draft/)
