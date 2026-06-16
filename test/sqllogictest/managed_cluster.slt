@@ -120,6 +120,11 @@ CREATE CLUSTER baz REPLICAS (), INTROSPECTION DEBUGGING = true
 statement error INTROSPECTION INTERVAL not supported for unmanaged clusters
 CREATE CLUSTER baz REPLICAS (), INTROSPECTION INTERVAL 1
 
+# An out-of-range INTROSPECTION INTERVAL should error gracefully, not panic.
+# See database-issues SQL-361.
+statement error interval out of range
+CREATE CLUSTER baz (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL = '150000000 days')
+
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----

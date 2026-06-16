@@ -748,6 +748,12 @@ CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY ASSERT NOT NULL x) AS SELECT
 query error invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "213503982001"
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '213503982001' days) AS SELECT * FROM t2;
 
+# An interval whose microseconds fit in u64 but not i64 must error gracefully
+# rather than panic when unparsed (e.g. for mz_materialized_view_refresh_strategies).
+# See database-issues SQL-361.
+query error REFRESH interval too large
+CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '150000000 days') AS SELECT * FROM t2;
+
 query error REFRESH interval must be at least 1 ms
 CREATE MATERIALIZED VIEW mv_bad
   WITH (REFRESH EVERY '999 microseconds')
