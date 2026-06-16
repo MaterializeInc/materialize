@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/transact.rs
-revision: 3a1c877be6
+revision: cad6e50f92
 ---
 
 # adapter::catalog::transact
@@ -11,4 +11,5 @@ Zero-downtime deployment logic (0dt) is also managed here; DDL operations can be
 `InjectedAuditEvent` struct and `Op::InjectAuditEvents` variant allow manually appending audit log entries at the current oracle write timestamp. `CREATE ROLE` audit events use `EventDetails::CreateRoleV1` which includes the `auto_provision_source` field.
 `Op::AlterAddColumn` emits an `AlterAddColumnV1` audit log event recording the table ID, column name, column type, and nullability. `Op::AlterTimestampInterval` emits an `AlterSourceTimestampIntervalV1` audit log event recording the item ID, old interval, and new interval.
 `Op::WeirdStorageUsageUpdates` has been removed; storage usage id allocation is handled outside the catalog transaction via `Catalog::allocate_storage_usage_id`.
+When dropping a cluster replica, the code expands dependent objects (including materialized views that target the replica) using `state.cluster_replica_dependents(cluster_id, replica_id, &mut seen)`, records their comments for cleanup, and adds them to the drop list; `seen` is seeded from already-collected items so the plan-driven path (which processes dependents before the replica in reverse-dependency order) does not re-add them.
 When dropping items, all storage collections associated with a dropped entry are scheduled for removal unconditionally; whether the item was a replacement target is not considered at this stage.

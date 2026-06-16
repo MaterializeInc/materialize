@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/mz_internal.rs
-revision: 554aab2461
+revision: 4ec14fa5c7
 ---
 
 # catalog::builtin::mz_internal
@@ -11,7 +11,7 @@ This is the largest builtin submodule, exporting 186 public items: sources, tabl
 
 **Sources** (`BuiltinSource`) — Backed by `DataSourceDesc::Catalog` or `IntrospectionType`. Key items include `MZ_CATALOG_RAW` (the raw persist-backed catalog source, system-only access), and storage statistics/status history sources such as `MZ_SOURCE_STATISTICS_RAW`, `MZ_SINK_STATISTICS_RAW`, `MZ_SOURCE_STATUS_HISTORY`, `MZ_SINK_STATUS_HISTORY`, `MZ_STATEMENT_EXECUTION_HISTORY`, `MZ_SESSION_HISTORY`, `MZ_SQL_TEXT`, `MZ_PREPARED_STATEMENT_HISTORY`, and replica metrics/status history sources.
 
-**Tables** (`BuiltinTable`) — Connector-specific and internal metadata tables such as `MZ_POSTGRES_SOURCES`, `MZ_MYSQL_SOURCES`, and others tracking sink/source details.
+**Tables** (`BuiltinTable`) — Connector-specific and internal metadata tables such as `MZ_POSTGRES_SOURCES`, `MZ_MYSQL_SOURCES`, and others tracking sink/source details. `MZ_CLUSTER_SCHEDULES` is a `BuiltinMaterializedView` (not a table) backed by a query over `mz_internal.mz_catalog_raw` that derives cluster scheduling configuration from the durable catalog JSON.
 
 **Materialized views** (`BuiltinMaterializedView`) — Derived catalog views backed by queries over `mz_catalog_raw` and other sources: aggregated statistics, lag histograms, and other derived metrics.
 

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog.rs
-revision: 12fbe31d24
+revision: 4ec14fa5c7
 ---
 
 # adapter::catalog
