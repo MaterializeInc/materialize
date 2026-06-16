@@ -72,11 +72,15 @@
 //! the separate `shard_source_descs_return` operator) is merged in as a
 //! disconnected `completed_fetches` input.
 //!
-//! **`shard_source_fetch`** forwards each incoming desc to its fetch task and
-//! retains a *pair* of capabilities for it: one for the data output, one for
-//! the `completed_fetches` output. The task downloads parts in order; the
-//! operator matches results to capabilities FIFO, emits the [FetchedBlob] at
-//! the first capability, and drops the second.
+//! **`shard_source_fetch`** forwards each incoming desc to its fetch task,
+//! tagged with the time it was minted at, and retains a capability pair (data
+//! output + `completed_fetches` output) per time, counting how many fetches at
+//! that time are outstanding. The task echoes the time back with each result;
+//! the operator emits the [FetchedBlob] at that time's data capability and,
+//! when a time's outstanding count reaches zero, drops both of its capabilities
+//! — advancing the data frontier and releasing that time's leases. Keying by
+//! time rather than arrival order makes the operator independent of the order
+//! results come back in.
 //!
 //! **Lease lifecycle**: dropping the completed-fetches capability advances a
 //! feedback loop back into `shard_source_descs`, whose frontier advances the
@@ -99,10 +103,10 @@
 //! * [LeasedBatchPart]s panic on drop while leased; only the lease-split
 //!   [ExchangeableBatchPart] representation may cross channels, where it can be
 //!   dropped harmlessly on shutdown.
-//! * The fetch task processes descs strictly in order; the FIFO capability
-//!   matching in the fetch operator is only sound because of this. Once a fetch
-//!   fails the operator freezes and must STOP draining results — a later, good
-//!   result would otherwise pop the failed part's capability and advance the
+//! * Each result carries its own time, so the operator does not depend on the
+//!   order the task returns them. Once a fetch fails the operator freezes and
+//!   must STOP draining results — a later, good result would otherwise release
+//!   a capability and advance the
 //!   frontier past data never emitted.
 //! * The `completed_fetches` feedback edge carries no data (`Infallible`); it
 //!   exists for its frontier, which signals cross-process fetch completion,
@@ -117,8 +121,8 @@
 //! [LeasedBatchPart]: crate::fetch::LeasedBatchPart
 //! [AbortOnDropHandle]: mz_ore::task::AbortOnDropHandle
 
+use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -868,10 +872,15 @@ where
     // reader's lease diagnostics so the operator can distinguish a lease expiry
     // from a GC bug. The task wakes the operator through the activator after
     // each result.
-    let (desc_tx, mut desc_rx) = tokio::sync::mpsc::unbounded_channel::<ExchangeableBatchPart<T>>();
-    let (blob_tx, blob_rx) = tokio::sync::mpsc::unbounded_channel::<
+    // Each desc is tagged with the time it was minted at; the task echoes that
+    // time back with the result so the operator can emit at the right
+    // capability without relying on the order results come back in.
+    let (desc_tx, mut desc_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(TInner, ExchangeableBatchPart<T>)>();
+    let (blob_tx, blob_rx) = tokio::sync::mpsc::unbounded_channel::<(
+        TInner,
         Result<FetchedBlob<K, V, T, D>, (BlobKey, String)>,
-    >();
+    )>();
     let (activator, activation_ack) = ArcActivator::new(scope.clone(), &info);
 
     // The fetch task owns the `BatchFetcher` and performs all async work:
@@ -893,7 +902,7 @@ where
                 )
                 .await
                 .expect("shard codecs should not change");
-            while let Some(part) = desc_rx.recv().await {
+            while let Some((time, part)) = desc_rx.recv().await {
                 let reader_id = part.reader_id().clone();
                 let fetched = fetcher
                     .fetch_leased_part(part)
@@ -917,7 +926,7 @@ where
                         Err((blob_key, diagnostics))
                     }
                 };
-                if blob_tx.send(fetched).is_err() {
+                if blob_tx.send((time, fetched)).is_err() {
                     // The operator is gone; stop fetching.
                     return;
                 }
@@ -930,13 +939,17 @@ where
     let (mut shutdown_handle, shutdown_button) = button(scope, info.address);
 
     builder.build_reschedule(move |_capabilities| {
-        // Per-flight capabilities, in the order parts were sent to the fetch
-        // task (which processes and returns them in the same order). The first
-        // capability emits the fetched blob; dropping the second advances the
-        // `completed_fetches` frontier, which releases the part's lease on the
-        // chosen worker. Holding both until the fetch completes keeps the lease
-        // alive while the download is in flight.
-        let mut inflight_caps: VecDeque<(Capability<TInner>, Capability<TInner>)> = VecDeque::new();
+        // Outstanding fetches, keyed by the time the part was minted at. For
+        // each time we retain a capability on each output (data and
+        // completed-fetches) and count how many fetches at that time are in
+        // flight. When the count reaches zero we drop both capabilities,
+        // advancing the data and completed-fetches frontiers past that time;
+        // the latter releases the parts' leases on the chosen worker (whose
+        // `LeaseManager` is likewise keyed by time). Keying by time rather than
+        // by arrival order makes the operator robust to the task returning
+        // results in any order — e.g. if it ever fetches concurrently.
+        let mut outstanding: BTreeMap<TInner, (Capability<TInner>, Capability<TInner>, usize)> =
+            BTreeMap::new();
         // Wrapped in `Option` so we can drop the sender to signal the task that
         // no more descs are coming.
         let mut desc_tx = Some(desc_tx);
@@ -954,7 +967,7 @@ where
             // workers have pressed do we drop capabilities and drain the input.
             if shutdown_handle.local_pressed() {
                 return if shutdown_handle.all_pressed() {
-                    inflight_caps.clear();
+                    outstanding.clear();
                     desc_tx = None;
                     blob_rx = None;
                     descs_input.for_each(|_cap, _data| {});
@@ -972,45 +985,47 @@ where
                 // Frozen: retain every outstanding capability so the frontier
                 // stays at the missing part and never advances past data we did
                 // not emit. Crucially we must NOT keep draining `blob_rx`: a
-                // later, successfully fetched part would otherwise pop the failed
-                // part's capability off the front of `inflight_caps` (FIFO) and
-                // advance the frontier past it. Still drain the input to avoid
-                // stalling the dataflow.
+                // later, successfully fetched part would otherwise release a
+                // capability and let the frontier advance past the missing part.
+                // Still drain the input to avoid stalling the dataflow.
                 descs_input.for_each(|_cap, _data| {});
                 return true;
             }
 
             // Forward incoming descs to the fetch task, retaining a capability
-            // pair for each.
+            // pair per time and counting the fetch as outstanding.
             descs_input.for_each(|cap, data| {
                 for (_idx, part) in data.drain(..) {
-                    let fetched_cap = cap.delayed(cap.time(), 0);
-                    let completed_cap = cap.delayed(cap.time(), 1);
-                    inflight_caps.push_back((fetched_cap, completed_cap));
+                    let entry = outstanding.entry(cap.time().clone()).or_insert_with(|| {
+                        (cap.delayed(cap.time(), 0), cap.delayed(cap.time(), 1), 0)
+                    });
+                    entry.2 += 1;
                     desc_tx
                         .as_ref()
                         .expect("desc_tx alive while operator is running")
-                        .send(part)
+                        .send((cap.time().clone(), part))
                         .expect("fetch task unexpectedly gone");
                 }
             });
 
-            // Drain completed fetches, emitting each at its retained capability.
+            // Drain completed fetches, emitting each at the capability for its
+            // time.
             if let Some(rx) = blob_rx.as_mut() {
                 loop {
                     match rx.try_recv() {
-                        Ok(Ok(fetched)) => {
-                            let (fetched_cap, _completed_cap) = inflight_caps
-                                .pop_front()
-                                .expect("capability for every in-flight fetch");
-                            fetched_output
-                                .activate()
-                                .session(&fetched_cap)
-                                .give(fetched);
-                            // `_completed_cap` drops here, advancing the
-                            // `completed_fetches` frontier past this part.
+                        Ok((time, Ok(fetched))) => {
+                            let entry = outstanding
+                                .get_mut(&time)
+                                .expect("capability for every in-flight fetch time");
+                            fetched_output.activate().session(&entry.0).give(fetched);
+                            entry.2 -= 1;
+                            if entry.2 == 0 {
+                                // Drops both capabilities, advancing the data and
+                                // completed-fetches frontiers past `time`.
+                                outstanding.remove(&time);
+                            }
                         }
-                        Ok(Err((blob_key, diagnostics))) => {
+                        Ok((_time, Err((blob_key, diagnostics)))) => {
                             // Report the missing blob and freeze: capabilities are
                             // retained (including this failed part's) so the
                             // frontier cannot advance past the missing part.
@@ -1028,9 +1043,9 @@ where
                             // (which we haven't done) or a panic; with fetches
                             // outstanding this is unexpected.
                             assert!(
-                                inflight_caps.is_empty(),
-                                "fetch task unexpectedly gone with {} fetches in flight",
-                                inflight_caps.len()
+                                outstanding.is_empty(),
+                                "fetch task unexpectedly gone with {} outstanding fetch times",
+                                outstanding.len()
                             );
                             break;
                         }
@@ -1040,7 +1055,7 @@ where
 
             // Once the input is closed and nothing is in flight, disconnect from
             // the task so it can exit.
-            if frontiers[0].frontier().is_empty() && inflight_caps.is_empty() {
+            if frontiers[0].frontier().is_empty() && outstanding.is_empty() {
                 desc_tx = None;
             }
 
@@ -1481,17 +1496,15 @@ mod tests {
     /// Regression test for the `shard_source_fetch` freeze path: a blob that
     /// goes missing while *fetching* (the listing path is covered by
     /// `test_shard_source_error_freeze`) must freeze the output frontier at the
-    /// missing part, not keep draining later results — which would match them
-    /// to earlier capabilities and advance the frontier past data never emitted.
+    /// missing part and report the error, never advancing past data never
+    /// emitted.
     ///
     /// We delete the first batch's blob, which is read by the snapshot at
-    /// `as_of = 0`. Its fetch fails; the later batches (t=1, t=2) fetch fine. A
-    /// buggy source that keeps draining after freezing pops the failed part's
-    /// capability off the front of `inflight_caps` and advances the frontier
-    /// onto the later parts. We step until the dataflow quiesces (with brief
-    /// parks so the tokio fetch task finishes), guaranteeing the later results
-    /// are produced and would be drained under the bug; a fixed-iteration wait
-    /// would race the task and mask it.
+    /// `as_of = 0`. Its fetch fails; the later batches (t=1, t=2) fetch fine. We
+    /// step until the dataflow quiesces (with brief parks so the tokio fetch
+    /// task finishes), so the later results are produced, then assert the error
+    /// fired and the frontier stayed at the missing part — the failed time's
+    /// capability is held regardless of what other times complete.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // too slow
     async fn test_shard_source_fetch_error_freeze() {
