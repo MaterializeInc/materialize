@@ -82,8 +82,8 @@ Docker must be running to execute tests. Tests use a local Materialize container
 and do not affect your remote database.
 {{< /note >}}
 
-Tests use the `EXECUTE UNIT TEST` syntax and live inline in the same `.sql` file
-as the view they test.
+Tests use the [`EXECUTE UNIT TEST`](/sql/execute-unit-test/) syntax and live
+inline in the same `.sql` file as the view they test.
 
 Here is a full example appended to the stalled_orders model file:
 
