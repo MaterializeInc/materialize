@@ -45,11 +45,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
     If you have set up a security group for your Kafka cluster, you must ensure that it allows traffic on both the listener port and the health check port.
 
-    **Remarks**:
-
-    a. Network Load Balancers do not have associated security groups. Therefore, the security groups for your targets must use IP addresses to allow traffic.
-
-    b. You can't use the security groups for the clients as a source in the security groups for the targets. Therefore, the security groups for your targets must use the IP addresses of the clients to allow traffic. For more details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+    {{% include-from-yaml data="privatelink/create-privatelink-connections" name="nlb-security-group-remarks" %}}
 
 1. Create a VPC [endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html) and associate it with the **Network Load Balancer** that you’ve just created.
 
