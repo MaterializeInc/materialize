@@ -35,7 +35,7 @@ use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, get_resource, replace_resource},
+    k8s::{apply_resource, get_resource, recommended_k8s_labels, replace_resource},
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -193,6 +193,7 @@ impl Context {
             None
         };
         let mut pod_template_labels = balancer.default_labels();
+        pod_template_labels.extend(recommended_k8s_labels(balancer.app_name()));
         pod_template_labels.insert(
             "materialize.cloud/name".to_owned(),
             balancer.deployment_name(),

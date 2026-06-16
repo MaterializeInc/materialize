@@ -17,7 +17,7 @@ use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id};
+use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id, recommended_k8s_labels};
 
 pub mod v1alpha1 {
     use super::*;
@@ -161,7 +161,7 @@ pub mod v1alpha1 {
 
     impl ManagedResource for Balancer {
         fn default_labels(&self) -> BTreeMap<String, String> {
-            BTreeMap::from_iter([
+            let mut labels = BTreeMap::from_iter([
                 (
                     "materialize.cloud/organization-name".to_owned(),
                     self.name_unchecked(),
@@ -175,7 +175,9 @@ pub mod v1alpha1 {
                     self.resource_id().to_owned(),
                 ),
                 ("materialize.cloud/app".to_owned(), "balancerd".to_owned()),
-            ])
+            ]);
+            labels.extend(recommended_k8s_labels("balancerd".into()));
+            labels
         }
 
         fn app_name(&self) -> Option<&str> {

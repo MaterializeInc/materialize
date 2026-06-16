@@ -70,7 +70,7 @@ pub struct MaterializeCertSpec {
 
 pub trait ManagedResource: Resource<DynamicType = ()> + Sized {
     fn default_labels(&self) -> BTreeMap<String, String> {
-        BTreeMap::new()
+        recommended_k8s_labels(self.app_name())
     }
 
     fn app_name(&self) -> Option<&str> {
@@ -78,10 +78,7 @@ pub trait ManagedResource: Resource<DynamicType = ()> + Sized {
     }
 
     fn managed_resource_meta(&self, name: String) -> ObjectMeta {
-        let mut labels = self.default_labels();
-        if let Some(app) = self.app_name() {
-            labels.insert("app.kubernetes.io/name".to_owned(), app.to_owned());
-        }
+        let labels = self.default_labels();
         ObjectMeta {
             namespace: Some(self.meta().namespace.clone().unwrap()),
             name: Some(name),
@@ -90,6 +87,25 @@ pub trait ManagedResource: Resource<DynamicType = ()> + Sized {
             ..Default::default()
         }
     }
+}
+
+/// Get the recommended Kubernetes labels (app.kubernetes.io/*)
+pub fn recommended_k8s_labels(app_name: Option<&str>) -> BTreeMap<String, String> {
+    let mut labels = BTreeMap::new();
+    labels.insert(
+        "app.kubernetes.io/managed-by".to_owned(),
+        "materialize-operator".to_owned(),
+    );
+    labels.insert(
+        "app.kubernetes.io/part-of".to_owned(),
+        "materialize".to_owned(),
+    );
+    if let Some(app) = app_name {
+        labels.insert("app.kubernetes.io/name".to_owned(), app.to_owned());
+        // legacy label
+        labels.insert("app".to_owned(), app.to_owned());
+    }
+    labels
 }
 
 fn owner_reference<T: Resource<DynamicType = ()>>(t: &T) -> OwnerReference {

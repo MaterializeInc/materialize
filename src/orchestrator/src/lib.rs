@@ -191,6 +191,8 @@ pub struct LabelSelector {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct ServiceConfig {
+    /// Static application name (usually present in labels)
+    pub app_name: String,
     /// An opaque identifier for the executable or container image to run.
     ///
     /// Often names a container on Docker Hub or a path on the local machine.
@@ -248,6 +250,23 @@ pub struct ServiceConfig {
     pub disk_limit: Option<DiskLimit>,
     /// Node selector for this service.
     pub node_selector: BTreeMap<String, String>,
+}
+
+/// Get the recommended Kubernetes labels (app.kubernetes.io/*)
+pub fn recommended_k8s_labels(app_name: String) -> BTreeMap<String, String> {
+    BTreeMap::from_iter([
+        (
+            "app.kubernetes.io/managed-by".to_owned(),
+            "materialize-operator".to_owned(),
+        ),
+        (
+            "app.kubernetes.io/part-of".to_owned(),
+            "materialize".to_owned(),
+        ),
+        ("app.kubernetes.io/name".to_owned(), app_name.to_owned()),
+        // legacy label
+        ("app".to_owned(), app_name.to_owned()),
+    ])
 }
 
 /// A named port associated with a service.

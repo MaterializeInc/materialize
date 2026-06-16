@@ -49,7 +49,7 @@ use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::{
     DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
     OfflineReason, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
-    ServiceProcessMetrics, ServiceStatus, scheduling_config::*,
+    ServiceProcessMetrics, ServiceStatus, recommended_k8s_labels, scheduling_config::*,
 };
 use mz_ore::cast::CastInto;
 use mz_ore::retry::Retry;
@@ -556,6 +556,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         &self,
         id: &str,
         ServiceConfig {
+            app_name,
             image,
             init_container_image,
             args,
@@ -599,6 +600,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         for (key, value) in labels_in {
             labels.insert(self.make_label_key(&key), value);
         }
+
+        let standard_labels = recommended_k8s_labels(app_name);
+
+        // Standard Kubernetes labels
+        labels.extend(standard_labels.clone());
 
         labels.insert(self.make_label_key("scale"), scale.to_string());
 
@@ -645,6 +651,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let service = K8sService {
             metadata: ObjectMeta {
                 name: Some(name.clone()),
+                labels: Some(standard_labels.clone()),
                 ..Default::default()
             },
             spec: Some(ServiceSpec {
@@ -1236,6 +1243,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let stateful_set = StatefulSet {
             metadata: ObjectMeta {
                 name: Some(name.clone()),
+                labels: Some(standard_labels.clone()),
                 ..Default::default()
             },
             spec: Some(StatefulSetSpec {

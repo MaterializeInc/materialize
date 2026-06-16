@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use k8s_openapi::{
@@ -189,4 +190,16 @@ pub async fn register_crds(
     info!("Done rewriting CRDs");
 
     Ok(())
+}
+
+/// Get the recommended Kubernetes labels (app.kubernetes.io/*)
+pub fn recommended_k8s_labels(app_name: String) -> BTreeMap<String, String> {
+    let mut labels = BTreeMap::new();
+    labels.insert(
+        "app.kubernetes.io/managed-by".into(),
+        "materialize-operator".into(),
+    );
+    labels.insert("app.kubernetes.io/part-of".into(), "materialize".into());
+    labels.insert("app.kubernetes.io/name".into(), app_name);
+    labels
 }
