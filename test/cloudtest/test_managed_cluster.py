@@ -451,15 +451,24 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
             break
         time.sleep(0.25)
     wait_for_replica_names(["r1"], cluster="slow_hydration")
+    # Rolled back: the record is cleared, so the sparse relation has no row for
+    # the cluster.
     reconfiguration = mz.environmentd.sql_query("""
-        SELECT recon.current_size, recon.target_size, recon.reconfiguration_in_flight
+        SELECT recon.target->>'size'
         FROM mz_internal.mz_cluster_reconfigurations recon
         JOIN mz_clusters c ON c.id = recon.cluster_id
         WHERE c.name = 'slow_hydration';
         """)
-    assert reconfiguration == (
-        ["scale=1,workers=1", "scale=1,workers=1", False],
-    ), f"Expected the rolled-back reconfiguration to settle at the realized config, found {reconfiguration}"
+    assert (
+        reconfiguration == ()
+    ), f"Expected the rolled-back reconfiguration record to be cleared, found {reconfiguration}"
+    # The realized config is untouched.
+    realized = mz.environmentd.sql_query("""
+        SELECT size FROM mz_clusters WHERE name = 'slow_hydration';
+        """)
+    assert realized == (
+        ["scale=1,workers=1"],
+    ), f"Expected the realized config to be untouched, found {realized}"
 
     # The timeout's papertrail is the audit log: a started and a timed-out
     # transition, the latter carrying the abandoned target.
