@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Ensure that the source becomes healthy again once the SSH tunnel is restarted.
-# We specifically make sure that new data written to the Kafka topic is visible
+# We specifically make sure that new data written to MySQL is visible
 # in the source, as that is the true measure of health, vs what is reported in
 # the mz_source_statuses relation.
 
@@ -24,11 +24,9 @@ INSERT INTO dummy VALUES (4);
 3
 4
 
-> SELECT bool_and(error IS NULL)
+> SELECT name, status, error IS NULL
   FROM mz_internal.mz_source_statuses
-  WHERE
-      name
-      IN (
-      SELECT name FROM (SHOW SUBSOURCES ON mysql_source WHERE type = 'subsource')
-      );
-true
+  WHERE name IN ('mysql_source', 'dummy')
+  ORDER BY name
+dummy running true
+mysql_source running true
