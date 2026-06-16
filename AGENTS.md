@@ -6,6 +6,9 @@ Canonical agent skills in `.agents/skills/`. `.claude/skills` is compat symlink
 for Claude Code. Check `mz-*` skill before tasks — encodes project conventions,
 saves time.
 
+Use the `mz-test` skill before running ANY tests, even mid-task — the canonical
+commands aren't the obvious ones.
+
 ## Code navigation
 
 For operation flow tracing, read first:
