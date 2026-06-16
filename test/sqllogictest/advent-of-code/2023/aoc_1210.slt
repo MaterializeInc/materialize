@@ -381,12 +381,12 @@ Explained Query:
                 FlatMap generate_series(1, array_length(regexp_split_to_array["\n", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
                   ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
-      Project (#0..=#2, #4, #5) // { arity: 5 }
-        Map ((#2{symb} = "-"), case when #3 then #0{row_no} else case when (#2{symb} = "|") then (#0{row_no} - 1) else case when (#2{symb} = "F") then (#0{row_no} + 1) else case when (#2{symb} = "L") then (#0{row_no} - 1) else case when (#2{symb} = "J") then #0{row_no} else case when (#2{symb} = "7") then #0{row_no} else null end end end end end end, case when #3 then (#1{col_no} - 1) else case when (#2{symb} = "|") then #1{col_no} else case when (#2{symb} = "F") then #1{col_no} else case when (#2{symb} = "L") then #1{col_no} else case when (#2{symb} = "J") then (#1{col_no} - 1) else case when (#2{symb} = "7") then (#1{col_no} - 1) else null end end end end end end) // { arity: 6 }
+      Project (#0..=#2, #4, #6) // { arity: 5 }
+        Map ((#0{row_no} - 1), case_lookup #2{symb} when "-" then #0{row_no} when "7" then #0{row_no} when "F" then (#0{row_no} + 1) when "J" then #0{row_no} when "L" then #3 when "|" then #3 else null end, (#1{col_no} - 1), case_lookup #2{symb} when "-" then #5 when "7" then #5 when "F" then #1{col_no} when "J" then #5 when "L" then #1{col_no} when "|" then #1{col_no} else null end) // { arity: 7 }
           Get l0 // { arity: 3 }
     cte l2 =
-      Project (#0..=#2, #4, #5) // { arity: 5 }
-        Map ((#2{symb} = "-"), case when #3 then #0{row_no} else case when (#2{symb} = "|") then (#0{row_no} + 1) else case when (#2{symb} = "F") then #0{row_no} else case when (#2{symb} = "L") then #0{row_no} else case when (#2{symb} = "J") then (#0{row_no} - 1) else case when (#2{symb} = "7") then (#0{row_no} + 1) else null end end end end end end, case when #3 then (#1{col_no} + 1) else case when (#2{symb} = "|") then #1{col_no} else case when (#2{symb} = "F") then (#1{col_no} + 1) else case when (#2{symb} = "L") then (#1{col_no} + 1) else case when (#2{symb} = "J") then #1{col_no} else case when (#2{symb} = "7") then #1{col_no} else null end end end end end end) // { arity: 6 }
+      Project (#0..=#2, #4, #6) // { arity: 5 }
+        Map ((#0{row_no} + 1), case_lookup #2{symb} when "-" then #0{row_no} when "7" then #3 when "F" then #0{row_no} when "J" then (#0{row_no} - 1) when "L" then #0{row_no} when "|" then #3 else null end, (#1{col_no} + 1), case_lookup #2{symb} when "-" then #5 when "7" then #1{col_no} when "F" then #5 when "J" then #1{col_no} when "L" then #5 when "|" then #1{col_no} else null end) // { arity: 7 }
           Get l0 // { arity: 3 }
     cte l3 =
       Project (#0..=#3) // { arity: 4 }

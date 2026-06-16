@@ -254,7 +254,7 @@ Explained Query:
                       Get l3 // { arity: 5 }
                   ArrangeBy keys=[[#0{r}]] // { arity: 4 }
                     Project (#0, #4..=#6) // { arity: 4 }
-                      Map (regexp_split_to_array[" ", case_insensitive=false](#1{line}), array_index(#2, 1), case when (#3 = "U") then -1 else case when ("D" = array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 1)) then 1 else 0 end end, case when (#3 = "L") then -1 else case when ("R" = array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 1)) then 1 else 0 end end, text_to_integer(array_index(#2, 2))) // { arity: 7 }
+                      Map (regexp_split_to_array[" ", case_insensitive=false](#1{line}), array_index(#2, 1), case_lookup #3 when "D" then 1 when "U" then -1 else 0 end, case_lookup #3 when "L" then -1 when "R" then 1 else 0 end, text_to_integer(array_index(#2, 2))) // { arity: 7 }
                         Get l0 // { arity: 2 }
             Constant // { arity: 5 }
               - (0, 0, 0, 0, 1)
@@ -285,7 +285,7 @@ Explained Query:
                       Get l6 // { arity: 5 }
                   ArrangeBy keys=[[#0{r}]] // { arity: 4 }
                     Project (#0, #4, #5, #7) // { arity: 4 }
-                      Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 3), substr(#2, 8, 1), case when (#3 = "3") then -1 else case when ("1" = substr(array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 3), 8, 1)) then 1 else 0 end end, case when (#3 = "2") then -1 else case when ("0" = substr(array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 3), 8, 1)) then 1 else 0 end end, decode(("0" || substr(#2, 3, 5)), "hex"), (((65536 * get_byte(#6, 0)) + (256 * get_byte(#6, 1))) + get_byte(#6, 2))) // { arity: 8 }
+                      Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 3), substr(#2, 8, 1), case_lookup #3 when "1" then 1 when "3" then -1 else 0 end, case_lookup #3 when "0" then 1 when "2" then -1 else 0 end, decode(("0" || substr(#2, 3, 5)), "hex"), (((65536 * get_byte(#6, 0)) + (256 * get_byte(#6, 1))) + get_byte(#6, 2))) // { arity: 8 }
                         Get l0 // { arity: 2 }
             Constant // { arity: 5 }
               - (0, 0, 0, 0, 1)
