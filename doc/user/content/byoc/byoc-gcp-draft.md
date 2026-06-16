@@ -30,26 +30,26 @@ BYOC is set up together with the Materialize team. This guide describes the step
 
 ## How it works
 
-Your environment runs entirely in a dedicated GCP project that you create for Materialize. Materialize provisions and operates it using a service account you grant admin on that project; the project itself is the isolation boundary. Only operational telemetry (logs and metrics, with sensitive values redacted) leaves your project so Materialize can monitor and support the deployment.
+Your environment runs entirely in a dedicated GCP project that you create for Materialize. Materialize provisions and operates it using an identity you grant admin on that project through Workload Identity Federation; the project itself is the isolation boundary. Only operational telemetry (logs and metrics, with sensitive values redacted) leaves your project so Materialize can monitor and support the deployment.
 
 ![BYOC on GCP architecture](/images/byoc-gcp-architecture.svg)
 
 ## Prerequisites
 
 - A dedicated GCP project for Materialize, and the region you want to run in.
-- Permission to grant IAM roles on that project.
+- Permission to configure Workload Identity Federation and grant IAM roles on that project.
 - An active Materialize BYOC subscription.
 
 ## Step 1: Share setup details
 
-Materialize provides the service account it will use for your deployment, along with a setup script. You confirm your target project ID, region, and network details with your Materialize contact for provisioning.
+Materialize provides its OIDC issuer details and a setup script. You confirm your target project ID, region, and network details with your Materialize contact for provisioning.
 
 ## Step 2: Grant access
 
-Run the provided setup in your dedicated project. It grants the Materialize-provided service account an admin role on the project, scoped to that project only. Materialize authenticates as that service account using Workload Identity, so no service-account keys are created or shared.
+Run the provided setup in your dedicated project. It configures Workload Identity Federation so your project trusts Materialize's OIDC issuer, and grants the federated identity an admin role on the project, scoped to that project only. Materialize's deployer federates in from its own infrastructure to obtain short-lived credentials; no service-account keys are created or shared, and Materialize runs nothing inside your project's control plane to authenticate.
 
 {{< note >}}
-The project should be dedicated to Materialize and contain no other resources. The project is the isolation boundary: Materialize's access does not extend to any of your other projects. (Draft: the exact setup tooling and whether the role is Owner or a custom admin role are still being finalized.)
+The project should be dedicated to Materialize and contain no other resources. The project is the isolation boundary: Materialize's access does not extend to any of your other projects. (Draft: the federation setup tooling and whether the granted role is Owner or a custom admin role are still being finalized.)
 {{< /note >}}
 
 ## Step 3: Materialize provisions your environment
@@ -62,11 +62,11 @@ Once provisioning completes, Materialize shares your connection details. Establi
 
 ## Security model
 
-- **No standing keys.** Materialize authenticates via Workload Identity using a service account you grant; no service-account keys are created or stored.
+- **No standing keys.** Materialize authenticates through Workload Identity Federation: your project trusts Materialize's OIDC issuer and issues short-lived credentials on demand. No service-account keys are created or stored.
 - **A dedicated, isolated project.** Materialize's admin is scoped to the dedicated project you create; it does not extend to your other projects, your organization, or billing.
 - **Single-tenant isolation.** Dedicated GKE, VPC, Cloud SQL, and Cloud Storage in your project. Data at rest is encrypted with your own Cloud KMS keys.
-- **You hold the kill switch.** Remove Materialize's IAM binding, or delete the project, at any time to cut access. While access is revoked, your environment keeps serving queries but cannot be upgraded, scaled, or repaired until access is restored.
-- **Audited support access.** Materialize support uses scoped, time-bound, audited access. Every action the service account takes is recorded in your project's Cloud Audit Logs.
+- **You hold the kill switch.** Remove the Workload Identity Federation trust or the granted IAM role, or delete the project, at any time to cut access. While access is revoked, your environment keeps serving queries but cannot be upgraded, scaled, or repaired until access is restored.
+- **Audited support access.** Materialize support uses scoped, time-bound, audited access. Every action the federated identity takes is recorded in your project's Cloud Audit Logs.
 
 ## Observability
 
