@@ -21,7 +21,7 @@ use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
     CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec,
-    IntCounterVec, MetricVecExt, MetricsRegistry,
+    IntCounterVec, MetricVecExt, MetricVisibility, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -82,6 +82,7 @@ impl ComputeControllerMetrics {
                 name: "mz_compute_commands_total",
                 help: "The total number of compute commands sent.",
                 var_labels: ["instance_id", "replica_id", "command_type"],
+                visibility: MetricVisibility::Public,
             )),
             command_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_command_message_bytes_total",
@@ -147,6 +148,7 @@ impl ComputeControllerMetrics {
                 name: "mz_compute_controller_hydration_queue_size",
                 help: "The size of the compute hydration queue.",
                 var_labels: ["instance_id", "replica_id"],
+                visibility: MetricVisibility::Public,
             )),
             history_command_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_history_command_count",
@@ -168,6 +170,7 @@ impl ComputeControllerMetrics {
                 help: "A histogram of peek durations since restart.",
                 var_labels: ["instance_id", "result"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.),
+                visibility: MetricVisibility::Public,
             )),
             connected_replica_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_connected_replica_count",

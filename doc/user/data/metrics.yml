@@ -4,1797 +4,2396 @@ metrics:
 - name: '*_postgres_connpool_acquire_seconds'
   help: time spent acquiring connections from pool
   source: src/postgres-client/src/metrics.rs
+  visibility: internal
 - name: '*_postgres_connpool_acquires'
   help: times a connection has been acquired from pool
   source: src/postgres-client/src/metrics.rs
+  visibility: internal
 - name: '*_postgres_connpool_available'
   help: available connections in the pool
   source: src/postgres-client/src/metrics.rs
+  visibility: internal
 - name: '*_postgres_connpool_connection_errors'
   help: number of errors when establishing a new connection
   source: src/postgres-client/src/metrics.rs
+  visibility: internal
 - name: '*_postgres_connpool_connections_created'
   help: times a connection was created
   source: src/postgres-client/src/metrics.rs
+  visibility: internal
 - name: '*_postgres_connpool_size'
   help: number of connections currently in pool
   source: src/postgres-client/src/metrics.rs
+  visibility: internal
 - name: '*_postgres_connpool_ttl_reconnections'
   help: times a connection was recycled due to ttl
   source: src/postgres-client/src/metrics.rs
+  visibility: internal
 - name: '*_request_duration_seconds'
   help: How long it takes for a request to complete in seconds.
   source: src/environmentd/src/http/metrics.rs
+  visibility: internal
 - name: '*_requests_active'
   help: Number of currently active/open http requests.
   source: src/environmentd/src/http/metrics.rs
+  visibility: internal
 - name: '*_requests_total'
   help: Total number of http requests received since process start.
   source: src/environmentd/src/http/metrics.rs
+  visibility: internal
 - name: environmentd_needs_update
   help: Count of organizations in this cluster which are running outdated pod templates
   source: src/orchestratord/src/metrics.rs
+  visibility: internal
 - name: jemalloc_active
   help: Total number of bytes in active pages allocated by the application
   source: src/prof/src/jemalloc.rs
+  visibility: internal
 - name: jemalloc_allocated
   help: Total number of bytes allocated by the application
   source: src/prof/src/jemalloc.rs
+  visibility: internal
 - name: jemalloc_metadata
   help: Total number of bytes dedicated to metadata.
   source: src/prof/src/jemalloc.rs
+  visibility: internal
 - name: jemalloc_resident
   help: Maximum number of bytes in physically resident data pages mapped
   source: src/prof/src/jemalloc.rs
+  visibility: internal
 - name: jemalloc_retained
   help: Total number of bytes in virtual memory mappings
   source: src/prof/src/jemalloc.rs
+  visibility: internal
 - name: mz_active_copy_tos
   help: The number of active COPY TO queries.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_active_sessions
   help: The number of active coordinator sessions.
   source: src/adapter/src/metrics.rs
+  visibility: public
 - name: mz_active_subscribes
   help: The number of active SUBSCRIBE queries.
   source: src/adapter/src/metrics.rs
+  visibility: public
 - name: mz_adapter_commands
   help: The total number of adapter commands issued of the given type since process start.
   source: src/adapter/src/metrics.rs
+  visibility: public
 - name: mz_append_table_duration_seconds
   help: Latency for appending to any (user or system) table.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_apply_catalog_implications_seconds
   help: The time it takes to apply catalog implications.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_arrangement_maintenance_active_info
   help: Whether maintenance is currently occuring.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_arrangement_maintenance_seconds_total
   help: The total time spent maintaining arrangements.
   source: src/compute/src/metrics.rs
+  visibility: public
 - name: mz_arrangement_sizes_collection_time_seconds
   help: Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_arrangement_sizes_rows_written_total
   help: Total rows appended to mz_object_arrangement_size_history since process start.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_auth_refresh_tasks_active
   help: The number of active refresh tasks we have running.
   source: src/frontegg-auth/src/metrics.rs
+  visibility: internal
 - name: mz_auth_request_count
   help: Total number of HTTP requests made to Frontegg for authentication
   source: src/frontegg-auth/src/metrics.rs
+  visibility: internal
 - name: mz_auth_request_duration_seconds
   help: How long it takes for a request to Frontegg to complete in seconds.
   source: src/frontegg-auth/src/metrics.rs
+  visibility: internal
 - name: mz_auth_session_refresh_count
   help: Total number of authentication sessions that get refreshed.
   source: src/frontegg-auth/src/metrics.rs
+  visibility: internal
 - name: mz_auth_session_request_count
   help: Total number of session start requests the Authenticator has received.
   source: src/frontegg-auth/src/metrics.rs
+  visibility: internal
 - name: mz_balancer_connection_active
   help: Count of currently open network connections.
   source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_connection_status
   help: Count of completed network connections, by status
   source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_metadata_seconds
   help: server uptime, labels are build metadata
   source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_tenant_connection_active
   help: Count of opened network connections by tenant.
   source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_tenant_connection_rx
   help: Number of bytes received from a client for a tenant.
   source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_tenant_connection_tx
   help: Number of bytes sent to a client for a tenant.
   source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_tenant_pgwire_sni_count
   help: Count of pgwire connections that have and do not have SNI available per tenant.
   source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_bytes_read_total
   help: Count of bytes read from sources
   source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_canceled_peeks_total
   help: The total number of canceled peeks since process start.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_catalog_allocate_id_seconds
   help: The time it takes to allocate IDs in the durable catalog.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_collection_entries
   help: Total number of entries, after consolidation, per catalog collection.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_info_metrics_reconcile_seconds
   help: Time taken to rebuild the catalog info metrics from a catalog snapshot.
   source: src/adapter/src/coord/info_metrics.rs
+  visibility: internal
 - name: mz_catalog_snapshot_consolidations
   help: Count of snapshot consolidation passes.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_snapshot_latency_seconds
   help: Total latency for fetching a snapshot of the durable catalog.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_snapshot_max_entries
   help: High-water mark of entries in the unconsolidated in-memory snapshot since process start.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_snapshot_seconds
   help: The time it takes to run `catalog_snapshot` when fetching the catalog.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_catalog_snapshots_taken
   help: Count of snapshots taken.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_sync_latency_seconds
   help: Total latency for syncing the in-memory state of the durable catalog with the persisted contents.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_syncs
   help: Count of catalog syncs.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_transact_seconds
   help: The time it takes to run various catalog transact methods.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_catalog_transaction_commit_latency_seconds
   help: Total latency for committing a durable catalog transactions.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_transaction_commits
   help: Count of transaction commits.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_transactions_started
   help: Total number of started transactions.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_check_scheduling_policies_seconds
   help: The time each policy in `check_scheduling_policies` takes.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_cluster_handle_command_duration_seconds
   help: Time spent in handling commands.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_cluster_info
   help: Maps cluster IDs to the cluster's name and size. Constant 1.
   source: src/adapter/src/coord/info_metrics.rs
+  visibility: public
 - name: mz_cluster_server_last_command_received
   help: The time (in seconds since the Unix epoch) at which the server last received data from the controller, including CTP keepalives. Used to detect controller connections that are no longer reachable.
   source: src/service/src/transport/metrics.rs
+  visibility: internal
 - name: mz_column_pager_budget_configured_bytes
   help: Most-recently-configured total budget for the column-pager tiered policy.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_column_pager_budget_remaining_bytes
   help: Bytes the column-pager tiered policy currently has available for resident columns.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_column_pager_paged_bytes_in_total
   help: Total uncompressed bytes handed to the pager for pageout, before any codec is applied.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_column_pager_paged_bytes_out_total
   help: Total on-storage bytes after codec / padding.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_column_pager_pagein_bytes_total
   help: Total uncompressed bytes delivered by page-in.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_column_pager_pageins_total
   help: Successful page-ins from `ColumnPager::take`.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_column_pager_pageouts_total
   help: Pager decisions that paged the chunk out.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_column_pager_resident_released_bytes_total
   help: Total bytes returned to the budget by ticket drops.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_column_pager_resident_released_total
   help: Resident-ticket drops returning budget.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_column_pager_skip_bytes_total
   help: Total bytes kept resident by skip decisions.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_column_pager_skip_decisions_total
   help: Pager decisions that kept the chunk resident.
   source: src/timely-util/src/column_pager/metrics.rs
+  visibility: internal
 - name: mz_compute_collection_count
   help: The number and hydration status of maintained compute collections.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_compute_command_message_bytes_total
   help: The total number of bytes sent in compute command messages.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_commands_total
   help: The total number of compute commands sent.
   source: src/compute-client/src/metrics.rs
+  visibility: public
 - name: mz_compute_controller_collection_count
   help: The number of installed compute collections.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_collection_unscheduled_count
   help: The number of installed but unscheduled compute collections.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_command_queue_size
   help: The size of the compute command queue.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_connected_replica_count
   help: The number of replicas successfully connected to the compute controller.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_copy_to_count
   help: The number of active copy tos.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_history_command_count
   help: The number of commands in the controller's command history.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_history_dataflow_count
   help: The number of dataflows in the controller's command history.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_hydration_queue_size
   help: The size of the compute hydration queue.
   source: src/compute-client/src/metrics.rs
+  visibility: public
 - name: mz_compute_controller_peek_count
   help: The number of pending peeks.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_replica_connect_wait_time_seconds_total
   help: The total time the compute controller spent waiting for replica (re-)connection.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_replica_connects_total
   help: The total number of replica (re-)connections made by the compute controller.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_replica_count
   help: The number of replicas.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_response_recv_count
   help: The number of receives on the compute response queue.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_response_send_count
   help: The number of sends on the compute response queue.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_controller_subscribe_count
   help: The number of active subscribes.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_peek_duration_seconds
   help: A histogram of peek durations since restart.
   source: src/compute-client/src/metrics.rs
+  visibility: public
 - name: mz_compute_peeks_total
   help: The total number of peeks served.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_reconciliation_replaced_dataflows_count_total
   help: The total number of dataflows that were replaced during compute reconciliation.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_compute_reconciliation_reused_dataflows_count_total
   help: The total number of dataflows that were reused during compute reconciliation.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_compute_replica_history_command_count
   help: The number of commands in the replica's command history.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_compute_replica_history_dataflow_count
   help: The number of dataflows in the replica's command history.
   source: src/compute/src/metrics.rs
+  visibility: public
 - name: mz_compute_response_message_bytes_total
   help: The total number of bytes sent in compute response messages.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_responses_total
   help: The total number of compute responses sent.
   source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_connection_status
   help: Count of completed network connections, by status
   source: src/pgwire/src/metrics.rs
+  visibility: internal
 - name: mz_coord_queue_busy_seconds
   help: The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_coordinator_message_batch_size
   help: Message batch size handled by the coordinator.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_dataflow_events_read_total
   help: Count of events we have read from the wire
   source: src/storage/src/metrics/decode.rs
+  visibility: internal
 - name: mz_dataflow_replica_expiration_remaining_seconds
   help: The remaining seconds until replica expiration. Can go negative, can lag behind.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_dataflow_replica_expiration_timestamp_seconds
   help: The replica expiration timestamp in seconds since epoch.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_dataflow_shared_row_heap_capacity_bytes
   help: The heap capacity of the shared row.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_dataflow_wallclock_lag_seconds
   help: A summary of the second-by-second lag of the dataflow frontier relative to wallclock time, aggregated over the last minute.
   source: src/cluster-client/src/metrics.rs
+  visibility: public
 - name: mz_dataflow_wallclock_lag_seconds_count
   help: The total count of dataflow wallclock lag measurements.
   source: src/cluster-client/src/metrics.rs
+  visibility: internal
 - name: mz_dataflow_wallclock_lag_seconds_sum
   help: The total sum of dataflow wallclock lag measurements.
   source: src/cluster-client/src/metrics.rs
+  visibility: internal
 - name: mz_determine_timestamp
   help: The total number of calls to determine_timestamp.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_group_commit_catalog_upper_seconds
   help: The time it takes to advance the catalog shard upper during group commit.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_handle_scheduling_decisions_seconds
   help: The time `handle_scheduling_decisions` takes.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_cursor_setup_seconds
   help: Time setting up cursor and literal constraints.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_error_scan_seconds
   help: Time scanning the error trace for errors.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_frontier_check_seconds
   help: Time checking trace frontiers.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_result_sort_seconds
   help: Time sorting intermediate results during peek collection.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_row_collection_seconds
   help: Time constructing RowCollection from peek results.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_row_iteration_seconds
   help: Time iterating rows and evaluating MFP.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_seek_fulfillment_seconds
   help: Time in seek_fulfillment method including frontier checks and data collection.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_total_seconds
   help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_kafka_partition_offset_max
   help: High watermark offset on broker for partition
   source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
 - name: mz_linearize_message_seconds
   help: The number of seconds it takes to linearize strict serializable messages
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_mcp_requests_total
   help: Total number of MCP requests received.
   source: src/environmentd/src/http/mcp_metrics.rs
+  visibility: internal
 - name: mz_mcp_tool_call_duration_seconds
   help: Duration of MCP tools/call invocations in seconds.
   source: src/environmentd/src/http/mcp_metrics.rs
+  visibility: internal
 - name: mz_mcp_tool_calls_total
   help: Total number of MCP tools/call invocations.
   source: src/environmentd/src/http/mcp_metrics.rs
+  visibility: internal
 - name: mz_memory_limiter_burst_budget_byteseconds
   help: The remaining memory burst budget.
   source: src/compute/src/memory_limiter.rs
+  visibility: internal
 - name: mz_memory_limiter_duration_seconds
   help: A histogram of the time it took to run the memory limiter.
   source: src/compute/src/memory_limiter.rs
+  visibility: internal
 - name: mz_memory_limiter_memory_limit_bytes
   help: The configured memory limit.
   source: src/compute/src/memory_limiter.rs
+  visibility: internal
 - name: mz_memory_limiter_memory_usage_bytes
   help: The current memory usage.
   source: src/compute/src/memory_limiter.rs
+  visibility: internal
 - name: mz_memory_limiter_vm_rss_bytes
   help: The current VmRSS metric.
   source: src/compute/src/memory_limiter.rs
+  visibility: internal
 - name: mz_memory_limiter_vm_swap_bytes
   help: The current VmSwap metric.
   source: src/compute/src/memory_limiter.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_allocations_total
   help: Number of region allocations in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_area_total_bytes
   help: Number of bytes in all areas in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_areas_total
   help: Number of areas backing size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_clean_regions_bytes_total
   help: Number of clean regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_clean_regions_total
   help: Number of clean regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_clear_eager_bytes_total
   help: Number of thread regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_clear_eager_total
   help: Number of thread regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_clear_slow_bytes_total
   help: Number of thread regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_clear_slow_total
   help: Number of thread regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_deallocations_total
   help: Number of region deallocations for size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_file_allocated_size_bytes
   help: Sum of allocated sizes in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_file_size_bytes
   help: Sum of file sizes in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_free_regions_bytes_total
   help: Number of free regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_free_regions_total
   help: Number of free regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_global_regions_bytes_total
   help: Number of global regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_global_regions_total
   help: Number of global regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_refill_total
   help: Number of area refills for size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_slow_path_total
   help: Number of slow path region allocations for size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_thread_regions_bytes_total
   help: Number of thread regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_thread_regions_total
   help: Number of thread regions in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_vm_active_bytes
   help: Sum of active sizes in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_vm_dirty_bytes
   help: Sum of dirty sizes in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_vm_mapped_bytes
   help: Sum of mapped sizes in size class
   source: src/metrics/src/lgalloc.rs
+  visibility: internal
 - name: mz_metrics_libc_ru_inblock_total
   help: block input operations
   source: src/metrics/src/rusage.rs
+  visibility: internal
 - name: mz_metrics_libc_ru_majflt_total
   help: page faults (hard page faults)
   source: src/metrics/src/rusage.rs
+  visibility: internal
 - name: mz_metrics_libc_ru_maxrss_bytes
   help: maximum resident set size
   source: src/metrics/src/rusage.rs
+  visibility: internal
 - name: mz_metrics_libc_ru_minflt_total
   help: page reclaims (soft page faults)
   source: src/metrics/src/rusage.rs
+  visibility: internal
 - name: mz_metrics_libc_ru_nivcsw_total
   help: involuntary context switches
   source: src/metrics/src/rusage.rs
+  visibility: internal
 - name: mz_metrics_libc_ru_nvcsw_total
   help: voluntary context switches
   source: src/metrics/src/rusage.rs
+  visibility: internal
 - name: mz_metrics_libc_ru_oublock_total
   help: block output operations
   source: src/metrics/src/rusage.rs
+  visibility: internal
 - name: mz_metrics_libc_ru_stime_seconds_total
   help: system CPU time used
   source: src/metrics/src/rusage.rs
+  visibility: internal
 - name: mz_metrics_libc_ru_utime_seconds_total
   help: user CPU time used
   source: src/metrics/src/rusage.rs
+  visibility: internal
 - name: mz_metrics_update_duration
   help: The time it took to update lgalloc stats
   source: src/metrics/src/lib.rs
+  visibility: internal
 - name: mz_mysql_per_source_deletes
   help: The number of deletes for all tables in this source
   source: src/storage/src/metrics/source/mysql.rs
+  visibility: internal
 - name: mz_mysql_per_source_ignored_messages
   help: The number of messages ignored because of an irrelevant type or relation_id
   source: src/storage/src/metrics/source/mysql.rs
+  visibility: internal
 - name: mz_mysql_per_source_inserts
   help: The number of inserts for all tables in this source
   source: src/storage/src/metrics/source/mysql.rs
+  visibility: internal
 - name: mz_mysql_per_source_messages_total
   help: The total number of replication messages for this source, not expected to be the sum of the other values.
   source: src/storage/src/metrics/source/mysql.rs
+  visibility: internal
 - name: mz_mysql_per_source_tables_count
   help: The number of upstream tables for this source
   source: src/storage/src/metrics/source/mysql.rs
+  visibility: internal
 - name: mz_mysql_per_source_updates
   help: The number of updates for all tables in this source
   source: src/storage/src/metrics/source/mysql.rs
+  visibility: internal
 - name: mz_mysql_snapshot_count_latency
   help: The wall time used to obtain snapshot sizes.
   source: src/storage/src/metrics/source/mysql.rs
+  visibility: internal
 - name: mz_mysql_sum_gtid_txns
   help: The sum of all transaction-ids committed for each GTID Source-ID UUID seen for this source
   source: src/storage/src/metrics/source/mysql.rs
+  visibility: internal
 - name: mz_oauth_protected_resource_metadata_requests_total
   help: Total number of requests to the OAuth Protected Resource Metadata endpoint.
   source: src/environmentd/src/http/oauth_metadata.rs
+  visibility: internal
 - name: mz_object_info
   help: Maps catalog object IDs to the object's name, schema, database, and type. Constant 1.
   source: src/adapter/src/coord/info_metrics.rs
+  visibility: public
 - name: mz_optimization_notices
   help: Number of optimization notices per notice type.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_optimizer_e2e_optimization_time_seconds
   help: A histogram of end-to-end optimization times since restart.
   source: src/sql/src/optimizer_metrics.rs
+  visibility: internal
 - name: mz_otel_on_close
   help: count of on_close events sent to otel
   source: src/ore/src/tracing.rs
+  visibility: internal
 - name: mz_parameter_frontend_last_cse_time_seconds
   help: The last known time when the LaunchDarkly client sent an event to the LaunchDarkly server (as unix timestamp).
   source: src/adapter/src/config.rs
+  visibility: internal
 - name: mz_parameter_frontend_last_sse_time_seconds
   help: The last known time when the LaunchDarkly client received an event from the LaunchDarkly server (as unix timestamp).
   source: src/adapter/src/config.rs
+  visibility: internal
 - name: mz_parameter_frontend_params_changed
   help: The number of parameter changes pulled from the LaunchDarkly frontend.
   source: src/adapter/src/config.rs
+  visibility: internal
 - name: mz_parse_seconds
   help: The time it takes to parse a SQL statement. (Works for both Simple Queries and the Extended Query protocol.)
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_persist_*_bytes
   help: total encoded size of * batches written
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_*_goodbytes
   help: total logical size of * batches written
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_*_key_lower_too_big
   help: count of * writes that were unable to write a key lower, because the size threshold was too low
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_*_step_inline
   help: time spent encoding * inline batches
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_*_step_part_writing
   help: blocking time spent writing parts for * updates
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_*_step_stats
   help: time spent computing * update stats
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_*_write_batch_order
   help: count of batches by the data ordering
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_*_write_batch_part_seconds
   help: time spent writing * batches
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_*_write_stall_count
   help: count of * writes stalling to await max outstanding reqs
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_audit_blob_batch_part_bytes
   help: total size of batch parts in blob
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_audit_blob_batch_part_count
   help: count of batch parts in blob
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_audit_blob_bytes
   help: total size of blob
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_audit_blob_count
   help: count of all blobs
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_audit_blob_rollup_bytes
   help: total size of state rollups stored in blob
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_audit_blob_rollup_count
   help: count of all state rollups in blob
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_audit_step_seconds
   help: time spent on individual steps of audit
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_backpressure_emitted_bytes
   help: A counter with the number of emitted bytes.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_backpressure_last_backpressured_bytes
   help: The last count of bytes we are waiting to be retired in the operator. This cannot be directly compared to `retired_bytes`, but CAN indicate that backpressure is happening.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_backpressure_retired_bytes
   help: A counter with the number of bytes retired by downstream processing.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_blob_cache_evictions
   help: count of capacity-based cache evictions
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_blob_cache_hits_blobs
   help: count of blobs served via cache instead of s3
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_blob_cache_hits_bytes
   help: total size of blobs served via cache instead of s3
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_blob_cache_size_blobs
   help: count of blobs in the cache
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_blob_cache_size_bytes
   help: total size of blobs in the cache
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_blob_failures
   help: count of all blob operation failures
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_cmd_cas_mismatch_count
   help: count of command retries from CaS mismatch
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_cmd_compare_and_append_noop
   help: count of compare_and_append retries that were discoverd to have already committed
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_cmd_failed_count
   help: count of commands failed
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_cmd_fetch_upper_count
   help: count of fetch_upper calls
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_cmd_seconds
   help: time spent applying commands
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_cmd_started_count
   help: count of commands started
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_cmd_succeeded_count
   help: count of commands succeeded
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_columnar_op_count
   help: number of rows we've run the specified op on in our structured columnar format
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_columnar_part_build_count
   help: number of times we've encoded our structured columnar format
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_columnar_part_build_seconds
   help: number of seconds we've spent encoding our structured columnar format
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_columnar_part_concat_bytes
   help: number of bytes we've copied when concatenating updates
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_admin_count
   help: count of compaction requests that were performed by admin tooling
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_applied
   help: count of compactions applied to state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_applied_exact_match
   help: count of merge results that exactly replaced a SpineBatch
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_applied_subset_match
   help: count of merge results that replaced a subset of a SpineBatch
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_chunks_compacted
   help: count of run chunks compacted
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_concurrency_waits
   help: count of compaction requests that ever blocked due to concurrency limit
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_disabled
   help: count of total compaction requests dropped because compaction was disabled
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_dropped
   help: count of total compaction requests dropped due to a full queue
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_failed
   help: count of compactions failed
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_fast_path_eligible
   help: count of compaction requests that could have used the fast-path optimization
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_memory_violations
   help: count of compaction memory requirement violations
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_noop
   help: count of compactions discarded (obsolete)
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_not_all_prefetched
   help: count of compactions where not all inputs were prefetched
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_not_applied_too_many_updates
   help: count of merge results that did not apply due to too many updates
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_parts_prefetched
   help: count of compaction parts completely prefetched by the time they're needed
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_parts_waited
   help: count of compaction parts that had to be waited on
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_queued_seconds
   help: time that compaction requests spent queued
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_requested
   help: count of total compaction requests
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_runs_compacted
   help: count of runs compacted
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_schema_selection
   help: count of compactions and how we did schema selection
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_seconds
   help: time spent in compaction
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_skipped
   help: count of compactions skipped due to heuristics
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_started
   help: count of compactions started
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_step_seconds
   help: time spent on individual steps of compaction
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_compaction_timed_out
   help: count of compactions that timed out
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_consensus_failures
   help: count of determinate consensus operation failures
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_consolidation_parts_fetched_count
   help: count of parts that were fetched and used during consolidation
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_consolidation_parts_skipped_count
   help: count of parts that were never needed during consolidation
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_consolidation_parts_wasted_count
   help: count of parts that were fetched but not needed during consolidation
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_consolidation_wrong_sort_count
   help: count of runs that were sorted using the wrong ordering for the current consolidation
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_decode_count
   help: count of op decodes
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_decode_seconds
   help: time spent in op decodes
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_encode_count
   help: count of op encodes
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_encode_seconds
   help: time spent in op encodes
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_external_blob_delete_noop_count
   help: count of blob delete calls that deleted a non-existent key
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_external_blob_sizes
   help: histogram of blob sizes at put time
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_external_bytes_count
   help: total size represented by external service calls
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_external_consensus_truncated_count
   help: count of versions deleted by consensus truncate calls
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_external_failed_count
   help: count of external service calls failed
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_external_op_latency
   help: rountrip latency observed by individual performance-critical operations
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_external_rtt_latency
   help: roundtrip-time to external service as seen by this process
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_external_seconds
   help: time spent in external service calls
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_external_started_count
   help: count of external service calls started
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_external_succeeded_count
   help: count of external service calls succeeded
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_gc_finished
   help: count of garbage collections finished
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_gc_merged_reqs
   help: count of garbage collection requests merged
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_gc_noop
   help: count of garbage collections skipped because they were already done
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_gc_seconds
   help: time spent in garbage collections
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_gc_started
   help: count of garbage collections started
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_gc_step_seconds
   help: time spent on individual steps of gc
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_inline_part_commit_bytes
   help: total size of of inline parts committed to state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_inline_part_commit_count
   help: count of inline parts committed to state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_lease_dropped_part
   help: count of LeasedBatchParts that were dropped without being politely returned
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_lease_timeout_read
   help: count of readers whose lease timed out
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_lock_acquire_count
   help: count of locks acquired
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_lock_blocking_acquire_count
   help: count of locks acquired that required blocking
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_lock_blocking_seconds
   help: time spent blocked for a lock
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_metadata_seconds
   help: server uptime, labels are build metadata
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_parquet_column_size
   help: size in bytes of a column within a parquet file
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_parquet_elided_null_buffer_count
   help: times we dropped an unnecessary null buffer returned by parquet decoding
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_parquet_encoded_size
   help: encoded size of a parquet file that we write to S3
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_parquet_row_group_count
   help: count of row groups in a parquet file
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_peek_seconds
   help: Time spent in (experimental) Persist fast-path peeks.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_approx_diff_apply_latency_seconds
   help: histogram of (approximate) latency between sending a diff and applying it
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_call_bytes_sent
   help: number of bytes sent for a given pubsub client call
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_call_failed
   help: times a pubsub client call failed
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_call_received
   help: times a pubsub client call was received
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_call_succeeded
   help: times a pubsub client call succeeded
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_grpc_broadcast_recv_lagged_count
   help: times a message was missed by broadcast receiver due to lag
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_grpc_connect_call_attempt_count
   help: count of connection call attempts (including retries) to pubsub server
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_grpc_connected
   help: whether the grpc client is currently connected
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_grpc_connection_established_count
   help: count of grpc connection establishments to pubsub server
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_grpc_error_count
   help: count of grpc errors received
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_receiver_state_push_diff_fast_path
   help: count fast-path state push_diff calls
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_receiver_state_push_diff_slow_path_failed
   help: count of unsuccessful slow-path state push_diff calls
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_receiver_state_push_diff_slow_path_succeeded
   help: count of successful slow-path state push_diff calls
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_server_active_connections
   help: number of active connections to server
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_server_broadcasted_diff_bytes
   help: count of total broadcast diff bytes sent
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_server_broadcasted_diff_count
   help: count of total broadcast diff messages sent
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_server_broadcasted_diff_dropped_channel_full
   help: count of diffs dropped due to full connection channel
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_server_call_count
   help: count of each pubsub server message received
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_server_operation_seconds
   help: time spent in pubsub server performing each operation
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_audited_bytes
   help: total size of parts fetched only for pushdown audit
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_audited_count
   help: count of parts fetched only for pushdown audit
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_faked_bytes
   help: total size of parts replaced with fakes by aggressive projection pushdown
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_faked_count
   help: count of parts faked because of aggressive projection pushdown
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_fetched_bytes
   help: total size of parts not filtered by pushdown in bytes
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_fetched_count
   help: count of parts not filtered by pushdown
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_filtered_bytes
   help: total size of parts filtered by pushdown in bytes
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_filtered_count
   help: count of parts filtered by pushdown
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_inline_bytes
   help: total size of parts not fetched because they were inline
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_inline_count
   help: count of parts not fetched because they were inline
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_mismatched_stats_count
   help: number of parts read with unexpectedly the incorrect type of stats
   source: src/persist-types/src/stats.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_projection_trimmed_bytes
   help: total bytes trimmed from columnar data because of projection pushdown
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_stats_trimmed_bytes
   help: total bytes trimmed from part stats
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pushdown_parts_stats_trimmed_count
   help: count of trimmed part stats
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_read_batch_part_bytes
   help: total encoded size of batch parts read
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_read_batch_part_count
   help: count of batch parts read
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_read_batch_part_goodbytes
   help: total logical size of batch parts read
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_read_batch_part_seconds
   help: time spent reading batch parts
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_read_ts_rewite
   help: count of updates read with rewritten ts
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_retry_finished_count
   help: count of retry loops finished
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_retry_retries_count
   help: count of total attempts by retry loops
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_retry_sleep_seconds
   help: time spent in retry loop backoff
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_retry_started_count
   help: count of retry loops started
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_s3_connect_timeouts
   help: number of timeouts establishing a connection to S3
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_s3_errors
   help: errors
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_s3_operation_attempt_timeouts
   help: number of operation attempt timeouts (within a single retry)
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_s3_operation_timeouts
   help: number of operation timeouts (including retries)
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_s3_operations
   help: number of raw s3 calls on behalf of Blob interface methods
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_s3_read_timeouts
   help: number of timeouts waiting on first response byte from S3
   source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_cache_added_count
   help: count of schema cache entries added
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_cache_cached_count
   help: count of schema cache entries served from cache
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_cache_computed_count
   help: count of schema cache entries computed
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_cache_dropped_count
   help: count of schema cache entries dropped
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_cache_fetch_state_count
   help: count of state fetches by the schema cache
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_cache_unavailable_count
   help: count of schema cache entries unavailable at current state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_migration_count
   help: count of fetch part migrations
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_migration_len
   help: count of migrated update records
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_migration_migrate_seconds
   help: seconds spent applying migration logic
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_migration_new_count
   help: count of migrations constructed
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_schema_migration_new_seconds
   help: seconds spent constructing migration logic
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_semaphore_acquire_count
   help: count of acquire calls (not acquired permits count)
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_semaphore_acquired_permits
   help: total sum of acquired permits
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_semaphore_available_permits
   help: currently available permits according to the semaphore
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_semaphore_blocking_count
   help: count of acquire calls that had to block
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_semaphore_blocking_seconds
   help: total time spent blocking on permit acquisition
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_semaphore_released_permits
   help: total sum of released permits
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_batch_part_count
   help: count of batch parts by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_batch_part_version_bytes
   help: total bytes in batch parts by shard and version
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_batch_part_version_count
   help: count of batch parts by shard and version
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_blob_gets
   help: number of Blob::get calls for this shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_blob_sets
   help: number of Blob::set calls for this shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_cmd_succeeded
   help: count of commands succeeded by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_compact_batches
   help: number of fully compact batches in the shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_compacting_batches
   help: number of batches in the shard with compactions in progress
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_compaction_applied
   help: count of compactions applied to state by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_count
   help: count of all active shards on this process
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_diff_size_bytes
   help: total encoded diff size by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_gc_finished
   help: count of garbage collections finished by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_gc_live_diffs
   help: the number of diffs (or, alternatively, the number of seqnos) present in consensus state at GC time
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_gc_seqno_held_parts
   help: count of parts referenced by some live state but not the current state (ie. parts kept only to satisfy seqno holds) at GC time
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_hollow_batch_count
   help: count of hollow batches by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_inline_backpressure_count
   help: count of CaA attempts retried because of inline backpressure
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_inline_part_bytes
   help: total size of parts inline in shard metadata
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_inline_part_count
   help: count of parts inline in shard metadata
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_largest_batch_size
   help: largest encoded batch size by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_live_writers
   help: number of writers that have recently appended updates to this shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_noncompact_batches
   help: number of batches in the shard that aren't compact and have no ongoing compaction
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_pubsub_diff_applied
   help: number of diffs received via pubsub that applied
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_pubsub_diff_not_applied_out_of_order
   help: number of diffs received via pubsub that did not apply due to out-of-order delivery
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_pubsub_diff_not_applied_stale
   help: number of diffs received via pubsub that did not apply due to staleness
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_rewrite_part_count
   help: count of batch parts with rewrites by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_rollup_count
   help: count of rollups by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_rollup_size_bytes
   help: total encoded rollup size by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_schema_registry_version_count
   help: count of versions in the schema registry
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_seqnos_held
   help: maximum count of gc-ineligible states by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_seqnos_since_last_rollup
   help: count of seqnos since last rollup
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_since
   help: since by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_spine_batch_count
   help: count of spine batches by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_stale_version
   help: indicates whether the current version of the shard is less than the current version of the code
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_unconsolidated_snapshot
   help: in snapshot_and_read, the number of times consolidating the raw data wasn't enough to produce consolidated output
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_update_count
   help: count of updates by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_upper
   help: upper by shard
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_usage_current_state_batches_bytes
   help: data in batches/parts referenced by current version of state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_usage_current_state_rollups_bytes
   help: data in rollups referenced by current version of state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_usage_leaked_bytes
   help: data reclaimable by a leaked blob detector
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_usage_not_leaked_not_referenced_bytes
   help: data written by an active writer but not referenced by any version of state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_usage_referenced_not_current_state_bytes
   help: data referenced only by a previous version of state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_sink_correction_capacity_decreases_total
   help: The cumulative capacity decreases observed on the correction buffer across workers and persist sinks.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_sink_correction_capacity_increases_total
   help: The cumulative capacity increases observed on the correction buffer across workers and persist sinks.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_sink_correction_deletions_total
   help: The cumulative deletions observed on the correction buffer across workers and persist sinks.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_sink_correction_insertions_total
   help: The cumulative insertions observed on the correction buffer across workers and persist sinks.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_sink_correction_max_per_sink_worker_capacity_updates
   help: The maximum capacity observed for the correction buffer of any single persist sink per worker.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_sink_correction_max_per_sink_worker_len_updates
   help: The maximum length observed for the correction buffer of any single persist sink per worker.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_apply_spine_fast_path
   help: count of spine diff applications that hit the fast path
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_apply_spine_flattened
   help: count of spine diff applications that flatten the trace
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_apply_spine_slow_path
   help: count of spine diff applications that hit the slow path
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_apply_spine_slow_path_lenient
   help: count of spine diff applications that hit the lenient compaction apply path
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_apply_spine_slow_path_lenient_adjustment
   help: count of adjustments made by the lenient compaction apply path
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_apply_spine_slow_path_with_reconstruction
   help: count of spine diff applications that hit the slow path with extra spine reconstruction step
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_fetch_recent_live_diffs_fast_path
   help: count of fetch_recent_live_diffs that hit the fast path
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_fetch_recent_live_diffs_slow_path
   help: count of fetch_recent_live_diffs that hit the slow path
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_force_applied_hostname
   help: count of when hostname diffs needed to be force applied
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_rollup_at_seqno_migration
   help: count of fetch_rollup_at_seqno calls that only worked because of the migration
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_rollup_write_noop
   help: count of no-op rollup writes
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_rollup_write_success
   help: count of rollups written successful (may not be linked in to state)
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_update_state_empty_path
   help: count of state update applications that found no new updates
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_update_state_fast_path
   help: count of state update applications that hit the fast path
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_update_state_noop_path
   help: count of state update applications that no-oped due to shared state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_update_state_slow_path
   help: count of state update applications that hit the slow path
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_writer_added
   help: count of writers added to the state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_writer_removed
   help: count of writers removed from the state
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_task_total_idle_duration
   help: Seconds of time spent idling, ie. waiting for a task to be woken up.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_task_total_idled_count
   help: The total number of task idles. Useful for computing the average idle time.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_task_total_scheduled_count
   help: The total number of task schedules. Useful for computing the average scheduled time.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_task_total_scheduled_duration
   help: Seconds of time spent scheduled, ie. ready to poll but not yet polled.
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_wait_resolved_via_sleep
   help: count of wait-for-uppers resolved via sleep
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_wait_resolved_via_watch
   help: count of wait-for-uppers resolved via watch notify
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_wait_woken_via_sleep
   help: count of wait-for-uppers wakes via sleep
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_wait_woken_via_watch
   help: count of wait-for-uppers wakes via watch notify
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_watch_notify_lagged
   help: count of lagged events in the watch notification broadcast channel
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_watch_notify_noop
   help: count of watch notifications sent to an broadcast channel
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_watch_notify_recv
   help: count of watch notifications received from the broadcast channel
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_watch_notify_sent
   help: count of watch notifications sent to a non-empty broadcast channel
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_watch_notify_wait_finished
   help: count of watch wait calls resolved
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_watch_notify_wait_started
   help: count of watch wait calls started
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_pgwire_ensure_transaction_seconds
   help: The time it takes to run `ensure_transactions` when processing pgwire messages.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_pgwire_message_processing_seconds
   help: The time it takes to process each of the pgwire message types, measured in the Adapter frontend
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_pgwire_recv_scheduling_delay_ms
   help: The time between a pgwire connection's receiver task being woken up by incoming data and getting polled.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_postgres_per_source_deletes
   help: The number of deletes for all tables in this source
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
 - name: mz_postgres_per_source_ignored_messages
   help: The number of messages ignored because of an irrelevant type or relation_id
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
 - name: mz_postgres_per_source_inserts
   help: The number of inserts for all tables in this source
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
 - name: mz_postgres_per_source_messages_total
   help: The total number of replication messages for this source, not expected to be the sum of the other values.
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
 - name: mz_postgres_per_source_tables_count
   help: The number of upstream tables for this source
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
 - name: mz_postgres_per_source_transactions_total
   help: The number of committed transactions for all tables in this source
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
 - name: mz_postgres_per_source_updates
   help: The number of updates for all tables in this source
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
 - name: mz_postgres_per_source_wal_lsn
   help: LSN of the latest transaction committed for this source, see Postgres Replication docs for more details on LSN
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
 - name: mz_postgres_snapshot_count_latency
   help: The wall time used to obtain snapshot sizes.
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
 - name: mz_query_total
   help: The total number of queries issued of the given type since process start.
   source: src/adapter/src/metrics.rs
+  visibility: public
 - name: mz_replica_info
   help: Maps cluster replica IDs to the replica's name and size. Constant 1.
   source: src/adapter/src/coord/info_metrics.rs
+  visibility: public
 - name: mz_result_rows_first_to_last_byte_seconds
   help: The time from just before sending the first result row to sending a final response message after having successfully flushed the last result row to the connection. (This can span multiple FETCH statements.) (This is never observed for unbounded SUBSCRIBEs, i.e., which have no last result row.)
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_resume_upper
   help: The timestamp-domain resumption frontier chosen for a source's ingestion
   source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_row_set_finishing_seconds
   help: The time it takes to run RowSetFinishing::finish.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_session_startup_table_writes_seconds
   help: If we had to wait for builtin table writes before processing a query, how long did we wait for.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_shard_finalization_op_failed
   help: count of shard finalization operations that failed
   source: src/storage-client/src/storage_collections/metrics.rs
+  visibility: internal
 - name: mz_shard_finalization_op_started
   help: count of shard finalization operations that have started
   source: src/storage-client/src/storage_collections/metrics.rs
+  visibility: internal
 - name: mz_shard_finalization_op_succeeded
   help: count of shard finalization operations that succeeded
   source: src/storage-client/src/storage_collections/metrics.rs
+  visibility: internal
 - name: mz_shard_finalization_outstanding
   help: count of shards in need of finalization
   source: src/storage-client/src/storage_collections/metrics.rs
+  visibility: internal
 - name: mz_shard_finalization_pending_commit
   help: count of shards for which finalization has completed but has not yet been durably recorded
   source: src/storage-client/src/storage_collections/metrics.rs
+  visibility: internal
 - name: mz_sink_bytes_committed
   help: The number of bytes committed to the sink.
   source: src/storage/src/statistics.rs
+  visibility: public
 - name: mz_sink_bytes_staged
   help: The number of bytes staged but possibly not committed to the sink.
   source: src/storage/src/statistics.rs
+  visibility: public
 - name: mz_sink_consumed_progress_records
   help: The number of progress records consumed by the sink.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_iceberg_commit_conflicts
   help: Number of commit conflicts in the iceberg sink
   source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: public
 - name: mz_sink_iceberg_commit_duration_seconds
   help: Time spent committing batches to Iceberg in seconds
   source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: public
 - name: mz_sink_iceberg_commit_failures
   help: Number of commit failures in the iceberg sink
   source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: public
 - name: mz_sink_iceberg_data_files_written
   help: Number of data files written by the iceberg sink
   source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: public
 - name: mz_sink_iceberg_delete_files_written
   help: Number of delete files written by the iceberg sink
   source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: public
 - name: mz_sink_iceberg_snapshots_committed
   help: Number of snapshots committed by the iceberg sink
   source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: public
 - name: mz_sink_iceberg_stashed_rows
   help: Number of stashed rows in the iceberg sink
   source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: internal
 - name: mz_sink_iceberg_writer_close_duration_seconds
   help: Time spent closing Iceberg DeltaWriters in seconds
   source: src/storage/src/metrics/sink/iceberg.rs
+  visibility: internal
 - name: mz_sink_info
   help: Maps user sink IDs to the sink's type, envelope type, and cluster. Constant 1.
   source: src/adapter/src/coord/info_metrics.rs
+  visibility: public
 - name: mz_sink_messages_committed
   help: The number of messages committed to the sink.
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_sink_messages_staged
   help: The number of messages staged but possibly not committed to the sink.
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_sink_oustanding_progress_records
   help: The number of outstanding progress records that need to be read before the sink can resume.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_partition_count
   help: The number of partitions this sink is publishing to.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_connects
   help: The number of connection attempts, including successful and failed attempts, and name resolution failures across all brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: public
 - name: mz_sink_rdkafka_disconnects
   help: The number of disconnections, whether triggered by the broker, the network, the load balancer, or something else across all brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: public
 - name: mz_sink_rdkafka_msg_cnt
   help: The current number of messages in producer queues.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_msg_size
   help: The current total size of messages in producer queues.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_outbuf_cnt
   help: The number of requests awaiting transmission across all brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_outbuf_msg_cnt
   help: The number of messages awaiting transmission across all brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: public
 - name: mz_sink_rdkafka_req_timeouts
   help: The total number of requests that timed out across all brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_tx
   help: The total number of requests sent to brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_tx_bytes
   help: The total number of bytes transmitted to brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_txerrs
   help: The total number of transmission errors across all brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: public
 - name: mz_sink_rdkafka_txmsg_bytes
   help: The total number of bytes transmitted (produced) to brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_txmsgs
   help: The total number of messages transmitted (produced) to brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_txretries
   help: The total number of request retries across all brokers.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_waitresp_cnt
   help: The number of requests in-flight across all brokers that are awaiting a response.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_sink_rdkafka_waitresp_msg_cnt
   help: The number of messages in-flight across all brokers that are awaiting a response.
   source: src/storage/src/metrics/sink/kafka.rs
+  visibility: internal
 - name: mz_slow_message_handling
   help: Latency for ALL coordinator messages. 'slow' is in the name for legacy reasons, but is not accurate.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_source_bytes_indexed
   help: The number of bytes of the source envelope state kept. This will be specific to the envelope in use.
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_source_bytes_received
   help: The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.
   source: src/storage/src/statistics.rs
+  visibility: public
 - name: mz_source_commit_upper_accepted_times
   help: The number of accepted remap bindings that are held in the reclock commit upper operator.
   source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_source_commit_upper_ready_times
   help: The number of ready remap bindings that are held in the reclock commit upper operator.
   source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_source_envelope_state_tombstones
   help: The number of outstanding tombstones in the source envelope state. This will be specific to the envelope in use
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_source_error_inserts
   help: A counter representing the actual number of errors being inserted to the data shard
   source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_source_error_retractions
   help: A counter representing the actual number of errors being retracted from the data shard
   source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_source_info
   help: Maps user source IDs to the source's type, envelope type, and cluster. Constant 1.
   source: src/adapter/src/coord/info_metrics.rs
+  visibility: public
 - name: mz_source_messages_received
   help: The number of raw messages the worker has received from upstream.
   source: src/storage/src/statistics.rs
+  visibility: public
 - name: mz_source_offset_commit_failures
   help: A counter representing how many times we have failed to commit offsets for a source
   source: src/storage/src/metrics/source.rs
+  visibility: public
 - name: mz_source_offset_committed
   help: The total number of _values_ (source-defined unit) we have fully processed, and storage and committed.
   source: src/storage/src/statistics.rs
+  visibility: public
 - name: mz_source_offset_known
   help: The total number of _values_ (source-defined unit) present in upstream.
   source: src/storage/src/statistics.rs
+  visibility: public
 - name: mz_source_processed_batches
   help: A counter representing the number of persist sink batches with actual data we have successfully processed.
   source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_source_progress
   help: A timestamp gauge representing forward progess in the data shard
   source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_source_records_indexed
   help: The number of records in the source envelope state. This will be specific to the envelope in use
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_source_rehydration_latency_ms
   help: The amount of time in milliseconds it took for the worker to rehydrate the source envelope state. This will be specific to the envelope in use.
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_source_row_inserts
   help: A counter representing the actual number of rows being inserted to the data shard
   source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_source_row_retractions
   help: A counter representing the actual number of rows being retracted from the data shard
   source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_source_snapshot_committed
   help: Whether or not the worker has committed the initial snapshot for a source.
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_source_snapshot_records_known
   help: The total number of records in the source's snapshot
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_source_snapshot_records_staged
   help: The total number of records read from the source's snapshot
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_source_updates_committed
   help: The number of updates (inserts + deletes) the worker has committed into the storage layer.
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_source_updates_staged
   help: The number of updates (inserts + deletes) the worker has written but not yet committed to the storage layer.
   source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_sql_server_per_source_deletes
   help: The number of deletes for all tables in this source
   source: src/storage/src/metrics/source/sql_server.rs
+  visibility: internal
 - name: mz_sql_server_per_source_ignored_messages
   help: The number of messages ignored because of an irrelevant type or relation_id
   source: src/storage/src/metrics/source/sql_server.rs
+  visibility: internal
 - name: mz_sql_server_per_source_inserts
   help: The number of inserts for all tables in this source
   source: src/storage/src/metrics/source/sql_server.rs
+  visibility: internal
 - name: mz_sql_server_per_source_updates
   help: The number of updates for all tables in this source
   source: src/storage/src/metrics/source/sql_server.rs
+  visibility: internal
 - name: mz_sql_server_snapshot_count_latency
   help: The wall time used to obtain snapshot sizes.
   source: src/storage/src/metrics/source/sql_server.rs
+  visibility: internal
 - name: mz_sql_server_snapshot_table_count
   help: The number of tables that SQL Server still needs to snapshot
   source: src/storage/src/metrics/source/sql_server.rs
+  visibility: internal
 - name: mz_sql_server_snapshot_table_lock
   help: The upstream tables locked for snapshot.
   source: src/storage/src/metrics/source/sql_server.rs
+  visibility: internal
 - name: mz_start_time_environmentd
   help: Time in milliseconds from environmentd start until the adapter is ready.
   source: src/environmentd/src/environmentd/main.rs
+  visibility: internal
 - name: mz_stashed_peek_seconds
   help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_statement_logging_actual_bytes
   help: The total amount of SQL text that was logged by statement logging.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_statement_logging_record_count
   help: The total number of SQL statements tagged with whether or not they were recorded.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_statement_logging_unsampled_bytes
   help: The total amount of SQL text that would have been logged if statement logging were unsampled.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_storage_command_message_bytes_total
   help: The total number of bytes sent in storage command messages.
   source: src/storage-client/src/metrics.rs
+  visibility: internal
 - name: mz_storage_commands_total
   help: The total number of storage commands sent.
   source: src/storage-client/src/metrics.rs
+  visibility: internal
 - name: mz_storage_controller_connected_replica_count
   help: The number of replicas successfully connected to the storage controller.
   source: src/storage-client/src/metrics.rs
+  visibility: internal
 - name: mz_storage_controller_history_command_count
   help: The number of commands in the controller's command history.
   source: src/storage-client/src/metrics.rs
+  visibility: internal
 - name: mz_storage_controller_replica_connect_wait_time_seconds_total
   help: The total time the storage controller spent waiting for replica (re-)connection.
   source: src/storage-client/src/metrics.rs
+  visibility: internal
 - name: mz_storage_controller_replica_connects_total
   help: The total number of replica (re-)connections made by the storage controller.
   source: src/storage-client/src/metrics.rs
+  visibility: internal
 - name: mz_storage_regressed_offset_known
   help: number of regressed offset_known stats for this id
   source: src/storage-client/src/metrics.rs
+  visibility: internal
 - name: mz_storage_response_message_bytes_total
   help: The total number of bytes received in storage response messages.
   source: src/storage-client/src/metrics.rs
+  visibility: internal
 - name: mz_storage_responses_total
   help: The total number of storage responses received.
   source: src/storage-client/src/metrics.rs
+  visibility: internal
 - name: mz_storage_rocksdb_multi_get_count_total
   help: The number of calls to rocksdb multi_get.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_rocksdb_multi_get_latency
   help: The latencies, in fractional seconds, of getting batches of values from RocksDB for this source.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_rocksdb_multi_get_result_bytes_total
   help: The total size of records returned, when getting batches of values from RocksDB for this source.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_rocksdb_multi_get_result_count_total
   help: The number of non-empty records returned, when getting batches of values from RocksDB for this source.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_rocksdb_multi_get_size_total
   help: The batch size, of getting batches of values from RocksDB for this source.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_rocksdb_multi_put_count_total
   help: The number of calls to rocksdb multi_put.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_rocksdb_multi_put_latency
   help: The latencies, in fractional seconds, of putting batches of values into RocksDB for this source.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_rocksdb_multi_put_size_total
   help: The batch size, of putting batches of values into RocksDB for this source.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_backpressure_emitted_bytes
   help: A counter with the number of emitted bytes.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_backpressure_last_backpressured_bytes
   help: The last count of bytes we are waiting to be retired in the operator. This cannot be directly compared to `retired_bytes`, but CAN indicate that backpressure is happening.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_backpressure_retired_bytes
   help: A counter with the number of bytes retired by downstream processing.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_deletes_total
   help: The number of deletes done by the upsert operator.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_inserts_total
   help: The number of inserts done by the upsert operator
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_merge_snapshot_deletes_total
   help: The number of deletes in a batch for merging snapshot updates for this source.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_merge_snapshot_inserts_total
   help: The number of inserts in a batch for merging snapshot updates for this source.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_merge_snapshot_latency
   help: The latencies, in fractional seconds, of merging snapshot updates into upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_merge_snapshot_updates_total
   help: The batch size, of merging snapshot updates into upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_multi_get_latency
   help: The latencies, in fractional seconds, of getting values from the upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_multi_get_result_bytes_total
   help: The total size of records returned in a multi_get batch. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_multi_get_result_count_total
   help: The number of non-empty records returned in a multi_get batch. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_multi_get_size_total
   help: The batch size, of getting values from the upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_multi_put_latency
   help: The latencies, in fractional seconds, of getting values into the upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_multi_put_size_total
   help: The batch size, of getting values into the upsert state for this source. Specific implementations of upsert state may have more detailed metrics about sub-batches.
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_state_rehydration_latency
   help: The latency, per-worker, in fractional seconds, of rehydrating the upsert state for this source
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_state_rehydration_total
   help: The number of values per-worker, rehydrated into the upsert state for this source
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_state_rehydration_updates
   help: The number of updates (both negative and positive), per-worker, rehydrated into the upsert state for this source
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_updates_total
   help: The number of updates done by the upsert operator
   source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_usage_collection_time_seconds
   help: The number of seconds the coord spends collecting usage metrics from storage.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_subscribe_outputs
   help: The total number of different subscribe outputs used
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_subscribe_snapshots_skipped_total
   help: The number of collection snapshots that were skipped by the subscribe snapshot optimization.
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_time_to_first_row_seconds
   help: Latency of an execute for a successful query from pgwire's perspective
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_timely_step_duration_seconds
   help: The time spent in each compute step_or_park call
   source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_timestamp_difference_for_bounded_staleness_ms
   help: How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_timestamp_difference_for_strict_serializable_ms
   help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_blocking_queue_depth
   help: The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_budget_forced_yield_count
   help: The number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_global_queue_depth
   help: The number of tasks currently scheduled in the runtime's global queue.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_num_alive_tasks
   help: The current number of alive tasks in the runtime.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_num_blocking_threads
   help: The number of additional threads spawned by the runtime.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_num_idle_blocking_threads
   help: The number of idle threads which have spawned by the runtime for spawn_blocking calls.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_num_workers
   help: The number of worker threads used by the runtime.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_remote_schedule_count
   help: The number of tasks scheduled from outside of the runtime.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_spawned_tasks_count
   help: The number of tasks spawned in this runtime since it was created.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_local_queue_depth
   help: The number of tasks currently scheduled in the workers' local queues.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_local_schedule_count
   help: The number of tasks scheduled from within the runtime on the given worker's local queue.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_mean_poll_time
   help: The mean duration of task polls in seconds.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_noop_count
   help: The number of times the given worker thread unparked but performed no work before parking again.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_overflow_count
   help: The number of times the given worker thread saturated its local queue.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_park_count
   help: The total number of times the worker threads have parked.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_park_unpark_count
   help: The total number of times the worker threads have parked and unparked.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_poll_count
   help: The number of tasks the given worker thread has polled.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_steal_count
   help: The number of tasks the given worker thread stole from another worker thread.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_steal_operations
   help: The number of times the given worker thread stole tasks from another worker thread.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_worker_total_busy_duration
   help: The amount of time the worker threads have been busy, in seconds.
   source: src/ore/src/metrics.rs
+  visibility: internal
 - name: mz_ts_oracle_batched_op_count
   help: count of batched operations
   source: src/timestamp-oracle/src/metrics.rs
+  visibility: internal
 - name: mz_ts_oracle_batches_count
   help: count of batches of operations
   source: src/timestamp-oracle/src/metrics.rs
+  visibility: internal
 - name: mz_ts_oracle_failed_count
   help: count of oracle operations failed
   source: src/timestamp-oracle/src/metrics.rs
+  visibility: internal
 - name: mz_ts_oracle_retry_finished_count
   help: count of retry loops finished
   source: src/timestamp-oracle/src/metrics.rs
+  visibility: internal
 - name: mz_ts_oracle_retry_retries_count
   help: count of total attempts by retry loops
   source: src/timestamp-oracle/src/metrics.rs
+  visibility: internal
 - name: mz_ts_oracle_retry_sleep_seconds
   help: time spent in retry loop backoff
   source: src/timestamp-oracle/src/metrics.rs
+  visibility: internal
 - name: mz_ts_oracle_retry_started_count
   help: count of retry loops started
   source: src/timestamp-oracle/src/metrics.rs
+  visibility: internal
 - name: mz_ts_oracle_seconds
   help: time spent in oracle operations
   source: src/timestamp-oracle/src/metrics.rs
+  visibility: internal
 - name: mz_ts_oracle_started_count
   help: count of oracle operations started
   source: src/timestamp-oracle/src/metrics.rs
+  visibility: internal
 - name: mz_ts_oracle_succeeded_count
   help: count of oracle operations succeeded
   source: src/timestamp-oracle/src/metrics.rs
+  visibility: internal
 - name: mz_txn_batch_commit_bytes
   help: total bytes committed via txn
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_txn_batch_commit_count
   help: count of batches committed via txn
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_txn_batch_unapplied_bytes
   help: total bytes committed via txn but not yet applied
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_txn_batch_unapplied_count
   help: count of batches committed via txn but not yet applied
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_txn_batch_unapplied_min_ts
   help: minimum ts of txn committed via txn but not yet applied
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_txn_data_shard_count
   help: count of data shards registered to the txn set
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_txn_op_duration_seconds
   help: time spent running a txn operation
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_txn_op_errored_count
   help: count of times a txn operation errored
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_txn_op_retry_count
   help: count of times a txn operation retried
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_txn_op_started_count
   help: count of times a txn operation started
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_txn_op_succeeded_count
   help: count of times a txn operation succeeded
   source: src/txn-wal/src/metrics.rs
+  visibility: internal
 - name: mz_webhook_get_appender_count
   help: Count of getting a webhook appender from the Coordinator.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_webhook_validation_reduce_failures
   help: Count of how many times we've failed to reduce a webhook source's CHECK statement.
   source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: outer_join_lowering_cases
   help: How many times the different outer join lowering cases happened.
   source: src/sql/src/optimizer_metrics.rs
+  visibility: internal
 - name: transform_hits
   help: How many times a given transform changed the plan.
   source: src/sql/src/optimizer_metrics.rs
+  visibility: internal
 - name: transform_total
   help: How many times a given transform was applied.
   source: src/sql/src/optimizer_metrics.rs
+  visibility: internal

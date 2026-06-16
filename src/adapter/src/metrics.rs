@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricVisibility, MetricsRegistry};
 use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
@@ -65,16 +65,19 @@ impl Metrics {
                 name: "mz_query_total",
                 help: "The total number of queries issued of the given type since process start.",
                 var_labels: ["session_type", "statement_type"],
+                visibility: MetricVisibility::Public,
             )),
             active_sessions: registry.register(metric!(
                 name: "mz_active_sessions",
                 help: "The number of active coordinator sessions.",
                 var_labels: ["session_type"],
+                visibility: MetricVisibility::Public,
             )),
             active_subscribes: registry.register(metric!(
                 name: "mz_active_subscribes",
                 help: "The number of active SUBSCRIBE queries.",
                 var_labels: ["session_type"],
+                visibility: MetricVisibility::Public,
             )),
             active_copy_tos: registry.register(metric!(
                 name: "mz_active_copy_tos",
@@ -107,6 +110,7 @@ impl Metrics {
                 name: "mz_adapter_commands",
                 help: "The total number of adapter commands issued of the given type since process start.",
                 var_labels: ["command_type", "status", "application_name"],
+                visibility: MetricVisibility::Public,
             )),
             storage_usage_collection_time_seconds: registry.register(metric!(
                 name: "mz_storage_usage_collection_time_seconds",
