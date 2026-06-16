@@ -39,7 +39,7 @@ Alternatively, download the latest release for your platform:
 
 ```shell
 ARCH=$(uname -m)
-sudo echo "Preparing to extract mz-deploy..."
+sudo -v
 curl -L "https://binaries.materialize.com/mz-deploy-latest-$ARCH-apple-darwin.tar.gz" \
 | sudo tar -xzC /usr/local --strip-components=1
 ```
@@ -48,7 +48,7 @@ curl -L "https://binaries.materialize.com/mz-deploy-latest-$ARCH-apple-darwin.ta
 
 ```shell
 ARCH=$(uname -m)
-sudo echo "Preparing to extract mz-deploy..."
+sudo -v
 curl -L "https://binaries.materialize.com/mz-deploy-latest-$ARCH-unknown-linux-gnu.tar.gz" \
 | sudo tar -xzC /usr/local --strip-components=1
 ```
@@ -119,9 +119,10 @@ Verify the connection:
 mz-deploy debug
 ```
 
-This prints your Materialize version, environment ID, and current role,
-confirming that `mz-deploy` can reach your instance. For an interactive
-psql shell against the active profile, use `mz-deploy sql`.
+This prints your active profile, Docker status, environment ID, and the
+health of the deployment server cluster, confirming that `mz-deploy` can
+reach your instance. For an interactive psql shell against the active
+profile, use `mz-deploy sql` (requires `psql` on your `PATH`).
 
 {{< tip >}}
 As a best practice, we strongly recommend using [service accounts](/security/cloud/users-service-accounts/create-service-accounts) to connect external applications, like mz-deploy, to Materialize.
@@ -181,7 +182,9 @@ mz-deploy wait <deploy-id>
 mz-deploy promote <deploy-id>
 ```
 
-- `setup` creates deployment tracking tables. This is a one-time step.
+- `setup` creates the deployment tracking tables, the deployment server
+  cluster that every connection runs against, and — when RBAC is enabled —
+  the access-control roles. This is a one-time step.
 - `stage` compiles the project, diffs against production, and deploys changed
   objects to staging schemas.
 - `wait` monitors cluster hydration until all materialized views are ready.

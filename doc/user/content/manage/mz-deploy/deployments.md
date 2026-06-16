@@ -31,9 +31,10 @@ production with zero downtime.
 mz-deploy setup
 ```
 
-This creates the `_mz_deploy` database, tracking tables, and three roles for
-access control. The command is idempotent — you can safely run it again without
-side effects.
+This creates the `_mz_deploy` database, its tracking tables, three roles for
+access control, and the deployment server cluster that every `mz-deploy`
+connection runs against. The command is idempotent — you can safely run it
+again without side effects.
 
 When [RBAC is enabled](/security/self-managed/access-control/#enabling-rbac),
 `setup` must be run by a **superuser**. It grants `CREATEDB` and
@@ -47,14 +48,20 @@ involvement.
 
 `setup` creates three roles that control who can do what:
 
-| Role | Capabilities |
+| Role | Commands |
 |------|-------------|
-| `materialize_deployer` | `apply`, `delete`, `stage`, `promote`, `abort` — full write access |
+| `materialize_deployer` | `delete`, `stage`, `promote`, `abort` — full write access |
 | `materialize_developer` | `dev`, `list`, `describe`, `log` |
 | `materialize_monitor` | `list`, `describe`, `log` — read-only deployment state |
 
-Your database user must be a member of exactly one of these roles to run
-commands that connect to the database. Grant the appropriate role to each user:
+Membership is enforced when the command connects: `stage`, `promote`,
+`abort`, and `delete` require `materialize_deployer`; `dev` requires
+`materialize_developer`; and `list`, `describe`, and `log` accept any of the
+three roles. `apply` provisions infrastructure (clusters, secrets,
+connections, sources, tables) and is not currently restricted by role.
+
+Your database user must be a member of one of these roles to run commands
+that connect to the database. Grant the appropriate role to each user:
 
 ```sql
 GRANT materialize_deployer TO deploy_bot;
@@ -193,6 +200,9 @@ Flags:
 
 - `--force` — skip conflict detection.
 - `--no-ready-check` — skip the automatic readiness check.
+- `--allowed-lag <SECONDS>` — maximum wallclock lag a cluster may have and
+  still pass the readiness check. Clusters lagging further block promotion.
+  Defaults to 300 (5 minutes).
 - `--dry-run` — preview the promotion without applying changes.
 
 {{< note >}}

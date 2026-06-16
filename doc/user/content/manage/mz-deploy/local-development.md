@@ -100,7 +100,7 @@ MOCK materialize.public.orders(
     (1, 'acme', 'pending', 99.99,
      '2024-06-15T10:00:00Z'::timestamptz,
      '2024-06-15T11:00:00Z'::timestamptz)
-),
+)
 EXPECTED(
     id bigint, customer text, amount numeric,
     created_at timestamptz, updated_at timestamptz, stalled_for interval
