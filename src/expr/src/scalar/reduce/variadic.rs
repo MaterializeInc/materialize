@@ -42,6 +42,16 @@ pub(super) fn reduce_call_variadic(
         return;
     }
 
+    // CaseLiteral is lazy: only the selected arm is evaluated, so a literal
+    // NULL or error in a *result branch* must not propagate to the whole call.
+    // Constant-fold only when every argument is a literal (eval is correct then).
+    if matches!(func, VariadicFunc::CaseLiteral(_)) {
+        if exprs.iter().all(|x| x.is_literal()) {
+            *e = MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type);
+        }
+        return;
+    }
+
     // Generic folds: constant-fold, null-propagate, error-propagate.
     if exprs.iter().all(|x| x.is_literal()) {
         *e = MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type);
@@ -459,5 +469,54 @@ mod tests {
         let mut e = MirScalarExpr::call_variadic(Substr, vec![col(), lit(1), lit(5)]);
         e.reduce(&types);
         assert_ne!(e, col());
+    }
+}
+
+#[cfg(test)]
+mod case_literal_tests {
+    use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, SqlColumnType, SqlScalarType};
+
+    use crate::scalar::func::{CaseLiteral, CaseLiteralEntry};
+    use crate::{EvalError, MirScalarExpr, VariadicFunc};
+
+    /// A CaseLiteral whose only matching arm is an error must NOT be folded to
+    /// that error: the error is reachable only when input == 1.
+    #[mz_ore::test]
+    fn case_literal_error_branch_not_hoisted() {
+        // input = column 0 (i64, nullable so it is not constant-folded away)
+        let input = MirScalarExpr::column(0);
+        let err_branch =
+            MirScalarExpr::literal(Err(EvalError::DivisionByZero), ReprScalarType::Int64);
+        let fallback = MirScalarExpr::literal_ok(Datum::Int64(0), ReprScalarType::Int64);
+        let cl = CaseLiteral {
+            lookup: vec![CaseLiteralEntry {
+                literal: Row::pack_slice(&[Datum::Int64(1)]),
+                expr_index: 1,
+            }],
+            return_type: SqlColumnType {
+                scalar_type: SqlScalarType::Int64,
+                nullable: true,
+            },
+        };
+        let mut expr = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::CaseLiteral(cl),
+            exprs: vec![input, err_branch, fallback],
+        };
+        let col_types = vec![ReprColumnType {
+            scalar_type: ReprScalarType::Int64,
+            nullable: true,
+        }];
+        crate::scalar::reduce::reduce(&mut expr, &col_types);
+        // Must remain a CaseLiteral, not collapse to the error literal.
+        assert!(
+            matches!(
+                expr,
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::CaseLiteral(_),
+                    ..
+                }
+            ),
+            "CaseLiteral was incorrectly folded: {expr:?}"
+        );
     }
 }
