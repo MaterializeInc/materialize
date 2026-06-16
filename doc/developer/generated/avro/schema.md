@@ -1,6 +1,6 @@
 ---
 source: src/avro/src/schema.rs
-revision: ed294863cf
+revision: aeab441868
 ---
 
 Parses JSON Avro schemas into an Arena-based `Schema` struct and performs schema resolution.
@@ -8,3 +8,4 @@ Parses JSON Avro schemas into an Arena-based `Schema` struct and performs schema
 Named types (records, enums, fixed) are interned in a flat `Vec<NamedSchemaPiece>` and referenced by index via `SchemaPieceOrNamed`, avoiding recursive ownership.
 `SchemaNode` pairs an index-table root with a borrowed `SchemaPiece` reference, providing the traversal handle used throughout the encode/decode paths.
 `resolve_schemas` builds a fully resolved `Schema` from a writer/reader pair, and `SchemaFingerprint` supports SHA-256 fingerprinting for schema identity checks.
+`SchemaParser` tracks a `depth` counter incremented on each recursive `parse_inner` call and enforced against `MAX_SCHEMA_DEPTH` (128); schemas nested deeper than this limit return a `ParseSchemaError` rather than overflowing the stack.

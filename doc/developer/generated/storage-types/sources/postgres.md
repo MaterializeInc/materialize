@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/sources/postgres.rs
-revision: f1e12c2e99
+revision: 84e4f14434
 ---
 
 # storage-types::sources::postgres
