@@ -377,6 +377,12 @@ def run_sqllogictest(
 
     failed_files = []
 
+    def file_replicas(file: str) -> int:
+        # `singlereplica_*` files assert replica-targeted introspection
+        # results, so always run them with a single replica instead of
+        # skipping them when the workflow requests more.
+        return 1 if "singlereplica_" in file else args.replicas
+
     def worker(container_name: str):
         exception: Exception | None = None
         while True:
@@ -384,9 +390,6 @@ def run_sqllogictest(
                 step, file, rewrite_results = work_queue.get_nowait()
             except Exception:
                 break  # Queue is empty
-
-            if "singlereplica_" in file and args.replicas > 1:
-                continue
 
             junit_report_path = (
                 None
@@ -398,7 +401,7 @@ def run_sqllogictest(
             cmd = step.to_command(
                 container_name,
                 file,
-                args.replicas,
+                file_replicas(file),
                 args.replica_size,
                 junit_report_path,
                 c.metadata_store(),
@@ -455,9 +458,16 @@ def run_sqllogictest(
                         f.write(diff)
                 else:
                     print("Rewriting results did not result in a diff")
-                print(
-                    f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results --replica-size={args.replica_size} --replicas={args.replicas} {' '.join([file for step, file in failed_files])}"
-                )
+                replica_counts = {file_replicas(file) for _, file in failed_files}
+                for replicas in sorted(replica_counts):
+                    files = [
+                        file
+                        for _, file in failed_files
+                        if file_replicas(file) == replicas
+                    ]
+                    print(
+                        f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results --replica-size={args.replica_size} --replicas={replicas} {' '.join(files)}"
+                    )
                 print(f"Or apply directly: git apply <<'EOF'\n{diff}EOF")
         if errors:
             raise errors[0]
