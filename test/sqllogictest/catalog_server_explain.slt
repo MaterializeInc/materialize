@@ -2581,7 +2581,7 @@ mz_internal.mz_sink_statuses:
                 Limit 1
                 →Map/Filter/Project
                   Project: #0..=#4, #6
-                  Map: case when (#2{status} = "dropped") then 1 else case when (#2{status} = "running") then 2 else case when (#2{status} = "stalled") then 3 else case when (#2{status} = "starting") then 4 else case when (#2{status} = "paused") then 5 else case when (#2{status} = "ceased") then 6 else 7 end end end end end end
+                  Map: case_lookup #2{status} when "ceased" then 6 when "paused" then 5 when "dropped" then 1 when "running" then 2 when "stalled" then 3 when "starting" then 4 else 7 end
                     →Non-monotonic TopK
                       Group By #1, #5
                       Order By #0 desc nulls_first
@@ -2747,7 +2747,7 @@ mz_internal.mz_source_statuses:
             Limit 1
             →Map/Filter/Project
               Project: #0..=#4, #6
-              Map: case when (#2{status} = "dropped") then 1 else case when (#2{status} = "running") then 2 else case when (#2{status} = "stalled") then 3 else case when (#2{status} = "starting") then 4 else case when (#2{status} = "paused") then 5 else case when (#2{status} = "ceased") then 6 else 7 end end end end end end
+              Map: case_lookup #2{status} when "ceased" then 6 when "paused" then 5 when "dropped" then 1 when "running" then 2 when "stalled" then 3 when "starting" then 4 else 7 end
                 →Non-monotonic TopK
                   Group By #1, #5
                   Order By #0 desc nulls_first
@@ -3261,7 +3261,7 @@ mz_internal.pg_class_all_databases:
       →Differential Join %0:l3[#0] » %1[#0]
         after %1:
           Project: #0..=#8
-          Map: case when (#3{type} = "table") then "r" else case when (#3{type} = "source") then "r" else case when (#3{type} = "index") then "i" else case when (#3{type} = "view") then "v" else case when (#3{type} = "materialized-view") then "m" else null end end end end end
+          Map: case_lookup #3{type} when "view" then "v" when "index" then "i" when "table" then "r" when "source" then "r" when "materialized-view" then "m" else null end
         →Arrange (#0)
           →Stream l3
         →Arrange (#0)
@@ -3857,7 +3857,7 @@ mz_internal.pg_type_all_databases:
       path %1:
         after %0:
           Project: #1, #3, #13, #22, #25, #0, #30..=#33
-          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
+          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case_lookup #4{category} when "enum" then "E" when "list" then "U" when "array" then "A" when "pseudo" then "P" when "string" then "S" when "boolean" then "B" when "numeric" then "N" when "unknown" then "X" when "timespan" then "T" when "composite" then "C" when "date-time" then "D" when "geometric" then "G" when "bit-string" then "V" when "user-defined" then "U" when "network-address" then "I" else null end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
         after %3:
           Project: #1..=#5, #0, #7..=#10, #12
           Map: coalesce(#6, #11, 0)
@@ -3870,7 +3870,7 @@ mz_internal.pg_type_all_databases:
       path %2:
         after %0:
           Project: #1, #3, #13, #22, #25, #0, #30..=#34
-          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
+          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case_lookup #4{category} when "enum" then "E" when "list" then "U" when "array" then "A" when "pseudo" then "P" when "string" then "S" when "boolean" then "B" when "numeric" then "N" when "unknown" then "X" when "timespan" then "T" when "composite" then "C" when "date-time" then "D" when "geometric" then "G" when "bit-string" then "V" when "user-defined" then "U" when "network-address" then "I" else null end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
         after %3:
           Project: #1..=#5, #0, #7..=#10, #12
           Map: coalesce(#6, #11, 0)
@@ -3883,7 +3883,7 @@ mz_internal.pg_type_all_databases:
       path %3:
         after %0:
           Project: #1, #3, #13, #22, #25, #0, #30..=#34
-          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
+          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case_lookup #4{category} when "enum" then "E" when "list" then "U" when "array" then "A" when "pseudo" then "P" when "string" then "S" when "boolean" then "B" when "numeric" then "N" when "unknown" then "X" when "timespan" then "T" when "composite" then "C" when "date-time" then "D" when "geometric" then "G" when "bit-string" then "V" when "user-defined" then "U" when "network-address" then "I" else null end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
         after %2:
           Project: #1..=#5, #0, #7..=#10, #12
           Map: coalesce(#11, #6, 0)
@@ -3896,7 +3896,7 @@ mz_internal.pg_type_all_databases:
       path %4:
         after %0:
           Project: #1, #3, #13, #22, #25, #0, #30..=#34
-          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
+          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case_lookup #4{category} when "enum" then "E" when "list" then "U" when "array" then "A" when "pseudo" then "P" when "string" then "S" when "boolean" then "B" when "numeric" then "N" when "unknown" then "X" when "timespan" then "T" when "composite" then "C" when "date-time" then "D" when "geometric" then "G" when "bit-string" then "V" when "user-defined" then "U" when "network-address" then "I" else null end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
         after %3:
           Project: #1..=#5, #7..=#11, #13
           Map: coalesce(#6, #12, 0)
@@ -6632,7 +6632,7 @@ Explained Query:
   →Return
     →Map/Filter/Project
       Project: #4, #2, #0, #3
-      Map: case when (#1{type} = "materialized-view") then "MATERIALIZED VIEW" else case when (#1{type} = "table") then "BASE TABLE" else upper(#1{type}) end end, "materialize"
+      Map: case_lookup #1{type} when "table" then "BASE TABLE" when "materialized-view" then "MATERIALIZED VIEW" else upper(#1{type}) end, "materialize"
         →Union
           →Fused with Child Map/Filter/Project
             Project: #0, #1, #3
@@ -8084,7 +8084,7 @@ Explained Query:
             Project: #0..=#4, #6..=#10
               →Read l22
         →Non-incremental GroupAggregate
-          Aggregation: jsonb_object_agg[order_by=[]](row(row(#3{name}, coalesce(jsonbable_to_jsonb(case when ((#4{type} = "int") OR (#4{type} = "real") OR (#4{type} = "float") OR (#4{type} = "uint2") OR (#4{type} = "uint4") OR (#4{type} = "uint8") OR (#4{type} = "bigint") OR (#4{type} = "double") OR (#4{type} = "integer") OR (#4{type} = "numeric") OR (#4{type} = "smallint") OR (#4{type} = "double precision")) then jsonb_build_object("type", "number", "description", jsonbable_to_jsonb(#9{comment})) else case when (#4{type} = "boolean") then jsonb_build_object("type", "boolean", "description", jsonbable_to_jsonb(#9{comment})) else case when (#4{type} = "bytea") then jsonb_build_object("type", "string", "description", jsonbable_to_jsonb(#9{comment}), "contentEncoding", "base64", "contentMediaType", "application/octet-stream") else case when (#4{type} = "date") then jsonb_build_object("type", "string", "format", "date", "description", jsonbable_to_jsonb(#9{comment})) else case when (#4{type} = "time") then jsonb_build_object("type", "string", "format", "time", "description", jsonbable_to_jsonb(#9{comment})) else case when ilike["timestamp%%"](#4{type}) then jsonb_build_object("type", "string", "format", "date-time", "description", jsonbable_to_jsonb(#9{comment})) else case when (#4{type} = "jsonb") then jsonb_build_object("type", "object", "description", jsonbable_to_jsonb(#9{comment})) else case when (#4{type} = "uuid") then jsonb_build_object("type", "string", "format", "uuid", "description", jsonbable_to_jsonb(#9{comment})) else jsonb_build_object("type", "string", "description", jsonbable_to_jsonb(#9{comment})) end end end end end end end end), json_null))))
+          Aggregation: jsonb_object_agg[order_by=[]](row(row(#3{name}, coalesce(jsonbable_to_jsonb(case when ((#4{type} = "int") OR (#4{type} = "real") OR (#4{type} = "float") OR (#4{type} = "uint2") OR (#4{type} = "uint4") OR (#4{type} = "uint8") OR (#4{type} = "bigint") OR (#4{type} = "double") OR (#4{type} = "integer") OR (#4{type} = "numeric") OR (#4{type} = "smallint") OR (#4{type} = "double precision")) then jsonb_build_object("type", "number", "description", jsonbable_to_jsonb(#9{comment})) else case_lookup #4{type} when "date" then jsonb_build_object("type", "string", "format", "date", "description", jsonbable_to_jsonb(#9{comment})) when "time" then jsonb_build_object("type", "string", "format", "time", "description", jsonbable_to_jsonb(#9{comment})) when "bytea" then jsonb_build_object("type", "string", "description", jsonbable_to_jsonb(#9{comment}), "contentEncoding", "base64", "contentMediaType", "application/octet-stream") when "boolean" then jsonb_build_object("type", "boolean", "description", jsonbable_to_jsonb(#9{comment})) else case when ilike["timestamp%%"](#4{type}) then jsonb_build_object("type", "string", "format", "date-time", "description", jsonbable_to_jsonb(#9{comment})) else case_lookup #4{type} when "uuid" then jsonb_build_object("type", "string", "format", "uuid", "description", jsonbable_to_jsonb(#9{comment})) when "jsonb" then jsonb_build_object("type", "object", "description", jsonbable_to_jsonb(#9{comment})) else jsonb_build_object("type", "string", "description", jsonbable_to_jsonb(#9{comment})) end end end end), json_null))))
           Key:
             Project: #10..=#12
             Map: (((((("\"" || #0{database}) || "\".\"") || #1{schema}) || "\".\"") || #2{name}) || "\""), coalesce(#5{name}, #6{name}), coalesce(#7{comment}, #8{comment})
