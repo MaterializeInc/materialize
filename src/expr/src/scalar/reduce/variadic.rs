@@ -44,10 +44,13 @@ pub(super) fn reduce_call_variadic(
 
     // CaseLiteral is lazy: only the selected arm is evaluated, so a literal
     // NULL or error in a *result branch* must not propagate to the whole call.
-    // Constant-fold only when every argument is a literal (eval is correct then).
-    if matches!(func, VariadicFunc::CaseLiteral(_)) {
+    // Constant-fold only when every argument is a literal (eval is correct then),
+    // otherwise normalize to canonical arm order.
+    if let VariadicFunc::CaseLiteral(cl) = func {
         if exprs.iter().all(|x| x.is_literal()) {
             *e = MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type);
+        } else {
+            cl.canonicalize(exprs);
         }
         return;
     }
@@ -517,6 +520,58 @@ mod case_literal_tests {
                 }
             ),
             "CaseLiteral was incorrectly folded: {expr:?}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn reduce_canonicalizes_case_literal_arm_order() {
+        use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, SqlColumnType, SqlScalarType};
+        let input = MirScalarExpr::column(0);
+        // exprs: [input, result@1=100, result@2=200, fallback=0]
+        // lookup sorted by literal: (1 -> idx 2), (2 -> idx 1)  -- out of slot order
+        let cl = CaseLiteral {
+            lookup: vec![
+                CaseLiteralEntry {
+                    literal: Row::pack_slice(&[Datum::Int64(1)]),
+                    expr_index: 2,
+                },
+                CaseLiteralEntry {
+                    literal: Row::pack_slice(&[Datum::Int64(2)]),
+                    expr_index: 1,
+                },
+            ],
+            return_type: SqlColumnType {
+                scalar_type: SqlScalarType::Int64,
+                nullable: true,
+            },
+        };
+        let mut expr = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::CaseLiteral(cl),
+            exprs: vec![
+                input,
+                MirScalarExpr::literal_ok(Datum::Int64(100), ReprScalarType::Int64),
+                MirScalarExpr::literal_ok(Datum::Int64(200), ReprScalarType::Int64),
+                MirScalarExpr::literal_ok(Datum::Int64(0), ReprScalarType::Int64),
+            ],
+        };
+        let col_types = vec![ReprColumnType {
+            scalar_type: ReprScalarType::Int64,
+            nullable: true,
+        }];
+        crate::scalar::reduce::reduce(&mut expr, &col_types);
+        let MirScalarExpr::CallVariadic {
+            func: VariadicFunc::CaseLiteral(cl),
+            exprs,
+        } = &expr
+        else {
+            panic!("expected CaseLiteral, got {expr:?}");
+        };
+        assert_eq!(cl.lookup[0].expr_index, 1);
+        assert_eq!(cl.lookup[1].expr_index, 2);
+        // exprs[1] is now the result for literal 1 (=200).
+        assert_eq!(
+            exprs[1],
+            MirScalarExpr::literal_ok(Datum::Int64(200), ReprScalarType::Int64)
         );
     }
 }
