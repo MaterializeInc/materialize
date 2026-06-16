@@ -812,7 +812,7 @@ def workflow_test_github_5087(c: Composition) -> None:
             contains:Invalid data in source, saw negative accumulation with unsigned type for key
 
             ! SELECT * FROM constant_sums;
-            contains:constant folding encountered reduce on collection with non-positive multiplicities
+            contains:reduce on a collection with non-positive multiplicities
 
             # The following statement verifies that the behavior introduced in PR materialize#6122
             # is now rectified, i.e., instead of wrapping to a negative number, we produce

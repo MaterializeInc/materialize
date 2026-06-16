@@ -1194,3 +1194,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17087  mz_builtin_sources
 17088  mz_cluster_replica_size_internal
 17089  mz_cluster_replica_size_internal_ind
+17090  generate_series_unoptimized
+17091  generate_series_unoptimized

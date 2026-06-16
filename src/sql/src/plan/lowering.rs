@@ -141,6 +141,9 @@ pub struct Config {
     pub enable_variadic_left_join_lowering: bool,
     pub enable_cast_elimination: bool,
     pub enable_simplify_quantified_comparisons: bool,
+    /// Enable lowering of row-local correlated subqueries to a stateless
+    /// `FlatMap` over a `TableFunc::EvalRelation`.
+    pub enable_rowwise_subquery_lowering: bool,
 }
 
 impl Default for Config {
@@ -150,6 +153,7 @@ impl Default for Config {
             enable_variadic_left_join_lowering: false,
             enable_cast_elimination: false,
             enable_simplify_quantified_comparisons: false,
+            enable_rowwise_subquery_lowering: false,
         }
     }
 }
@@ -161,6 +165,7 @@ impl From<&SystemVars> for Config {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_cast_elimination: vars.enable_cast_elimination(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
+            enable_rowwise_subquery_lowering: vars.enable_rowwise_subquery_lowering(),
         }
     }
 }
@@ -1776,7 +1781,11 @@ fn branch<F>(
     apply: F,
 ) -> Result<MirRelationExpr, PlanError>
 where
-    F: FnOnce(
+    // `Fn` rather than `FnOnce`: the row-wise path below may invoke `apply`
+    // once against a placeholder to test whether the result is evaluable, and,
+    // if not, the keyed path invokes it again. All callers' closures capture
+    // nothing (or only `Copy` state), so this costs them nothing.
+    F: Fn(
         &mut mz_ore::id_gen::IdGen,
         HirRelationExpr,
         MirRelationExpr,
@@ -1921,6 +1930,70 @@ where
         }));
     }
     let new_col_map = ColumnMap::new(new_col_map);
+
+    // Row-wise path: if `inner` is a correlated, row-local computation, we can
+    // evaluate it as a stateless function of each outer row rather than as a
+    // stateful keyed `Reduce` joined back to `outer`. We discover this by
+    // applying `inner` to a single-row *placeholder* standing for one outer
+    // key-tuple; if the resulting expression is closed (every leaf is a
+    // `Constant` or a `Get` of a bound local / the placeholder, with no stored
+    // collections or recursion), it can be housed in a `TableFunc::EvalRelation`
+    // and driven row-by-row by a `FlatMap`.
+    //
+    // The empty-key case is excluded: an uncorrelated subquery is better served
+    // by the keyed path's "compute once" handling below than by recomputing it
+    // for every outer row.
+    if context.config.enable_rowwise_subquery_lowering
+        && !key.is_empty()
+        && is_rowwise_candidate(&inner)
+    {
+        let mut placeholder_id = mz_expr::LocalId::new(id_gen.allocate_id());
+        let outer_typ = outer.typ();
+        let input_type = ReprRelationType::new(
+            key.iter()
+                .map(|&k| outer_typ.column_types[k].clone())
+                .collect(),
+        );
+        let placeholder = MirRelationExpr::local_get(placeholder_id, input_type);
+        // Decorrelate a *clone* of `inner` against the placeholder; on failure
+        // to be row-wise evaluable we fall through to the keyed path with the
+        // original `inner` intact.
+        let trial = apply(
+            id_gen,
+            inner.clone(),
+            placeholder,
+            &new_col_map,
+            cte_map,
+            context,
+        )?;
+        // The decorrelated result echoes the placeholder's `key.len()` columns
+        // ahead of the subquery's own output; drop that echo so the table
+        // function emits only the subquery columns.
+        let trial_arity = trial.arity();
+        let mut body = trial.project((key.len()..trial_arity).collect());
+        if is_rowwise_closed(&body, placeholder_id) {
+            // Renumber the housed relation's local ids to a canonical sequence so
+            // that two structurally-equivalent subqueries produce byte-identical
+            // `EvalRelation`s, which lets the later `RelationCSE` pass share their
+            // `FlatMap`s instead of building one arrangement + join input per copy.
+            canonicalize_rowwise_ids(&mut body, &mut placeholder_id);
+            let output_type = SqlRelationType::from_repr(&body.typ());
+            let func = mz_expr::TableFunc::EvalRelation {
+                relation: Box::new(body),
+                input_id: placeholder_id,
+                output_type,
+            };
+            let exprs = key.iter().map(|&k| MirScalarExpr::column(k)).collect();
+            return outer.let_in(id_gen, |_id_gen, get_outer| {
+                Ok(MirRelationExpr::FlatMap {
+                    input: Box::new(get_outer),
+                    func,
+                    exprs,
+                })
+            });
+        }
+    }
+
     outer.let_in(id_gen, |id_gen, get_outer| {
         let keyed_outer = if key.is_empty() {
             // Don't depend on outer at all if the branch is not correlated,
@@ -1956,6 +2029,131 @@ where
             Ok(joined)
         })
     })
+}
+
+/// Cheap pre-filter for the row-wise `branch` path: does `inner` use only the
+/// relational operators we are (currently) willing to evaluate per row?
+///
+/// This is a conservative, default-deny allowlist — the dial for how much of
+/// the relational fragment the row-wise path covers. It deliberately rejects
+/// `Get` (a reference to a stored collection or CTE makes the computation not
+/// row-local), and `Join`/`Let`/`LetRec` for now. Passing this filter does not
+/// by itself guarantee evaluability; [`is_rowwise_closed`] makes the
+/// authoritative decision on the decorrelated result (including rejecting any
+/// `TopK` whose limit `eval_relation` cannot evaluate).
+fn is_rowwise_candidate(inner: &HirRelationExpr) -> bool {
+    let mut ok = true;
+    #[allow(deprecated)]
+    inner.visit(0, &mut |expr, _| match expr {
+        HirRelationExpr::Constant { .. }
+        | HirRelationExpr::Project { .. }
+        | HirRelationExpr::Map { .. }
+        | HirRelationExpr::Filter { .. }
+        | HirRelationExpr::Distinct { .. }
+        | HirRelationExpr::CallTable { .. }
+        | HirRelationExpr::Reduce { .. }
+        | HirRelationExpr::TopK { .. }
+        | HirRelationExpr::Negate { .. }
+        | HirRelationExpr::Threshold { .. }
+        | HirRelationExpr::Union { .. } => {}
+        _ => ok = false,
+    });
+    ok
+}
+
+/// Canonically renumbers the local ids of a row-wise-closed `body` (and updates
+/// `input_id`, the placeholder) to a dense sequence in pre-order first-visit
+/// order.
+///
+/// The ids in a `TableFunc::EvalRelation`'s housed relation are bound and
+/// resolved entirely within `eval_relation_with_input`'s own environment (see
+/// `is_rowwise_closed` for the shape guarantee: only the placeholder and inner
+/// `Let`s — no global `Get`, no `LetRec`), so their concrete values don't affect
+/// evaluation. Normalizing them makes two structurally-equivalent housed
+/// relations compare equal, which lets the later `RelationCSE` pass share their
+/// `FlatMap`s rather than materialize one arrangement and one join input per copy.
+fn canonicalize_rowwise_ids(body: &mut MirRelationExpr, input_id: &mut mz_expr::LocalId) {
+    use mz_expr::{Id, LocalId};
+    let mut remap: BTreeMap<LocalId, LocalId> = BTreeMap::new();
+    let mut next = 0u64;
+    let next_id = |remap: &mut BTreeMap<LocalId, LocalId>, next: &mut u64, old: LocalId| {
+        *remap.entry(old).or_insert_with(|| {
+            let id = LocalId::new(*next);
+            *next += 1;
+            id
+        })
+    };
+    // Assign the placeholder first so it occupies a fixed canonical slot.
+    *input_id = next_id(&mut remap, &mut next, *input_id);
+    // Pre-order, so each `Let` binding is renumbered before the `Get`s beneath it.
+    body.visit_mut_pre(&mut |e: &mut MirRelationExpr| match e {
+        MirRelationExpr::Let { id, .. } => *id = next_id(&mut remap, &mut next, *id),
+        MirRelationExpr::Get {
+            id: Id::Local(id), ..
+        } => *id = next_id(&mut remap, &mut next, *id),
+        _ => {}
+    });
+}
+
+/// Authoritative check that `body` (a decorrelated subquery rooted at the
+/// placeholder `Get(Local(placeholder))`) can be evaluated row-by-row by
+/// [`mz_expr::eval::eval_relation_with_input`].
+///
+/// `body` is evaluable iff it references no stored collection, contains no
+/// recursion or arrangements, contains no unmaterializable functions, every
+/// `TopK` has a limit `eval_relation` can evaluate (absent, or a non-negative
+/// literal), and every local `Get` resolves to either the placeholder or a
+/// `Let` bound within `body`.
+fn is_rowwise_closed(body: &MirRelationExpr, placeholder: mz_expr::LocalId) -> bool {
+    // `eval_relation` evaluates scalars with `MirScalarExpr::eval`, which errors
+    // on unmaterializable functions (`now()`, `mz_now()`, `current_database()`,
+    // ...). Those are resolved to literals by a later optimizer pass that cannot
+    // see into the housed relation, so we must not house them: bail and let the
+    // keyed path (whose scalars that pass can reach) handle them.
+    let mut materializable = true;
+    body.visit_scalars(&mut |s| {
+        if s.contains_unmaterializable() {
+            materializable = false;
+        }
+    });
+    if !materializable {
+        return false;
+    }
+
+    let mut ok = true;
+    let mut lets = BTreeSet::new();
+    let mut local_gets = BTreeSet::new();
+    body.visit_pre(|e: &MirRelationExpr| match e {
+        MirRelationExpr::Let { id, .. } => {
+            lets.insert(*id);
+        }
+        MirRelationExpr::LetRec { .. } | MirRelationExpr::ArrangeBy { .. } => ok = false,
+        MirRelationExpr::Get {
+            id: mz_expr::Id::Global(_),
+            ..
+        } => ok = false,
+        MirRelationExpr::Get {
+            id: mz_expr::Id::Local(id),
+            ..
+        } => {
+            local_gets.insert(*id);
+        }
+        // Mirror `eval_relation`'s precondition: it can only evaluate a `TopK`
+        // whose limit is absent or a non-negative literal.
+        MirRelationExpr::TopK { limit, .. } => {
+            let limit_ok = match limit {
+                None => true,
+                Some(l) => l.as_literal_int64().map_or(false, |v| v >= 0),
+            };
+            if !limit_ok {
+                ok = false;
+            }
+        }
+        _ => {}
+    });
+    ok && local_gets
+        .iter()
+        .all(|id| *id == placeholder || lets.contains(id))
 }
 
 fn apply_scalar_subquery(

@@ -638,6 +638,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_simplify_quantified_comparisons: Default::default(),
                 enable_coalesce_case_transform: Default::default(),
                 enable_will_distinct_propagation: Default::default(),
+                enable_rowwise_subquery_lowering: Default::default(),
             },
         })
     }

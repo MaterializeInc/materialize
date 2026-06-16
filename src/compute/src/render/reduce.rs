@@ -580,15 +580,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 .clone()
                 .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
                     move |key, source, target| {
-                        // We respect the multiplicity here (unlike in hierarchical aggregation)
+                        // We pass the multiplicity through (unlike in hierarchical aggregation)
                         // because we don't know that the aggregation method is not sensitive
-                        // to the number of records.
-                        let iter = source.iter().flat_map(|(v, w)| {
-                            // Note that in the non-positive case, this is wrong, but harmless because
-                            // our other reduction will produce an error.
-                            let count = usize::try_from(w.into_inner()).unwrap_or(0);
-                            std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
-                        });
+                        // to the number of records. The aggregate decides how to consume it.
+                        let iter = source
+                            .iter()
+                            .map(|(v, w)| (v.to_datum_iter().next().unwrap(), *w));
 
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums1.borrow();
@@ -619,10 +616,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
                     move |key, source, target| {
                         // This part is the same as in the `!fused_unnest_list` if branch above.
-                        let iter = source.iter().flat_map(|(v, w)| {
-                            let count = usize::try_from(w.into_inner()).unwrap_or(0);
-                            std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
-                        });
+                        let iter = source
+                            .iter()
+                            .map(|(v, w)| (v.to_datum_iter().next().unwrap(), *w));
 
                         // This is the part that is specific to the `fused_unnest_list` branch.
                         let temp_storage = RowArena::new();
@@ -684,11 +680,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
                             // We know that `mfp_after` can error if it exists, so try to evaluate it here.
                             let Some(mfp) = &mfp_after2 else { return };
-                            let iter = source.iter().flat_map(|&(mut v, ref w)| {
-                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
+                            let iter = source.iter().map(|&(mut v, ref w)| {
                                 // This would ideally use `to_datum_iter` but we cannot as it needs to
                                 // borrow `v` and only presents datums with that lifetime, not any longer.
-                                std::iter::repeat(v.next().unwrap()).take(count)
+                                (v.next().unwrap(), *w)
                             });
 
                             let temp_storage = RowArena::new();
@@ -720,11 +715,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         &format!("{name} Error Check"),
                         move |key, source, target| {
-                            let iter = source.iter().flat_map(|&(mut v, ref w)| {
-                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
+                            let iter = source.iter().map(|&(mut v, ref w)| {
                                 // This would ideally use `to_datum_iter` but we cannot as it needs to
                                 // borrow `v` and only presents datums with that lifetime, not any longer.
-                                std::iter::repeat(v.next().unwrap()).take(count)
+                                (v.next().unwrap(), *w)
                             });
 
                             let temp_storage = RowArena::new();
@@ -972,7 +966,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                     .collect::<Vec<_>>();
                                 for func in aggr_funcs2.iter() {
                                     let column_iter = (0..source_iters.len())
-                                        .map(|i| source_iters[i].next().unwrap());
+                                        .map(|i| (source_iters[i].next().unwrap(), Diff::ONE));
                                     datums_local.push(func.eval(column_iter, &temp_storage));
                                 }
                                 if let Result::Err(e) =
@@ -1005,7 +999,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                 .collect::<Vec<_>>();
                             for func in aggr_funcs.iter() {
                                 let column_iter = (0..source_iters.len())
-                                    .map(|i| source_iters[i].next().unwrap());
+                                    .map(|i| (source_iters[i].next().unwrap(), Diff::ONE));
                                 datums_local.push(func.eval(column_iter, &temp_storage));
                             }
 
@@ -1159,8 +1153,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .map(|(values, _cnt)| *values)
                     .collect::<Vec<_>>();
                 for func in aggrs.iter() {
-                    let column_iter =
-                        (0..source_iters.len()).map(|i| source_iters[i].next().unwrap());
+                    let column_iter = (0..source_iters.len())
+                        .map(|i| (source_iters[i].next().unwrap(), Diff::ONE));
                     row_packer.push(func.eval(column_iter, &RowArena::new()));
                 }
                 // We only want to arrange the parts of the input that are not part of the output.

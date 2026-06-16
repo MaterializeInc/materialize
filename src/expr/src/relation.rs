@@ -55,6 +55,7 @@ use crate::{
 };
 
 pub mod canonicalize;
+pub mod eval;
 pub mod func;
 pub mod join_input_mapper;
 
