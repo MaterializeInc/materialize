@@ -4492,7 +4492,7 @@ pub fn plan_create_role(
     let attributes = plan_role_attributes(options, scx)?;
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
-        attributes: attributes.into(),
+        attributes: crate::catalog::role_attributes_raw_from_planned(attributes),
     }))
 }
 
@@ -5380,7 +5380,7 @@ pub fn plan_drop_objects(
     if object_type == mz_sql_parser::ast::ObjectType::Func {
         bail_unsupported!("DROP FUNCTION");
     }
-    let object_type = object_type.into();
+    let object_type = crate::catalog::object_type_from_ast(object_type);
 
     let mut referenced_ids = Vec::new();
     for name in names {
@@ -6377,7 +6377,7 @@ pub fn plan_alter_item_set_cluster(
 ) -> Result<Plan, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_ALTER_SET_CLUSTER)?;
 
-    let object_type = object_type.into();
+    let object_type = crate::catalog::object_type_from_ast(object_type);
 
     // Prevent access to `SET CLUSTER` for unsupported objects.
     match object_type {
@@ -6450,7 +6450,7 @@ pub fn plan_alter_object_rename(
         if_exists,
     }: AlterObjectRenameStatement,
 ) -> Result<Plan, PlanError> {
-    let object_type = object_type.into();
+    let object_type = crate::catalog::object_type_from_ast(object_type);
     match (object_type, name) {
         (
             ObjectType::View
@@ -6792,7 +6792,7 @@ pub fn plan_alter_object_swap(
         name_a,
         name_b,
     } = stmt;
-    let object_type = object_type.into();
+    let object_type = crate::catalog::object_type_from_ast(object_type);
 
     // We'll try 10 times to generate a temporary suffix.
     let gen_temp_suffix = |check_fn: &dyn Fn(&str) -> bool| {
@@ -6864,7 +6864,13 @@ pub fn plan_alter_retain_history(
         history,
     }: AlterRetainHistoryStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    alter_retain_history(scx, object_type.into(), if_exists, name, history)
+    alter_retain_history(
+        scx,
+        crate::catalog::object_type_from_ast(object_type),
+        if_exists,
+        name,
+        history,
+    )
 }
 
 fn alter_retain_history(

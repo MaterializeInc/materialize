@@ -21,7 +21,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId};
-use mz_sql::names::{DatabaseId, SchemaId};
+use mz_sql_types::names::{DatabaseId, SchemaId};
 use proptest::prelude::*;
 
 fn serialize_and_parse_catalog_id(val: &impl serde::Serialize) -> String {

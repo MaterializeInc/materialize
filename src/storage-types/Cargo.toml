@@ -37,6 +37,7 @@ mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry" }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
+mz-cluster-types = { path = "../cluster-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
@@ -95,4 +96,4 @@ prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
-proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest", "mz-expr/proptest"]
+proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest", "mz-expr/proptest", "mz-cluster-types/proptest"]

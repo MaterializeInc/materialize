@@ -953,6 +953,14 @@ impl From<EvalError> for PlanError {
     }
 }
 
+impl From<mz_sql_types::ParseError> for PlanError {
+    fn from(e: mz_sql_types::ParseError) -> PlanError {
+        match e {
+            mz_sql_types::ParseError::Unstructured(msg) => PlanError::Unstructured(msg),
+        }
+    }
+}
+
 impl From<ParserError> for PlanError {
     fn from(e: ParserError) -> PlanError {
         PlanError::Parser(e)

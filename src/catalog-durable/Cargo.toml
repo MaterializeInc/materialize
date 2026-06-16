@@ -1,6 +1,14 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
 [package]
-name = "mz-catalog"
-description = "Materialize's catalog layer."
+name = "mz-catalog-durable"
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -27,7 +35,6 @@ mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
 mz-auth = { path = "../auth" }
 mz-build-info = { path = "../build-info" }
-mz-catalog-durable = { path = "../catalog-durable" }
 mz-catalog-protos = { path = "../catalog-protos" }
 mz-catalog-types = { path = "../catalog-types" }
 mz-cloud-resources = { path = "../cloud-resources" }
@@ -47,11 +54,10 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-pgtz = { path = "../pgtz" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing"] }
-mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-sql-types = { path = "../sql-types" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
-mz-transform = { path = "../transform" }
 openssl.workspace = true
 paste.workspace = true
 prometheus.workspace = true
@@ -61,8 +67,8 @@ semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_plain.workspace = true
-static_assertions.workspace = true
 sha2.workspace = true
+static_assertions.workspace = true
 thiserror.workspace = true
 timely.workspace = true
 tokio.workspace = true
@@ -73,6 +79,8 @@ uuid.workspace = true
 base64.workspace = true
 insta.workspace = true
 mz-catalog-protos = { path = "../catalog-protos", features = ["proptest"] }
+mz-catalog-types = { path = "../catalog-types", features = ["proptest"] }
+mz-ore = { path = "../ore", features = ["test"] }
 mz-repr = { path = "../repr", features = ["proptest"] }
 proptest.workspace = true
 proptest-derive.workspace = true

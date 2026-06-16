@@ -27,8 +27,8 @@ use mz_storage_types::connections::Connection;
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
-    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogItem, CatalogItemType,
-    CatalogSchema, ObjectType, SessionCatalog, SystemObjectType,
+    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogItem, CatalogSchema, ObjectType,
+    SessionCatalog, SystemObjectType,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
@@ -490,34 +490,8 @@ pub fn plan_copy_from(
     query::plan_copy_from_rows(pcx, catalog, target_id, target_name, columns, rows)
 }
 
-/// Whether a SQL object type can be interpreted as matching the type of the given catalog item.
-/// For example, if `v` is a view, `DROP SOURCE v` should not work, since Source and View
-/// are non-matching types.
-///
-/// For now tables are treated as a special kind of source in Materialize, so just
-/// allow `TABLE` to refer to either.
-impl PartialEq<ObjectType> for CatalogItemType {
-    fn eq(&self, other: &ObjectType) -> bool {
-        match (self, other) {
-            (CatalogItemType::Source, ObjectType::Source)
-            | (CatalogItemType::Table, ObjectType::Table)
-            | (CatalogItemType::Sink, ObjectType::Sink)
-            | (CatalogItemType::View, ObjectType::View)
-            | (CatalogItemType::MaterializedView, ObjectType::MaterializedView)
-            | (CatalogItemType::Index, ObjectType::Index)
-            | (CatalogItemType::Type, ObjectType::Type)
-            | (CatalogItemType::Secret, ObjectType::Secret)
-            | (CatalogItemType::Connection, ObjectType::Connection) => true,
-            (_, _) => false,
-        }
-    }
-}
-
-impl PartialEq<CatalogItemType> for ObjectType {
-    fn eq(&self, other: &CatalogItemType) -> bool {
-        other == self
-    }
-}
+// `PartialEq` between `CatalogItemType` and `ObjectType` lives in `mz-sql-types`, alongside
+// both types.
 
 /// Immutable state that applies to the planning of an entire `Statement`.
 #[derive(Debug, Clone)]

@@ -692,11 +692,11 @@ impl TryFrom<&Statement<Raw>> for ExecuteResponse {
         }
         let resp = match stmt {
             Statement::DropObjects(DropObjectsStatement { object_type, .. }) => {
-                ExecuteResponse::DroppedObject((*object_type).into())
+                ExecuteResponse::DroppedObject(mz_sql::catalog::object_type_from_ast(*object_type))
             }
             Statement::AlterObjectRename(AlterObjectRenameStatement { object_type, .. })
             | Statement::AlterOwner(AlterOwnerStatement { object_type, .. }) => {
-                ExecuteResponse::AlteredObject((*object_type).into())
+                ExecuteResponse::AlteredObject(mz_sql::catalog::object_type_from_ast(*object_type))
             }
             _ => return Err(()),
         };

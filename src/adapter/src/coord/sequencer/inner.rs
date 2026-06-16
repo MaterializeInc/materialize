@@ -3238,7 +3238,9 @@ impl Coordinator {
         // Apply our updates.
         match option {
             PlannedAlterRoleOption::Attributes(attrs) => {
-                self.validate_role_attributes(&attrs.clone().into())?;
+                self.validate_role_attributes(&mz_sql::catalog::role_attributes_raw_from_planned(
+                    attrs.clone(),
+                ))?;
 
                 if let Some(inherit) = attrs.inherit {
                     attributes.inherit = inherit;

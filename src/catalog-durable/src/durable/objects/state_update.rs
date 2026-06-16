@@ -19,13 +19,13 @@
 //!      [`proto::StateUpdateKind`].
 //!   4. The update is then converted into a [`StateUpdate<StateUpdateKind>`], which is a strongly
 //!      typed Rust object.
-//!   5. Finally, the update is converted into an [`Option<memory::objects::StateUpdate>`], and
+//!   5. Finally, the update is converted into an [`Option<memory::StateUpdate>`], and
 //!      `Some` variants are given to the in-memory catalog. The in-memory catalog is only
 //!      interested in a subset of catalog updates which is why the [`Option`] is necessary.
 //!
 //! TLDR: [`PersistStateUpdate`] -> [`StateUpdate<StateUpdateKindJson>`] ->
 //!       [`proto::StateUpdateKind`] -> [`StateUpdate<StateUpdateKind>`] ->
-//!       [`Option<memory::objects::StateUpdate>`]
+//!       [`Option<memory::StateUpdate>`]
 //!
 //! The process of writing a catalog update to persist is the exact opposite.
 //!
@@ -53,7 +53,7 @@ use crate::durable::objects::{DurableType, FenceToken};
 use crate::durable::persist::Timestamp;
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{DurableCatalogError, Epoch};
-use crate::memory;
+use mz_catalog_types::memory;
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKindJson`].
 pub trait IntoStateUpdateKindJson:
@@ -424,14 +424,14 @@ impl StateUpdateKindJson {
 /// Version of [`StateUpdateKind`] that is stored directly in persist.
 type PersistStateUpdate = ((SourceData, ()), Timestamp, StorageDiff);
 
-impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
+impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::StateUpdate> {
     type Error = DurableCatalogError;
 
     fn try_from(
         StateUpdate { kind, ts, diff }: &StateUpdate<StateUpdateKind>,
     ) -> Result<Self, Self::Error> {
-        let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
-        let update = kind.map(|kind| memory::objects::StateUpdate {
+        let kind: Option<memory::StateUpdateKind> = TryInto::try_into(kind)?;
+        let update = kind.map(|kind| memory::StateUpdate {
             kind,
             ts: ts.clone(),
             diff: diff.clone().try_into().expect("invalid diff"),
@@ -440,7 +440,7 @@ impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpd
     }
 }
 
-impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
+impl TryFrom<&StateUpdateKind> for Option<memory::StateUpdateKind> {
     type Error = DurableCatalogError;
 
     fn try_from(kind: &StateUpdateKind) -> Result<Self, Self::Error> {
@@ -458,93 +458,83 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
         Ok(match kind {
             StateUpdateKind::AuditLog(key, value) => {
                 let audit_log = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::AuditLog(audit_log))
+                Some(memory::StateUpdateKind::AuditLog(audit_log))
             }
             StateUpdateKind::Cluster(key, value) => {
                 let cluster = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Cluster(cluster))
+                Some(memory::StateUpdateKind::Cluster(cluster))
             }
             StateUpdateKind::ClusterReplica(key, value) => {
                 let cluster_replica = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::ClusterReplica(
-                    cluster_replica,
-                ))
+                Some(memory::StateUpdateKind::ClusterReplica(cluster_replica))
             }
             StateUpdateKind::Comment(key, value) => {
                 let comment = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Comment(comment))
+                Some(memory::StateUpdateKind::Comment(comment))
             }
             StateUpdateKind::Database(key, value) => {
                 let database = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Database(database))
+                Some(memory::StateUpdateKind::Database(database))
             }
             StateUpdateKind::DefaultPrivilege(key, value) => {
                 let default_privilege = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::DefaultPrivilege(
-                    default_privilege,
-                ))
+                Some(memory::StateUpdateKind::DefaultPrivilege(default_privilege))
             }
             StateUpdateKind::Item(key, value) => {
                 let item = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Item(item))
+                Some(memory::StateUpdateKind::Item(item))
             }
             StateUpdateKind::IntrospectionSourceIndex(key, value) => {
                 let introspection_source_index = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::IntrospectionSourceIndex(
+                Some(memory::StateUpdateKind::IntrospectionSourceIndex(
                     introspection_source_index,
                 ))
             }
             StateUpdateKind::NetworkPolicy(key, value) => {
                 let policy = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::NetworkPolicy(policy))
+                Some(memory::StateUpdateKind::NetworkPolicy(policy))
             }
             StateUpdateKind::Role(key, value) => {
                 let role = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Role(role))
+                Some(memory::StateUpdateKind::Role(role))
             }
             StateUpdateKind::RoleAuth(key, value) => {
                 let role_auth = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::RoleAuth(role_auth))
+                Some(memory::StateUpdateKind::RoleAuth(role_auth))
             }
             StateUpdateKind::Schema(key, value) => {
                 let schema = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Schema(schema))
+                Some(memory::StateUpdateKind::Schema(schema))
             }
             StateUpdateKind::SourceReferences(key, value) => {
                 let source_references = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::SourceReferences(
-                    source_references,
-                ))
+                Some(memory::StateUpdateKind::SourceReferences(source_references))
             }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
                 let storage_collection_metadata = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::StorageCollectionMetadata(
+                Some(memory::StateUpdateKind::StorageCollectionMetadata(
                     storage_collection_metadata,
                 ))
             }
             StateUpdateKind::SystemConfiguration(key, value) => {
                 let system_configuration = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::SystemConfiguration(
+                Some(memory::StateUpdateKind::SystemConfiguration(
                     system_configuration,
                 ))
             }
             StateUpdateKind::SystemObjectMapping(key, value) => {
                 let system_object_mapping = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::SystemObjectMapping(
+                Some(memory::StateUpdateKind::SystemObjectMapping(
                     system_object_mapping,
                 ))
             }
             StateUpdateKind::SystemPrivilege(key, value) => {
                 let system_privilege = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::SystemPrivilege(
-                    system_privilege,
-                ))
+                Some(memory::StateUpdateKind::SystemPrivilege(system_privilege))
             }
             StateUpdateKind::UnfinalizedShard(key, value) => {
                 let unfinalized_shard = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::UnfinalizedShard(
-                    unfinalized_shard,
-                ))
+                Some(memory::StateUpdateKind::UnfinalizedShard(unfinalized_shard))
             }
             // Not exposed to higher layers.
             StateUpdateKind::Config(_, _)

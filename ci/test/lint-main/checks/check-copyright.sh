@@ -62,8 +62,8 @@ copyright_files=$(grep -vE \
     -e '^test/ldbc-bi/.*\.sql' \
     -e '^test/ldbc-bi/.*\.log' \
     -e '^src/catalog/tests/snapshots/.*\.snap' \
-    -e '^src/catalog/src/durable/upgrade/snapshots/.*' \
-    -e '^src/catalog/src/durable/upgrade/persist/snapshots/.*\.snap' \
+    -e '^src/catalog-durable/src/durable/upgrade/snapshots/.*' \
+    -e '^src/catalog-durable/src/durable/upgrade/persist/snapshots/.*\.snap' \
     -e '^src/expr-derive-impl/src/snapshots.*' \
     -e '^src/expr/src/scalar/func/impls/snapshots/.*' \
     -e '^src/expr/src/scalar/func/snapshots/.*' \

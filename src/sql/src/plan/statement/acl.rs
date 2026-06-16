@@ -62,7 +62,7 @@ pub fn plan_alter_owner(
         new_owner,
     }: AlterOwnerStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let object_type = object_type.into();
+    let object_type = crate::catalog::object_type_from_ast(object_type);
     match (object_type, name) {
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
             plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
@@ -441,7 +441,7 @@ fn plan_update_privilege(
                     object_type == &scx.get_object_type(object_id)
                 }
             }
-            let object_type = object_type.into();
+            let object_type = crate::catalog::object_type_from_ast(object_type);
             let object_ids: Vec<ObjectId> = match object_spec_inner {
                 GrantTargetSpecificationInner::All(GrantTargetAllSpecification::All) => {
                     let cluster_ids = scx
@@ -509,7 +509,7 @@ fn plan_update_privilege(
                     for name in names {
                         ids.push(
                             // Name resolution should have rejected invalid objects.
-                            name.try_into()
+                            crate::names::object_id_from_resolved(name)
                                 .map_err(|e| internal_err!("invalid object name: {}", e))?,
                         );
                     }
@@ -652,7 +652,8 @@ pub fn plan_alter_default_privileges(
         grant_or_revoke,
     }: AlterDefaultPrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let object_type: ObjectType = (*grant_or_revoke.object_type()).into();
+    let object_type: ObjectType =
+        crate::catalog::object_type_from_ast(*grant_or_revoke.object_type());
     match object_type {
         ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => sql_bail!(
             "{object_type}S is not valid for ALTER DEFAULT PRIVILEGES, use TABLES instead"

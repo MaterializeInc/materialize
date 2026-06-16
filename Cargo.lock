@@ -6109,7 +6109,9 @@ dependencies = [
  "mz-audit-log",
  "mz-auth",
  "mz-build-info",
+ "mz-catalog-durable",
  "mz-catalog-protos",
+ "mz-catalog-types",
  "mz-cloud-resources",
  "mz-compute-client",
  "mz-compute-types",
@@ -6180,6 +6182,71 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-catalog-durable"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bincode",
+ "bytes",
+ "bytesize",
+ "chrono",
+ "clap",
+ "derivative",
+ "differential-dataflow",
+ "futures",
+ "insta",
+ "ipnet",
+ "itertools 0.14.0",
+ "mz-adapter-types",
+ "mz-audit-log",
+ "mz-auth",
+ "mz-build-info",
+ "mz-catalog-protos",
+ "mz-catalog-types",
+ "mz-cloud-resources",
+ "mz-compute-client",
+ "mz-compute-types",
+ "mz-controller",
+ "mz-controller-types",
+ "mz-durable-cache",
+ "mz-dyncfg",
+ "mz-expr",
+ "mz-license-keys",
+ "mz-orchestrator",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-pgrepr",
+ "mz-pgtz",
+ "mz-proto",
+ "mz-repr",
+ "mz-sql-parser",
+ "mz-sql-types",
+ "mz-storage-client",
+ "mz-storage-types",
+ "openssl",
+ "paste",
+ "prometheus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "rand 0.9.4",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_plain",
+ "sha2",
+ "static_assertions",
+ "thiserror 2.0.18",
+ "timely",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mz-catalog-protos"
 version = "0.0.0"
 dependencies = [
@@ -6187,13 +6254,13 @@ dependencies = [
  "md-5",
  "mz-audit-log",
  "mz-catalog-protos",
- "mz-compute-types",
+ "mz-cluster-types",
  "mz-controller-types",
  "mz-expr",
  "mz-ore",
  "mz-proto",
  "mz-repr",
- "mz-sql",
+ "mz-sql-types",
  "mz-storage-types",
  "num_enum 0.7.6",
  "proptest",
@@ -6202,6 +6269,28 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "similar-asserts",
+]
+
+[[package]]
+name = "mz-catalog-types"
+version = "0.0.0"
+dependencies = [
+ "mz-adapter-types",
+ "mz-audit-log",
+ "mz-catalog-protos",
+ "mz-catalog-types",
+ "mz-compute-client",
+ "mz-controller",
+ "mz-controller-types",
+ "mz-ore",
+ "mz-persist-types",
+ "mz-pgrepr",
+ "mz-proto",
+ "mz-repr",
+ "mz-sql-types",
+ "proptest",
+ "proptest-derive",
+ "serde",
 ]
 
 [[package]]
@@ -6298,12 +6387,24 @@ name = "mz-cluster-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-cluster-types",
  "mz-ore",
  "mz-repr",
  "prometheus",
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "mz-cluster-types"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "proptest",
+ "serde",
+ "tracing",
 ]
 
 [[package]]
@@ -6441,6 +6542,7 @@ dependencies = [
  "columnation",
  "differential-dataflow",
  "itertools 0.14.0",
+ "mz-cluster-types",
  "mz-dyncfg",
  "mz-expr",
  "mz-ore",
@@ -8128,6 +8230,7 @@ dependencies = [
  "mz-sql-parser",
  "mz-sql-pretty",
  "mz-sql-server-util",
+ "mz-sql-types",
  "mz-ssh-util",
  "mz-storage-types",
  "mz-tracing",
@@ -8241,6 +8344,26 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "mz-sql-types"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "ipnet",
+ "mz-audit-log",
+ "mz-auth",
+ "mz-cloud-provider",
+ "mz-cluster-types",
+ "mz-ore",
+ "mz-repr",
+ "proptest",
+ "proptest-derive",
+ "regex",
+ "serde",
+ "uncased",
  "uuid",
 ]
 
@@ -8576,6 +8699,7 @@ dependencies = [
  "mz-build-tools",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster-types",
  "mz-dyncfg",
  "mz-expr",
  "mz-interchange",
