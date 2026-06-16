@@ -7,7 +7,8 @@ for Claude Code. Check `mz-*` skill before tasks — encodes project conventions
 saves time.
 
 Use the `mz-test` skill before running ANY tests, even mid-task — the canonical
-commands aren't the obvious ones.
+commands aren't the obvious ones (e.g. `bin/sqllogictest --optimized`, not
+`cargo build --bin sqllogictest`).
 
 ## Code navigation
 
