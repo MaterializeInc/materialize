@@ -63,7 +63,7 @@ endpoint service (step 5).
 
 {{< /note >}}
 
-{{% network-security/privatelink-kafka %}}
+{{% include-headless "/headless/privatelink/privatelink-kafka" %}}
 
 {{< /tab >}}
 

@@ -14,6 +14,14 @@
 
 {{- range $rows -}}
 {{- if eq .name $name -}}
-{{- index . $field | $.Page.RenderString -}}
+{{- $content := index . $field -}}
+{{- /* If the snippet contains nested shortcodes, render it (skill shortcode
+       variants resolve, but output is HTML). Otherwise emit the raw markdown so
+       skill output stays clean markdown. */ -}}
+{{- if findRE "{{[<%]" $content -}}
+{{- $content | $.Page.RenderString -}}
+{{- else -}}
+{{- $content -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
