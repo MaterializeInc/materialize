@@ -188,4 +188,54 @@ macro_rules! impl_optimizer_feature_type {
 
 // Implement `OptimizerFeatureType` for all types used in the
 // `optimizer_feature_flags!(...)`  call above.
-impl_optimizer_feature_type![bool, usize];
+impl_optimizer_feature_type![usize];
+
+impl OptimizerFeatureType for bool {
+    fn encode(self) -> String {
+        self.to_string()
+    }
+
+    fn decode(v: &str) -> Self {
+        // Accept both the Rust spelling (`true`/`false`, what `encode` and
+        // `CREATE CLUSTER ... FEATURES` produce) and the canonical system-var /
+        // PostgreSQL spellings (`on`/`off`, ...). A cluster-coherent scoped
+        // override may arrive as the var's canonical `on`/`off`.
+        match v.trim().to_lowercase().as_str() {
+            "t" | "true" | "on" | "1" | "y" | "yes" => true,
+            "f" | "false" | "off" | "0" | "n" | "no" => false,
+            // The writer only stores values that passed `canonicalize`, so this
+            // arm is unreachable in practice. Log rather than panic anyway: a
+            // stored bad value reaching the plan path would otherwise crash the
+            // optimizer on every query for the affected cluster. Fall back to
+            // `false`.
+            other => {
+                mz_ore::soft_panic_or_log!("invalid boolean optimizer feature override: {other:?}");
+                false
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::OptimizerFeatureOverrides;
+
+    #[mz_ore::test]
+    fn bool_override_decodes_lenient_spellings() {
+        for (stored, want) in [
+            ("true", true),
+            ("false", false),
+            ("on", true),
+            ("off", false),
+        ] {
+            let map =
+                BTreeMap::from([("enable_eager_delta_joins".to_string(), stored.to_string())]);
+            assert_eq!(
+                OptimizerFeatureOverrides::from(map).enable_eager_delta_joins,
+                Some(want),
+            );
+        }
+    }
+}

@@ -9,6 +9,7 @@
 
 use std::collections::BTreeSet;
 
+use mz_adapter_types::dyncfgs::ENABLE_SCOPED_SYSTEM_PARAMETERS;
 use mz_sql::session::vars::{ENABLE_LAUNCHDARKLY, SystemVars, Value, Var, VarInput};
 
 /// A struct that defines the system parameters that should be synchronized
@@ -96,6 +97,21 @@ impl SynchronizedParameters {
             .value()
     }
 
+    /// Canonicalize a raw `value` for the parameter `name` to the same formatted
+    /// form [`SynchronizedParameters::get`] returns, by parsing it through the
+    /// system var and re-formatting.
+    ///
+    /// This lets values that are equal but differently encoded compare equal.
+    /// For example LaunchDarkly serves a boolean as `"true"`, while the canonical
+    /// formatting of a `bool` system var is `"on"`. Returns `None` if `name` is
+    /// not a valid parameter or `value` does not parse for it.
+    pub fn canonicalize(&self, name: &str, value: &str) -> Option<String> {
+        self.system_vars
+            .parse(name, VarInput::Flat(value))
+            .ok()
+            .map(|value| value.format())
+    }
+
     /// Try to modify the in-memory entry for `name` in the SystemVars backing
     /// this [SynchronizedParameters] instance.
     ///
@@ -143,6 +159,15 @@ impl SynchronizedParameters {
         let var_input = VarInput::Flat(&var_name);
         bool::parse(var_input).expect("This is known to be a bool")
     }
+
+    /// Whether scoped (per-cluster and per-replica) system parameters are
+    /// evaluated. Read from this working copy so the sync loop can gate the
+    /// scoped reconcile without taking a catalog snapshot.
+    pub fn enable_scoped_system_parameters(&self) -> bool {
+        let var_name = self.get(ENABLE_SCOPED_SYSTEM_PARAMETERS.name());
+        let var_input = VarInput::Flat(&var_name);
+        bool::parse(var_input).expect("This is known to be a bool")
+    }
 }
 
 pub struct ModifiedParameter {
@@ -166,6 +191,49 @@ mod tests {
         assert_eq!(sync.get("allowed_cluster_replica_sizes"), r#""1", "2""#);
         assert!(sync.modify("allowed_cluster_replica_sizes", ""));
         assert_eq!(sync.get("allowed_cluster_replica_sizes"), "");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_canonicalize_bridges_bool_encodings() {
+        let vars = SystemVars::default();
+        let sync = SynchronizedParameters::new(vars);
+
+        // A `bool` system var formats canonically as "on"/"off", while
+        // LaunchDarkly serves booleans as "true"/"false". The scoped
+        // differs-from-env test compares a raw LD value against `get()`, so
+        // canonicalization must bridge the two spellings, otherwise every
+        // boolean flag would register as differing, even on a FALLTHROUGH that
+        // serves the env-wide value. (`enable_eager_delta_joins` is a scoped
+        // `bool` feature flag, default off.)
+        let name = "enable_eager_delta_joins";
+        let off = sync.get(name);
+        assert_eq!(off, "off");
+
+        // The LD spellings canonicalize to the same form as the var's own.
+        assert_eq!(sync.canonicalize(name, "false").as_deref(), Some("off"));
+        assert_eq!(sync.canonicalize(name, "true").as_deref(), Some("on"));
+        assert_eq!(
+            sync.canonicalize(name, "off"),
+            sync.canonicalize(name, "false")
+        );
+        assert_eq!(
+            sync.canonicalize(name, "on"),
+            sync.canonicalize(name, "true")
+        );
+
+        // The crux: a scoped "false" must match the env-wide "off" baseline, so
+        // it is dropped rather than recorded as a spurious override.
+        assert_eq!(
+            sync.canonicalize(name, "false").as_deref(),
+            Some(off.as_str())
+        );
+
+        // An unparseable value yields `None`. The scoped recording path relies
+        // on this to *skip* such values rather than store them: a stored
+        // unparseable bool would later panic the optimizer's decode on every
+        // plan. See `SystemParameterFrontend::evaluate_scoped_overrides`.
+        assert_eq!(sync.canonicalize(name, "not-a-bool"), None);
     }
 
     #[mz_ore::test]

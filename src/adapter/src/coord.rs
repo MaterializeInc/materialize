@@ -92,7 +92,8 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterC
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
-    USER_ID_POOL_BATCH_SIZE, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
+    ENABLE_SCOPED_SYSTEM_PARAMETERS, USER_ID_POOL_BATCH_SIZE,
+    WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
@@ -139,7 +140,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlRelationType, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -183,7 +184,10 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
-use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
+use crate::config::{
+    ScopedParameters, ScopedParametersScope, SynchronizedParameters, SystemParameterFrontend,
+    SystemParameterSyncConfig, evaluate_scoped_parameters,
+};
 use crate::coord::appends::{
     BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit, PendingWriteTxn,
 };
@@ -436,6 +440,12 @@ impl Message {
                 Command::GetWebhook { .. } => "command-get_webhook",
                 Command::GetSystemVars { .. } => "command-get_system_vars",
                 Command::SetSystemVars { .. } => "command-set_system_vars",
+                Command::UpdateScopedSystemParameters { .. } => {
+                    "command-update_scoped_system_parameters"
+                }
+                Command::InstallScopedSystemParameterFrontend { .. } => {
+                    "command-install_scoped_system_parameter_frontend"
+                }
                 Command::Terminate { .. } => "command-terminate",
                 Command::RetireExecute { .. } => "command-retire_execute",
                 Command::CheckConsistency { .. } => "command-check_consistency",
@@ -1984,6 +1994,16 @@ pub struct Coordinator {
     /// so it can register and own its `*_info` series.
     catalog_info_metrics_registry: MetricsRegistry,
 
+    /// The shared system-parameter frontend, installed by the sync loop once it
+    /// initializes (and re-installed on reconnect). `None` until then, for
+    /// example before LaunchDarkly connects, where a newly-created object
+    /// resolves to the environment-wide value (the cold-cache fallback). Used to
+    /// resolve a new cluster's or replica's scoped overrides synchronously at
+    /// create time, so its first plan or first controller configuration is
+    /// correct rather than waiting for the next sync tick. See the scoped
+    /// feature flags design.
+    scoped_frontend: Option<Arc<SystemParameterFrontend>>,
+
     /// Tracks the state associated with the currently installed watchsets.
     installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
 
@@ -2014,6 +2034,103 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
+    /// Persists the scoped system-parameter working copy and reconciles it into
+    /// the per-scope resolution boundaries.
+    ///
+    /// The system-parameter sync loop and the create-time resolve
+    /// (`resolve_scoped_for_new_objects`) are the only writers, both serialized
+    /// on the coordinator loop. The diff is persisted to the
+    /// durable cache (so values survive an `environmentd` restart and an LD
+    /// outage) via `Op::UpdateScopedSystemParameters`, which also updates the
+    /// in-memory working copy in [`CatalogState`] and the
+    /// `mz_cluster_system_parameters` / `mz_replica_system_parameters`
+    /// introspection relations. The `replica`-scoped overrides reach the compute
+    /// controller's per-replica dyncfg layer through the catalog implication for
+    /// the persisted change. The `cluster`-scoped layer is resolved at plan time
+    /// via [`CatalogState::cluster_scoped_optimizer_overrides`].
+    ///
+    /// [`CatalogState`]: crate::catalog::CatalogState
+    /// [`CatalogState::cluster_scoped_optimizer_overrides`]: crate::catalog::CatalogState::cluster_scoped_optimizer_overrides
+    pub(crate) async fn reconcile_scoped_system_parameters(
+        &mut self,
+        scoped: ScopedParameters,
+        prune_scope: Option<ScopedParametersScope>,
+    ) {
+        // Nothing changed: skip the durable write. This is the common case on
+        // most sync ticks.
+        if self.catalog().state().scoped_system_parameters() == &scoped {
+            return;
+        }
+
+        // Persist the diff and update the in-memory working copy + introspection
+        // through the catalog transaction, serialized on the coordinator loop
+        // with the create-time resolve. The replica-scoped
+        // controller push is derived from this transaction's diff by the catalog
+        // implication. `prune_scope` bounds removals to the evaluated objects, so
+        // a concurrently-created object's override is not wiped. Best-effort: a
+        // failure here is logged and retried on the next sync tick.
+        if let Err(e) = self
+            .catalog_transact(
+                None,
+                vec![crate::catalog::Op::UpdateScopedSystemParameters {
+                    scoped,
+                    prune_scope,
+                }],
+            )
+            .await
+        {
+            tracing::warn!("failed to persist scoped system parameters: {e}");
+        }
+    }
+
+    /// Synchronously resolves the scoped overrides for the given freshly-created
+    /// clusters and replicas and folds them into the working copy, so a new
+    /// object observes its overrides immediately, before its first plan
+    /// (cluster-coherent) or first controller configuration (replica-local),
+    /// rather than after the next sync tick. Render-frozen flags (optimizer
+    /// features baked into an immutable dataflow) make the tick-latency window a
+    /// correctness problem, not just a delay, which is why this exists.
+    ///
+    /// No-op when the feature is gated off or the shared frontend is not yet
+    /// installed (e.g. before LaunchDarkly connects), in which case the object
+    /// resolves to the environment-wide value, the cold-cache fallback. The
+    /// periodic sync loop remains the authoritative full-state reconciler.
+    pub(crate) async fn resolve_scoped_for_new_objects(
+        &mut self,
+        clusters: &BTreeSet<ClusterId>,
+        replicas: &BTreeSet<ReplicaId>,
+    ) {
+        if clusters.is_empty() && replicas.is_empty() {
+            return;
+        }
+        let Some(frontend) = self.scoped_frontend.clone() else {
+            return;
+        };
+        let catalog = self.catalog();
+        if !ENABLE_SCOPED_SYSTEM_PARAMETERS.get(catalog.system_config().dyncfgs()) {
+            return;
+        }
+
+        // Evaluate only the new objects, then merge onto the current working copy
+        // so reconcile keeps the overrides of objects it did not re-evaluate.
+        let params = SynchronizedParameters::new(catalog.system_config().clone());
+        let evaluated =
+            evaluate_scoped_parameters(&frontend, &params, catalog, Some(clusters), Some(replicas));
+        let merged = catalog.state().scoped_system_parameters().merge(&evaluated);
+        // This runs synchronously after the create transaction, so the catalog
+        // already reflects the new objects. The merged state is authoritative
+        // for all live objects, so prune within them.
+        let prune_scope = ScopedParametersScope {
+            clusters: catalog.clusters().map(|cluster| cluster.id).collect(),
+            replicas: catalog
+                .clusters()
+                .flat_map(|cluster| cluster.replicas().map(|replica| replica.replica_id))
+                .collect(),
+        };
+        self.reconcile_scoped_system_parameters(merged, Some(prune_scope))
+            .await;
+    }
+
     /// Resolves the replica-local scoped overrides from the catalog working copy
     /// into the compute controller's per-replica dyncfg layer, then re-pushes
     /// the environment-wide compute configuration so replicas observe the new
@@ -2082,6 +2199,18 @@ impl Coordinator {
         // renders the full dyncfg set.
         let compute_config = crate::flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
+    }
+
+    /// Returns the cluster-coherent scoped optimizer-feature overrides for
+    /// `cluster_id`. See
+    /// [`CatalogState::cluster_scoped_optimizer_overrides`](crate::catalog::CatalogState::cluster_scoped_optimizer_overrides).
+    pub(crate) fn cluster_scoped_optimizer_overrides(
+        &self,
+        cluster_id: ClusterId,
+    ) -> OptimizerFeatureOverrides {
+        self.catalog()
+            .state()
+            .cluster_scoped_optimizer_overrides(cluster_id)
     }
 
     /// Initializes coordinator state based on the contained catalog. Must be
@@ -3298,7 +3427,15 @@ impl Coordinator {
         let optimizer_config = |catalog: &Catalog, cluster_id| {
             let system_config = catalog.system_config();
             let overrides = catalog.get_cluster(cluster_id).config.features();
-            OptimizerConfig::from(system_config).override_from(&overrides)
+            OptimizerConfig::from(system_config)
+                .override_from(&overrides)
+                // A cluster-scoped LaunchDarkly rule beats a manual `FEATURES`
+                // pin.
+                .override_from(
+                    &catalog
+                        .state()
+                        .cluster_scoped_optimizer_overrides(cluster_id),
+                )
         };
 
         for entry in ordered_catalog_entries {
@@ -4817,6 +4954,7 @@ pub fn serve(
                     segment_client,
                     metrics,
                     catalog_info_metrics_registry: metrics_registry.clone(),
+                    scoped_frontend: None,
                     optimizer_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
