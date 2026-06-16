@@ -24,6 +24,7 @@ use crate::scalar::func::UnaryFunc;
 use crate::visit::Visit;
 
 mod binary;
+mod case_literal;
 mod if_then;
 mod unary;
 mod variadic;
@@ -111,6 +112,14 @@ fn reduce_post(e: &mut MirScalarExpr, column_types: &[ReprColumnType], temp_stor
         MirScalarExpr::CallVariadic { .. } => {
             variadic::reduce_call_variadic(e, column_types, temp_storage)
         }
-        MirScalarExpr::If { .. } => if_then::reduce_if(e, column_types),
+        MirScalarExpr::If { .. } => {
+            if_then::reduce_if(e, column_types);
+            // reduce_if may have rewritten the node away (e.g. bool branches
+            // become AND/OR); only attempt CaseLiteral construction if it is
+            // still an If.
+            if matches!(e, MirScalarExpr::If { .. }) {
+                case_literal::try_build(e, column_types);
+            }
+        }
     }
 }
