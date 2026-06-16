@@ -161,3 +161,25 @@ JOIN mz_clusters c ON s.cluster_id = c.id
 WHERE c.name = 'c_rt'
 ----
 0
+
+# --- cluster_check_scheduling_policies_interval rejects zero ------------------
+
+# The interval at which scheduling policies run is passed to
+# tokio::time::interval during coordinator bootstrap, which panics on a zero
+# period. A zero value would therefore crash-loop environmentd on every boot,
+# so it must be rejected at ALTER SYSTEM SET time.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_check_scheduling_policies_interval = '0s';
+----
+db error: ERROR: parameter "cluster_check_scheduling_policies_interval" cannot have value "0ns": only supports non-zero durations
+
+# A non-zero value is still accepted.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_check_scheduling_policies_interval = '1s';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET cluster_check_scheduling_policies_interval;
+----
+COMPLETE 0
