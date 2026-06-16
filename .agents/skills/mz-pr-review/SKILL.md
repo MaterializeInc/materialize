@@ -69,7 +69,8 @@ The overall developer guide for reviewing changes is defined in `doc/developer/g
 - New public items should have doc comments.
 
 ### Release notes
-- Any user-visible change to stable APIs needs a release note (imperative, "This release will…").
+
+Release notes are auto-generated per release from PR descriptions (the `mz-release-notes` skill); authors don't write them. So for a user-visible change, check that the PR *description* states the user-observable effect in user-facing terms — not only implementation detail — so the classifier includes it.
 
 ## One semantic change rule
 
