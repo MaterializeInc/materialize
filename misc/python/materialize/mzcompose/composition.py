@@ -913,6 +913,7 @@ class Composition:
         entrypoint: str | None = None,
         check: bool = True,
         silent: bool = False,
+        use_aliases: bool = False,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
@@ -929,6 +930,9 @@ class Composition:
             stdin: read STDIN from a string.
             env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
+            use_aliases: Connect the container to the network(s) using the
+                service's network aliases, so other services can reach it by
+                its service name (`docker compose run` omits aliases by default).
             capture: Capture the stdout of the `docker compose` invocation.
             capture_stderr: Capture the stderr of the `docker compose` invocation.
             capture_and_print: Print during execution and capture the
@@ -940,6 +944,7 @@ class Composition:
             *(f"-e{k}" for k in env_extra.keys()),
             *(["--detach"] if detach else []),
             *(["--rm"] if rm else []),
+            *(["--use-aliases"] if use_aliases else []),
             service,
             *args,
             capture=capture,

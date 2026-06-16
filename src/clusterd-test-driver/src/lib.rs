@@ -17,4 +17,6 @@ pub mod dataflow;
 pub mod driver;
 pub mod persist_host;
 pub mod responses;
+pub mod script;
 pub mod target;
+pub mod text;
