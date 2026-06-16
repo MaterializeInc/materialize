@@ -1,9 +1,11 @@
 ---
 title: "Stable APIs"
+aliases:
+  - /manage/mz-deploy/stable-apis/
 description: "Build cross-team data products with stable API schemas that never break downstream consumers."
 menu:
   main:
-    parent: manage-mz-deploy
+    parent: mz-deploy-deploy
     weight: 55
     identifier: "mz-deploy-stable-apis"
     name: "Stable APIs"
@@ -20,7 +22,7 @@ Stable API schemas solve this problem.
 
 ## Marking a schema as stable
 
-Add `SET api = stable` to a [schema modifier](/manage/mz-deploy/project-structure/#schema-modifiers):
+Add `SET api = stable` to a [schema modifier](/manage/mz-deploy/develop/project-structure/#schema-modifiers):
 
 ```sql
 -- models/materialize/ontology.sql
@@ -142,7 +144,7 @@ views on top of the ontology. Each project:
 - Has its own git repository and deployment lifecycle.
 - Runs on its own cluster for independent scaling.
 - Declares cross-project references as
-  [external dependencies](/manage/mz-deploy/local-development/#external-dependencies)
+  [external dependencies](/manage/mz-deploy/develop/local-development/#external-dependencies)
   in `project.toml`.
 
 When the Ontology team changes how `customers_cleaned` is computed, they deploy

@@ -1,9 +1,11 @@
 ---
 title: "Project structure"
+aliases:
+  - /manage/mz-deploy/project-structure/
 description: "How mz-deploy projects are organized: directories, model files, and configuration."
 menu:
   main:
-    parent: manage-mz-deploy
+    parent: mz-deploy-develop
     weight: 20
     identifier: "mz-deploy-project-structure"
     name: "Project structure"
@@ -19,7 +21,7 @@ A typical project looks like this:
 
 ```nofmt
 order-monitoring/
-├── models/
+├── models/                        # Schema-scoped object definitions
 │   └── materialize/
 │       ├── public.sql             # Schema modifier
 │       └── public/
@@ -30,20 +32,15 @@ order-monitoring/
 ├── roles/
 │   └── order_reader.sql           # Role definition
 ├── network-policies/              # Network policy definitions
+├── .vscode/
+│   └── extensions.json            # Recommends the mz-deploy VS Code extension
 ├── project.toml                   # Project configuration
 ├── types.lock                     # Column schemas (generated)
 ├── README.md
 └── .gitignore
 ```
 
-The `models/` directory contains all schema-scoped objects: views, materialized
-views, sinks, tables, sources, connections, and secrets. These live under
-`models/<database>/<schema>/` because they belong to a specific database and
-schema.
-
-The `clusters/`, `roles/`, and `network-policies/` directories have their own
-top-level directories because these are **global objects** — they are not scoped
-to any database or schema.
+{{% include-headless "/headless/mz-deploy/project-structure-table/" %}}
 
 ## File-path-to-object-name mapping
 
@@ -56,6 +53,12 @@ models/<database>/<schema>/<object>.sql  →  database.schema.object
 
 For example, `models/materialize/public/stalled_orders.sql` creates the object
 `materialize.public.stalled_orders`.
+
+You don't create the database and schema explicitly: `mz-deploy` derives them
+from the file path and creates them for you at deploy time (idempotently, so
+re-deploying is safe). You only need a database or schema modifier file (see
+below) if you want to apply namespace-level settings such as comments, grants,
+or default privileges.
 
 ## Model files
 
@@ -135,14 +138,14 @@ The `project.toml` file in your project root controls project-wide settings:
 - **`mz_version`** — the Materialize version used for local type-checking. Set
   to `"cloud"` to use the latest cloud version.
 - **`dependencies`** — external dependency declarations for objects your project
-  references but does not own. See [Local development](/manage/mz-deploy/local-development/)
+  references but does not own. See [Local development](/manage/mz-deploy/develop/local-development/)
   for details.
 - **Per-profile config sections** — override settings for specific environments.
-  See [Profiles](/manage/mz-deploy/profiles/) for multi-environment setup.
+  See [Profiles](/manage/mz-deploy/deploy/profiles/) for multi-environment setup.
 
 The active connection profile is resolved per-invocation from `--profile`,
 `MZ_DEPLOY_PROFILE`, or the per-checkout default set by `mz-deploy profile
-set`. See [Profiles](/manage/mz-deploy/profiles/).
+set`. See [Profiles](/manage/mz-deploy/deploy/profiles/).
 
 ## profiles.toml
 
@@ -157,5 +160,5 @@ username = "<your-username>"
 password = "<your-password>"
 ```
 
-See [Profiles](/manage/mz-deploy/profiles/) for multi-environment setup and
+See [Profiles](/manage/mz-deploy/deploy/profiles/) for multi-environment setup and
 advanced configuration.

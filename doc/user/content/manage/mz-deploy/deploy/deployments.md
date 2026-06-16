@@ -1,9 +1,11 @@
 ---
 title: "Deployments"
+aliases:
+  - /manage/mz-deploy/deployments/
 description: "Stage, test, and promote zero-downtime blue/green deployments."
 menu:
   main:
-    parent: manage-mz-deploy
+    parent: mz-deploy-deploy
     weight: 50
     identifier: "mz-deploy-deployments"
     name: "Deployments"
@@ -17,8 +19,8 @@ compile ──▶ test ──▶ dev ──▶ stage ──▶ wait ──▶ pr
   local      local   real env  real env
 ```
 
-[`compile`](/manage/mz-deploy/local-development/#compile-and-validate) and
-[`test`](/manage/mz-deploy/local-development/#write-and-run-unit-tests) run
+[`compile`](/manage/mz-deploy/develop/local-development/#compile-and-validate) and
+[`test`](/manage/mz-deploy/develop/local-development/#write-and-run-unit-tests) run
 locally to catch errors fast.
 [`dev`](#iterate-against-production-data) builds a per-developer overlay
 against real production data so you can validate behavior before staging.
@@ -283,4 +285,4 @@ Supported types: `cluster`, `connection`, `network-policy`, `role`, `secret`,
 
 If other teams depend on your materialized views, you can mark schemas as
 stable API boundaries so that deployments never break downstream consumers.
-See [Stable APIs](/manage/mz-deploy/stable-apis/) for details.
+See [Stable APIs](/manage/mz-deploy/deploy/stable-apis/) for details.

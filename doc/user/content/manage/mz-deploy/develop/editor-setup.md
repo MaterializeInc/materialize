@@ -1,9 +1,11 @@
 ---
 title: "Editor setup"
+aliases:
+  - /manage/mz-deploy/editor-setup/
 description: "Configure VS Code, Neovim, or Helix with the mz-deploy language server."
 menu:
   main:
-    parent: manage-mz-deploy
+    parent: mz-deploy-develop
     weight: 42
     identifier: "mz-deploy-editor-setup"
     name: "Editor setup"

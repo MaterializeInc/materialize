@@ -1,9 +1,11 @@
 ---
 title: "Infrastructure"
+aliases:
+  - /manage/mz-deploy/infrastructure/
 description: "Manage clusters, roles, secrets, connections, sources, and tables with mz-deploy apply."
 menu:
   main:
-    parent: manage-mz-deploy
+    parent: mz-deploy-develop
     weight: 30
     identifier: "mz-deploy-infrastructure"
     name: "Infrastructure"
@@ -33,6 +35,10 @@ You can also target individual object types with subcommands for granular contro
 mz-deploy apply clusters
 mz-deploy apply secrets
 ```
+
+The related `mz-deploy lock` command captures the column schemas of tables,
+sources, and external dependencies into `types.lock` for offline type-checking.
+See [Local development — Lock types](/manage/mz-deploy/develop/local-development/#lock-types).
 
 ## Clusters
 
@@ -117,4 +123,4 @@ CREATE TABLE orders FROM SOURCE pg_source
 (REFERENCE public.orders);
 ```
 
-After `apply tables`, the table's column schema is automatically captured in `types.lock`. This is how `compile` knows what columns `orders` has when type-checking views that reference it. See [Local development — Lock types](/manage/mz-deploy/local-development/#lock-types) for details.
+After `apply tables`, the table's column schema is automatically captured in `types.lock`. This is how `compile` knows what columns `orders` has when type-checking views that reference it. See [Local development — Lock types](/manage/mz-deploy/develop/local-development/#lock-types) for details.

@@ -13,83 +13,56 @@ menu:
 `mz-deploy` is a v0.1 release and is not yet recommended for production use.
 {{< /warning >}}
 
-`mz-deploy` is a deployment tool that gives you compile-time validation, unit
-testing, and zero-downtime blue/green deployments for Materialize — all from
-plain SQL files in a git repository. This quickstart walks you through creating
-a project and deploying it.
+`mz-deploy` is a deployment tool that gives you local type-checking, unit
+testing, and zero-downtime blue/green deployments for Materialize. This quickstart walks you through creating a project and deploying it.
 
-## Prerequisites and installation
+## Prerequisites
 
-Before you begin, you need:
+A running Materialize instance ([Materialize
+Cloud](https://materialize.com/register/) or
+[self-managed](/self-managed-deployments/)).
 
-- A running Materialize instance ([Materialize Cloud](https://materialize.com/register/) or [self-managed](/self-managed-deployments/)).
+## Install `mz-deploy`
 
-On macOS and Linux, we recommend installing `mz-deploy` with
-[Homebrew](https://brew.sh/):
-
-```shell
-brew install materializeinc/materialize/mz-deploy
-```
-
-Alternatively, download the latest release for your platform:
-
-{{< tabs >}}
-
-{{< tab "macOS" >}}
-
-```shell
-ARCH=$(uname -m)
-sudo -v
-curl -L "https://binaries.materialize.com/mz-deploy-latest-$ARCH-apple-darwin.tar.gz" \
-| sudo tar -xzC /usr/local --strip-components=1
-```
-{{</ tab >}}
-{{< tab "Linux" >}}
-
-```shell
-ARCH=$(uname -m)
-sudo -v
-curl -L "https://binaries.materialize.com/mz-deploy-latest-$ARCH-unknown-linux-gnu.tar.gz" \
-| sudo tar -xzC /usr/local --strip-components=1
-```
-{{</ tab >}}
-{{</ tabs >}}
-
-Verify the installation:
-
-```shell
-mz-deploy --version
-```
-
-Docker is required for `mz-deploy test` and `mz-deploy explain` (see [Local development](/manage/mz-deploy/local-development/)).
+{{% include-headless "/headless/mz-deploy/install" %}}
 
 ## Create a project
+
+`mz-deploy new <project-name>` command[^1]:
+- Creates and initializes the project directory.
+- Initializes a git repository (pass `--no-git` to skip).
+
+For example, create a new project `order-monitoring`:
 
 ```bash
 mz-deploy new order-monitoring
 cd order-monitoring
 ```
 
-This scaffolds the following directory structure:
+An `mz-deploy` project has the following structure and files:
 
 ```nofmt
 order-monitoring/
-├── models/
+├── models/                # Schema-scoped object definitions
 │   └── materialize/
 │       └── public/        # SQL files → materialize.public.<filename>
 ├── clusters/              # Cluster definitions
 ├── roles/                 # Role definitions
 ├── network-policies/      # Network policy definitions
+├── .vscode/               # Recommends the mz-deploy VS Code extension
 ├── project.toml           # Project configuration
 ├── README.md
 └── .gitignore
 ```
 
-The path of each SQL file under `models/` determines the fully qualified object
-name in Materialize: `models/<database>/<schema>/<object>.sql` maps to
-`database.schema.object`. For example,
-`models/materialize/public/stalled_orders.sql` creates the object
-`materialize.public.stalled_orders`.
+{{% include-headless "/headless/mz-deploy/project-structure-table/" %}}
+
+[^1]: To scaffold an existing directory instead of creating a new one, `cd` into
+it and run `mz-deploy init`. It creates the same structure and uses the
+directory name as the project name. By default, `init` also runs `git init` and
+makes an initial commit; if the directory is already a git repository or an
+existing mz-deploy project, add `--no-git` to skip that step (`mz-deploy init
+--no-git`).
 
 ## Configure connection profiles
 
@@ -160,7 +133,7 @@ COMMENT ON VIEW order_summary IS
 
 Each model file contains one primary `CREATE` statement, plus optional companion
 statements like `CREATE INDEX`, `COMMENT ON`, and `GRANT`. See
-[Project structure](/manage/mz-deploy/project-structure/) for full details.
+[Project structure](/manage/mz-deploy/develop/project-structure/) for full details.
 
 ## Compile
 
@@ -170,7 +143,7 @@ mz-deploy compile
 
 `mz-deploy compile` validates your SQL and dependencies locally without a
 database connection. It catches parse errors, circular dependencies, and type
-mismatches. See [Local development](/manage/mz-deploy/local-development/) for
+mismatches. See [Local development](/manage/mz-deploy/develop/local-development/) for
 the full compile, test, and explain workflow.
 
 ## Deploy
@@ -190,16 +163,19 @@ mz-deploy promote <deploy-id>
 - `wait` monitors cluster hydration until all materialized views are ready.
 - `promote` atomically swaps staging into production.
 
-See [Deployments](/manage/mz-deploy/deployments/) for flags, error handling, and
+See [Deployments](/manage/mz-deploy/deploy/deployments/) for flags, error handling, and
 deployment management.
 
 ## Next steps
 
-- [Project structure](/manage/mz-deploy/project-structure/) — model files, companion statements, configuration
-- [Infrastructure](/manage/mz-deploy/infrastructure/) — secrets, connections, sources, tables
-- [Local development](/manage/mz-deploy/local-development/) — type checking, unit tests, query plans
-- [Editor setup](/manage/mz-deploy/editor-setup/) — VS Code, Neovim, Helix integration
-- [AI agent setup](/manage/mz-deploy/agent-setup/) — Claude Code, Codex, and other coding agents
-- [Deployments](/manage/mz-deploy/deployments/) — staging, hydration, promotion, management
-- [Stable APIs](/manage/mz-deploy/stable-apis/) — cross-team data products and data mesh
-- [Profiles](/manage/mz-deploy/profiles/) — multi-environment configuration
+| Category | Guide | Description |
+|----------|-------|-------------|
+| Develop | [Project structure](/manage/mz-deploy/develop/project-structure/) | Model files, companion statements, and configuration. |
+|  | [Infrastructure](/manage/mz-deploy/develop/infrastructure/) | Clusters, secrets, connections, sources, and tables via `apply`. |
+|  | [Local development](/manage/mz-deploy/develop/local-development/) | Type-checking, unit tests, and query plans. |
+|  | [Editor setup](/manage/mz-deploy/develop/editor-setup/) | VS Code, Neovim, and Helix integration. |
+|  | [AI agent setup](/manage/mz-deploy/develop/agent-setup/) | Claude Code, Codex, and other coding agents. |
+| Deploy | [Deployments](/manage/mz-deploy/deploy/deployments/) | Staging, hydration, promotion, and management. |
+|  | [Stable APIs](/manage/mz-deploy/deploy/stable-apis/) | Cross-team data products and data mesh. |
+|  | [Profiles](/manage/mz-deploy/deploy/profiles/) | Multi-environment configuration. |
+| Reference | [Command reference](/manage/mz-deploy/commands/) | Every command, grouped, with synopsis and flags. |
