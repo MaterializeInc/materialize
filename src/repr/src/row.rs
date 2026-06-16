@@ -904,6 +904,23 @@ impl<T> PartialOrd for DatumList<'_, T> {
 
 /// A mapping from string keys to Datums
 ///
+/// # Payload layout
+///
+/// `data` points at the map's serialized payload, which carries a small index
+/// so that a key can be located with a binary search instead of a linear scan.
+/// For a map with `n > 0` entries the layout is:
+///
+/// ```text
+/// [ count: u32 ][ offset_1: u32 ] .. [ offset_{n-1}: u32 ][ entries.. ]
+/// ```
+///
+/// where `count` is `n`, `offset_i` is the start of entry `i` relative to the
+/// first entry (entry 0 is always at offset 0 and so is omitted), and the
+/// entries are `(key, value)` datum pairs **sorted in ascending key order**.
+/// The index is thus exactly `n` little-endian `u32`s, so the entries begin
+/// `4 * n` bytes into the payload. An empty map has an empty payload (no
+/// header), keeping its encoding canonical.
+///
 /// The type parameter `T` represents the value type of the map. It is a
 /// phantom parameter — the actual values are stored as serialized bytes and
 /// `T` is not enforced at runtime. It is up to the caller to ensure `T`
@@ -913,7 +930,8 @@ impl<T> PartialOrd for DatumList<'_, T> {
 /// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
 /// behind the generic type parameter.
 pub struct DatumMap<'a, T = Datum<'a>> {
-    /// Points at the serialized datums, which should be sorted in key order
+    /// Points at the serialized payload (index header followed by the
+    /// key-sorted entries). See the type-level docs for the layout.
     data: &'a [u8],
     _phantom: PhantomData<fn() -> T>,
 }
@@ -1220,6 +1238,70 @@ fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
     let (bytes, next) = data.split_at(len);
     *data = next;
     bytes
+}
+
+/// Builds the in-map index for a dictionary the packer has just written.
+///
+/// On entry, `data[entries_start..]` holds the dictionary's entries as a
+/// sequence of sorted `(key, value)` datum pairs. This walks those entries to
+/// compute the byte offset of each one, then splices an index header in just
+/// before them. The resulting payload layout is documented on [`DatumMap`].
+///
+/// Empty dictionaries are left untouched so that they keep a canonical,
+/// header-free encoding (identical to [`DatumMap::empty`]). This keeps the
+/// encoding of any given map value deterministic, which `Row`'s byte-based
+/// equality relies on.
+fn finish_dict(data: &mut CompactBytes, entries_start: usize) {
+    // Walk the freshly written entries, recording the start offset of each one
+    // relative to `entries_start`.
+    let mut offsets: Vec<u32> = Vec::new();
+    {
+        let entries = &data[entries_start..];
+        let entries_len = entries.len();
+        let mut cursor: &[u8] = entries;
+        while !cursor.is_empty() {
+            let offset = entries_len - cursor.len();
+            offsets.push(u32::try_from(offset).expect("map larger than 4 GiB cannot be indexed"));
+            // SAFETY: `cursor` points at the key/value datums just written by
+            // the packer, which are well-formed per `push_dict_with`'s contract.
+            unsafe {
+                let _key = read_datum(&mut cursor);
+                let _val = read_datum(&mut cursor);
+            }
+        }
+    }
+
+    let n = offsets.len();
+    if n == 0 {
+        return;
+    }
+
+    // The header stores the entry count followed by the start offsets of
+    // entries `1..n`; entry 0 always starts at offset 0 and is omitted. This is
+    // exactly `n` little-endian `u32`s, so the entries begin `4 * n` bytes into
+    // the payload.
+    let mut header = Vec::with_capacity(size_of::<u32>() * n);
+    header.extend_from_slice(
+        &u32::try_from(n)
+            .expect("map with more than 4 billion entries")
+            .to_le_bytes(),
+    );
+    for offset in &offsets[1..] {
+        header.extend_from_slice(&offset.to_le_bytes());
+    }
+    let header_len = header.len();
+    let entries_len = data.len() - entries_start;
+
+    // Insert `header` just before the entries. `CompactBytes` has no `splice`,
+    // so we grow the buffer (reusing `header` as filler), shift the entries
+    // right to open a gap, then write the header into the gap. This mirrors the
+    // in-place shift in `push_list_with`'s `long_list`.
+    data.extend_from_slice(&header);
+    data.copy_within(
+        entries_start..entries_start + entries_len,
+        entries_start + header_len,
+    );
+    data[entries_start..entries_start + header_len].copy_from_slice(&header);
 }
 
 /// Read a data whose length is encoded in the row before its contents.
@@ -2406,6 +2488,12 @@ impl RowPacker<'_> {
 
         let res = f(self);
 
+        // Build an in-map index over the entries that were just written, so
+        // that individual keys can be located with a binary search rather than
+        // a linear scan. See [`DatumMap`] for the payload layout. This must
+        // happen before the length is fixed up, as it changes the payload size.
+        finish_dict(&mut self.row.data, start + size_of::<u64>());
+
         let len = u64::cast_from(self.row.data.len() - start - size_of::<u64>());
         // fix up the len
         self.row.data[start..start + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
@@ -2946,9 +3034,78 @@ impl<'a, T: FromDatum<'a>> Iterator for DatumListTypedIter<'a, T> {
 }
 
 impl<'a, T> DatumMap<'a, T> {
+    /// The number of entries in the map.
+    pub fn len(&self) -> usize {
+        if self.data.is_empty() {
+            0
+        } else {
+            let count = u32::from_le_bytes(self.data[..size_of::<u32>()].try_into().unwrap());
+            usize::cast_from(count)
+        }
+    }
+
+    /// Whether the map has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// The slice holding the entries, with the index header stripped off.
+    ///
+    /// See the type-level docs for the payload layout.
+    fn entries(&self) -> &'a [u8] {
+        if self.data.is_empty() {
+            return self.data;
+        }
+        // The header is exactly `len()` little-endian `u32`s.
+        let header_len = size_of::<u32>() * self.len();
+        &self.data[header_len..]
+    }
+
+    /// The start offset of entry `i` relative to the start of the entries
+    /// region. Entry 0 is implicitly at offset 0; the rest are read from the
+    /// index header. `i` must be in `0..len()`.
+    fn entry_offset(&self, i: usize) -> usize {
+        if i == 0 {
+            0
+        } else {
+            let at = size_of::<u32>() * i;
+            let offset =
+                u32::from_le_bytes(self.data[at..at + size_of::<u32>()].try_into().unwrap());
+            usize::cast_from(offset)
+        }
+    }
+
+    /// Looks up `key`, returning its value if present.
+    ///
+    /// Runs in `O(log n)` over the `n` entries by binary searching the
+    /// key-sorted index, rather than the `O(n)` linear scan of [`Self::iter`].
+    pub fn get(&self, key: &str) -> Option<Datum<'a>> {
+        let n = self.len();
+        if n == 0 {
+            return None;
+        }
+        let entries = self.entries();
+
+        let mut lo = 0;
+        let mut hi = n;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let mut cursor = &entries[self.entry_offset(mid)..];
+            // SAFETY: `cursor` points at a well-formed entry (a string key
+            // followed by its value), per the `DatumMap` payload contract.
+            let mid_key = unsafe { read_datum(&mut cursor) }.unwrap_str();
+            match key.cmp(mid_key) {
+                Ordering::Equal => return Some(unsafe { read_datum(&mut cursor) }),
+                Ordering::Less => hi = mid,
+                Ordering::Greater => lo = mid + 1,
+            }
+        }
+        None
+    }
+
     pub fn iter(&self) -> DatumDictIter<'a> {
         DatumDictIter {
-            data: self.data,
+            data: self.entries(),
             prev_key: None,
         }
     }
@@ -3685,6 +3842,65 @@ mod tests {
         assert_eq!(dict.next(), None);
 
         Ok(())
+    }
+
+    #[mz_ore::test]
+    fn test_datum_map_get() {
+        // For maps of various sizes, `DatumMap::get` (binary search over the
+        // in-map index) must agree with a linear scan for both present keys and
+        // misses, and `len`/`is_empty` must report the right cardinality.
+        for n in [0_usize, 1, 2, 3, 7, 16, 50] {
+            let keys: Vec<String> = (0..n).map(|i| format!("k{i:03}")).collect();
+            let mut row = Row::default();
+            row.packer().push_dict_with(|row| {
+                // `push_dict_with` requires keys in ascending order; `keys` is
+                // already sorted.
+                for (i, k) in keys.iter().enumerate() {
+                    row.push(Datum::String(k));
+                    row.push(Datum::Int64(i64::try_from(i).unwrap() * 10));
+                }
+            });
+            let datum = row.unpack_first();
+            let map = datum.unwrap_map();
+
+            assert_eq!(map.len(), n);
+            assert_eq!(map.is_empty(), n == 0);
+
+            // Every present key resolves to its value.
+            for (i, k) in keys.iter().enumerate() {
+                assert_eq!(
+                    map.get(k),
+                    Some(Datum::Int64(i64::try_from(i).unwrap() * 10)),
+                    "present key {k:?} with n={n}",
+                );
+            }
+
+            // Misses (before, between, and after the keys) agree with a scan.
+            for probe in ["", "k", "k000a", "k999", "zzz"] {
+                let linear = map.iter().find(|(k, _)| *k == probe).map(|(_, v)| v);
+                assert_eq!(map.get(probe), linear, "probe {probe:?} with n={n}");
+            }
+        }
+
+        // A nested value is returned intact via `get`.
+        let mut row = Row::default();
+        row.packer().push_dict_with(|row| {
+            row.push(Datum::String("list"));
+            row.push_list_with(|row| {
+                row.push(Datum::Int64(1));
+                row.push(Datum::Int64(2));
+            });
+            row.push(Datum::String("scalar"));
+            row.push(Datum::Int64(7));
+        });
+        let datum = row.unpack_first();
+        let map = datum.unwrap_map();
+        assert_eq!(map.get("scalar"), Some(Datum::Int64(7)));
+        assert_eq!(
+            map.get("list").unwrap().unwrap_list().iter().collect::<Vec<_>>(),
+            vec![Datum::Int64(1), Datum::Int64(2)],
+        );
+        assert_eq!(map.get("missing"), None);
     }
 
     #[mz_ore::test]

@@ -1683,7 +1683,7 @@ fn jsonb_get_int64_stringify<'a>(
 #[sqlfunc(sqlname = "->", is_infix_op = true)]
 fn jsonb_get_string<'a>(a: JsonbRef<'a>, k: &str) -> Option<JsonbRef<'a>> {
     let dict = DatumMap::try_from_result(Ok::<_, ()>(a.into_datum())).ok()?;
-    let v = dict.iter().find(|(k2, _v)| k == *k2).map(|(_k, v)| v)?;
+    let v = dict.get(k)?;
     JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()
 }
 
@@ -1707,7 +1707,7 @@ fn jsonb_get_path<'a>(mut json: JsonbRef<'a>, b: Array<'a>) -> Option<JsonbRef<'
             _ => unreachable!("keys in jsonb_get_path known to be strings"),
         };
         let v = match json.into_datum() {
-            Datum::Map(map) => map.iter().find(|(k, _)| key == *k).map(|(_k, v)| v),
+            Datum::Map(map) => map.get(key),
             Datum::List(list) => {
                 let i = strconv::parse_int64(key).ok()?;
                 let i = if i >= 0 {
