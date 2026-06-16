@@ -291,6 +291,10 @@ impl<'a> CatalogCluster<'a> for StubCluster {
         None
     }
 
+    fn replication_factor(&self) -> Option<u32> {
+        None
+    }
+
     fn try_to_plan(&self) -> Result<mz_sql::plan::CreateClusterPlan, PlanError> {
         Err(PlanError::Unsupported {
             feature: "clusters are not supported by the catalog typecheck backend".into(),

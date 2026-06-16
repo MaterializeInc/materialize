@@ -1692,6 +1692,40 @@ ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
 ----
 COMPLETE 0
 
+# Switching a managed cluster to a non-MANUAL SCHEDULE while its REPLICATION FACTOR is greater
+# than 1 must be rejected. Otherwise the cluster would be left in an invalid state (a refresh
+# schedule implies a replication factor of 0 or 1), which used to make SHOW CREATE CLUSTER panic
+# the coordinator (see database-issues SQL-215). This is placed at the end of the scheduling
+# section so that creating/dropping this cluster doesn't pollute the audit-event queries above.
+statement ok
+CREATE CLUSTER c_schedule_rf (SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 2);
+
+statement error SCHEDULE cannot be set to anything other than MANUAL while the cluster's REPLICATION FACTOR is greater than 1; set the REPLICATION FACTOR to 1 first
+ALTER CLUSTER c_schedule_rf SET (SCHEDULE = ON REFRESH);
+
+# The rejected ALTER left the cluster unchanged, and SHOW CREATE CLUSTER still works.
+query T multiline
+SELECT create_sql FROM (SHOW CREATE CLUSTER c_schedule_rf);
+----
+CREATE CLUSTER "c_schedule_rf" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 2, SIZE = 'scale=1,workers=1', SCHEDULE = MANUAL)
+EOF
+
+# Lowering the REPLICATION FACTOR to 1 first lets the schedule change succeed.
+statement ok
+ALTER CLUSTER c_schedule_rf SET (REPLICATION FACTOR = 1);
+
+statement ok
+ALTER CLUSTER c_schedule_rf SET (SCHEDULE = ON REFRESH);
+
+query T multiline
+SELECT create_sql FROM (SHOW CREATE CLUSTER c_schedule_rf);
+----
+CREATE CLUSTER "c_schedule_rf" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '00:00:00'))
+EOF
+
+statement ok
+DROP CLUSTER c_schedule_rf;
+
 ## EXPLAIN FILTER PUSHDOWN can be run on materialized views in this file
 
 simple conn=mz_system,user=mz_system
