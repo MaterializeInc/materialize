@@ -1159,6 +1159,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_schema_transition_objects_to_replacement_routes_to_new_replacement() {
         // When a schema transitions from Objects kind to Replacement kind,
@@ -1214,6 +1215,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_steady_state_replacement_routes_to_changed_replacement() {
         // When a schema was already Replacement kind and stays Replacement,

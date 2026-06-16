@@ -24,6 +24,7 @@ fn test_fqn() -> FullyQualifiedName {
     FullyQualifiedName::try_from(item_name).expect("test FQN is fully qualified")
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_cte_references_not_qualified() {
     let fqn = test_fqn();
@@ -67,6 +68,7 @@ fn test_cte_references_not_qualified() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_multiple_ctes() {
     let fqn = test_fqn();
@@ -121,6 +123,7 @@ fn test_multiple_ctes() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_nested_cte_scope() {
     let fqn = test_fqn();
@@ -166,6 +169,7 @@ fn test_nested_cte_scope() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_cte_with_joins() {
     let fqn = test_fqn();
@@ -214,6 +218,7 @@ fn test_cte_with_joins() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_cte_shadowing_external_table() {
     // Regression test for the simple-CTE scoping rule (QA Finding 1).
@@ -270,6 +275,7 @@ fn test_cte_shadowing_external_table() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_complex_multi_cte_query() {
     // Test the exact query from the user that was failing
@@ -357,6 +363,7 @@ fn test_complex_multi_cte_query() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_implicit_alias_unqualified_table() {
     // Test that unqualified table names get implicit aliases
@@ -388,6 +395,7 @@ fn test_implicit_alias_unqualified_table() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_implicit_alias_schema_qualified_table() {
     // Test that schema-qualified table names get implicit aliases
@@ -419,6 +427,7 @@ fn test_implicit_alias_schema_qualified_table() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_implicit_alias_fully_qualified_table() {
     // Test that fully qualified table names get implicit aliases
@@ -450,6 +459,7 @@ fn test_implicit_alias_fully_qualified_table() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_no_implicit_alias_when_explicit_alias_exists() {
     // Test that explicit aliases are preserved and no implicit alias is added
@@ -486,6 +496,7 @@ fn test_no_implicit_alias_when_explicit_alias_exists() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_no_implicit_alias_for_cte() {
     // Test that CTEs don't get implicit aliases
@@ -524,6 +535,7 @@ fn test_no_implicit_alias_for_cte() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_implicit_alias_in_lateral_join() {
     // Test implicit aliases work correctly in LATERAL joins
@@ -560,6 +572,7 @@ fn test_implicit_alias_in_lateral_join() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_having_clause_with_subquery() {
     // Test that subqueries in HAVING clauses are normalized
@@ -592,6 +605,7 @@ fn test_having_clause_with_subquery() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_having_clause_with_nested_subquery() {
     // Test deeply nested subqueries in HAVING
@@ -634,6 +648,7 @@ fn test_having_clause_with_nested_subquery() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_having_with_cte_reference() {
     // Test HAVING clause with CTE reference (should not be qualified)
@@ -674,6 +689,7 @@ fn test_having_with_cte_reference() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_and_operator_with_subqueries() {
     // Test AND operator with subqueries on both sides
@@ -711,6 +727,7 @@ fn test_and_operator_with_subqueries() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_or_operator_with_subqueries() {
     // Test OR operator with subqueries
@@ -744,6 +761,7 @@ fn test_or_operator_with_subqueries() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_comparison_operator_with_subquery() {
     // Test comparison operators (>, <, =, etc.) with subqueries
@@ -777,6 +795,7 @@ fn test_comparison_operator_with_subquery() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_nested_operators_with_subqueries() {
     // Test deeply nested operators with multiple subqueries
@@ -811,6 +830,7 @@ fn test_nested_operators_with_subqueries() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_arithmetic_operators_with_subqueries() {
     // Test arithmetic operators containing subqueries
@@ -846,6 +866,7 @@ fn test_arithmetic_operators_with_subqueries() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_schema_qualified_with_having_subquery() {
     // Integration test: schema-qualified tables with HAVING subquery
@@ -891,6 +912,7 @@ fn test_schema_qualified_with_having_subquery() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_lateral_with_operators_and_implicit_alias() {
     // Integration test: LATERAL join with operators and implicit aliases
@@ -934,6 +956,7 @@ fn test_lateral_with_operators_and_implicit_alias() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_wmr_with_operators_and_having() {
     // Integration test: WITH MUTUALLY RECURSIVE with operators and HAVING
@@ -989,6 +1012,7 @@ fn test_wmr_with_operators_and_having() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_flattening_unqualified_name() {
     // Test that unqualified names get flattened to "database.schema.object"
@@ -1018,6 +1042,7 @@ fn test_flattening_unqualified_name() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_flattening_schema_qualified_name() {
     // Test that schema-qualified names get flattened
@@ -1047,6 +1072,7 @@ fn test_flattening_schema_qualified_name() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_flattening_fully_qualified_name() {
     // Test that fully qualified names get flattened
@@ -1076,6 +1102,7 @@ fn test_flattening_fully_qualified_name() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_flattening_with_join() {
     // Test flattening with multiple tables in a join
@@ -1110,6 +1137,7 @@ fn test_flattening_with_join() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_flattening_cte_not_flattened() {
     // Test that CTEs are not flattened (they remain unqualified)
@@ -1159,6 +1187,7 @@ fn staging_test_fqn() -> FullyQualifiedName {
     FullyQualifiedName::try_from(item_name).expect("test FQN is fully qualified")
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_unqualified_name() {
     // Test that unqualified names get staging suffix on schema
@@ -1196,6 +1225,7 @@ fn test_staging_unqualified_name() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_schema_qualified_name() {
     // Test that schema-qualified names get staging suffix
@@ -1233,6 +1263,7 @@ fn test_staging_schema_qualified_name() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_external_dependency_not_transformed() {
     // Test that external dependencies are NOT transformed
@@ -1282,6 +1313,7 @@ fn test_staging_external_dependency_not_transformed() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_mixed_internal_and_external() {
     // Test query with both internal (should be transformed) and external (should not) dependencies
@@ -1333,6 +1365,7 @@ fn test_staging_mixed_internal_and_external() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_objects_to_deploy_filter() {
     // Test that objects not in objects_to_deploy are treated as external
@@ -1386,6 +1419,7 @@ fn test_staging_objects_to_deploy_filter() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_keyword_named_object_is_deployed() {
     // Regression test for QA Finding 2: a deployed object whose name requires
@@ -1442,6 +1476,7 @@ fn test_staging_keyword_named_object_is_deployed() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_cross_schema_objects_to_deploy_filter() {
     // Test that references to specific replacement objects are NOT suffixed,
@@ -1519,6 +1554,7 @@ fn test_staging_cross_schema_objects_to_deploy_filter() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_replacement_schema_full_deploy() {
     // When replacement_objects is empty (first deployment / full blue-green swap),
@@ -1585,6 +1621,7 @@ fn test_staging_replacement_schema_full_deploy() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_replacement_schema_incremental_deploy() {
     // When replacement_objects contains the MV ID (incremental update),
@@ -1656,6 +1693,7 @@ fn test_staging_replacement_schema_incremental_deploy() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_cte_not_transformed() {
     // Test that CTEs are not transformed (they're local to the query)
@@ -1702,6 +1740,7 @@ fn test_staging_cte_not_transformed() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_nested_cte_in_derived_table() {
     // Test CTE defined inside a derived table (subquery in FROM)
@@ -1753,6 +1792,7 @@ fn test_nested_cte_in_derived_table() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_nested_cte_in_scalar_subquery() {
     // Test CTE defined inside a scalar subquery (in SELECT list)
@@ -1803,6 +1843,7 @@ fn test_nested_cte_in_scalar_subquery() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_nested_cte_in_where_subquery() {
     // Test CTE defined inside a subquery in WHERE clause
@@ -1855,6 +1896,7 @@ fn test_nested_cte_in_where_subquery() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_triple_nested_ctes() {
     // Test three levels of nested CTEs
@@ -1914,6 +1956,7 @@ fn test_triple_nested_ctes() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_cte_name_shadowing_in_nested_scope() {
     // Test that a CTE in inner scope shadows a CTE with same name in outer scope
@@ -1968,6 +2011,7 @@ fn test_cte_name_shadowing_in_nested_scope() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_nested_cte_in_lateral_join() {
     // Test CTE defined inside a LATERAL join subquery
@@ -2021,6 +2065,7 @@ fn test_nested_cte_in_lateral_join() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_parallel_nested_ctes_in_union() {
     // Test multiple independent CTEs in different branches of a UNION
@@ -2075,6 +2120,7 @@ fn test_parallel_nested_ctes_in_union() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_outer_cte_visible_in_nested_subquery() {
     // Test that outer CTE is visible in nested subqueries (without redefining)
@@ -2118,6 +2164,7 @@ fn test_outer_cte_visible_in_nested_subquery() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_nested_cte_with_join_to_outer_cte() {
     // Test nested CTE that joins with outer CTE
@@ -2174,6 +2221,7 @@ fn test_nested_cte_with_join_to_outer_cte() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_nested_cte_in_exists_subquery() {
     // Test CTE defined inside an EXISTS subquery
@@ -2230,6 +2278,7 @@ fn test_nested_cte_in_exists_subquery() {
 // (COALESCE, NOT, AND/OR, NULLIF, GREATEST/LEAST, parenthesized expressions)
 // are properly normalized. A previous `_ => {}` catch-all silently skipped them.
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_coalesce_with_subquery_normalized() {
     let fqn = test_fqn();
@@ -2260,6 +2309,7 @@ fn test_coalesce_with_subquery_normalized() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_nested_expr_with_subquery_normalized() {
     let fqn = test_fqn();
@@ -2287,6 +2337,7 @@ fn test_nested_expr_with_subquery_normalized() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_not_expr_with_subquery_normalized() {
     let fqn = test_fqn();
@@ -2314,6 +2365,7 @@ fn test_not_expr_with_subquery_normalized() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_and_or_with_subquery_normalized() {
     let fqn = test_fqn();
@@ -2347,6 +2399,7 @@ fn test_and_or_with_subquery_normalized() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_nullif_with_subquery_normalized() {
     let fqn = test_fqn();
@@ -2374,6 +2427,7 @@ fn test_nullif_with_subquery_normalized() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_greatest_least_with_subquery_normalized() {
     let fqn = test_fqn();
@@ -2401,6 +2455,7 @@ fn test_greatest_least_with_subquery_normalized() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_in_list_with_subquery_normalized() {
     let fqn = test_fqn();
@@ -2433,6 +2488,7 @@ fn test_in_list_with_subquery_normalized() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_system_schema_2part_not_qualified() {
     let fqn = test_fqn();

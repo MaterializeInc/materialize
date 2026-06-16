@@ -466,6 +466,7 @@ mod run_tests {
         fs::write(path, sql).unwrap();
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn run_typechecks_simple_view_and_persists_columns() {
         let temp = tempdir().unwrap();
@@ -507,6 +508,7 @@ mod run_tests {
     }
 
     /// A second `run` after no source change should typecheck zero nodes.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn second_run_skips_all_nodes_when_nothing_changed() {
         let temp = tempdir().unwrap();
@@ -559,6 +561,7 @@ mod run_tests {
 
     /// Editing a leaf view in a way that doesn't change its output schema
     /// should re-typecheck the leaf but skip its dependents.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn schema_stable_edit_does_not_dirty_dependents() {
         let temp = tempdir().unwrap();
@@ -616,6 +619,7 @@ mod run_tests {
 
     /// Changing one external table's schema only dirties objects that depend
     /// on that specific table. Unrelated objects keep their cached results.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn external_type_change_dirties_only_consumers() {
         use crate::types::ObjectKind;
@@ -718,6 +722,7 @@ mod run_tests {
     }
 
     /// A leaf edit that changes the output schema must cascade to dependents.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn schema_change_dirties_dependents() {
         let temp = tempdir().unwrap();
@@ -775,6 +780,7 @@ mod run_tests {
     /// A view whose typecheck failed must be re-run on the next invocation,
     /// even if no source files changed. Otherwise an unfixed broken project
     /// would silently start passing on the second compile.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn previous_typecheck_failure_re_runs_next_invocation() {
         let temp = tempdir().unwrap();
@@ -822,6 +828,7 @@ mod run_tests {
 
     /// Editing a previously-successful view to introduce a typecheck error must
     /// surface that error on every subsequent run — not just the first one.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn typecheck_failure_after_successful_run_persists() {
         let temp = tempdir().unwrap();
@@ -883,6 +890,7 @@ mod run_tests {
     /// Editing a non-view object (e.g. a table) must invalidate dependent
     /// views' cached typecheck results, because the table's column schema
     /// flows into the catalog views are validated against.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn table_edit_dirties_dependent_view() {
         let temp = tempdir().unwrap();
