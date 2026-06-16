@@ -23,7 +23,7 @@ use crate::{BinaryFunc, MirScalarExpr, VariadicFunc};
 
 /// Entry point invoked from `reduce_post` for surviving `If` nodes.
 pub(super) fn try_build(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
-    try_fold_into_case_literal(expr);
+    try_fold_into_case_literal(expr, column_types);
     try_create_case_literal(expr, column_types);
 }
 
@@ -34,7 +34,7 @@ pub(super) fn try_build(expr: &mut MirScalarExpr, column_types: &[ReprColumnType
 /// Because we traverse bottom-up, the current If is an *earlier* arm than anything
 /// already in the CaseLiteral. For duplicates, the outer/earlier arm wins per SQL
 /// CASE semantics, so we overwrite the existing entry.
-fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
+fn try_fold_into_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
     let MirScalarExpr::If { cond, then, els } = expr else {
         return;
     };
@@ -63,6 +63,22 @@ fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
         exprs.insert(new_idx, then.take());
         cl.insert(literal_row.clone(), new_idx);
     }
+
+    // Recompute the return type over the result arms and the fallback
+    // (`exprs[1..]`; `exprs[0]` is the input). The folded-in arm's type — in
+    // particular its nullability — must be unioned in, exactly as
+    // `try_create_case_literal` does, otherwise the CaseLiteral under-reports
+    // its type and downstream rules (e.g. IsNull folding) misfire.
+    let mut return_type: Option<ReprColumnType> = None;
+    for result in &exprs[1..] {
+        let t = result.typ(column_types);
+        return_type = Some(match return_type {
+            None => t,
+            Some(prev) => prev.union(&t).expect("incompatible branch types"),
+        });
+    }
+    cl.return_type =
+        SqlColumnType::from_repr(&return_type.expect("CaseLiteral has at least a fallback"));
 
     // Replace the If with the CaseLiteral.
     *expr = els.take();
@@ -275,6 +291,52 @@ mod tests {
         );
     }
 
+    #[mz_ore::test]
+    fn fold_preserves_nullability() {
+        // CASE WHEN c=1 THEN NULL WHEN c=2 THEN 20 WHEN c=3 THEN 30 ELSE 0 END.
+        // The c=2/c=3 arms form the inner CaseLiteral (via try_create); the c=1
+        // NULL arm is folded in (via try_fold). The folded NULL must keep the
+        // overall result type nullable.
+        let col = MirScalarExpr::column(0);
+        let null_i64 = MirScalarExpr::literal_null(mz_repr::ReprScalarType::Int64);
+        let mut expr = MirScalarExpr::If {
+            cond: Box::new(eq(col.clone(), lit_i64(1))),
+            then: Box::new(null_i64),
+            els: Box::new(MirScalarExpr::If {
+                cond: Box::new(eq(col.clone(), lit_i64(2))),
+                then: Box::new(lit_i64(20)),
+                els: Box::new(MirScalarExpr::If {
+                    cond: Box::new(eq(col.clone(), lit_i64(3))),
+                    then: Box::new(lit_i64(30)),
+                    els: Box::new(lit_i64(0)),
+                }),
+            }),
+        };
+        let col_types = vec![mz_repr::ReprColumnType {
+            scalar_type: mz_repr::ReprScalarType::Int64,
+            nullable: true,
+        }];
+        let original_type = expr.typ(&col_types);
+        crate::scalar::reduce::reduce(&mut expr, &col_types);
+        // Sanity: it actually folded into a CaseLiteral.
+        assert!(
+            matches!(
+                expr,
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::CaseLiteral(_),
+                    ..
+                }
+            ),
+            "expected CaseLiteral, got {expr:?}"
+        );
+        // The bug: folded NULL arm lost nullability.
+        assert_eq!(
+            expr.typ(&col_types),
+            original_type,
+            "reduced CaseLiteral type must match the original If-chain type (nullability preserved)"
+        );
+    }
+
     /// Evaluate `expr` against a single optional-i64 input column.
     /// Returns Ok(Some(v)) for an i64 result, Ok(None) for NULL, Err(()) for an
     /// eval error. Collapsing errors to a unit lets us compare originals and
@@ -294,18 +356,25 @@ mod tests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow under miri
         fn reduce_preserves_eval(
-            arms in prop::collection::vec((-5i64..5, -100i64..100), 2..6),
-            fallback in -100i64..100,
+            arms in prop::collection::vec((-5i64..5, proptest::option::of(-100i64..100)), 2..6),
+            fallback in proptest::option::of(-100i64..100),
             probes in prop::collection::vec(-8i64..8, 1..6),
         ) {
+            // Map a generated optional result to a literal: `Some(v)` -> integer
+            // literal, `None` -> typed NULL literal. Exercising NULL results lets
+            // the type-equality assertion below catch under-reported nullability.
+            let result_lit = |v: &Option<i64>| match v {
+                Some(v) => lit_i64(*v),
+                None => MirScalarExpr::literal_null(mz_repr::ReprScalarType::Int64),
+            };
             let col = MirScalarExpr::column(0);
             // Build the chain bottom-up so earlier arms end up outermost
             // (outer arm wins for duplicate literals, matching SQL CASE).
-            let mut chain = lit_i64(fallback);
+            let mut chain = result_lit(&fallback);
             for (lit, res) in arms.iter().rev() {
                 chain = MirScalarExpr::If {
                     cond: Box::new(eq(col.clone(), lit_i64(*lit))),
-                    then: Box::new(lit_i64(*res)),
+                    then: Box::new(result_lit(res)),
                     els: Box::new(chain),
                 };
             }
@@ -325,6 +394,28 @@ mod tests {
             for p in &probes {
                 inputs.push(Some(*p));
             }
+
+            // Soundness of the reduced type's nullability: if any reachable input
+            // makes the (original) expression evaluate to NULL, the reduced form
+            // must report a nullable type. The original bug folded a NULL arm
+            // without unioning its nullability, so the reduced type claimed
+            // `nullable: false` while a reachable arm still produced NULL — which
+            // is exactly what this catches. We compare against eval rather than
+            // the original's static type because `typ` over-reports nullability
+            // for dead duplicate-literal arms that reduce legitimately drops.
+            let reduced_type = reduced.typ(&col_types);
+            for input in &inputs {
+                if eval_one(&original, *input) == Ok(None) {
+                    prop_assert!(
+                        reduced_type.nullable,
+                        "reduced type must be nullable: input {:?} evaluates to NULL but \
+                         reduced type is {:?}",
+                        input,
+                        reduced_type
+                    );
+                }
+            }
+
             for input in inputs {
                 prop_assert_eq!(
                     eval_one(&original, input),
