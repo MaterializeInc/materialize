@@ -3413,82 +3413,101 @@ mz_internal.pg_description_all_databases_ind:
 mz_internal.pg_description_all_databases:
   →With
     cte l0 =
-      →Arranged mz_internal.pg_class_all_databases
-    cte l1 =
-      →Differential Join %1[#0] » %0:l0[#1{relname}]
-        →Arranged l0
+      →Differential Join %1[#0] » %0:pg_namespace_all_databases[#1{nspname}]
+        →Arranged mz_internal.pg_namespace_all_databases
         →Arrange (#0)
           →Constant (1 row)
+    cte l1 =
+      →Differential Join %0:pg_class_all_databases[#2{relnamespace}] » %1[#0]
+        →Arrange (#2{relnamespace})
+          →Fused with Child Map/Filter/Project
+            Project: #1, #0, #2, #23
+              →Arranged mz_internal.pg_class_all_databases
+                Key: (#1{relname})
+        →Arrange (#0)
+          →Union
+            →Stream l0
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l0
     cte l2 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+        Filter: (#1{relname} = "pg_class")
+          →Read l1
+    cte l3 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
         →Fused with Child Map/Filter/Project
           Project: ()
-            →Read l1
-    cte l3 =
-      →Union
-        →Fused with Child Map/Filter/Project
-          Project: #0
-            →Read l1
-        →Table Function guard_subquery_size(#0)
-          →Arranged l2
+            →Read l2
     cte l4 =
       →Union
         →Fused with Child Map/Filter/Project
-          Project: #1
-            →Read l1
+          Project: #0
+            →Read l2
         →Table Function guard_subquery_size(#0)
-          →Arranged l2
+          →Arranged l3
     cte l5 =
-      →Differential Join %1[#0] » %0:l0[#1{relname}]
-        →Arranged l0
-        →Arrange (#0)
-          →Constant (1 row)
+      →Union
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Read l2
+        →Table Function guard_subquery_size(#0)
+          →Arranged l3
     cte l6 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+        Filter: (#1{relname} = "pg_type")
+          →Read l1
+    cte l7 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
         →Fused with Child Map/Filter/Project
           Project: ()
-            →Read l5
-    cte l7 =
-      →Union
-        →Fused with Child Map/Filter/Project
-          Project: #0
-            →Read l5
-        →Table Function guard_subquery_size(#0)
-          →Arranged l6
+            →Read l6
     cte l8 =
       →Union
         →Fused with Child Map/Filter/Project
-          Project: #1
-            →Read l5
+          Project: #0
+            →Read l6
         →Table Function guard_subquery_size(#0)
-          →Arranged l6
+          →Arranged l7
     cte l9 =
-      →Differential Join %1[#0] » %0:l0[#1{relname}]
-        →Arranged l0
-        →Arrange (#0)
-          →Constant (1 row)
+      →Union
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Read l6
+        →Table Function guard_subquery_size(#0)
+          →Arranged l7
     cte l10 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+        Filter: (#1{relname} = "pg_namespace")
+          →Read l1
+    cte l11 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
         →Fused with Child Map/Filter/Project
           Project: ()
-            →Read l9
-    cte l11 =
-      →Union
-        →Fused with Child Map/Filter/Project
-          Project: #0
-            →Read l9
-        →Table Function guard_subquery_size(#0)
-          →Arranged l10
+            →Read l10
     cte l12 =
       →Union
         →Fused with Child Map/Filter/Project
-          Project: #1
-            →Read l9
+          Project: #0
+            →Read l10
         →Table Function guard_subquery_size(#0)
-          →Arranged l10
+          →Arranged l11
+    cte l13 =
+      →Union
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Read l10
+        →Table Function guard_subquery_size(#0)
+          →Arranged l11
   →Return
     →Delta Join [%0[#0{oid}] » %1[#1{oid}] » %2:mz_comments[#0{id}, lower(#1{object_type})]] [%1[#0{id}, lower(#2{type})] » %2:mz_comments[#0{id}, lower(#1{object_type})] » %0[#0{oid}]] [%2:mz_comments[#0{id}, lower(#1{object_type})] » %1[#0{id}, lower(#2{type})] » %0[#0{oid}]]
       path %0:
@@ -3509,20 +3528,6 @@ mz_internal.pg_description_all_databases:
                     Key: (#1{relname})
             →Arrange (empty key)
               →Union
-                →Stream l3
-                →Map/Filter/Project
-                  Project: #0
-                  Map: null
-                    →Consolidating Union
-                      →Negate Diffs
-                        →Unarranged Raw Stream
-                          →Distinct GroupAggregate
-                            →Fused with Child Map/Filter/Project
-                              Project: ()
-                                →Read l3
-                      →Constant (1 row)
-            →Arrange (empty key)
-              →Union
                 →Stream l4
                 →Map/Filter/Project
                   Project: #0
@@ -3535,15 +3540,9 @@ mz_internal.pg_description_all_databases:
                               Project: ()
                                 →Read l4
                       →Constant (1 row)
-          →Delta Cross Join [%0:pg_type_all_databases[×] » %1[×] » %2[×]] [%1[×] » %0:pg_type_all_databases[×] » %2[×]] [%2[×] » %0:pg_type_all_databases[×] » %1[×]]
-            →Arrange (empty key)
-              →Fused with Child Map/Filter/Project
-                Project: #0, #18
-                  →Arranged mz_internal.pg_type_all_databases
-                    Key: (#0{oid})
             →Arrange (empty key)
               →Union
-                →Stream l7
+                →Stream l5
                 →Map/Filter/Project
                   Project: #0
                   Map: null
@@ -3553,8 +3552,14 @@ mz_internal.pg_description_all_databases:
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
                               Project: ()
-                                →Read l7
+                                →Read l5
                       →Constant (1 row)
+          →Delta Cross Join [%0:pg_type_all_databases[×] » %1[×] » %2[×]] [%1[×] » %0:pg_type_all_databases[×] » %2[×]] [%2[×] » %0:pg_type_all_databases[×] » %1[×]]
+            →Arrange (empty key)
+              →Fused with Child Map/Filter/Project
+                Project: #0, #18
+                  →Arranged mz_internal.pg_type_all_databases
+                    Key: (#0{oid})
             →Arrange (empty key)
               →Union
                 →Stream l8
@@ -3569,15 +3574,9 @@ mz_internal.pg_description_all_databases:
                               Project: ()
                                 →Read l8
                       →Constant (1 row)
-          →Delta Cross Join [%0:pg_namespace_all_databases[×] » %1[×] » %2[×]] [%1[×] » %0:pg_namespace_all_databases[×] » %2[×]] [%2[×] » %0:pg_namespace_all_databases[×] » %1[×]]
-            →Arrange (empty key)
-              →Fused with Child Map/Filter/Project
-                Project: #1, #4
-                  →Arranged mz_internal.pg_namespace_all_databases
-                    Key: (#1{nspname})
             →Arrange (empty key)
               →Union
-                →Stream l11
+                →Stream l9
                 →Map/Filter/Project
                   Project: #0
                   Map: null
@@ -3587,8 +3586,14 @@ mz_internal.pg_description_all_databases:
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
                               Project: ()
-                                →Read l11
+                                →Read l9
                       →Constant (1 row)
+          →Delta Cross Join [%0:pg_namespace_all_databases[×] » %1[×] » %2[×]] [%1[×] » %0:pg_namespace_all_databases[×] » %2[×]] [%2[×] » %0:pg_namespace_all_databases[×] » %1[×]]
+            →Arrange (empty key)
+              →Fused with Child Map/Filter/Project
+                Project: #1, #4
+                  →Arranged mz_internal.pg_namespace_all_databases
+                    Key: (#1{nspname})
             →Arrange (empty key)
               →Union
                 →Stream l12
@@ -3602,6 +3607,20 @@ mz_internal.pg_description_all_databases:
                             →Fused with Child Map/Filter/Project
                               Project: ()
                                 →Read l12
+                      →Constant (1 row)
+            →Arrange (empty key)
+              →Union
+                →Stream l13
+                →Map/Filter/Project
+                  Project: #0
+                  Map: null
+                    →Consolidating Union
+                      →Negate Diffs
+                        →Unarranged Raw Stream
+                          →Distinct GroupAggregate
+                            →Fused with Child Map/Filter/Project
+                              Project: ()
+                                →Read l13
                       →Constant (1 row)
       →Arrange (#0{id}, lower(#2{type})) (#1{oid})
         →Union
@@ -3618,8 +3637,8 @@ mz_internal.pg_description_all_databases:
         →Arranged mz_internal.mz_comments
 
 Used Indexes:
-  - mz_internal.pg_namespace_all_databases_ind (*** full scan ***)
-  - mz_internal.pg_class_all_databases_ind (*** full scan ***, lookup)
+  - mz_internal.pg_namespace_all_databases_ind (*** full scan ***, lookup)
+  - mz_internal.pg_class_all_databases_ind (*** full scan ***)
   - mz_internal.pg_type_all_databases_ind (*** full scan ***)
   - mz_internal.mz_comments_ind (*** full scan ***)
   - mz_catalog.mz_schemas_ind (*** full scan ***)
