@@ -221,3 +221,18 @@ query T
 SELECT 'array_length'::regtype::text;
 ----
 array_length
+
+# Regression test for SQL-270: the `regtype`->text cast is implemented as a
+# subquery. It works in contexts that allow subqueries (e.g. a plain SELECT)...
+statement ok
+CREATE TABLE regtype_returning (a regtype)
+
+query T
+SELECT concat(a) FROM (VALUES ('date'::regtype)) AS v (a)
+----
+date
+
+# ...but a RETURNING clause does not allow subqueries, so the same cast must
+# produce a graceful planning error there instead of panicking environmentd.
+query error pg_catalog.concat does not support casting from regtype to text
+INSERT INTO regtype_returning VALUES ('date'::regtype) RETURNING concat(a)
