@@ -281,6 +281,7 @@ mod tests {
         assert_eq!(parts, vec!["My Table"]);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn resolve_one_part_name() {
         let (root, cache) = build_test_project_cache();
@@ -292,6 +293,7 @@ mod tests {
         assert_eq!(location.uri, Url::from_file_path(expected_path).unwrap());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn resolve_two_part_name() {
         let (root, cache) = build_test_project_cache();
@@ -308,6 +310,7 @@ mod tests {
         assert_eq!(location.uri, Url::from_file_path(expected_path).unwrap());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn resolve_three_part_name() {
         let (root, cache) = build_test_project_cache();
@@ -324,6 +327,7 @@ mod tests {
         assert_eq!(location.uri, Url::from_file_path(expected_path).unwrap());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn resolve_unknown_name_returns_none() {
         let (root, cache) = build_test_project_cache();
@@ -334,6 +338,7 @@ mod tests {
         assert!(result.is_none());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn resolve_cross_schema_reference() {
         let (root, cache) = build_test_project_cross_schema_cache();

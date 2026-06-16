@@ -200,6 +200,7 @@ mod tests {
         assert_eq!(find_test_line(text, "nonexistent"), None);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_single_test() {
         let root = tempfile::tempdir().unwrap();
@@ -228,6 +229,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_multiple_tests() {
         let root = tempfile::tempdir().unwrap();
@@ -263,6 +265,7 @@ mod tests {
         assert_ne!(lenses[0].range.start.line, lenses[1].range.start.line);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_no_tests() {
         let root = tempfile::tempdir().unwrap();
@@ -279,6 +282,7 @@ mod tests {
         assert!(lenses.is_empty());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_file_not_in_project() {
         let root = tempfile::tempdir().unwrap();

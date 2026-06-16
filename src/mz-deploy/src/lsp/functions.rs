@@ -129,6 +129,7 @@ pub fn search_prefix(prefix: &str) -> impl Iterator<Item = &'static FunctionInfo
 mod tests {
     use super::*;
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn lookup_finds_core_scalar() {
         let f = lookup("abs").expect("abs should exist");
@@ -145,30 +146,35 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn lookup_is_case_insensitive() {
         assert!(lookup("ABS").is_some());
         assert!(lookup("Abs").is_some());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn lookup_classifies_aggregate() {
         let f = lookup("sum").expect("sum should exist");
         assert_eq!(f.kind, FunctionKind::Aggregate);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn lookup_classifies_table() {
         let f = lookup("generate_series").expect("generate_series should exist");
         assert_eq!(f.kind, FunctionKind::Table);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn lookup_classifies_window() {
         let f = lookup("row_number").expect("row_number should exist");
         assert_eq!(f.kind, FunctionKind::Window);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn lookup_finds_materialize_specific() {
         assert!(
@@ -177,11 +183,13 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn lookup_unknown_returns_none() {
         assert!(lookup("this_function_does_not_exist").is_none());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn search_prefix_returns_sorted_unique_names() {
         let names: Vec<&str> = search_prefix("arr").map(|f| f.name.as_str()).collect();
@@ -198,6 +206,7 @@ mod tests {
         assert_eq!(names.len(), sorted.len(), "duplicate names: {:?}", names);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn signature_format_includes_return_type() {
         let f = lookup("lower").expect("lower should exist");

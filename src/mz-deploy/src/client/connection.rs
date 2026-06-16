@@ -880,6 +880,7 @@ mod tests {
         assert!(matches!(connector, Connector::NoTls));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn build_prefer_returns_tls_no_ca_work() {
         let connector = build_connector(ConnectorSpec::Tls {
@@ -891,6 +892,7 @@ mod tests {
         assert!(matches!(connector, Connector::Tls(_)));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn build_explicit_missing_ca_returns_ca_not_found() {
         let err = build_connector(ConnectorSpec::Tls {

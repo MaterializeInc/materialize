@@ -402,6 +402,7 @@ mod tests {
         graph::Project::from(typed_project)
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_apply_managed_objects_excluded_from_snapshot() {
         let view_obj = make_typed_object("CREATE VIEW my_view AS SELECT 1");

@@ -2437,6 +2437,7 @@ mod tests {
     use super::*;
     use mz_sql::catalog::SessionCatalog;
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_resolve_builtin_types() {
         let catalog = CatalogRuntime::new().expect("catalog creation should succeed");
@@ -2472,6 +2473,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_create_table_with_date_column() {
         let mut runtime = CatalogRuntime::new().expect("catalog creation should succeed");
@@ -2486,6 +2488,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_stub_table_with_date_column() {
         let mut runtime = CatalogRuntime::new().expect("catalog creation should succeed");

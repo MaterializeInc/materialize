@@ -91,6 +91,7 @@ mod tests {
     use crate::project::compiler::cache::ProjectCache;
     use std::path::Path;
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn object_with_dependents() {
         let (root, cache) = build_test_project_cache();
@@ -104,6 +105,7 @@ mod tests {
         assert_eq!(locations[0].uri, expected);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn object_with_dependents_include_declaration() {
         let (root, cache) = build_test_project_cache();
@@ -116,6 +118,7 @@ mod tests {
         assert_eq!(locations[0].uri, def_uri);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn object_with_no_dependents() {
         let (root, cache) = build_test_project_cache();
@@ -127,6 +130,7 @@ mod tests {
         assert!(locations.is_empty());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn unknown_identifier_returns_empty() {
         let (root, cache) = build_test_project_cache();
@@ -142,6 +146,7 @@ mod tests {
         assert!(locations.is_empty());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn transitive_dependents() {
         let (root, cache) = build_chain_project_cache();

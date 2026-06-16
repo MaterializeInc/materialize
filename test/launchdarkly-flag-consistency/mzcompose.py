@@ -326,7 +326,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_expression_cache_force_compaction_wait
     persist_fast_path_order
     persist_fetch_semaphore_cost_adjustment
-    persist_fetch_semaphore_permit_adjustment
     persist_gc_fallback_threshold_ms
     persist_gc_min_versions
     persist_pubsub_client_receiver_channel_size
@@ -483,7 +482,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "cluster_topology_spread_min_domains",
     "column_paged_batcher_budget_fraction",
     "compute_logical_backpressure_inflight_slack",
-    "compute_prometheus_introspection_scrape_interval",
     "enable_lgalloc",
     "enable_timely_zero_copy_lgalloc",
     "enable_zero_downtime_cluster_reconfiguration",
@@ -537,7 +535,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_new_outer_join_lowering
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
-    enable_storage_introspection_logs
     enable_upsert_v2
     enable_variadic_left_join_lowering
     grpc_client_http2_keep_alive_timeout
@@ -551,6 +548,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     persist_claim_compaction_min_version
     persist_claim_unclaimed_compactions
     persist_enable_incremental_compaction
+    persist_fetch_semaphore_permit_adjustment
     persist_rollup_use_active_rollup
     persist_txns_data_shard_retryer_initial_backoff
     persist_validate_part_bounds_on_read
