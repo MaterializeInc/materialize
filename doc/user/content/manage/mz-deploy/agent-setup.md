@@ -101,18 +101,3 @@ Add to your project's `.claude/settings.json`:
   }
 }
 ```
-
-### Configuring for Codex
-
-Add to your project's agent configuration:
-
-```json
-{
-  "lsp": {
-    "sql": {
-      "command": "mz-deploy",
-      "args": ["lsp", "-d", "."]
-    }
-  }
-}
-```
