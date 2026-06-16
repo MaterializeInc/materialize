@@ -25,6 +25,7 @@ This section contains various resources for managing Materialize.
 |-------|-------------|
 | [Using dbt to manage Materialize](/manage/dbt/) | Guides for using dbt to manage Materialize |
 | [Using Terraform to manage Materialize](/manage/terraform/) | Guides for using Terraform to manage Materialize |
+| [Using mz-deploy to manage Materialize](/manage/mz-deploy/) | SQL-native CLI for zero-downtime blue/green deployments |
 
 ## Usage and billing
 
