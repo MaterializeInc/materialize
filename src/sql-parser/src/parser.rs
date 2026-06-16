@@ -1241,7 +1241,17 @@ impl<'a> Parser<'a> {
                                 UNKNOWN => IsExprConstruct::Unknown,
                                 DISTINCT => {
                                     self.expect_keyword(FROM)?;
-                                    let expr = self.parse_expr()?;
+                                    // Parse the right-hand side at the
+                                    // precedence of the `IS` operator we are in
+                                    // the middle of, not at `Precedence::Zero`.
+                                    // Otherwise we greedily pull a trailing
+                                    // `AND`/`OR` into the RHS and parse `a IS
+                                    // DISTINCT FROM b AND c` as `a IS DISTINCT
+                                    // FROM (b AND c)`. `IS DISTINCT FROM` binds
+                                    // tighter than `AND`/`OR` (and looser than
+                                    // comparison and arithmetic), matching
+                                    // PostgreSQL.
+                                    let expr = self.parse_subexpr(precedence)?;
                                     IsExprConstruct::DistinctFrom(Box::new(expr))
                                 }
                                 _ => unreachable!(),
