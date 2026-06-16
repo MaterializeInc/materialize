@@ -60,7 +60,7 @@
   <!-- manage: control plane -> project -->
   <line x1="672" y1="226" x2="528" y2="226" stroke="#7F4EFF" stroke-width="2" marker-end="url(#ap)"/>
   <text x="600" y="216" font-size="10.5" fill="#7F4EFF" text-anchor="middle">manages your environment</text>
-  <text x="600" y="240" font-size="9.5" fill="#8A77C9" text-anchor="middle">admin on a dedicated project</text>
+  <text x="600" y="240" font-size="9.5" fill="#8A77C9" text-anchor="middle">admin via federation</text>
 
   <!-- telemetry: project -> control plane -->
   <line x1="528" y1="300" x2="670" y2="300" stroke="#5B6472" stroke-width="2" marker-end="url(#ag)"/>
