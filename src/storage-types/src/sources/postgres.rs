@@ -273,7 +273,8 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
                     (Some(is_physical_replica), Some(is_physical_replica_other)) => {
                         is_physical_replica == is_physical_replica_other
                     }
-                    (None, Some(_)) => true,
+                    // All existing sources are expected to not be physical replicas
+                    (None, Some(is_physical_replica_other)) => !is_physical_replica_other,
                     // New values must always have is_physical_replica
                     (_, None) => false,
                 },

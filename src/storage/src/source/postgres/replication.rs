@@ -644,6 +644,17 @@ async fn raw_stream<'a>(
         return Ok(Err(err));
     }
 
+    // Ensure the upstream server's physical replica status hasn't changed since the source was
+    // created. We use the metadata client here for the same reason as "SHOW wal_sender_timeout" below.
+    //
+    // This runs before the timeline ID check on purpose. Promoting a physical replica to a primary
+    // both flips pg_is_in_recovery() and switches the timeline, so either check could fire. Running
+    // this one first means a promotion always surfaces as the specific InvalidPhysicalReplica error
+    // (rather than the more generic timeline mismatch), which is the clearer signal for an operator.
+    if let Err(err) = ensure_physical_replica(&*metadata_client, is_physical_replica).await? {
+        return Ok(Err(err));
+    }
+
     // Skip the timeline ID check for sources without a known timeline ID
     // (sources created before the timeline ID was added to the source details)
     if let Some(expected_timeline_id) = timeline_id {
@@ -656,12 +667,6 @@ async fn raw_stream<'a>(
         {
             return Ok(Err(err));
         }
-    }
-
-    // Ensure the upstream server's physical replica status hasn't changed since the source was
-    // created. We use the metadata client here for the same reason as "SHOW wal_sender_timeout" below.
-    if let Err(err) = ensure_physical_replica(&*metadata_client, is_physical_replica).await? {
-        return Ok(Err(err));
     }
 
     // How often a proactive standby status update message should be sent to the server.

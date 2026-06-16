@@ -226,13 +226,13 @@ pub async fn get_timeline_id(client: &Client) -> Result<u64, PostgresError> {
             .parse::<u64>()
             .map_err(|err| {
                 PostgresError::Generic(anyhow::anyhow!(
-                    "Failed to parse timeline ID from IDENTIFY_SYSTEM: {}",
+                    "Failed to parse timeline ID from pg_control_checkpoint(): {}",
                     err
                 ))
             })
     } else {
         Err(PostgresError::Generic(anyhow::anyhow!(
-            "IDENTIFY_SYSTEM did not return a result row"
+            "pg_control_checkpoint() did not return a result row"
         )))
     }
 }
@@ -241,26 +241,35 @@ pub async fn fetch_max_lsn(
     client: &Client,
     is_physical_standby: bool,
 ) -> Result<PgLsn, PostgresError> {
-    let query = if is_physical_standby {
+    if is_physical_standby {
         // A physical standby will not support pg_current_wal_lsn, so we use pg_last_wal_replay_lsn. This reports
         // the latest LSN that the replica has successfully applied from the WAL.
-        crate::sql!("SELECT pg_last_wal_replay_lsn()")
-    } else {
-        // Based on the documentation, it appears that `pg_current_wal_lsn` has
-        // the same "upper" semantics of `confirmed_flush_lsn`:
-        // <https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-BACKUP>
-        // We may need to revisit this and use `pg_current_wal_flush_lsn`.
-        crate::sql!("SELECT pg_current_wal_lsn()")
-    };
-    let row = query_one(client, query, &[]).await?;
-    let lsn: Option<PgLsn> = row.get(0);
-    if let Some(lsn) = lsn {
+        if let Some(lsn) = fetch_lsn(client, crate::sql!("SELECT pg_last_wal_replay_lsn()")).await?
+        {
+            return Ok(lsn);
+        }
+        return Err(PostgresError::Generic(anyhow::anyhow!(
+            "pg_last_wal_replay_lsn unexpectedly None, expected client in recovery, is_in_recovery: {}",
+            get_is_in_recovery(client).await?
+        )));
+    }
+    // Based on the documentation, it appears that `pg_current_wal_lsn` has
+    // the same "upper" semantics of `confirmed_flush_lsn`:
+    // <https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-BACKUP>
+    // We may need to revisit this and use `pg_current_wal_flush_lsn`.
+    if let Some(lsn) = fetch_lsn(client, crate::sql!("SELECT pg_current_wal_lsn()")).await? {
         return Ok(lsn);
     }
 
     Err(PostgresError::Generic(anyhow::anyhow!(
-        "WAL LSN mysteriously has no value"
+        "pg_current_wal_lsn mysteriously has no value"
     )))
+}
+
+async fn fetch_lsn(client: &Client, query: Sql) -> Result<Option<PgLsn>, PostgresError> {
+    let row = query_one(client, query, &[]).await?;
+    let lsn: Option<PgLsn> = row.get(0);
+    Ok(lsn)
 }
 
 /// Returns whether the server is in recovery, i.e. is a physical replica.
