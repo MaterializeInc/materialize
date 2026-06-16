@@ -241,11 +241,9 @@ pub async fn fetch_max_lsn(
     client: &Client,
     is_physical_standby: bool,
 ) -> Result<PgLsn, PostgresError> {
-    // A physical standby (a.k.a. hot standby) is a postgres replica receiving physical replication (files as opposed to statements).
-    // It will not support pg_current_wal_lsn. Instead we use pg_last_wal_replay_lsn which reports the latest available data replayed by the replica
-    // (as opposed to received -- there will be a further-ahead curser for the latest LSN recieved from the leader). Treating pg_last_wal_replay_lsn
-    // as the latest from the replica means RTR will be with respect to the replica, not the primary.
     let query = if is_physical_standby {
+        // A physical standby will not support pg_current_wal_lsn, so we use pg_last_wal_replay_lsn. This reports
+        // the latest LSN that the replica has successfully applied from the WAL.
         crate::sql!("SELECT pg_last_wal_replay_lsn()")
     } else {
         // Based on the documentation, it appears that `pg_current_wal_lsn` has

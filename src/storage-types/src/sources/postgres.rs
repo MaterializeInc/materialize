@@ -277,7 +277,7 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
                     // New values must always have is_physical_replica
                     (_, None) => false,
                 },
-                "timeline_id",
+                "is_physical_replica",
             ),
         ];
 
