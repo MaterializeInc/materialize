@@ -15,6 +15,40 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.29.0
+*Released to Materialize Cloud: 2026-06-18* <br>
+*Released to Materialize Self-Managed: 2026-06-19* <br>
+
+### Bounded Staleness Isolation Level {#v26.29-bounded-staleness-isolation-level}
+
+New SQL isolation level `BOUNDED STALENESS <duration>` that picks the freshest available read timestamp within a bounded staleness window, returning `SQLSTATE 40001` when no timestamp is available within the specified duration instead of blocking. This provides an explicit ceiling on data staleness without blocking on input frontiers. Writes and `real_time_recency` are rejected under bounded staleness.
+
+### Google Cloud Support for Iceberg Sinks {#v26.29-google-cloud-support-for-iceberg-sinks}
+
+Iceberg sinks now support Google Cloud BigLake catalogs through a new `GCP` connection type for Google service account credentials, with validation of the `token_uri` field at connection creation. AWS connection credentials for Iceberg sinks are now optional.
+
+### Improvements {#v26.29-improvements}
+
+- **MCP OAuth discovery**: The MCP server now advertises OAuth metadata via RFC 9728 Protected Resource Metadata, enabling MCP clients that use standard OAuth discovery (e.g., Claude Desktop, ChatGPT) to connect to Materialize's MCP endpoints.
+- **Correct SQLSTATEs for evaluation errors**: Evaluation errors such as division by zero, out-of-range casts, and invalid input now return their correct PostgreSQL-standard SQLSTATE codes instead of the generic `XX000` (internal error).
+- **PostgreSQL-compatible binary encoding diagnostics**: When a type has no binary output function (e.g., `list`, `map`, `aclitem`), Materialize now returns PostgreSQL's `SQLSTATE 42883` with the message `no binary output function available for type <t>`.
+- **Self-Managed info-level Prometheus metrics**: Self-managed deployments now expose info-level Prometheus metrics (e.g., `mz_cluster_info`, `mz_cluster_replica_info`) that allow joining metric label IDs with human-readable cluster and object names in Grafana dashboards.
+- **Fivetran Destination removed**: The Fivetran Destination integration has been removed from Materialize.
+
+### Bug Fixes {#v26.29-bug-fixes}
+
+- Fixed a panic when a cluster is dropped concurrently with statement execution on that cluster.
+- Fixed stack overflows on deeply nested query expressions by converting expression visitors to iterative traversals.
+- Fixed a panic when using `COPY ... TO STDOUT WITH (FORMAT binary)` on types without binary encoding support, including `list`, `map`, `aclitem`, and records or arrays containing these types.
+- Fixed a panic when specifying `TEXT COLUMNS` with an empty list.
+- Fixed a panic when specifying `EXCLUDE COLUMNS` with an empty list.
+- Fixed `oidc_group_claim` and `oidc_group_role_sync_strict` being incorrectly modifiable by environment superusers via `ALTER SYSTEM SET`; these parameters now correctly require `mz_system` access.
+- Fixed a stack overflow when using Avro schemas with recursive references in maps.
+- Fixed data corruption in MySQL sources when a table is dropped and immediately recreated with the same name and a compatible schema.
+- Fixed HTTP health probes (`/api/livez`, `/api/readyz`) and the metrics endpoint failing when the coordinator is unhealthy in deployments with OIDC authentication.
+- Fixed a crash caused by duplicate statement execution logging that could bring down the entire environment.
+- Fixed array values failing to write to Iceberg sinks due to the array dimension being stored as a narrower integer type than Iceberg requires.
+
 ## v26.28.0
 *Released to Materialize Cloud: 2026-06-11* <br>
 *Released to Materialize Self-Managed: 2026-06-12* <br>
