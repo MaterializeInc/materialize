@@ -1,0 +1,33 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# An index on a CASE-over-literals expression is matched by a query that
+# filters on the same CASE expression, now that CaseLiteral is part of the
+# canonical reduce output (index key and query expression reduce identically).
+
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+CREATE INDEX t_case_idx ON t (CASE WHEN a = 1 THEN 10 WHEN a = 2 THEN 20 ELSE 0 END)
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT * FROM t WHERE (CASE WHEN a = 1 THEN 10 WHEN a = 2 THEN 20 ELSE 0 END) = 10
+----
+Explained Query (fast path):
+  Project (#1{a})
+    ReadIndex on=materialize.public.t t_case_idx=[lookup value=(10)]
+
+Used Indexes:
+  - materialize.public.t_case_idx (lookup)
+
+Target cluster: quickstart
+
+EOF
