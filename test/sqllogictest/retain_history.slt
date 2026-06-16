@@ -215,3 +215,16 @@ CREATE SOURCE low_rh FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '1ms')
 
 statement error RETAIN HISTORY cannot be disabled or set to 0
 CREATE SOURCE low_rh FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '0')
+
+# Check retain history upper bound. An interval whose microseconds fit in u64 but
+# not i64 must be rejected gracefully rather than panicking later when unparsed
+# (e.g. for SHOW CREATE). See database-issues SQL-361.
+statement error interval out of range
+ALTER SOURCE counter SET (RETAIN HISTORY FOR '150000000 days')
+
+statement error interval out of range
+CREATE SOURCE big_rh FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '150000000 days')
+
+# A large but in-range interval is still accepted.
+statement ok
+ALTER SOURCE counter SET (RETAIN HISTORY FOR '1000000 days')

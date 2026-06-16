@@ -2893,7 +2893,13 @@ pub fn plan_create_materialized_view(
                         sql_bail!("REFRESH interval must not involve units larger than days");
                     }
                     let interval = interval.duration()?;
-                    if u64::try_from(interval.as_millis()).is_err() {
+                    // `Interval::from_duration` (needed to unparse the interval, e.g. for
+                    // `mz_materialized_view_refresh_strategies`) requires the micros to fit
+                    // in an i64, which is a tighter bound than `Duration::duration` enforces.
+                    // Reject too-large intervals here to avoid panicking later.
+                    if u64::try_from(interval.as_millis()).is_err()
+                        || Interval::from_duration(&interval).is_err()
+                    {
                         sql_bail!("REFRESH interval too large");
                     }
                     if interval.as_micros() < 1000 {
