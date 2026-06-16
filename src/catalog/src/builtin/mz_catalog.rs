@@ -23,7 +23,7 @@ use mz_sql::catalog::{
     CatalogType, CatalogTypeDetails, CatalogTypePgMetadata, NameReference, ObjectType,
 };
 use mz_sql::rbac;
-use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME};
 use mz_storage_client::controller::IntrospectionType;
 
 use super::{
@@ -1691,39 +1691,73 @@ pub static MZ_MAP_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
         },
     }),
 });
-pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_roles",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_ROLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("inherit", SqlScalarType::Bool.nullable(false))
-        .with_column("rolcanlogin", SqlScalarType::Bool.nullable(true))
-        .with_column("rolsuper", SqlScalarType::Bool.nullable(true))
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the role."),
-        ("oid", "A PostgreSQL-compatible OID for the role."),
-        ("name", "The name of the role."),
-        (
-            "inherit",
-            "Indicates whether the role has inheritance of privileges.",
-        ),
-        ("rolcanlogin", "Indicates whether the role can log in."),
-        ("rolsuper", "Indicates whether the role is a superuser."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "role",
-        description: "A user or role for authentication and access control",
-        links: &const { [] },
-        column_semantic_types: &const { [("id", SemanticType::RoleId), ("oid", SemanticType::OID)] },
-    }),
+pub static MZ_ROLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    // The two built-in super-roles are identified by name; their names live as
+    // compile-time constants in `mz_sql::session::user`, so we interpolate to
+    // keep the SQL in sync with the Rust definition.
+    let sql = format!(
+        "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL inherit
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    data->'value'->>'name' AS name,
+    (data->'value'->'attributes'->>'inherit')::bool AS inherit,
+    COALESCE(
+        (data->'value'->'attributes'->>'login')::bool,
+        data->'value'->>'name' IN ('{system}', '{support}')
+    ) AS rolcanlogin,
+    COALESCE(
+        (data->'value'->'attributes'->>'superuser')::bool,
+        CASE WHEN data->'value'->>'name' IN ('{system}', '{support}') THEN true END
+    ) AS rolsuper
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Role' AND data->'key'->'id' != '\"Public\"'::jsonb",
+        system = SYSTEM_USER_NAME,
+        support = SUPPORT_USER_NAME,
+    );
+
+    BuiltinMaterializedView {
+        name: "mz_roles",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_ROLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("inherit", SqlScalarType::Bool.nullable(false))
+            .with_column("rolcanlogin", SqlScalarType::Bool.nullable(true))
+            .with_column("rolsuper", SqlScalarType::Bool.nullable(true))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the role."),
+            ("oid", "A PostgreSQL-compatible OID for the role."),
+            ("name", "The name of the role."),
+            (
+                "inherit",
+                "Indicates whether the role has inheritance of privileges.",
+            ),
+            ("rolcanlogin", "Indicates whether the role can log in."),
+            ("rolsuper", "Indicates whether the role is a superuser."),
+        ]),
+        sql: Box::leak(sql.into_boxed_str()),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "role",
+            description: "A user or role for authentication and access control",
+            links: &const { [] },
+            column_semantic_types: &const { [("id", SemanticType::RoleId), ("oid", SemanticType::OID)] },
+        }),
+    }
 });
 
 pub static MZ_ROLE_MEMBERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
@@ -1800,43 +1834,67 @@ WHERE data->>'kind' = 'Role'",
     }
 });
 
-pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_role_parameters",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_ROLE_PARAMETERS_OID,
-    desc: RelationDesc::builder()
-        .with_column("role_id", SqlScalarType::String.nullable(false))
-        .with_column("parameter_name", SqlScalarType::String.nullable(false))
-        .with_column("parameter_value", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "role_id",
-            "The ID of the role whose configuration parameter default is set. Corresponds to `mz_roles.id`.",
-        ),
-        (
-            "parameter_name",
-            "The configuration parameter name. One of the supported configuration parameters.",
-        ),
-        (
-            "parameter_value",
-            "The default value of the parameter for the given role. Can be either a single value, or a comma-separated list of values for configuration parameters that accept a list.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "role_parameter",
-        description: "A session parameter default set for a role",
-        links: &const {
-            [OntologyLink {
-                name: "default_parameter_setting_of",
-                target: "role",
-                properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
-            }]
-        },
-        column_semantic_types: &[("role_id", SemanticType::RoleId)],
-    }),
+pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_role_parameters",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_ROLE_PARAMETERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("role_id", SqlScalarType::String.nullable(false))
+            .with_column("parameter_name", SqlScalarType::String.nullable(false))
+            .with_column("parameter_value", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "role_id",
+                "The ID of the role whose configuration parameter default is set. Corresponds to `mz_roles.id`.",
+            ),
+            (
+                "parameter_name",
+                "The configuration parameter name. One of the supported configuration parameters.",
+            ),
+            (
+                "parameter_value",
+                "The default value of the parameter for the given role. Can be either a single value, or a comma-separated list of values for configuration parameters that accept a list.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL role_id,
+    ASSERT NOT NULL parameter_name,
+    ASSERT NOT NULL parameter_value
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS role_id,
+    entry->>'key' AS parameter_name,
+    CASE
+        WHEN entry->'val' ? 'Flat' THEN entry->'val'->>'Flat'
+        ELSE (
+            SELECT pg_catalog.string_agg(t.elem, ', ' ORDER BY t.ord)
+            FROM jsonb_array_elements_text(entry->'val'->'SqlSet')
+                WITH ORDINALITY AS t(elem, ord)
+        )
+    END AS parameter_value
+FROM
+    mz_internal.mz_catalog_raw,
+    jsonb_array_elements(data->'value'->'vars'->'entries') AS entry
+WHERE data->>'kind' = 'Role'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "role_parameter",
+            description: "A session parameter default set for a role",
+            links: &const {
+                [OntologyLink {
+                    name: "default_parameter_setting_of",
+                    target: "role",
+                    properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("role_id", SemanticType::RoleId)],
+        }),
+    }
 });
 pub static MZ_ROLE_AUTH: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_role_auth",
@@ -2027,103 +2085,177 @@ pub static MZ_OPERATORS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     }),
 });
 
-pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_clusters",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_CLUSTERS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "privileges",
-            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-        )
-        .with_column("managed", SqlScalarType::Bool.nullable(false))
-        .with_column("size", SqlScalarType::String.nullable(true))
-        .with_column("replication_factor", SqlScalarType::UInt32.nullable(true))
-        .with_column("disk", SqlScalarType::Bool.nullable(true))
-        .with_column(
-            "availability_zones",
-            SqlScalarType::List {
-                element_type: Box::new(SqlScalarType::String),
-                custom_id: None,
-            }
-            .nullable(true),
-        )
-        .with_column(
-            "introspection_debugging",
-            SqlScalarType::Bool.nullable(true),
-        )
-        .with_column(
-            "introspection_interval",
-            SqlScalarType::Interval.nullable(true),
-        )
-        .with_key(vec![0])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the cluster."),
-        ("name", "The name of the cluster."),
-        (
-            "owner_id",
-            "The role ID of the owner of the cluster. Corresponds to `mz_roles.id`.",
-        ),
-        ("privileges", "The privileges belonging to the cluster."),
-        (
-            "managed",
-            "Whether the cluster is a managed cluster with automatically managed replicas.",
-        ),
-        (
-            "size",
-            "If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters.",
-        ),
-        (
-            "replication_factor",
-            "If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters.",
-        ),
-        (
-            "disk",
-            "**Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.",
-        ),
-        (
-            "availability_zones",
-            "**Unstable** If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters.",
-        ),
-        (
-            "introspection_debugging",
-            "Whether introspection of the gathering of the introspection data is enabled.",
-        ),
-        (
-            "introspection_interval",
-            "The interval at which to collect introspection data.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "cluster",
-        description: "A compute cluster that runs dataflows for sources, sinks, MVs, and indexes",
-        links: &const {
-            [
-                OntologyLink {
-                    name: "owned_by",
-                    target: "role",
-                    properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
-                },
-                OntologyLink {
-                    name: "has_size",
-                    target: "replica_size",
-                    properties: LinkProperties::fk_nullable("size", "size", Cardinality::ManyToOne),
-                },
-            ]
-        },
-        column_semantic_types: &const {
-            [
-                ("id", SemanticType::ClusterId),
-                ("owner_id", SemanticType::RoleId),
-            ]
-        },
-    }),
+pub static MZ_CLUSTERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_clusters",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_CLUSTERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("managed", SqlScalarType::Bool.nullable(false))
+            .with_column("size", SqlScalarType::String.nullable(true))
+            .with_column("replication_factor", SqlScalarType::UInt32.nullable(true))
+            .with_column("disk", SqlScalarType::Bool.nullable(true))
+            .with_column(
+                "availability_zones",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::String),
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .with_column(
+                "introspection_debugging",
+                SqlScalarType::Bool.nullable(true),
+            )
+            .with_column(
+                "introspection_interval",
+                SqlScalarType::Interval.nullable(true),
+            )
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the cluster."),
+            ("name", "The name of the cluster."),
+            (
+                "owner_id",
+                "The role ID of the owner of the cluster. Corresponds to `mz_roles.id`.",
+            ),
+            ("privileges", "The privileges belonging to the cluster."),
+            (
+                "managed",
+                "Whether the cluster is a managed cluster with automatically managed replicas.",
+            ),
+            (
+                "size",
+                "If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters.",
+            ),
+            (
+                "replication_factor",
+                "If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters.",
+            ),
+            (
+                "disk",
+                "**Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.",
+            ),
+            (
+                "availability_zones",
+                "**Unstable** If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters.",
+            ),
+            (
+                "introspection_debugging",
+                "Whether introspection of the gathering of the introspection data is enabled.",
+            ),
+            (
+                "introspection_interval",
+                "The interval at which to collect introspection data.",
+            ),
+        ]),
+        // `config.variant` is a serde-tagged enum: `"Unmanaged"` (bare string)
+        // or `{"Managed": {...}}`. Managed-only fields (size, replication_factor,
+        // availability_zones, logging, schedule) live under `Managed`, and
+        // resolve to NULL for unmanaged clusters.
+        //
+        // `disk` is computed as in
+        // `CatalogState::cluster_replica_size_has_disk`:
+        // `NOT swap_enabled AND disk_bytes != 0`. Both flags are sourced from
+        // `mz_internal.mz_cluster_replica_size_internal`, which the catalog
+        // populates for every size — including ones flagged `disabled`, which
+        // the public `mz_cluster_replica_sizes` table omits. Using the internal
+        // table directly preserves the prior behavior of indexing the in-memory
+        // size map regardless of `disabled`.
+        //
+        // `availability_zones` is normalised to NULL when empty, matching
+        // `pack_cluster_update`'s `None` for an empty `Vec`. `list_agg` over
+        // `jsonb_array_elements_text WITH ORDINALITY` preserves the configured
+        // order, matching the prior `push_list` of the `Vec`.
+        //
+        // `introspection_interval` is a Duration `{secs, nanos}` in the JSON;
+        // we compose a string and cast to interval because Materialize has no
+        // `make_interval`.
+        //
+        // The `kind = 'Cluster'` filter is pushed into a subquery on
+        // `mz_catalog_raw` by hand. database-issues/8495 keeps the optimizer
+        // from pushing a top-level `WHERE` below the LEFT JOIN, so without the
+        // subquery the join scans the entire raw catalog.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges,
+    ASSERT NOT NULL managed
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+    jsonb_typeof(data->'value'->'config'->'variant') = 'object' AS managed,
+    data->'value'->'config'->'variant'->'Managed'->>'size' AS size,
+    (data->'value'->'config'->'variant'->'Managed'->>'replication_factor')::uint4 AS replication_factor,
+    CASE
+        WHEN jsonb_typeof(data->'value'->'config'->'variant') = 'object' THEN
+            NOT COALESCE(internal.swap_enabled, false)
+            AND COALESCE(internal.disk_bytes, 0) != 0
+    END AS disk,
+    CASE
+        WHEN jsonb_array_length(data->'value'->'config'->'variant'->'Managed'->'availability_zones') > 0 THEN
+            (
+                SELECT mz_catalog.list_agg(az.value ORDER BY az.ord)
+                FROM jsonb_array_elements_text(data->'value'->'config'->'variant'->'Managed'->'availability_zones')
+                     WITH ORDINALITY AS az(value, ord)
+            )
+    END AS availability_zones,
+    (data->'value'->'config'->'variant'->'Managed'->'logging'->>'log_logging')::bool AS introspection_debugging,
+    CASE
+        WHEN data->'value'->'config'->'variant'->'Managed'->'logging'->'interval' != 'null'::jsonb THEN
+            (
+                (data->'value'->'config'->'variant'->'Managed'->'logging'->'interval'->>'secs')
+                || ' seconds '
+                || ((data->'value'->'config'->'variant'->'Managed'->'logging'->'interval'->>'nanos')::bigint / 1000)::text
+                || ' microseconds'
+            )::interval
+    END AS introspection_interval
+FROM (
+    SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'Cluster'
+) raw
+LEFT JOIN mz_internal.mz_cluster_replica_size_internal internal
+    ON internal.size = data->'value'->'config'->'variant'->'Managed'->>'size'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "cluster",
+            description: "A compute cluster that runs dataflows for sources, sinks, MVs, and indexes",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "owned_by",
+                        target: "role",
+                        properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "has_size",
+                        target: "replica_size",
+                        properties: LinkProperties::fk_nullable("size", "size", Cardinality::ManyToOne),
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::ClusterId),
+                    ("owner_id", SemanticType::RoleId),
+                ]
+            },
+        }),
+    }
 });
 
 pub static MZ_SECRETS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
@@ -2199,74 +2331,121 @@ WHERE
     }
 });
 
-pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_cluster_replicas",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_CLUSTER_REPLICAS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_column("size", SqlScalarType::String.nullable(true))
-        // `NULL` for un-orchestrated clusters and for replicas where the user
-        // hasn't specified them.
-        .with_column("availability_zone", SqlScalarType::String.nullable(true))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column("disk", SqlScalarType::Bool.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the cluster replica."),
-        ("name", "The name of the cluster replica."),
-        (
-            "cluster_id",
-            "The ID of the cluster to which the replica belongs. Corresponds to `mz_clusters.id`.",
-        ),
-        (
-            "size",
-            "The cluster replica's size, selected during creation.",
-        ),
-        (
-            "availability_zone",
-            "The availability zone in which the cluster is running.",
-        ),
-        (
-            "owner_id",
-            "The role ID of the owner of the cluster replica. Corresponds to `mz_roles.id`.",
-        ),
-        ("disk", "If the replica has a local disk."),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "replica",
-        description: "A physical replica of a cluster providing fault tolerance",
-        links: &const {
-            [
-                OntologyLink {
-                    name: "owned_by",
-                    target: "role",
-                    properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
-                },
-                OntologyLink {
-                    name: "belongs_to_cluster",
-                    target: "cluster",
-                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
-                },
-                OntologyLink {
-                    name: "has_size",
-                    target: "replica_size",
-                    properties: LinkProperties::fk_nullable("size", "size", Cardinality::ManyToOne),
-                },
-            ]
-        },
-        column_semantic_types: &const {
-            [
-                ("id", SemanticType::ReplicaId),
-                ("cluster_id", SemanticType::ClusterId),
-                ("owner_id", SemanticType::RoleId),
-            ]
-        },
-    }),
+pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_cluster_replicas",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_REPLICAS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("size", SqlScalarType::String.nullable(true))
+            // `NULL` for un-orchestrated clusters and for replicas where the user
+            // hasn't specified them.
+            .with_column("availability_zone", SqlScalarType::String.nullable(true))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column("disk", SqlScalarType::Bool.nullable(true))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the cluster replica."),
+            ("name", "The name of the cluster replica."),
+            (
+                "cluster_id",
+                "The ID of the cluster to which the replica belongs. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "size",
+                "The cluster replica's size, selected during creation.",
+            ),
+            (
+                "availability_zone",
+                "The availability zone in which the cluster is running.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the cluster replica. Corresponds to `mz_roles.id`.",
+            ),
+            ("disk", "If the replica has a local disk."),
+        ]),
+        // `config.location` is a serde-tagged enum: `{"Unmanaged": {...}}` or
+        // `{"Managed": {...}}`. For unmanaged replicas all orchestrator-facing
+        // fields (size, availability_zone, disk) are NULL.
+        //
+        // `disk` mirrors `cluster_replica_size_has_disk`, joining
+        // `mz_cluster_replica_size_internal` for both `swap_enabled` and
+        // `disk_bytes`. The catalog populates that table for every size
+        // (including ones flagged `disabled`), so a managed replica pinned to
+        // a disabled size still resolves correctly. If a row is somehow
+        // missing, the COALESCEs resolve `disk` to `false` (treating an
+        // unknown size as having no disk), not NULL.
+        //
+        // The `kind = 'ClusterReplica'` filter is pushed into a subquery on
+        // `mz_catalog_raw` by hand. database-issues/8495 keeps the optimizer
+        // from pushing a top-level `WHERE` below the LEFT JOIN.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL owner_id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_id(data->'value'->'cluster_id') AS cluster_id,
+    data->'value'->'config'->'location'->'Managed'->>'size' AS size,
+    data->'value'->'config'->'location'->'Managed'->>'availability_zone' AS availability_zone,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    CASE
+        WHEN data->'value'->'config'->'location' ? 'Managed' THEN
+            NOT COALESCE(internal.swap_enabled, false)
+            AND COALESCE(internal.disk_bytes, 0) != 0
+    END AS disk
+FROM (
+    SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica'
+) raw
+LEFT JOIN mz_internal.mz_cluster_replica_size_internal internal
+    ON internal.size = data->'value'->'config'->'location'->'Managed'->>'size'",
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "replica",
+            description: "A physical replica of a cluster providing fault tolerance",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "owned_by",
+                        target: "role",
+                        properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "belongs_to_cluster",
+                        target: "cluster",
+                        properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "has_size",
+                        target: "replica_size",
+                        properties: LinkProperties::fk_nullable(
+                            "size",
+                            "size",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::ReplicaId),
+                    ("cluster_id", SemanticType::ClusterId),
+                    ("owner_id", SemanticType::RoleId),
+                ]
+            },
+        }),
+    }
 });
 
 pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {

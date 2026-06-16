@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/show.rs
-revision: 9f19833bd6
+revision: 12fbe31d24
 ---
 
 # mz-sql::plan::statement::show
@@ -11,3 +11,4 @@ Most `SHOW` variants are rewritten to internal `SELECT` queries against `mz_inte
 The `ensure_no_from` helper enforces that `FROM` is absent for `SHOW` commands that do not accept it (e.g., `SHOW ROLES`, `SHOW CLUSTERS`, `SHOW DATABASES`, `SHOW SCHEMAS`, `SHOW PRIVILEGES`), returning `PlanError::Internal` if the parser somehow produced a `FROM` clause.
 `plan_show_create_type` uses the fully-qualified type name (schema + item) in the output row rather than just the bare item name, and rejects system types with an error.
 `humanize_sql_for_show_create` strips the `Version` option from `CREATE SINK` SQL output, since that option does not roundtrip (a SQL string containing `VERSION` cannot be used as-is to recreate the sink).
+Role names embedded in `pg_has_role` filter expressions are passed through `escaped_string_literal` to ensure correct SQL quoting.

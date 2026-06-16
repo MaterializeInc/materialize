@@ -148,6 +148,21 @@ error: Expected FROM, found NOT
                   ^
 
 parse-scalar
+a IS DISTINCT FROM b AND c
+----
+And { left: IsExpr { expr: Identifier([Ident("a")]), construct: DistinctFrom(Identifier([Ident("b")])), negated: false }, right: Identifier([Ident("c")]) }
+
+parse-scalar
+a IS NOT DISTINCT FROM b OR c
+----
+Or { left: IsExpr { expr: Identifier([Ident("a")]), construct: DistinctFrom(Identifier([Ident("b")])), negated: true }, right: Identifier([Ident("c")]) }
+
+parse-scalar
+a IS DISTINCT FROM b + c
+----
+IsExpr { expr: Identifier([Ident("a")]), construct: DistinctFrom(Op { op: Op { namespace: None, op: "+" }, expr1: Identifier([Ident("b")]), expr2: Some(Identifier([Ident("c")])) }), negated: false }
+
+parse-scalar
 a ~ 'foo'
 ----
 Op { op: Op { namespace: None, op: "~" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }

@@ -29,24 +29,68 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
-from materialize.ui import CommandFailureCausedUIError
+from materialize.ui import CommandFailureCausedUIError, UIError
 
 MAX_SLTS = 8
 SLTS = [f"slt_{i+1}" for i in range(MAX_SLTS)]
 
-SERVICES = [CockroachOrPostgresMetadata(), Mz(app_password="")] + [
+SERVICES = [CockroachOrPostgresMetadata(), Mz(app_password=""), Materialized()] + [
     SqlLogicTest(name=slt) for slt in SLTS
 ]
 
 COCKROACH_DEFAULT_PORT = 26257
 
+# Replica configuration the recorded catalog-server EXPLAIN plans depend on.
+# Shared by `run_sqllogictest`'s defaults and the `catalog-server-explain
+# --rewrite` plan fill so a rewrite reproduces the plans CI validates.
+DEFAULT_REPLICA_SIZE = "scale=1,workers=2"
+DEFAULT_REPLICAS = 1
+
+# --- catalog_server_explain.slt coverage ------------------------------------
+#
+# `catalog_server_explain.slt` snapshots the EXPLAIN plan of every index,
+# materialized view, and system-schema view on `mz_catalog_server`. sqllogictest
+# owns the recorded plans (run as a normal .slt); the workflows below own the
+# *list* of objects, enumerated from the catalog, and assert the file covers
+# exactly that set so a newly added/removed builtin cannot silently escape it.
+
+CATALOG_SERVER_EXPLAIN_SLT = (
+    MZ_ROOT / "test" / "sqllogictest" / "catalog_server_explain.slt"
+)
+
+BEGIN_MARKER = "# BEGIN AUTO-GENERATED QUERIES"
+END_MARKER = "# END AUTO-GENERATED QUERIES"
+
+CATALOG_SERVER_CLUSTER = "mz_catalog_server"
+
+# System schemas whose views we snapshot. Mirrors `SYSTEM_SCHEMAS` in
+# src/repr/src/namespaces.rs. Views are not tied to a cluster, but when planned
+# with `SET cluster = mz_catalog_server` (as the .slt does) they resolve the
+# arrangements maintained on the catalog server, which is exactly the plan we
+# want to guard against churn.
+CATALOG_SERVER_SYSTEM_SCHEMAS = [
+    "mz_catalog",
+    "mz_catalog_unstable",
+    "pg_catalog",
+    "mz_internal",
+    "mz_introspection",
+    "information_schema",
+    "mz_unsafe",
+]
+
 
 def workflow_default(c: Composition) -> None:
+    # `catalog-server-explain` validation runs inside `fast_tests` (shard 0), so
+    # skip it here to avoid running it twice (and it is `--rewrite`-capable, so
+    # we never want it auto-run with stray args).
+    skip = {"default", "catalog-server-explain"}
+
     def process(name: str) -> None:
-        if name == "default":
+        if name in skip:
             return
 
         with c.test_case(name):
@@ -58,6 +102,18 @@ def workflow_default(c: Composition) -> None:
 def workflow_fast_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run fast SQL logic tests"""
     update_sqlite_repo()
+    # Validate catalog-server EXPLAIN coverage once per CI run (on a single
+    # shard), alongside the normal run that checks the recorded plans. Call the
+    # helpers directly rather than `c.workflow(...)`, which would feed this
+    # workflow's argv to the nested workflow's parser.
+    if buildkite.get_parallelism_index() == 0:
+        c.up("materialized")
+        queries = _enumerate_catalog_server_explain_queries(c)
+        _validate_catalog_server_explain(queries)
+        print(
+            f"OK: {CATALOG_SERVER_EXPLAIN_SLT} covers all {len(queries)} "
+            "catalog-server objects."
+        )
     run_sqllogictest(c, parser, compileFastSltConfig())
 
 
@@ -95,11 +151,205 @@ def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
 
+def workflow_catalog_server_explain(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Assert catalog_server_explain.slt covers exactly the current set of
+    mz_catalog_server objects. With --rewrite, regenerate the query list and
+    fill in the recorded plans instead, producing a ready-to-commit file."""
+    parser.add_argument(
+        "--rewrite",
+        action="store_true",
+        help="Regenerate the query list and recorded plans instead of validating.",
+    )
+    args = parser.parse_args()
+
+    c.up("materialized")
+    queries = _enumerate_catalog_server_explain_queries(c)
+
+    if args.rewrite:
+        _rewrite_catalog_server_explain(queries)
+        print(f"Wrote {len(queries)} EXPLAIN queries to {CATALOG_SERVER_EXPLAIN_SLT}.")
+        # Newly added objects land with empty plans; fill them (and refresh any
+        # churned plans) by running sqllogictest in rewrite mode, so a single
+        # invocation produces a ready-to-commit file.
+        _fill_catalog_server_explain_plans(c)
+        print(f"Filled in plans for {CATALOG_SERVER_EXPLAIN_SLT}.")
+    else:
+        _validate_catalog_server_explain(queries)
+        print(
+            f"OK: {CATALOG_SERVER_EXPLAIN_SLT} covers all {len(queries)} "
+            "catalog-server objects."
+        )
+
+
+def _quote_ident(ident: str) -> str:
+    """Double-quote a SQL identifier, escaping embedded double quotes."""
+    escaped = ident.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _qualified(schema: str, name: str) -> str:
+    return f"{_quote_ident(schema)}.{_quote_ident(name)}"
+
+
+def _enumerate_catalog_server_explain_queries(c: Composition) -> list[str]:
+    """Return the deterministically-ordered list of EXPLAIN statements that
+    should appear in catalog_server_explain.slt, one per catalog-server object."""
+    # Exclude per-replica introspection log indexes (catalog kind
+    # `ClusterIntrospectionSourceIndex`, surfaced with an `si` id prefix; see
+    # `introspection_source_indexes_cte` in src/catalog/src/builtin/mz_catalog.rs).
+    # These are auto-created once per replica over the logging arrangements, so
+    # their names embed a non-deterministic replica id (e.g.
+    # `..._s2_primary_idx`) and they have no optimizer plan -- `EXPLAIN INDEX`
+    # errors with "cannot find dataflow metainformation". The `si`-prefix filter
+    # keys off the object kind, not the schema, so it still excludes them if a
+    # future log index is created over a relation outside `mz_introspection`.
+    indexes = c.sql_query(f"""
+        SELECT s.name, o.name
+        FROM mz_objects o
+        JOIN mz_schemas s ON o.schema_id = s.id
+        JOIN mz_clusters c ON o.cluster_id = c.id
+        WHERE o.type = 'index' AND c.name = '{CATALOG_SERVER_CLUSTER}'
+          AND o.id NOT LIKE 'si%'
+        ORDER BY s.name, o.name
+        """)
+    materialized_views = c.sql_query(f"""
+        SELECT s.name, o.name
+        FROM mz_objects o
+        JOIN mz_schemas s ON o.schema_id = s.id
+        JOIN mz_clusters c ON o.cluster_id = c.id
+        WHERE o.type = 'materialized-view' AND c.name = '{CATALOG_SERVER_CLUSTER}'
+        ORDER BY s.name, o.name
+        """)
+    schema_list = ", ".join(f"'{s}'" for s in CATALOG_SERVER_SYSTEM_SCHEMAS)
+    views = c.sql_query(f"""
+        SELECT s.name, v.name
+        FROM mz_views v
+        JOIN mz_schemas s ON v.schema_id = s.id
+        WHERE s.name IN ({schema_list})
+        ORDER BY s.name, v.name
+        """)
+
+    queries: list[str] = []
+    for schema, name in indexes:
+        queries.append(f"EXPLAIN INDEX {_qualified(schema, name)};")
+    for schema, name in materialized_views:
+        queries.append(f"EXPLAIN MATERIALIZED VIEW {_qualified(schema, name)};")
+    for schema, name in views:
+        queries.append(f"EXPLAIN SELECT * FROM {_qualified(schema, name)};")
+    return queries
+
+
+def _split_catalog_server_explain() -> tuple[list[str], list[str], list[str]]:
+    """Split the .slt into (header_through_begin_marker, records_lines,
+    end_marker_through_tail)."""
+    text = CATALOG_SERVER_EXPLAIN_SLT.read_text()
+    lines = text.split("\n")
+    try:
+        begin = next(i for i, l in enumerate(lines) if l.startswith(BEGIN_MARKER))
+        end = next(i for i, l in enumerate(lines) if l.startswith(END_MARKER))
+    except StopIteration:
+        raise UIError(
+            f"{CATALOG_SERVER_EXPLAIN_SLT} is missing the {BEGIN_MARKER!r} / "
+            f"{END_MARKER!r} markers."
+        )
+    return lines[: begin + 1], lines[begin + 1 : end], lines[end:]
+
+
+def _parse_catalog_server_explain_records(
+    records_lines: list[str],
+) -> dict[str, list[str]]:
+    """Parse the auto-generated region into a mapping of EXPLAIN statement to
+    its recorded plan output lines (so plans survive a query-list rewrite)."""
+    plans: dict[str, list[str]] = {}
+    i = 0
+    while i < len(records_lines):
+        if records_lines[i].strip() == "query T multiline":
+            sql = records_lines[i + 1]
+            assert records_lines[i + 2] == "----", f"malformed record near: {sql!r}"
+            j = i + 3
+            output: list[str] = []
+            while j < len(records_lines) and records_lines[j] != "EOF":
+                output.append(records_lines[j])
+                j += 1
+            plans[sql] = output
+            i = j + 1
+        else:
+            i += 1
+    return plans
+
+
+def _render_catalog_server_explain_records(
+    queries: list[str], plans: dict[str, list[str]]
+) -> str:
+    blocks = []
+    for sql in queries:
+        output = plans.get(sql, [])
+        body = "".join(f"{line}\n" for line in output)
+        blocks.append(f"query T multiline\n{sql}\n----\n{body}EOF")
+    return "\n\n".join(blocks)
+
+
+def _rewrite_catalog_server_explain(queries: list[str]) -> None:
+    head, records_lines, tail = _split_catalog_server_explain()
+    plans = _parse_catalog_server_explain_records(records_lines)
+    rendered = _render_catalog_server_explain_records(queries, plans)
+    body = ["", rendered, ""] if rendered else [""]
+    CATALOG_SERVER_EXPLAIN_SLT.write_text("\n".join(head + body + tail))
+
+
+def _fill_catalog_server_explain_plans(c: Composition) -> None:
+    """Run sqllogictest in rewrite mode to fill the recorded plans for the
+    auto-generated query list, equivalent to `bin/sqllogictest --
+    --rewrite-results`. Uses the same replica configuration the plans are
+    validated with so the rewrite is reproducible."""
+    rel_path = str(CATALOG_SERVER_EXPLAIN_SLT.relative_to(MZ_ROOT))
+    c.up(c.metadata_store(), Service("slt_1", idle=True))
+    cmd = SltRunStepConfig(file_set=set(), flags=[]).to_command(
+        "slt_1",
+        rel_path,
+        DEFAULT_REPLICAS,
+        DEFAULT_REPLICA_SIZE,
+        junit_report_path=None,
+        metadata_store=c.metadata_store(),
+        rewrite_results=True,
+    )
+    c.exec("slt_1", *cmd, capture=True, capture_stderr=True)
+
+
+def _validate_catalog_server_explain(queries: list[str]) -> None:
+    _, records_lines, _ = _split_catalog_server_explain()
+    covered = set(_parse_catalog_server_explain_records(records_lines).keys())
+    desired = set(queries)
+
+    missing = sorted(desired - covered)
+    extra = sorted(covered - desired)
+    if not missing and not extra:
+        return
+
+    lines = [
+        f"{CATALOG_SERVER_EXPLAIN_SLT} is out of date with the objects on "
+        f"{CATALOG_SERVER_CLUSTER}.",
+        "Regenerate it with:",
+        "  bin/mzcompose --find sqllogictest run catalog-server-explain --rewrite",
+    ]
+    if missing:
+        lines.append(f"\nMissing EXPLAIN queries ({len(missing)}):")
+        lines.extend(f"  + {q}" for q in missing)
+    if extra:
+        lines.append(
+            f"\nStale EXPLAIN queries no longer backed by an object ({len(extra)}):"
+        )
+        lines.extend(f"  - {q}" for q in extra)
+    raise UIError("\n".join(lines))
+
+
 def run_sqllogictest(
     c: Composition, parser: WorkflowArgumentParser, run_config: SltRunConfig
 ) -> None:
-    parser.add_argument("--replica-size", default="scale=1,workers=2", type=str)
-    parser.add_argument("--replicas", default=1, type=int)
+    parser.add_argument("--replica-size", default=DEFAULT_REPLICA_SIZE, type=str)
+    parser.add_argument("--replicas", default=DEFAULT_REPLICAS, type=int)
     parser.add_argument("--parallelism", default=MAX_SLTS, type=int)
     args = parser.parse_args()
 
@@ -127,6 +377,12 @@ def run_sqllogictest(
 
     failed_files = []
 
+    def file_replicas(file: str) -> int:
+        # `singlereplica_*` files assert replica-targeted introspection
+        # results, so always run them with a single replica instead of
+        # skipping them when the workflow requests more.
+        return 1 if "singlereplica_" in file else args.replicas
+
     def worker(container_name: str):
         exception: Exception | None = None
         while True:
@@ -134,9 +390,6 @@ def run_sqllogictest(
                 step, file, rewrite_results = work_queue.get_nowait()
             except Exception:
                 break  # Queue is empty
-
-            if "singlereplica_" in file and args.replicas > 1:
-                continue
 
             junit_report_path = (
                 None
@@ -148,7 +401,7 @@ def run_sqllogictest(
             cmd = step.to_command(
                 container_name,
                 file,
-                args.replicas,
+                file_replicas(file),
                 args.replica_size,
                 junit_report_path,
                 c.metadata_store(),
@@ -161,6 +414,18 @@ def run_sqllogictest(
                     os.remove(junit_report_path)
             except CommandFailureCausedUIError as e:
                 print(f"STDERR:\n{e.stderr}")
+                if (
+                    junit_report_path
+                    and junit_report_path.exists()
+                    and junit_report_path.stat().st_size > 0
+                ):
+                    # sqllogictest wrote a junit report with the failure
+                    # details; signal that the mzcompose-level junit should be
+                    # skipped to avoid duplicate annotations. Workflow failures
+                    # outside the sqllogictest run (or crashes that leave no
+                    # report behind) still get the mzcompose-level junit, so
+                    # ci-annotate-errors can annotate them.
+                    c.has_sqllogictest_junit = True
                 if not rewrite_results:
                     failed_files.append((step, file))
                     if ui.env_is_truthy("CI"):
@@ -193,9 +458,16 @@ def run_sqllogictest(
                         f.write(diff)
                 else:
                     print("Rewriting results did not result in a diff")
-                print(
-                    f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results --replica-size={args.replica_size} --replicas={args.replicas} {' '.join([file for step, file in failed_files])}"
-                )
+                replica_counts = {file_replicas(file) for _, file in failed_files}
+                for replicas in sorted(replica_counts):
+                    files = [
+                        file
+                        for _, file in failed_files
+                        if file_replicas(file) == replicas
+                    ]
+                    print(
+                        f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results --replica-size={args.replica_size} --replicas={replicas} {' '.join(files)}"
+                    )
                 print(f"Or apply directly: git apply <<'EOF'\n{diff}EOF")
         if errors:
             raise errors[0]
@@ -221,7 +493,7 @@ class SltRunStepConfig:
         container_name: str,
         file: str,
         replicas: int,
-        replica_size: int,
+        replica_size: str,
         junit_report_path: Path | None,
         metadata_store: str,
         metadata_store_port: int = COCKROACH_DEFAULT_PORT,

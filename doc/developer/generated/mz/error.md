@@ -1,6 +1,6 @@
 ---
 source: src/mz/src/error.rs
-revision: e757b4d11b
+revision: 12fbe31d24
 ---
 
 # mz::error

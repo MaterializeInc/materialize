@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars/value.rs
-revision: 47b3fad674
+revision: 208bf3b953
 ---
 
 # mz-sql::session::vars::value
@@ -8,3 +8,4 @@ revision: 47b3fad674
 Defines the `Value` trait (parse/format/clone for variable values) and implements it for all supported variable types: `bool`, integers, `String`, `Duration`, `Numeric`, `IsolationLevel`, `TimeZone`, `IntervalStyle`, `ClientEncoding`, `ClientSeverity`, `CloneableEnvFilter`, `ByteSize`, and many others.
 Also defines `AsAny` and the helper enums `IsolationLevel`, `TimeZone`, `IntervalStyle`, `ClientSeverity`, `ClientEncoding`, `Failpoints`.
 `Duration` parsing splits the input at the end of the leading run of ASCII digits (not all Unicode numeric characters) to avoid mis-indexing multi-byte Unicode numerals such as `²` or `½`.
+`IsolationLevel` includes a `BoundedStaleness(std::time::Duration)` variant that parses the syntax `bounded staleness <duration>` (e.g., `bounded staleness 5s`). The `Display` impl renders `BoundedStaleness` with its duration via `humantime`; `as_variant_str` returns the bare keyword `"bounded staleness"` without the duration. `is_bounded_staleness()` returns true for this variant.

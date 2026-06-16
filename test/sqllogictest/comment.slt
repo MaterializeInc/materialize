@@ -657,3 +657,43 @@ database  NULL  main_db
 query IT
 SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
+
+# Regression test for SQL-278: pg_catalog.pg_description scopes its
+# pg_class/pg_type/pg_namespace classoid lookups to the pg_catalog schema. A
+# user-created object named after one of those catalogs (in any schema) used to
+# make the scalar subqueries match multiple rows, breaking pg_description for
+# everyone. PostgreSQL's pg_description is unaffected by such user objects.
+
+statement ok
+CREATE TABLE has_comment (a int)
+
+statement ok
+COMMENT ON TABLE has_comment IS 'useful_comment'
+
+# User objects shadowing the pg_catalog system catalog names.
+statement ok
+CREATE TABLE public.pg_class (x int)
+
+statement ok
+CREATE TABLE public.pg_type (x int)
+
+statement ok
+CREATE TABLE public.pg_namespace (x int)
+
+# pg_description must still return the comment, not error.
+query IT
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
+----
+0  useful_comment
+
+statement ok
+DROP TABLE public.pg_class
+
+statement ok
+DROP TABLE public.pg_type
+
+statement ok
+DROP TABLE public.pg_namespace
+
+statement ok
+DROP TABLE has_comment

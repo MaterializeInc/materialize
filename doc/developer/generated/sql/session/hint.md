@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/hint.rs
-revision: 32e3a61596
+revision: 704f7f8fcc
 ---
 
 # mz-sql::session::hint

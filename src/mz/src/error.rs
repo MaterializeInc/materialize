@@ -151,4 +151,7 @@ pub enum Error {
         "The profile name '{0}' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name."
     )]
     ProfileNameAlreadyExistsError(String),
+    /// Error that raises when a secret value does not parse as a single SQL expression.
+    #[error("Invalid secret expression: {0}")]
+    InvalidSecretExpression(String),
 }

@@ -41,7 +41,6 @@
 //! }
 //! ```
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -60,11 +59,9 @@ use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, Registry};
 
 mod delete_on_drop;
-mod rule;
 
 pub use delete_on_drop::*;
 pub use prometheus::Opts as PrometheusOpts;
-pub use rule::{NameLookup, ObjectName, Rule};
 
 /// Define a metric for use in materialize.
 #[macro_export]
@@ -76,7 +73,6 @@ macro_rules! metric {
         $(, const_labels: { $($cl_key:expr => $cl_value:expr ),* })?
         $(, var_labels: [ $($vl_name:expr),* ])?
         $(, buckets: $bk_name:expr)?
-        $(, rules: [ $($rule:expr),* $(,)? ])?
         $(,)?
     ) => {{
         let const_labels = (&[
@@ -95,7 +91,6 @@ macro_rules! metric {
                 .const_labels(const_labels)
                 .variable_labels(var_labels),
             buckets: None,
-            rules: vec![ $($($rule),*)? ],
         };
         // Set buckets if passed
         $(mk_opts.buckets = Some($bk_name);)*
@@ -111,10 +106,6 @@ pub struct MakeCollectorOpts {
     /// Buckets to be used with Histogram and HistogramVec. Must be set to create Histogram types
     /// and must not be set for other types.
     pub buckets: Option<Vec<f64>>,
-    /// Enrichment rules attached to this metric. Applied by environmentd's public
-    /// scrape endpoint to attach human-readable name labels (e.g. `cluster_name`)
-    /// alongside the ID labels the metric already carries.
-    pub rules: Vec<Rule>,
 }
 
 /// The materialize metrics registry.
@@ -124,10 +115,6 @@ pub struct MetricsRegistry {
     inner: Registry,
     #[derivative(Debug = "ignore")]
     postprocessors: Arc<Mutex<Vec<Box<dyn FnMut(&mut Vec<MetricFamily>) + Send + Sync>>>>,
-    /// Enrichment rules declared per-metric via [`MakeCollectorOpts::rules`].
-    /// Keyed by the fully-qualified Prometheus metric name (matches
-    /// `MetricFamily::name()` at scrape time).
-    rules_by_metric: Arc<Mutex<BTreeMap<String, Vec<Rule>>>>,
 }
 
 /// A wrapper for metrics to require delete on drop semantics
@@ -216,29 +203,7 @@ impl MetricsRegistry {
         MetricsRegistry {
             inner: Registry::new(),
             postprocessors: Arc::new(Mutex::new(vec![])),
-            rules_by_metric: Arc::new(Mutex::new(BTreeMap::new())),
         }
-    }
-
-    /// Returns a snapshot of per-metric enrichment rules, keyed by the
-    /// fully-qualified Prometheus metric name.
-    pub fn rules_by_metric(&self) -> BTreeMap<String, Vec<Rule>> {
-        self.rules_by_metric.lock().expect("lock poisoned").clone()
-    }
-
-    /// Records the per-metric rules from `opts` under the metric's
-    /// fully-qualified name, if any are declared.
-    fn record_per_metric_rules(&self, opts: &MakeCollectorOpts) {
-        if opts.rules.is_empty() {
-            return;
-        }
-        let fq_name = opts.opts.fq_name();
-        self.rules_by_metric
-            .lock()
-            .expect("lock poisoned")
-            .entry(fq_name)
-            .or_default()
-            .extend(opts.rules.iter().cloned());
     }
 
     /// Register a metric defined with the [`metric`] macro.
@@ -246,7 +211,6 @@ impl MetricsRegistry {
     where
         M: MakeCollector,
     {
-        self.record_per_metric_rules(&opts);
         let collector = M::make_collector(opts);
         self.inner.register(Box::new(collector.clone())).unwrap();
         collector
@@ -261,7 +225,6 @@ impl MetricsRegistry {
     where
         P: Atomic + 'static,
     {
-        self.record_per_metric_rules(&opts);
         let gauge = ComputedGenericGauge {
             gauge: GenericGauge::make_collector(opts),
             f: Arc::new(f),
@@ -948,6 +911,24 @@ pub fn register_runtime_metrics(
     }
 }
 
+/// Returns the `(name, help, source)` of every Tokio runtime metric registered
+/// by [`register_runtime_metrics`].
+#[cfg(feature = "async")]
+pub fn describe_runtime_metrics() -> Vec<(String, String, &'static str)> {
+    // A current-thread runtime is enough to enumerate the metrics; we only read
+    // their names and help text, never their values.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("building a current-thread runtime");
+    let registry = MetricsRegistry::new();
+    register_runtime_metrics("describe", runtime.handle().metrics(), &registry);
+    registry
+        .gather()
+        .into_iter()
+        .map(|mf| (mf.name().to_owned(), mf.help().to_owned(), file!()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -1086,42 +1067,5 @@ mod tests {
         let wall_counter = wall_metric[0].get_counter();
         // We filtered wall time to < 10ms, so our wall time metric should be filtered out.
         assert_eq!(wall_counter.value(), 0.0);
-    }
-
-    #[crate::test]
-    fn register_metric_stores_rules() {
-        let registry = MetricsRegistry::new();
-        let cluster_rule = super::Rule::ClusterNameLookup {
-            cluster_id_label: "cluster_id".into(),
-            output_label: "cluster_name".into(),
-        };
-        let replica_rule = super::Rule::ReplicaNameLookup {
-            cluster_id_label: "cluster_id".into(),
-            replica_id_label: "replica_id".into(),
-            output_label: "replica_name".into(),
-        };
-        let _: prometheus::IntCounter = registry.register(crate::metric!(
-            name: "mz_test_register_metric_stores_rules",
-            help: "test metric",
-            rules: [
-                cluster_rule.clone(),
-                replica_rule.clone(),
-            ],
-        ));
-        let by_metric = registry.rules_by_metric();
-        let rules = by_metric
-            .get("mz_test_register_metric_stores_rules")
-            .expect("rules registered under fq name");
-        assert_eq!(rules, &vec![cluster_rule, replica_rule]);
-    }
-
-    #[crate::test]
-    fn register_metric_without_rules_omits_entry() {
-        let registry = MetricsRegistry::new();
-        let _: prometheus::IntCounter = registry.register(crate::metric!(
-            name: "mz_test_register_metric_without_rules",
-            help: "test metric without rules",
-        ));
-        assert!(registry.rules_by_metric().is_empty());
     }
 }

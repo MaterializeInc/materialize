@@ -1,6 +1,6 @@
 ---
 source: src/regexp/src/lib.rs
-revision: 1125338d45
+revision: 12fbe31d24
 ---
 
 # mz-regexp

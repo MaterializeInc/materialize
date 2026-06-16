@@ -270,6 +270,23 @@ pub enum AdapterError {
     },
     /// OIDC group-to-role sync failed and strict mode is enabled.
     OidcGroupSyncFailed(String),
+    /// Returned when bounded staleness was selected but the input frontiers lag
+    /// further than the bound permits, so no timestamp in the no-wait window is
+    /// at most `bound` stale.
+    BoundedStalenessExceeded {
+        bound: std::time::Duration,
+        gap_ms: u64,
+        slowest_input: Option<mz_repr::GlobalId>,
+    },
+    /// A write was attempted in a session whose isolation level is bounded
+    /// staleness. Bounded staleness is read-only.
+    BoundedStalenessReadOnly,
+    /// `real_time_recency = on` and bounded staleness were both requested in
+    /// the same session; they are mutually exclusive.
+    BoundedStalenessRealTimeRecencyConflict,
+    /// A bounded-staleness query touched a timeline whose timestamps are not
+    /// the `EpochMilliseconds` wall-clock timeline.
+    BoundedStalenessTimelineUnsupported,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -642,6 +659,25 @@ impl AdapterError {
             AdapterError::ImpossibleTimestampConstraints { constraints } => {
                 Some(format!("Constraints:\n{}", constraints))
             }
+            AdapterError::BoundedStalenessExceeded {
+                gap_ms,
+                slowest_input,
+                ..
+            } => {
+                let mut detail = format!(
+                    "Freshest available timestamp is {}ms older than the bound.",
+                    gap_ms,
+                );
+                if let Some(id) = slowest_input {
+                    detail.push_str(&format!(" Slowest input: {}.", id));
+                }
+                Some(detail)
+            }
+            AdapterError::BoundedStalenessTimelineUnsupported => Some(
+                "This query touches a timeline other than the EpochMilliseconds wall-clock \
+                 timeline."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -885,6 +921,14 @@ impl AdapterError {
             // similar to AbsurdSubscribeBounds
             AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
             AdapterError::OidcGroupSyncFailed(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::BoundedStalenessExceeded { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
+            // Matches ReadOnlyTransaction/ReadOnly: a write was rejected
+            // because the session is effectively read-only.
+            AdapterError::BoundedStalenessReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
+            AdapterError::BoundedStalenessRealTimeRecencyConflict => {
+                SqlState::FEATURE_NOT_SUPPORTED
+            }
+            AdapterError::BoundedStalenessTimelineUnsupported => SqlState::FEATURE_NOT_SUPPORTED,
         }
     }
 
@@ -1302,6 +1346,22 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::OidcGroupSyncFailed(msg) => {
                 write!(f, "OIDC group-to-role sync failed: {msg}")
+            }
+            AdapterError::BoundedStalenessExceeded { bound, .. } => {
+                write!(
+                    f,
+                    "cannot serve query under bounded staleness {}",
+                    humantime::format_duration(*bound),
+                )
+            }
+            AdapterError::BoundedStalenessReadOnly => {
+                f.write_str("writes are not permitted under bounded staleness isolation")
+            }
+            AdapterError::BoundedStalenessRealTimeRecencyConflict => {
+                f.write_str("real_time_recency cannot be combined with bounded staleness isolation")
+            }
+            AdapterError::BoundedStalenessTimelineUnsupported => {
+                f.write_str("bounded staleness isolation requires the EpochMilliseconds timeline")
             }
         }
     }

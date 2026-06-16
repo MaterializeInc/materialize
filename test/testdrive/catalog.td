@@ -514,8 +514,6 @@ mz_array_types                 ""
 mz_audit_events                ""
 mz_aws_privatelink_connections ""
 mz_base_types                  ""
-mz_clusters                    ""
-mz_cluster_replicas            ""
 mz_cluster_replica_sizes       ""
 mz_columns                     ""
 mz_default_privileges          ""
@@ -531,8 +529,6 @@ mz_map_types                   ""
 mz_operators                   ""
 mz_pseudo_types                ""
 mz_role_auth                   ""
-mz_roles                       ""
-mz_role_parameters             ""
 mz_sinks                       ""
 mz_ssh_tunnel_connections      ""
 mz_system_privileges           ""
@@ -553,10 +549,14 @@ mz_timezone_names          ""
 > SHOW MATERIALIZED VIEWS FROM mz_catalog
 name                cluster             comment
 ------------------------------------------------
+mz_clusters         mz_catalog_server   ""
+mz_cluster_replicas mz_catalog_server   ""
 mz_connections      mz_catalog_server   ""
 mz_databases        mz_catalog_server   ""
 mz_indexes          mz_catalog_server   ""
 mz_role_members     mz_catalog_server   ""
+mz_role_parameters  mz_catalog_server   ""
+mz_roles            mz_catalog_server   ""
 mz_schemas          mz_catalog_server   ""
 mz_secrets          mz_catalog_server   ""
 mz_sources          mz_catalog_server   ""
@@ -604,7 +604,7 @@ name                                     comment
 ------------------------------------------------
 mz_aggregates                            ""
 mz_aws_connections                       ""
-mz_cluster_schedules                     ""
+mz_cluster_replica_size_internal         ""
 mz_comments                              ""
 mz_history_retention_strategies          ""
 mz_kafka_source_tables                   ""
@@ -721,6 +721,7 @@ pg_authid_core                           ""
 > SHOW MATERIALIZED VIEWS FROM mz_internal
 name                   cluster             comment
 ----------------------------------------------------
+mz_cluster_schedules           mz_catalog_server   ""
 mz_cluster_workload_classes    mz_catalog_server   ""
 mz_internal_cluster_replicas   mz_catalog_server   ""
 mz_network_policies            mz_catalog_server   ""
@@ -822,11 +823,11 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-52
+48
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-267
+268
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

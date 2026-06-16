@@ -64,6 +64,20 @@ steps:
     concurrency: 1
     concurrency_group: deploy/npm
 
+  - id: deploy-github-release
+    label: ":rocket: :github: Release"
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.github_release
+    branches: main
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64-small
+    retry:
+      automatic:
+        - exit_status: "*"
+          limit: 2
+    concurrency: 1
+    concurrency_group: deploy/github-release
+
   - id: deploy-console
     label: ":rocket: :vercel: Console"
     command: bin/ci-builder run stable ci/deploy/console.sh

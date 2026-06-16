@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: b1959edbc1
+revision: e7094a29a8
 ---
 
 # mz-sql-parser::parser
@@ -12,4 +12,7 @@ The parser enforces a recursion limit to guard against stack overflow on deeply 
 Iceberg sink mode parsing accepts `UPSERT` or `APPEND` as valid values.
 `EXECUTE UNIT TEST <name> FOR <target> [AT TIME <expr>] [MOCK <view_def>, ...] EXPECTED <result_def>` is parsed by `parse_execute_unit_test`; individual mock clauses are parsed by `parse_mock_view_def`. Both methods are called from `parse_execute` after the leading `EXECUTE UNIT TEST` tokens are consumed.
 The private method `parse_list_value<T, F>` optionally consumes `=`, then parses a comma-separated list enclosed in parentheses or brackets using a provided closure, returning `Vec<T>`.
-`CREATE CONNECTION ... TO AWS` dispatches on the next keyword: `PRIVATELINK` yields `CreateConnectionType::AwsPrivatelink`, `GLUE` (followed by `SCHEMA REGISTRY`) yields `CreateConnectionType::GlueSchemaRegistry`, and no keyword yields `CreateConnectionType::Aws`.
+`CREATE CONNECTION ... TO AWS` dispatches on the next keyword: `PRIVATELINK` yields `CreateConnectionType::AwsPrivatelink`, `GLUE` (followed by `SCHEMA REGISTRY`) yields `CreateConnectionType::GlueSchemaRegistry`, and no keyword yields `CreateConnectionType::Aws`. `CREATE CONNECTION ... TO GCP` yields `CreateConnectionType::Gcp`.
+In connection option parsing, `GCP CONNECTION` is parsed as `ConnectionOptionName::GcpConnection` (with `parse_object_option_value`), and `SERVICE ACCOUNT KEY` is parsed as `ConnectionOptionName::ServiceAccountKey`.
+Iceberg sink parsing reads the catalog connection name, then optionally parses `USING AWS CONNECTION <name>` — if the keywords are absent, `aws_connection` is `None`.
+`parse_rows_from` uses `parse_windowless_function` (a private method) for each function inside `ROWS FROM (...)`. `parse_windowless_function` parses a function name and argument list without consuming `DISTINCT`, `FILTER`, or `OVER`, ensuring that table functions in `ROWS FROM` never carry those clauses.

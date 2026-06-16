@@ -1,6 +1,6 @@
 ---
 source: src/postgres-util/src/schemas.rs
-revision: fa6cc7a6c7
+revision: 12fbe31d24
 ---
 
 # mz-postgres-util::schemas

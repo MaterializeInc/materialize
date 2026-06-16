@@ -1,0 +1,228 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_catalog.mz_roles, locking down the column shape,
+# nullability, and bootstrap-row contract of the materialized view.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 6 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_roles' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+oid  oid  false
+name  text  false
+inherit  boolean  false
+rolcanlogin  boolean  true
+rolsuper  boolean  true
+
+# --- PUBLIC pseudo-role is excluded -------------------------------------------
+
+query I
+SELECT count(*) FROM mz_roles WHERE id = 'p'
+----
+0
+
+query I
+SELECT count(*) FROM mz_roles WHERE name = 'PUBLIC'
+----
+0
+
+# --- System super-roles (s1 = mz_system, s2 = mz_support) --------------------
+
+# These are the only two ids in the `builtin_supers` set in
+# pack_role_update; both must report rolcanlogin = true and rolsuper = true.
+query TTBBB
+SELECT id, name, inherit, rolcanlogin, rolsuper
+FROM mz_roles
+WHERE id IN ('s1', 's2')
+ORDER BY id
+----
+s1  mz_system  true  true  true
+s2  mz_support  true  true  true
+
+# Both have OIDs assigned.
+query I
+SELECT count(*) FROM mz_roles WHERE id IN ('s1', 's2') AND oid > 0
+----
+2
+
+# --- Other built-in system / predefined roles --------------------------------
+
+# These roles are constructed with RoleAttributesRaw::new() — login = None,
+# superuser = None, and they are NOT in builtin_supers, so the populator
+# yields rolcanlogin = false and rolsuper = NULL.
+query TTBBT rowsort
+SELECT id, name, inherit, rolcanlogin, rolsuper IS NULL
+FROM mz_roles
+WHERE name IN ('mz_analytics', 'mz_jwt_sync', 'mz_monitor', 'mz_monitor_redacted')
+----
+g1  mz_monitor  true  false  true
+g2  mz_monitor_redacted  true  false  true
+s3  mz_analytics  true  false  true
+s4  mz_jwt_sync  true  false  true
+
+# --- Default user role (materialize) -----------------------------------------
+
+# Default user role is created with no explicit login/superuser attributes;
+# rolcanlogin = false (fallback: id not in builtin_supers), rolsuper = NULL.
+query TBBT
+SELECT name, inherit, rolcanlogin, rolsuper IS NULL
+FROM mz_roles
+WHERE id = 'u1'
+----
+materialize  true  false  true
+
+# --- CREATE ROLE with default attributes --------------------------------------
+
+statement ok
+CREATE ROLE r_default
+
+query TBBT
+SELECT id LIKE 'u%', inherit, rolcanlogin, rolsuper IS NULL
+FROM mz_roles WHERE name = 'r_default'
+----
+true  true  false  true
+
+statement ok
+DROP ROLE r_default
+
+# --- CREATE ROLE WITH LOGIN ---------------------------------------------------
+
+statement ok
+CREATE ROLE r_login WITH LOGIN
+
+query B
+SELECT rolcanlogin FROM mz_roles WHERE name = 'r_login'
+----
+true
+
+# Round-trip via ALTER: LOGIN → NOLOGIN must flip rolcanlogin.
+statement ok
+ALTER ROLE r_login WITH NOLOGIN
+
+query B
+SELECT rolcanlogin FROM mz_roles WHERE name = 'r_login'
+----
+false
+
+# And back to LOGIN.
+statement ok
+ALTER ROLE r_login WITH LOGIN
+
+query B
+SELECT rolcanlogin FROM mz_roles WHERE name = 'r_login'
+----
+true
+
+statement ok
+DROP ROLE r_login
+
+# --- CREATE ROLE WITH SUPERUSER (requires mz_system) -------------------------
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE r_super SUPERUSER
+----
+COMPLETE 0
+
+query B
+SELECT rolsuper FROM mz_roles WHERE name = 'r_super'
+----
+true
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE r_super NOSUPERUSER
+----
+COMPLETE 0
+
+query B
+SELECT rolsuper FROM mz_roles WHERE name = 'r_super'
+----
+false
+
+simple conn=mz_system,user=mz_system
+DROP ROLE r_super
+----
+COMPLETE 0
+
+# --- Uniqueness invariants ----------------------------------------------------
+
+# id is unique.
+query I
+SELECT count(*) - count(DISTINCT id) FROM mz_roles
+----
+0
+
+# oid is unique.
+query I
+SELECT count(*) - count(DISTINCT oid) FROM mz_roles
+----
+0
+
+# (id, name) is bijective.
+query I
+SELECT count(*) FROM mz_roles WHERE name IS NULL OR id IS NULL OR oid IS NULL
+----
+0
+
+# --- inherit invariant --------------------------------------------------------
+
+# NOINHERIT is not currently supported in Materialize, so every row must
+# report inherit = true. If NOINHERIT support is added later, update this
+# assertion explicitly.
+query I
+SELECT count(*) FROM mz_roles WHERE inherit = false
+----
+0
+
+# --- mz_roles_ind is on mz_roles ----------------------------------------------
+
+# The mz_roles_ind index must continue to target mz_roles after conversion
+# from Table to MaterializedView.
+query TT
+SELECT idx.name, on_obj.name
+FROM mz_indexes idx
+JOIN mz_objects on_obj ON idx.on_id = on_obj.id
+WHERE idx.name = 'mz_roles_ind'
+----
+mz_roles_ind  mz_roles
+
+# --- CREATE ROLE / DROP ROLE round-trip --------------------------------------
+
+statement ok
+CREATE ROLE r_rt_a
+
+statement ok
+CREATE ROLE r_rt_b
+
+query I
+SELECT count(*) FROM mz_roles WHERE name IN ('r_rt_a', 'r_rt_b')
+----
+2
+
+statement ok
+DROP ROLE r_rt_a
+
+statement ok
+DROP ROLE r_rt_b
+
+query I
+SELECT count(*) FROM mz_roles WHERE name IN ('r_rt_a', 'r_rt_b')
+----
+0

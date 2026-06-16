@@ -28,6 +28,7 @@ use mz_sql_parser::ast::{
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
 
+use crate::ast::display::escaped_string_literal;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
@@ -815,8 +816,10 @@ pub fn show_privileges<'a>(
         ));
     }
     if let Some(role) = role {
-        let name = role.name;
-        query_filter.push(format!("CASE WHEN grantee = 'PUBLIC' THEN true ELSE pg_has_role('{name}', grantee, 'USAGE') END"));
+        let name = escaped_string_literal(&role.name);
+        query_filter.push(format!(
+            "CASE WHEN grantee = 'PUBLIC' THEN true ELSE pg_has_role({name}, grantee, 'USAGE') END"
+        ));
     }
     let query_filter = if query_filter.len() > 0 {
         format!("WHERE {}", itertools::join(query_filter, " AND "))
@@ -861,8 +864,10 @@ pub fn show_default_privileges<'a>(
         ));
     }
     if let Some(role) = role {
-        let name = role.name;
-        query_filter.push(format!("CASE WHEN grantee = 'PUBLIC' THEN true ELSE pg_has_role('{name}', grantee, 'USAGE') END"));
+        let name = escaped_string_literal(&role.name);
+        query_filter.push(format!(
+            "CASE WHEN grantee = 'PUBLIC' THEN true ELSE pg_has_role({name}, grantee, 'USAGE') END"
+        ));
     }
     let query_filter = if query_filter.len() > 0 {
         format!("WHERE {}", itertools::join(query_filter, " AND "))
@@ -899,8 +904,8 @@ pub fn show_role_membership<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filter = Vec::new();
     if let Some(role) = role {
-        let name = role.name;
-        query_filter.push(format!("pg_has_role('{name}', member, 'USAGE')"));
+        let name = escaped_string_literal(&role.name);
+        query_filter.push(format!("pg_has_role({name}, member, 'USAGE')"));
     }
     let query_filter = if query_filter.len() > 0 {
         format!("WHERE {}", itertools::join(query_filter, " AND "))

@@ -50,6 +50,7 @@ module "base_node_group" {
   source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks-node-group?ref=main"
 
   cluster_name                      = module.eks.cluster_name
+  aws_region                        = var.aws_region
   subnet_ids                        = module.networking.private_subnet_ids
   node_group_name                   = "${var.name_prefix}-base"
   instance_types                    = local.instance_types_base

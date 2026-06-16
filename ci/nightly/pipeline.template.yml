@@ -165,7 +165,7 @@ steps:
       - id: feature-benchmark
         label: "Feature benchmark against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 12
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
@@ -179,7 +179,7 @@ steps:
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         env:
           # Runs against Dockerhub directly
           MZ_GHCR: 0
@@ -204,7 +204,7 @@ steps:
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         env:
           # Runs against Dockerhub directly
@@ -233,7 +233,7 @@ steps:
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         env:
           # Runs against Dockerhub directly
@@ -260,7 +260,7 @@ steps:
       - id: parallel-benchmark
         label: "Parallel Benchmark"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 5
         agents:
           # Larger instance is more stable in performance
@@ -278,7 +278,7 @@ steps:
       - id: workload-replay
         label: "Workload Replay (1% initial data)"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 5
         plugins:
           - ./ci/plugins/mzcompose:
@@ -959,6 +959,20 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: secrets-local-file
 
+  - group: GCP
+    key: gcp
+    steps:
+      - id: gcp-real
+        label: GCP (Real)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        agents:
+          # because of GCP access
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: gcp
+
   - group: "Platform checks"
     key: platform-checks
     steps:
@@ -1436,6 +1450,17 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: launchdarkly
 
+      - id: launchdarkly-flag-consistency
+        label: "LaunchDarkly flag consistency"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        agents:
+          # Requires LAUNCHDARKLY_API_TOKEN
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: launchdarkly-flag-consistency
+
   - group: E2E
     key: e2e
     steps:
@@ -1483,13 +1508,14 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize-terraform-self-managed#131"
 
     - id: terraform-aws-upgrade
       label: "Terraform + Helm Chart Upgrade on AWS"
       artifact_paths: [test/terraform/aws-upgrade/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 60
+      # ~26 min EKS setup + ~5 min per upgrade step + tests + ~18 min destroy
+      # (cleanup runs in the pre-exit hook, inside the job timeout)
+      timeout_in_minutes: 90
       concurrency: 1
       concurrency_group: 'terraform-upgrade-aws'
       agents:
@@ -1508,7 +1534,6 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize-terraform-self-managed#131"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
@@ -1527,6 +1552,7 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      skip: "materialize-terraform-self-managed#157"
 
     - id: terraform-azure
       label: "Terraform + Helm Chart E2E on Azure"

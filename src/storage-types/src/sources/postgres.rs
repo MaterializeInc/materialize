@@ -84,7 +84,7 @@ impl PostgresSourceConnection {
             )
             .await?;
 
-        let lsn = mz_postgres_util::get_current_wal_lsn(&client).await?;
+        let lsn = mz_postgres_util::fetch_max_lsn(&client).await?;
 
         let current_upper = Antichain::from_elem(MzOffset::from(u64::from(lsn)));
         Ok(current_upper)

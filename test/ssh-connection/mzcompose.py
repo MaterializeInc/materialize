@@ -717,6 +717,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when database-issues#9638 is fixed
         (workflow_kafka_sink, (), True),
         (workflow_sql_server, (), True),
+        (workflow_mysql, (), True),
     ]
     if args.extended:
         workflows.extend(

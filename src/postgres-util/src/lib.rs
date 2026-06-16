@@ -13,7 +13,7 @@
 pub mod replication;
 #[cfg(feature = "replication")]
 pub use replication::{
-    available_replication_slots, drop_replication_slots, get_current_wal_lsn, get_max_wal_senders,
+    available_replication_slots, drop_replication_slots, fetch_max_lsn, get_max_wal_senders,
     get_timeline_id, get_wal_level, validate_no_rls_policies,
 };
 #[cfg(feature = "schemas")]
@@ -28,7 +28,12 @@ pub mod tunnel;
 pub use tunnel::{Client, Config, DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT, TunnelConfig};
 
 pub mod query;
-pub use query::simple_query_opt;
+pub use mz_ore::sql;
+pub use query::{
+    Sql, SqlFormatError, batch_execute, execute, execute_prepared, query, query_one,
+    query_one_prepared, query_opt, query_opt_prepared, query_prepared, simple_query,
+    simple_query_opt,
+};
 
 /// An error representing pg, ssh, ssl, and other failures.
 #[derive(Debug, thiserror::Error)]

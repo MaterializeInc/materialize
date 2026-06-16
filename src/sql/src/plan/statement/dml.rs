@@ -1952,7 +1952,7 @@ fn plan_copy_from(
     target: &CopyTarget<Aug>,
     table_name: ResolvedItemName,
     columns: Vec<Ident>,
-    format: CopyFormat,
+    format: Option<CopyFormat>,
     options: CopyOptionExtracted,
 ) -> Result<Plan, PlanError> {
     fn only_available_with_csv<T>(option: Option<T>, param: &str) -> Result<(), PlanError> {
@@ -2001,6 +2001,20 @@ fn plan_copy_from(
             }
         }
         CopyTarget::Stdout => bail_never_supported!("COPY FROM {} not supported", target),
+    };
+
+    // COPY FROM a URL or S3 bucket only supports CSV and Parquet. Unlike COPY
+    // FROM STDIN there's no sensible default format, so one must be specified
+    // explicitly. Reject unsupported formats here in planning; the coordinator
+    // relies on this and would otherwise soft-panic.
+    let format = match &source {
+        CopyFromSource::Stdin => format.unwrap_or(CopyFormat::Text),
+        CopyFromSource::Url(_) | CopyFromSource::AwsS3 { .. } => match format {
+            None => sql_bail!("COPY FROM <expr> requires a FORMAT option"),
+            Some(CopyFormat::Text) => bail_unsupported!("FORMAT TEXT"),
+            Some(CopyFormat::Binary) => bail_unsupported!("FORMAT BINARY"),
+            Some(format @ (CopyFormat::Csv | CopyFormat::Parquet)) => format,
+        },
     };
 
     let params = match format {
@@ -2120,8 +2134,17 @@ pub fn plan_copy(
             if options.quote.is_some() {
                 sql_bail!("COPY TO does not support QUOTE option yet");
             }
+            if options.escape.is_some() {
+                sql_bail!("COPY TO does not support ESCAPE option yet");
+            }
             if options.null.is_some() {
                 sql_bail!("COPY TO does not support NULL option yet");
+            }
+            // `HEADER false` is the default and already honored; only an
+            // enabled header is unimplemented. Silently accepting it would
+            // make clients strip the first data row as a presumed header.
+            if options.header == Some(true) {
+                sql_bail!("COPY TO does not support HEADER option yet");
             }
             match relation {
                 CopyRelation::Named { .. } => sql_bail!("named with COPY TO STDOUT unsupported"),
@@ -2140,14 +2163,9 @@ pub fn plan_copy(
             }
         }
         (CopyDirection::From, target) => match relation {
-            CopyRelation::Named { name, columns } => plan_copy_from(
-                scx,
-                target,
-                name,
-                columns,
-                format.unwrap_or(CopyFormat::Text),
-                options,
-            ),
+            CopyRelation::Named { name, columns } => {
+                plan_copy_from(scx, target, name, columns, format, options)
+            }
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
         (CopyDirection::To, CopyTarget::Expr(to_expr)) => {

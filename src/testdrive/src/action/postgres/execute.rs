@@ -18,6 +18,9 @@ use crate::util::postgres::postgres_client;
 async fn execute_input(cmd: BuiltinCommand, client: &Client) -> Result<(), anyhow::Error> {
     for query in cmd.input {
         println!(">> {}", query);
+        // `query` is raw SQL from testdrive input and may contain multiple
+        // statements; this command intentionally forwards it verbatim.
+        #[allow(clippy::disallowed_methods)]
         client
             .batch_execute(&query)
             .await

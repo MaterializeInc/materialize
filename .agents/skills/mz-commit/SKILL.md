@@ -14,7 +14,7 @@ Read `doc/developer/guide-changes.md` for the full conventions on submitting and
 
 Before committing, run these and fix any warnings:
 
-1. `bin/fmt` (formats `.rs`, `.py`, and `.proto` files)
+1. `bin/fmt` (formats all `.rs`, `.py`, and `.proto` files; takes no file arguments)
 2. `bin/lint` (can error if tools are missing; use `bin/ci-builder run stable bin/lint` as an alternative)
 3. `cargo clippy --all-targets -- -D warnings`
 

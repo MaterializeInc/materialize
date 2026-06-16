@@ -1156,10 +1156,13 @@ fn get_cast(
 
 /// Converts an expression to `SqlScalarType::String`.
 ///
-/// All types are convertible to string, so this never fails.
-pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
+/// Most types have an explicit cast to string, but a few do not: `mz_aclitem`
+/// has no text cast at all, and the `reg*` casts are implemented as subqueries
+/// that `plan_cast` rejects in contexts that disallow subqueries (e.g. a
+/// `RETURNING` clause or a `to_jsonb` element cast). We surface those as a
+/// planning error rather than panicking.
+pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> Result<HirScalarExpr, PlanError> {
     plan_cast(ecx, CastContext::Explicit, expr, &SqlScalarType::String)
-        .expect("cast known to exist")
 }
 
 /// Converts an expression to `SqlScalarType::Jsonb`.
@@ -1170,12 +1173,13 @@ pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 ///   * Records are converted to a JSON object where the record's field names
 ///     are the keys of the object, and the record's fields are recursively
 ///     converted to JSON by `to_jsonb`.
-///   * Other types are converted to strings by their usual cast function an
-//      become JSON strings.
-pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
+///   * Other types are converted to strings by their usual cast function and
+///     become JSON strings. That cast can fail (see `to_string`), in which case
+///     we propagate the planning error instead of panicking.
+pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> Result<HirScalarExpr, PlanError> {
     use SqlScalarType::*;
 
-    match ecx.scalar_type(&expr) {
+    Ok(match ecx.scalar_type(&expr) {
         Bool | Jsonb | Numeric { .. } => {
             expr.call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb))
         }
@@ -1198,7 +1202,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                     ecx,
                     expr.clone()
                         .call_unary(UnaryFunc::RecordGet(func::RecordGet(i))),
-                ));
+                )?);
             }
             HirScalarExpr::call_variadic(JsonbBuildObject, exprs)
         }
@@ -1222,7 +1226,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 
             // Create an element-casting expression by calling `to_jsonb` on
             // an expression that references the first column in a row.
-            let cast_element = to_jsonb(&ecx, HirScalarExpr::column(0));
+            let cast_element = to_jsonb(&ecx, HirScalarExpr::column(0))?;
             let cast_element = cast_element
                 .lower_uncorrelated(ecx.catalog().system_vars())
                 .expect("to_jsonb does not produce correlated expressions on uncorrelated input");
@@ -1263,9 +1267,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         | MzTimestamp
         | Range { .. }
         | MzAclItem
-        | AclItem => to_string(ecx, expr)
+        | AclItem => to_string(ecx, expr)?
             .call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb)),
-    }
+    })
 }
 
 /// Guesses the most-common type among a set of [`SqlScalarType`]s that all members

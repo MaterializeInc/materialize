@@ -91,6 +91,15 @@ contains:did not match desc
 100 none 1.11 <null>
 100 none 1.11 <null>
 
+# COPY FROM <url>/S3 only supports CSV and Parquet: TEXT — including the
+# implicit default when no FORMAT is given — must be rejected at planning
+# rather than soft-panicking in the coordinator.
+! COPY INTO t1 FROM '${1_csv_url}';
+contains:COPY FROM <expr> requires a FORMAT option
+
+! COPY INTO t1 FROM '${1_csv_url}' WITH (FORMAT = 'text');
+contains:FORMAT TEXT not yet supported
+
 # gzip Compression.
 
 $ s3-file-upload bucket=copytos3 key=csv/2.csv.gz repeat=2 compression=gzip
@@ -220,6 +229,10 @@ zstd 500
 > SELECT * FROM t4;
 none 100
 none 100
+
+# The S3 source must reject TEXT at planning time too.
+! COPY INTO t4 FROM 's3://copytos3/csv' (FORMAT = 'text', AWS CONNECTION = aws_conn, FILES = ["csv/1.csv"]);
+contains:FORMAT TEXT not yet supported
 
 # Test pagination: upload >1000 objects to force multiple ListObjectsV2 pages.
 

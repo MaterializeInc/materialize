@@ -1624,7 +1624,8 @@ pub mod cluster_scheduling {
         "How often policies are invoked to automatically start/stop clusters, e.g., \
             for REFRESH EVERY materialized views.",
         false,
-    );
+    )
+    .with_constraint(&NON_ZERO_DURATION);
 
     pub static CLUSTER_SECURITY_CONTEXT_ENABLED: VarDefinition = VarDefinition::new(
         "cluster_security_context_enabled",
@@ -2252,6 +2253,12 @@ feature_flags!(
         name: enable_rowwise_subquery_lowering,
         desc: "Lower row-local correlated subqueries to a stateless FlatMap over a TableFunc::EvalRelation instead of a keyed Reduce joined back to the outer relation.",
         default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_bounded_staleness_isolation,
+        desc: "the `bounded staleness <duration>` transaction isolation level",
+        default: true,
         enable_for_item_parsing: false,
     },
 );

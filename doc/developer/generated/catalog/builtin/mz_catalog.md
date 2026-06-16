@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/mz_catalog.rs
-revision: d777d0f6da
+revision: 4ec14fa5c7
 ---
 
 # catalog::builtin::mz_catalog
@@ -13,7 +13,7 @@ This module exports 78 public items: types, tables, materialized views, views, s
 
 **Tables** — `BuiltinTable` statics covering connector-specific metadata: `MZ_ICEBERG_SINKS`, `MZ_KAFKA_SINKS`, `MZ_KAFKA_CONNECTIONS`, `MZ_KAFKA_SOURCES`, and more.
 
-**Materialized views** — Core catalog entities backed by queries over `mz_internal.mz_catalog_raw`: `MZ_DATABASES`, `MZ_SCHEMAS`, `MZ_CONNECTIONS`, `MZ_SECRETS`, `MZ_TABLES`, `MZ_COLUMNS`, `MZ_VIEWS`, `MZ_SOURCES`, `MZ_SINKS`, `MZ_CLUSTER_REPLICAS`, `MZ_ROLES`, `MZ_OBJECTS`, `MZ_ALL_OBJECTS`, and others. These carry `Ontology` annotations with entity names, descriptions, and `OntologyLink` relationships for the catalog graph. `MZ_INDEXES` is also a `BuiltinMaterializedView` but is generated dynamically via the `pub(super) make_mz_indexes` function rather than declared as a static, so it is not counted among the module's exported statics.
+**Materialized views** — Core catalog entities backed by queries over `mz_internal.mz_catalog_raw`: `MZ_DATABASES`, `MZ_SCHEMAS`, `MZ_CONNECTIONS`, `MZ_SECRETS`, `MZ_TABLES`, `MZ_COLUMNS`, `MZ_VIEWS`, `MZ_SOURCES`, `MZ_SINKS`, `MZ_CLUSTERS`, `MZ_CLUSTER_REPLICAS`, `MZ_ROLES`, `MZ_ROLE_PARAMETERS`, `MZ_OBJECTS`, `MZ_ALL_OBJECTS`, and others. `MZ_CLUSTERS` and `MZ_CLUSTER_REPLICAS` are `BuiltinMaterializedView` objects that derive cluster and replica metadata from the durable catalog raw source; `MZ_CLUSTER_REPLICAS` resolves the `disk` column via a LEFT JOIN against `mz_cluster_replica_size_internal` (which retains rows for disabled sizes), so replicas with unknown sizes return `NULL` for `disk` rather than causing an error. These carry `Ontology` annotations with entity names, descriptions, and `OntologyLink` relationships for the catalog graph. `MZ_INDEXES` is also a `BuiltinMaterializedView` but is generated dynamically via the `pub(super) make_mz_indexes` function rather than declared as a static, so it is not counted among the module's exported statics.
 
 **Views** — Additional SQL views for derived catalog information such as `MZ_TIMEZONE_ABBREVIATIONS` and `MZ_TIMEZONE_NAMES`.
 

@@ -658,7 +658,7 @@ INSERT INTO test_table VALUES (1, 'Alice'), (2, 'Bob');
 
 #### `$ duckdb-query name=... [sort-rows=true]`
 
-Executes a query against a named DuckDB connection and verifies the output. The first line of the command body is the SQL query. The remaining lines are the expected output, with columns separated by spaces.
+Executes a query against a named DuckDB connection and verifies the output. The first line of the command body is the SQL query. The remaining lines are the expected output, with columns separated by spaces. `duckdb-query` executions are automatically retried the same way regular testdrive queries are.
 
 ```
 $ duckdb-query name=duckdb

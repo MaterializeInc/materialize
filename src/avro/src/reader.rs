@@ -267,9 +267,15 @@ impl<R: AvroRead> Reader<R> {
         assert!(self.is_empty(), "Expected self to be empty!");
         match util::read_long(&mut self.inner) {
             Ok(block_len) => {
-                self.messages_remaining = block_len as usize;
-                let block_bytes = util::read_long(&mut self.inner)?;
-                self.fill_buf(block_bytes as usize)?;
+                // The object count is read straight from the wire; cap it like
+                // every other wire-read length (and reject negatives, which wrap
+                // to a huge `usize`). Otherwise a crafted block with a huge count
+                // and a zero-byte schema (e.g. `null`) makes the reader spin
+                // decoding billions of empty values. Found by the reader_decode
+                // cargo-fuzz target.
+                self.messages_remaining = util::safe_len(block_len as usize)?;
+                let block_bytes = util::safe_len(util::read_long(&mut self.inner)? as usize)?;
+                self.fill_buf(block_bytes)?;
                 let mut marker = [0u8; 16];
                 self.inner.read_exact(&mut marker)?;
 
@@ -686,9 +692,13 @@ impl<'a> SchemaResolver<'a> {
                 let (index, w_inner) = w_inner
                     .match_ref(other, &self.reader_to_writer_names)
                     .ok_or_else(|| {
+                        // `other` is the reader's concrete node (the second element
+                        // of the match), so its name must be looked up in the
+                        // reader's schema. Using `writer.root` here indexed the
+                        // writer's (possibly empty) `named` table out of bounds.
                         SchemaResolutionError::new(
                             format!("No matching schema in writer union for reader type `{}` for field `{}`",
-                                    other.get_human_name(writer.root),
+                                    other.get_human_name(reader.root),
                                     self.get_current_human_readable_path()))
                     })?;
                 let inner = Box::new(self.resolve(writer.step(w_inner), reader.step_ref(other))?);
@@ -873,9 +883,18 @@ impl<'a> SchemaResolver<'a> {
                             match self.resolve_named(writer.root, reader.root, w_index, r_index) {
                                 Ok(piece) => piece,
                                 Err(e) => {
-                                    // clean up the placeholder values that were added above.
-                                    self.named.pop();
-                                    self.reader_to_resolved_names.remove(&r_index);
+                                    // Roll back to the state before this node. We must remove not
+                                    // only this node's placeholder but also any nested named nodes
+                                    // resolved while resolving it: they live at indices
+                                    // `>= resolved_idx` and are unreachable now that this resolution
+                                    // failed. A plain `pop()` removed only the last one, orphaning a
+                                    // `None` placeholder (which a later `Option::unwrap` panics on)
+                                    // whenever a nested node had been pushed. Union resolution stores
+                                    // rather than propagates this error, so the orphan would survive.
+                                    self.named.truncate(resolved_idx);
+                                    self.reader_to_resolved_names
+                                        .retain(|_, v| *v < resolved_idx);
+                                    self.indices.retain(|_, v| *v < resolved_idx);
                                     return Err(e);
                                 }
                             };
@@ -937,6 +956,29 @@ mod tests {
     use crate::types::{Record, ToAvro};
 
     use super::*;
+
+    #[mz_ore::test]
+    fn reader_rejects_huge_block_object_count() {
+        // A crafted object-container block with a huge object count and a
+        // zero-byte (`null`) schema must be rejected, not spin decoding billions
+        // of empty values. Regression for the reader_decode cargo-fuzz timeout.
+        let bytes: &[u8] = &[
+            0x4f, 0x62, 0x6a, 0x01, 0x04, 0x16, 0x61, 0x76, 0x72, 0x6f, 0x2e, 0x73, 0x63, 0x68,
+            0x65, 0x6d, 0x61, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22,
+            0x6e, 0x75, 0x6c, 0x6c, 0x22, 0x20, 0x00, 0x00, 0x00, 0x64, 0x64, 0x64, 0x64, 0x64,
+            0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0xbf, 0x00, 0x26,
+            0x35, 0x33, 0x39, 0x33, 0x34, 0x38, 0x33, 0xcd, 0x45, 0x38, 0x56, 0xb1, 0x00, 0x00,
+            0x64, 0x64, 0x7a, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64,
+            0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64,
+        ];
+        let reader = Reader::new(bytes).expect("OCF header parses");
+        // Iteration must terminate with an error (the oversized count is
+        // rejected), not hang.
+        assert!(
+            reader.into_iter().any(|item| item.is_err()),
+            "expected a decode error from the oversized block count"
+        );
+    }
 
     static SCHEMA: &str = r#"
             {

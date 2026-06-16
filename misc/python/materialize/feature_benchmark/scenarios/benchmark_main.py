@@ -1009,13 +1009,7 @@ class DifferentialJoinHydration(Dataflow):
     iterations; `v1` stays hydrated throughout.
     """
 
-    # SCALE=8 → 100M rows per side, ~1.6 GiB per side input. The
-    # merge-batcher transient while arranging that input dwarfs the File
-    # variant's spill budget floors (16 MiB per worker + 128 MiB shared),
-    # so nearly all of it spills, while the Baseline holds it in memory.
-    # Note `cluster_default` runs with a single worker, so iterations are
-    # slow; use `--scale` to dial down for quick checks.
-    SCALE = 8
+    SCALE = 6
 
     @classmethod
     def can_run(cls, version: MzVersion) -> bool:

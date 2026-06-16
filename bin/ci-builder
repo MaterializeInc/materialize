@@ -188,6 +188,13 @@ case "$cmd" in
         ;;
     push)
         docker login ghcr.io -u materialize-bot --password "$GITHUB_GHCR_TOKEN"
+        for sleep_time in 5 10 20 40 60; do
+            if build --push "$@"; then
+                exit 0
+            fi
+            echo "docker push failed, retrying in ${sleep_time}s" >&2
+            sleep "$sleep_time"
+        done
         build --push "$@"
         ;;
     run)
@@ -274,6 +281,13 @@ case "$cmd" in
                 --env AZURE_SERVICE_ACCOUNT_PASSWORD
                 --env AZURE_SERVICE_ACCOUNT_TENANT
                 --env GCP_SERVICE_ACCOUNT_JSON
+                # For test/gcp Iceberg E2E
+                --env ICEBERG_GCS_BUCKET
+                --env ICEBERG_GCP_PROJECT
+                --env ICEBERG_GCP_SA_JSON_B64
+                # For test/canary-environment Iceberg GCS sinks
+                --env QA_CANARY_ICEBERG_GCS_BUCKET
+                --env QA_CANARY_ICEBERG_GCP_SA_JSON_B64
                 --env GITHUB_TOKEN
                 --env GITHUB_GHCR_TOKEN
                 --env GPG_KEY

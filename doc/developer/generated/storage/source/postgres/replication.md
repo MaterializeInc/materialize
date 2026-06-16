@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/postgres/replication.rs
-revision: 5427dc5764
+revision: 84e4f14434
 ---
 
 # mz-storage::source::postgres::replication

@@ -72,6 +72,14 @@ use crate::catalog::migrate::get_migration_version;
 /// example, if we support upgrading one major version at a time, the release of version `N.0.0`
 /// can delete all migration steps with versions before `(N-1).0.0`.
 ///
+/// Exception: when a builtin's `SystemObjectDescription` changes — e.g. a builtin table is
+/// converted to a materialized view (see `migrate_builtin_tables_to_mvs`), or a builtin is
+/// renamed or removed — existing steps naming the old description must be removed regardless
+/// of version, because `validate_migration_steps` panics on steps that don't resolve to a
+/// current builtin. This is safe only if a `Replacement` step for the new description is added
+/// at the conversion version: every environment that needed the removed steps upgrades from an
+/// even older version, so the new replacement subsumes them.
+///
 /// Smallest supported version: 0.147.0
 static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
     vec![
@@ -92,12 +100,6 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             CatalogItemType::Source,
             MZ_INTERNAL_SCHEMA,
             "mz_cluster_replica_metrics_history",
-        ),
-        MigrationStep::replacement(
-            "0.160.0",
-            CatalogItemType::Table,
-            MZ_CATALOG_SCHEMA,
-            "mz_roles",
         ),
         MigrationStep::replacement(
             "0.160.0",
@@ -182,6 +184,36 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_indexes",
+        ),
+        MigrationStep::replacement(
+            "26.29.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_roles",
+        ),
+        MigrationStep::replacement(
+            "26.29.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_role_parameters",
+        ),
+        MigrationStep::replacement(
+            "26.30.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_clusters",
+        ),
+        MigrationStep::replacement(
+            "26.30.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_cluster_replicas",
+        ),
+        MigrationStep::replacement(
+            "26.30.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_schedules",
         ),
     ]
 });

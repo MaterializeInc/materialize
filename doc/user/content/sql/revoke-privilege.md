@@ -18,6 +18,13 @@ The syntax supports the `ALL [PRIVILEGES]` shorthand to refer to all
 [*applicable* privileges](#applicable-privileges-to-revoke) for the
 object type.
 
+For PostgreSQL compatibility, you can reference views, materialized views,
+and sources with the `TABLE` keyword. With `ON TABLE`, the `ALL [PRIVILEGES]`
+shorthand expands to the full table privilege set
+(`SELECT, INSERT, UPDATE, DELETE`). This clears every privilege previously
+granted through the same shorthand, including the non-applicable ones that
+have no runtime effect.
+
 {{</note>}}
 
 
@@ -103,7 +110,19 @@ For specific materialized view(s)/view(s)/source(s):
 
 ```mzsql
 REVOKE <SELECT | ALL [PRIVILEGES]>
-ON [TABLE] <name> [, <name> ...] -- For PostgreSQL compatibility, if specifying type, use TABLE
+ON <name> [, <name> ...]
+FROM <role_name> [, ... ];
+```
+
+For PostgreSQL compatibility, the `TABLE` keyword is also accepted. With the
+`TABLE` syntax, you can name `INSERT`, `UPDATE`, and `DELETE` explicitly, and
+`ALL [PRIVILEGES]` expands to the full table privilege set
+(`SELECT, INSERT, UPDATE, DELETE`). This clears every privilege previously
+granted through the matching `GRANT ALL ON TABLE` shorthand.
+
+```mzsql
+REVOKE <SELECT | INSERT | UPDATE | DELETE | ALL [PRIVILEGES]> [, ...]
+ON TABLE <name> [, <name> ...]
 FROM <role_name> [, ... ];
 ```
 
