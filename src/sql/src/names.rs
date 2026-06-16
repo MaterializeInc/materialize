@@ -18,7 +18,6 @@ use std::sync::LazyLock;
 use anyhow::anyhow;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
-use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::network_policy_id::NetworkPolicyId;
@@ -1413,9 +1412,14 @@ impl<'a> NameResolver<'a> {
                     }
                     RawItemName::Id(id, name, version) => {
                         let id: CatalogItemId = id.parse()?;
-                        let item = self.catalog.get_item(&id);
+                        let item = match self.catalog.try_get_item(&id) {
+                            Some(item) => item,
+                            None => return Err(PlanError::InvalidId(id)),
+                        };
                         let full_name = normalize::full_name(name)?;
-                        assert_none!(version, "no support for versioning data types");
+                        if version.is_some() {
+                            sql_bail!("specifying a version for a type reference is not supported");
+                        }
 
                         (full_name, item)
                     }
