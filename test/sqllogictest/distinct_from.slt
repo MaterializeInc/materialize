@@ -121,3 +121,55 @@ CREATE TABLE t0(c0 INT , c1 BOOLEAN );
 
 statement error operator does not exist: boolean <> double precision
 SELECT t0.c0, t0.c1 FROM t0 INNER  JOIN  (SELECT CBRT(t0.c0) AS col0 FROM t0) AS sub0  ON ((true)IS NOT DISTINCT FROM(sub0.col0)) WHERE t0.c1 ORDER BY (NOT t0.c1) ASC;
+
+# Regression test for SQL-236: `IS [NOT] DISTINCT FROM` must bind tighter than
+# `AND`/`OR`, so a trailing boolean connective is not pulled into the RHS.
+# `a IS DISTINCT FROM b AND c` parses as `(a IS DISTINCT FROM b) AND c`,
+# matching PostgreSQL.
+
+statement ok
+CREATE TABLE idf_bug (flag boolean, active boolean)
+
+statement ok
+INSERT INTO idf_bug VALUES (true, true), (false, true), (NULL, true), (true, false)
+
+# AND must not be consumed into the RHS: equivalent to
+# (flag IS DISTINCT FROM false) AND (active = true).
+query BB rowsort
+SELECT flag, active FROM idf_bug WHERE flag IS DISTINCT FROM false AND active = true
+----
+NULL  true
+true  true
+
+# OR must not be consumed into the RHS: equivalent to
+# (flag IS DISTINCT FROM false) OR (active = false).
+query BB rowsort
+SELECT flag, active FROM idf_bug WHERE flag IS DISTINCT FROM false OR active = false
+----
+NULL  true
+true  false
+true  true
+
+# Explicit parens produce the same results as the unparenthesized forms above.
+query BB rowsort
+SELECT flag, active FROM idf_bug WHERE (flag IS DISTINCT FROM false) AND (active = true)
+----
+NULL  true
+true  true
+
+query BB rowsort
+SELECT flag, active FROM idf_bug WHERE (flag IS DISTINCT FROM false) OR (active = false)
+----
+NULL  true
+true  false
+true  true
+
+# Comparison and arithmetic still bind tighter than IS DISTINCT FROM, so they
+# are consumed into the RHS (matching PostgreSQL).
+query B
+SELECT 3 IS DISTINCT FROM 1 + 2
+----
+false
+
+statement ok
+DROP TABLE idf_bug
