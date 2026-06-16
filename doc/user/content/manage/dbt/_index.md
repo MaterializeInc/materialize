@@ -1,5 +1,5 @@
 ---
-title: "Use dbt to manage Materialize"
+title: "dbt"
 description: "How to use dbt and Materialize to transform streaming data in real time."
 disable_list: true
 aliases:

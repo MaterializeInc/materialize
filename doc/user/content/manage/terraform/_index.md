@@ -1,5 +1,5 @@
 ---
-title: "Use Terraform to manage Materialize"
+title: "Terraform"
 description: "Create and manage Materialize resources with Terraform"
 disable_list: true
 menu:
