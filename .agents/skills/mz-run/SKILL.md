@@ -41,7 +41,8 @@ Other useful flags:
 
 ## Formatting and linting
 
-Format Rust, Python, and Protobuf files with `bin/fmt`.
+Format Rust, Python, and Protobuf files with `bin/fmt`. Takes no file
+arguments — it always formats the whole tree (only flag: `--check`).
 Run `bin/lint` to check for lint errors.
 Run `cargo clippy --all-targets -- -D warnings` to check for Rust-specific warnings.
 
