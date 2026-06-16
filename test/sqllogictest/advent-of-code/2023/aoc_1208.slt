@@ -75,7 +75,7 @@ Explained Query:
             Map (0) // { arity: 4 }
               ReadStorage materialize.public.paths // { arity: 3 }
         Project (#3, #8, #9) // { arity: 3 }
-          Map (case when (#7{step} = "L") then #1{"left"} else case when (#7{step} = "R") then #2{"right"} else "???" end end, (#5{steps} + 1)) // { arity: 10 }
+          Map (case when (#7{step} = "L") then #1{left} else case when (#7{step} = "R") then #2{right} else "???" end end, (#5{steps} + 1)) // { arity: 10 }
             Join on=(#0{state} = #4{state} AND #6{steps} = (1 + (#5{steps} % 263))) type=delta // { arity: 8 }
               implementation
                 %0:paths » %1:l0[#1{state}]Kf » %2[#0{steps}]K

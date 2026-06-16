@@ -1349,6 +1349,20 @@ SUBSCRIBE foo.bar
 Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, output: Diffs })
 
 parse-statement
+SUBSCRIBE TO to
+----
+SUBSCRIBE TO to
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("to")]))), options: [], as_of: None, up_to: None, output: Diffs })
+
+parse-statement
+SUBSCRIBE TO to.foo
+----
+SUBSCRIBE TO to.foo
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("to"), Ident("foo")]))), options: [], as_of: None, up_to: None, output: Diffs })
+
+parse-statement
 SUBSCRIBE foo.bar AS OF 123
 ----
 SUBSCRIBE foo.bar AS OF 123
@@ -2886,7 +2900,7 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
 ----
-error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CATALOG or CREDENTIAL or DATABASE or ENDPOINT or GCP or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or REGISTRY or ROLE or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
+error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CATALOG or CREDENTIAL or DATABASE or ENDPOINT or GCP or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or REGISTRY or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
                                                ^
 
