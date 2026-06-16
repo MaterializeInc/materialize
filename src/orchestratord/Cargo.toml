@@ -36,6 +36,7 @@ mz-server-core = { path = "../server-core", default-features = false }
 prometheus.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true

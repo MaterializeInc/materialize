@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use axum_server::tls_openssl::OpenSSLConfig;
+use axum_server::tls_rustls::RustlsConfig;
 use http::HeaderValue;
 use k8s_openapi::{
     api::{
@@ -301,12 +301,23 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let tls_key = args.tls_key;
     let tls_ca = args.tls_ca;
     let reload_config = if args.install_v1_crd {
-        let config = OpenSSLConfig::from_pem_file(&tls_cert, &tls_key).unwrap();
+        // Pin the rustls crypto provider to aws-lc-rs. `RustlsConfig` builds its
+        // `ServerConfig` via `ServerConfig::builder()`, which resolves the
+        // process-default provider. Installing it explicitly keeps the choice
+        // deterministic even in workspace builds where rustls' `ring` feature is
+        // also enabled by another crate (with both features on, rustls cannot
+        // pick a default on its own and would otherwise panic).
+        rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .expect("installing the aws-lc-rs crypto provider should not fail");
+        let config = RustlsConfig::from_pem_file(&tls_cert, &tls_key)
+            .await
+            .unwrap();
         let reload_config = config.clone();
         let webhook_listen_address = args.webhook_listen_address;
 
         mz_ore::task::spawn(|| "webhook server", async move {
-            if let Err(e) = axum_server::bind_openssl(webhook_listen_address, config)
+            if let Err(e) = axum_server::bind_rustls(webhook_listen_address, config)
                 .serve(webhook::router().into_make_service())
                 .await
             {
@@ -363,7 +374,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                if let Err(err) = reload_config.reload_from_pem_file(&tls_cert, &tls_key) {
+                if let Err(err) = reload_config
+                    .reload_from_pem_file(&tls_cert, &tls_key)
+                    .await
+                {
                     tracing::error!("failed to reload webhook TLS certificate: {err}");
                     continue;
                 }
