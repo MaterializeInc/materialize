@@ -3687,21 +3687,35 @@ pub static PG_DESCRIPTION_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|
         column_comments: BTreeMap::new(),
         sql: "
 (
+    -- The classoid of a comment is the oid of the pg_catalog system catalog
+    -- that conceptually stores the commented object: pg_class for relations,
+    -- pg_type for types, pg_namespace for schemas. We scope the lookup to the
+    -- pg_catalog schema; otherwise a user-created object named e.g. `pg_class`
+    -- makes the scalar subqueries below match multiple rows and the whole view
+    -- errors for everyone. PostgreSQL's pg_description is a real catalog table
+    -- and is unaffected by such user objects, and so are we.
+    WITH pg_catalog_class AS (
+        SELECT oid, relname, database_name
+        FROM mz_internal.pg_class_all_databases
+        WHERE relnamespace = (
+            SELECT oid FROM mz_internal.pg_namespace_all_databases WHERE nspname = 'pg_catalog'
+        )
+    ),
     -- Gather all of the class oid's for objects that can have comments.
-    WITH pg_classoids AS (
+    pg_classoids AS (
         SELECT oid, database_name as oid_database_name,
-          (SELECT oid FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_class') AS classoid,
-          (SELECT database_name FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_class') AS class_database_name
+          (SELECT oid FROM pg_catalog_class WHERE relname = 'pg_class') AS classoid,
+          (SELECT database_name FROM pg_catalog_class WHERE relname = 'pg_class') AS class_database_name
         FROM mz_internal.pg_class_all_databases
         UNION ALL
         SELECT oid, database_name as oid_database_name,
-          (SELECT oid FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_type') AS classoid,
-          (SELECT database_name FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_type') AS class_database_name
+          (SELECT oid FROM pg_catalog_class WHERE relname = 'pg_type') AS classoid,
+          (SELECT database_name FROM pg_catalog_class WHERE relname = 'pg_type') AS class_database_name
         FROM mz_internal.pg_type_all_databases
         UNION ALL
         SELECT oid, database_name as oid_database_name,
-          (SELECT oid FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_namespace') AS classoid,
-          (SELECT database_name FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_namespace') AS class_database_name
+          (SELECT oid FROM pg_catalog_class WHERE relname = 'pg_namespace') AS classoid,
+          (SELECT database_name FROM pg_catalog_class WHERE relname = 'pg_namespace') AS class_database_name
         FROM mz_internal.pg_namespace_all_databases
     ),
 
