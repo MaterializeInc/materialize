@@ -4350,12 +4350,16 @@ impl Coordinator {
             acl_mode,
             target_id,
             grantor,
+            acl_from_all,
         } in update_privileges
         {
             let actual_object_type = catalog.get_system_object_type(&target_id);
             // For all relations we allow all applicable table privileges, but send a warning if the
-            // privilege isn't actually applicable to the object type.
-            if actual_object_type.is_relation() {
+            // privilege isn't actually applicable to the object type. We skip the warning when the
+            // user used the `ALL [PRIVILEGES]` shorthand: the user did not explicitly name a
+            // non-applicable privilege, and via PostgreSQL-compatible `ON TABLE <view>` syntax
+            // `ALL` deliberately expands to the full table set.
+            if actual_object_type.is_relation() && !acl_from_all {
                 let applicable_privileges = rbac::all_object_privileges(actual_object_type);
                 let non_applicable_privileges = acl_mode.difference(applicable_privileges);
                 if !non_applicable_privileges.is_empty() {
