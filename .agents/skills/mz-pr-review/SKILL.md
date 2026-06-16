@@ -70,7 +70,9 @@ The overall developer guide for reviewing changes is defined in `doc/developer/g
 
 ### Release notes
 
-Release notes are auto-generated per release from PR descriptions (the `mz-release-notes` skill); authors don't write them. So for a user-visible change, check that the PR *description* states the user-observable effect in user-facing terms — not only implementation detail — so the classifier includes it.
+Release notes are auto-generated per release from PR descriptions (the [`/mz-release-notes` skill](https://github.com/MaterializeInc/mz-skills/blob/main/.agents/skills/mz-release-notes/SKILL.md));
+authors don't write them. So for a user-visible change, check that the PR *description* states the
+user-observable effect in user-facing terms — not only implementation detail — so the classifier includes it.
 
 ## One semantic change rule
 

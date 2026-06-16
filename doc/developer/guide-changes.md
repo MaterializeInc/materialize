@@ -151,18 +151,18 @@ A classic example of a bad commit message is
 ### Release notes
 
 Release notes are no longer written by PR authors. They are generated per
-release by the LLM-driven `mz-release-notes` skill in `MaterializeInc/mz-skills`,
+release by the LLM-driven [`/mz-release-notes` skill](https://github.com/MaterializeInc/mz-skills/blob/main/.agents/skills/mz-release-notes/SKILL.md),
 which reads every PR in a version — including its **full description** —
 classifies each change as user-facing or internal, drafts a note describing the
 user-observable effect, and opens a docs PR against materialize for human
 review.
 
 What this means for you as a PR author: instead of writing a release note, make
-sure your **PR description** states the user-visible effect in user-facing
-terms. The classifier omits any PR whose description contains only implementation
+sure your **PR description** states the user-visible effect in **user-facing
+terms**. The classifier omits any PR whose description contains only implementation
 detail (internal struct, function, flag, or config names) with no discernible
 user-facing impact. If your change is user-visible, say so in the description —
-otherwise it will be silently left out of the release notes.
+otherwise it may be silently left out of the release notes.
 
 #### What counts as a user-facing change?
 
