@@ -232,10 +232,11 @@ fn collect_if_chain_arms(
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::{Datum, ReprColumnType, ReprScalarType};
+    use mz_repr::{Datum, ReprColumnType, ReprScalarType, RowArena};
+    use proptest::prelude::*;
 
     use crate::scalar::func::Eq;
-    use crate::{BinaryFunc, MirScalarExpr, VariadicFunc};
+    use crate::{BinaryFunc, Eval, MirScalarExpr, VariadicFunc};
 
     fn lit_i64(v: i64) -> MirScalarExpr {
         MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64)
@@ -272,5 +273,65 @@ mod tests {
             ),
             "expected CaseLiteral, got {expr:?}"
         );
+    }
+
+    /// Evaluate `expr` against a single optional-i64 input column.
+    /// Returns Ok(Some(v)) for an i64 result, Ok(None) for NULL, Err(()) for an
+    /// eval error. Collapsing errors to a unit lets us compare originals and
+    /// reduced forms for equivalence including the error case.
+    fn eval_one(expr: &MirScalarExpr, input: Option<i64>) -> Result<Option<i64>, ()> {
+        let datums = vec![input.map_or(Datum::Null, Datum::Int64)];
+        let arena = RowArena::new();
+        match expr.eval(&datums, &arena) {
+            Ok(d) if d.is_null() => Ok(None),
+            Ok(Datum::Int64(v)) => Ok(Some(v)),
+            Ok(other) => panic!("unexpected datum {other:?}"),
+            Err(_) => Err(()),
+        }
+    }
+
+    proptest! {
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow under miri
+        fn reduce_preserves_eval(
+            arms in prop::collection::vec((-5i64..5, -100i64..100), 2..6),
+            fallback in -100i64..100,
+            probes in prop::collection::vec(-8i64..8, 1..6),
+        ) {
+            let col = MirScalarExpr::column(0);
+            // Build the chain bottom-up so earlier arms end up outermost
+            // (outer arm wins for duplicate literals, matching SQL CASE).
+            let mut chain = lit_i64(fallback);
+            for (lit, res) in arms.iter().rev() {
+                chain = MirScalarExpr::If {
+                    cond: Box::new(eq(col.clone(), lit_i64(*lit))),
+                    then: Box::new(lit_i64(*res)),
+                    els: Box::new(chain),
+                };
+            }
+            let original = chain.clone();
+            let mut reduced = chain;
+            let col_types = vec![ReprColumnType {
+                scalar_type: ReprScalarType::Int64,
+                nullable: true,
+            }];
+            crate::scalar::reduce::reduce(&mut reduced, &col_types);
+
+            // Probe NULL, every literal used in the chain, and random values.
+            let mut inputs: Vec<Option<i64>> = vec![None];
+            for (lit, _) in &arms {
+                inputs.push(Some(*lit));
+            }
+            for p in &probes {
+                inputs.push(Some(*p));
+            }
+            for input in inputs {
+                prop_assert_eq!(
+                    eval_one(&original, input),
+                    eval_one(&reduced, input),
+                    "mismatch at input {:?}: original chain vs reduced", input
+                );
+            }
+        }
     }
 }
