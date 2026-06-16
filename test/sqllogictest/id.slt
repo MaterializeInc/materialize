@@ -60,6 +60,15 @@ SELECT y.a FROM [xx AS materialize.public.y]
 statement error invalid digit
 SELECT y.a FROM [ux AS materialize.public.y]
 
+# Regression test for SQL-200: a non-existent id used as a data type must
+# produce a graceful error instead of panicking environmentd.
+statement error invalid id
+CREATE TABLE bad_type (x [u100 AS materialize.public.foo])
+
+# A version specifier on a type reference must error gracefully, not panic.
+statement error specifying a version for a type reference is not supported
+CREATE TABLE bad_type (x [u1 AS materialize.public.x VERSION 5])
+
 statement ok
 CREATE VIEW foo AS SELECT * FROM x
 
