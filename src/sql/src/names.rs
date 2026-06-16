@@ -947,21 +947,16 @@ impl FromStr for SchemaId {
     type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(PlanError::Unstructured(format!(
-                "couldn't parse SchemaId {}",
-                s
-            )));
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next() {
-            Some('s') => Ok(SchemaId::System(val)),
-            Some('u') => Ok(SchemaId::User(val)),
-            _ => Err(PlanError::Unstructured(format!(
-                "couldn't parse SchemaId {}",
-                s
-            ))),
-        }
+        let err = || PlanError::Unstructured(format!("couldn't parse SchemaId {}", s));
+        // Validate the (single-byte, ASCII) tag before slicing so that a
+        // multi-byte leading character doesn't slice inside a UTF-8 boundary.
+        let variant = match s.chars().next() {
+            Some('s') => SchemaId::System,
+            Some('u') => SchemaId::User,
+            _ => return Err(err()),
+        };
+        let val: u64 = s[1..].parse().map_err(|_| err())?;
+        Ok(variant(val))
     }
 }
 
@@ -1007,21 +1002,16 @@ impl FromStr for DatabaseId {
     type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(PlanError::Unstructured(format!(
-                "couldn't parse DatabaseId {}",
-                s
-            )));
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next() {
-            Some('s') => Ok(DatabaseId::System(val)),
-            Some('u') => Ok(DatabaseId::User(val)),
-            _ => Err(PlanError::Unstructured(format!(
-                "couldn't parse DatabaseId {}",
-                s
-            ))),
-        }
+        let err = || PlanError::Unstructured(format!("couldn't parse DatabaseId {}", s));
+        // Validate the (single-byte, ASCII) tag before slicing so that a
+        // multi-byte leading character doesn't slice inside a UTF-8 boundary.
+        let variant = match s.chars().next() {
+            Some('s') => DatabaseId::System,
+            Some('u') => DatabaseId::User,
+            _ => return Err(err()),
+        };
+        let val: u64 = s[1..].parse().map_err(|_| err())?;
+        Ok(variant(val))
     }
 }
 
@@ -2579,6 +2569,69 @@ impl<'ast> Visit<'ast, Raw> for IdDependencVisitor {
                     self.error = Some(e);
                 }
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn proptest_schema_id_roundtrips() {
+        fn testcase(og: SchemaId) {
+            let s = og.to_string();
+            let rnd: SchemaId = s.parse().unwrap();
+            assert_eq!(og, rnd);
+        }
+
+        proptest!(|(id in any::<SchemaId>())| {
+            testcase(id);
+        })
+    }
+
+    #[mz_ore::test]
+    fn proptest_database_id_roundtrips() {
+        fn testcase(og: DatabaseId) {
+            let s = og.to_string();
+            let rnd: DatabaseId = s.parse().unwrap();
+            assert_eq!(og, rnd);
+        }
+
+        proptest!(|(id in any::<DatabaseId>())| {
+            testcase(id);
+        })
+    }
+
+    #[mz_ore::test]
+    fn test_schema_id_from_str() {
+        assert_eq!("s5".parse::<SchemaId>().unwrap(), SchemaId::System(5));
+        assert_eq!("u5".parse::<SchemaId>().unwrap(), SchemaId::User(5));
+
+        // Regression test for a panic on multi-byte leading characters, where
+        // slicing off a single byte landed inside a UTF-8 char boundary (SQL-195).
+        for invalid in ["ü1", "ü", "é42", "🦀7", "", "x1", "s"] {
+            assert!(
+                invalid.parse::<SchemaId>().is_err(),
+                "expected {invalid:?} to fail to parse"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_database_id_from_str() {
+        assert_eq!("s5".parse::<DatabaseId>().unwrap(), DatabaseId::System(5));
+        assert_eq!("u5".parse::<DatabaseId>().unwrap(), DatabaseId::User(5));
+
+        // Regression test for a panic on multi-byte leading characters, where
+        // slicing off a single byte landed inside a UTF-8 char boundary (SQL-195).
+        for invalid in ["ü1", "ü", "é42", "🦀7", "", "x1", "u"] {
+            assert!(
+                invalid.parse::<DatabaseId>().is_err(),
+                "expected {invalid:?} to fail to parse"
+            );
         }
     }
 }

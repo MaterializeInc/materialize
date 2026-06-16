@@ -76,3 +76,14 @@ CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."p
 error: Expected literal unsigned integer, found operator "-"
 CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."public"."t1" VERSION -101]
                                                                                                     ^
+
+# An id with a multi-byte leading character parses fine; it is name resolution
+# that rejects it as an invalid id. Previously this id panicked the server while
+# resolving the name because `CatalogItemId::from_str` sliced off a single byte,
+# landing inside the multi-byte char (SQL-195).
+parse-statement
+SELECT * FROM [ü1 AS materialize.public.foo]
+----
+SELECT * FROM [ü1 AS materialize.public.foo]
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("ü1", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")]), None), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
