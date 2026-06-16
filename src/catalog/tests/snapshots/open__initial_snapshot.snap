@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/open.rs
-assertion_line: 518
 expression: test_snapshot
 ---
 Snapshot {
@@ -783,6 +782,8 @@ Snapshot {
     source_references: {},
     system_object_mappings: {},
     system_configurations: {},
+    cluster_system_configurations: {},
+    replica_system_configurations: {},
     default_privileges: {
         DefaultPrivilegesKey {
             role_id: Public,

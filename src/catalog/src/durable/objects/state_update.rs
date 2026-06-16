@@ -149,6 +149,8 @@ impl StateUpdate {
             source_references,
             system_gid_mapping,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -177,6 +179,14 @@ impl StateUpdate {
             from_batch(system_gid_mapping, StateUpdateKind::SystemObjectMapping);
         let system_configurations =
             from_batch(system_configurations, StateUpdateKind::SystemConfiguration);
+        let cluster_system_configurations = from_batch(
+            cluster_system_configurations,
+            StateUpdateKind::ClusterSystemConfiguration,
+        );
+        let replica_system_configurations = from_batch(
+            replica_system_configurations,
+            StateUpdateKind::ReplicaSystemConfiguration,
+        );
         let default_privileges = from_batch(default_privileges, StateUpdateKind::DefaultPrivilege);
         let source_references = from_batch(source_references, StateUpdateKind::SourceReferences);
         let system_privileges = from_batch(system_privileges, StateUpdateKind::SystemPrivilege);
@@ -204,6 +214,8 @@ impl StateUpdate {
             .chain(source_references)
             .chain(system_object_mappings)
             .chain(system_configurations)
+            .chain(cluster_system_configurations)
+            .chain(replica_system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
             .chain(storage_collection_metadata)
@@ -244,6 +256,14 @@ pub enum StateUpdateKind {
         proto::ServerConfigurationKey,
         proto::ServerConfigurationValue,
     ),
+    ClusterSystemConfiguration(
+        proto::ClusterSystemConfigurationKey,
+        proto::ClusterSystemConfigurationValue,
+    ),
+    ReplicaSystemConfiguration(
+        proto::ReplicaSystemConfigurationKey,
+        proto::ReplicaSystemConfigurationValue,
+    ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
     StorageCollectionMetadata(
@@ -277,6 +297,12 @@ impl StateUpdateKind {
             StateUpdateKind::Setting(_, _) => Some(CollectionType::Setting),
             StateUpdateKind::SourceReferences(_, _) => Some(CollectionType::SourceReferences),
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
+            StateUpdateKind::ClusterSystemConfiguration(_, _) => {
+                Some(CollectionType::ClusterSystemConfiguration)
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(_, _) => {
+                Some(CollectionType::ReplicaSystemConfiguration)
+            }
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
             StateUpdateKind::StorageCollectionMetadata(_, _) => {
@@ -528,6 +554,22 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     system_configuration,
                 ))
             }
+            StateUpdateKind::ClusterSystemConfiguration(key, value) => {
+                let cluster_system_configuration = into_durable(key, value)?;
+                Some(
+                    memory::objects::StateUpdateKind::ClusterSystemConfiguration(
+                        cluster_system_configuration,
+                    ),
+                )
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(key, value) => {
+                let replica_system_configuration = into_durable(key, value)?;
+                Some(
+                    memory::objects::StateUpdateKind::ReplicaSystemConfiguration(
+                        replica_system_configuration,
+                    ),
+                )
+            }
             StateUpdateKind::SystemObjectMapping(key, value) => {
                 let system_object_mapping = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SystemObjectMapping(
@@ -666,6 +708,16 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     value,
                 })
             }
+            StateUpdateKind::ClusterSystemConfiguration(key, value) => {
+                proto::StateUpdateKind::ClusterSystemConfiguration(
+                    proto::ClusterSystemConfiguration { key, value },
+                )
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(key, value) => {
+                proto::StateUpdateKind::ReplicaSystemConfiguration(
+                    proto::ReplicaSystemConfiguration { key, value },
+                )
+            }
             StateUpdateKind::SystemObjectMapping(key, value) => {
                 proto::StateUpdateKind::GidMapping(proto::GidMapping { key, value })
             }
@@ -743,6 +795,12 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 key,
                 value,
             }) => StateUpdateKind::SystemConfiguration(key, value),
+            proto::StateUpdateKind::ClusterSystemConfiguration(
+                proto::ClusterSystemConfiguration { key, value },
+            ) => StateUpdateKind::ClusterSystemConfiguration(key, value),
+            proto::StateUpdateKind::ReplicaSystemConfiguration(
+                proto::ReplicaSystemConfiguration { key, value },
+            ) => StateUpdateKind::ReplicaSystemConfiguration(key, value),
             proto::StateUpdateKind::GidMapping(proto::GidMapping { key, value }) => {
                 StateUpdateKind::SystemObjectMapping(key, value)
             }
