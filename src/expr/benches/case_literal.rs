@@ -12,9 +12,7 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 use mz_expr::func::{BinaryFunc, Eq};
 use mz_expr::{Eval, MirScalarExpr};
-use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType, RowArena};
-use mz_transform::Transform;
-use mz_transform::case_literal::CaseLiteralTransform;
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, RowArena};
 
 /// Build `Eq(lhs, rhs)` as a `MirScalarExpr`.
 fn eq(lhs: MirScalarExpr, rhs: MirScalarExpr) -> MirScalarExpr {
@@ -51,32 +49,15 @@ fn build_if_chain(n: usize) -> MirScalarExpr {
     expr
 }
 
-/// Apply `CaseLiteralTransform` to the If chain and return the resulting scalar.
+/// Reduce the If chain, which constructs a `CaseLiteral`, and return the resulting scalar.
 fn build_case_literal(n: usize) -> MirScalarExpr {
-    let scalar = build_if_chain(n);
-    let mut relation = mz_expr::MirRelationExpr::Map {
-        input: Box::new(mz_expr::MirRelationExpr::constant(
-            vec![vec![Datum::Int64(0)]],
-            ReprRelationType::new(vec![ReprColumnType {
-                scalar_type: ReprScalarType::Int64,
-                nullable: false,
-            }]),
-        )),
-        scalars: vec![scalar],
-    };
-    let mut features = mz_repr::optimize::OptimizerFeatures::default();
-    features.enable_case_literal_transform = true;
-    let typecheck_ctx = mz_transform::typecheck::empty_typechecking_context();
-    let mut df_meta = mz_transform::dataflow::DataflowMetainfo::default();
-    let mut transform_ctx =
-        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
-    CaseLiteralTransform
-        .transform(&mut relation, &mut transform_ctx)
-        .unwrap();
-    match relation {
-        mz_expr::MirRelationExpr::Map { scalars, .. } => scalars.into_iter().next().unwrap(),
-        other => panic!("expected Map, got {other:?}"),
-    }
+    let mut scalar = build_if_chain(n);
+    let column_types = vec![ReprColumnType {
+        scalar_type: ReprScalarType::Int64,
+        nullable: false,
+    }];
+    scalar.reduce(&column_types);
+    scalar
 }
 
 fn bench_case_literal(c: &mut Criterion) {

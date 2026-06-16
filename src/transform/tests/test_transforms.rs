@@ -238,11 +238,6 @@ fn handle_apply(
             let transform = SemijoinIdempotence::default();
             apply_transform(transform, catalog, input)
         }
-        "case_literal" => {
-            use mz_transform::case_literal::CaseLiteralTransform;
-            let transform = CaseLiteralTransform;
-            apply_transform(transform, catalog, input)
-        }
         "coalesce_case" => {
             use mz_transform::coalesce_case::CoalesceCase;
             let transform = CoalesceCase;

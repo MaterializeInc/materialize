@@ -2223,12 +2223,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_case_literal_transform,
-        desc: "Allow the optimizer to rewrite If-chains matching a single expression against literals into a CaseLiteral lookup.",
-        default: false,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_simplify_quantified_comparisons,
         desc: "Allow the optimizer to simplify quantified comparisons in JOIN ON clauses into semi/anti-join EXISTS form during HIR-to-MIR lowering.",
         default: true,
@@ -2274,7 +2268,6 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
             enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
             enable_cast_elimination: vars.enable_cast_elimination(),
-            enable_case_literal_transform: vars.enable_case_literal_transform(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
             enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
@@ -2316,7 +2309,6 @@ mod tests {
             enable_dequadratic_eqprop_map,
             enable_fast_path_plan_insights,
             enable_cast_elimination,
-            enable_case_literal_transform,
             enable_simplify_quantified_comparisons,
             enable_coalesce_case_transform,
             enable_will_distinct_propagation,
@@ -2346,7 +2338,6 @@ mod tests {
         set_var!(enable_dequadratic_eqprop_map);
         set_var!(enable_fast_path_plan_insights);
         set_var!(enable_cast_elimination);
-        set_var!(enable_case_literal_transform);
         set_var!(enable_simplify_quantified_comparisons);
         set_var!(enable_coalesce_case_transform);
         set_var!(enable_will_distinct_propagation);
