@@ -169,7 +169,7 @@ impl Coordinator {
             .map(|id| self.catalog().resolve_item_id(id))
             .collect();
         let validity = PlanValidity::new(
-            self.catalog.transient_revision(),
+            &self.catalog,
             dependencies,
             Some(cluster_id),
             Some(replica_id),
@@ -228,7 +228,7 @@ impl Coordinator {
                     // Add introduced indexes as validity dependencies.
                     let id_bundle = global_mir_plan.id_bundle(cluster_id);
                     let item_ids = id_bundle.iter().map(|id| catalog.resolve_item_id(&id));
-                    validity.extend_dependencies(item_ids);
+                    validity.extend_dependencies(&catalog, item_ids);
 
                     let stage = IntrospectionSubscribeStage::TimestampOptimizeLir(
                         IntrospectionSubscribeTimestampOptimizeLir {

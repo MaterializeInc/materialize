@@ -1449,14 +1449,13 @@ impl Coordinator {
                 let otel_ctx = OpenTelemetryContext::obtain();
                 let current_storage_configuration = self.controller.storage.config().clone();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
-                    let transient_revision = catalog.transient_revision();
-                    let catalog = catalog.for_session(ctx.session());
+                    let conn_catalog = catalog.for_session(ctx.session());
 
                     // Checks if the session is authorized to purify a statement. Usually
                     // authorization is checked after planning, however purification happens before
                     // planning, which may require the use of some connections and secrets.
                     if let Err(e) = rbac::check_usage(
-                        &catalog,
+                        &conn_catalog,
                         ctx.session(),
                         &resolved_ids,
                         &CREATE_ITEM_USAGE,
@@ -1465,7 +1464,7 @@ impl Coordinator {
                     }
 
                     let (result, cluster_id) = mz_sql::pure::purify_statement(
-                        catalog,
+                        conn_catalog,
                         now,
                         stmt,
                         &current_storage_configuration,
@@ -1474,7 +1473,7 @@ impl Coordinator {
                     let result = result.map_err(|e| e.into());
                     let dependency_ids = resolved_ids.items().copied().collect();
                     let plan_validity = PlanValidity::new(
-                        transient_revision,
+                        &catalog,
                         dependency_ids,
                         cluster_id,
                         None,

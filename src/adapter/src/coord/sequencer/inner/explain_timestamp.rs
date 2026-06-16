@@ -109,7 +109,7 @@ impl Coordinator {
             .map(|id| self.catalog().resolve_item_id(&id))
             .collect();
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             dependencies,
             Some(cluster_id),
             None,

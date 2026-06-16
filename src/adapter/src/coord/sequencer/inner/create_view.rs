@@ -271,7 +271,7 @@ impl Coordinator {
         // stages instead of panicking later when the persisted SQL is
         // re-parsed during catalog application.
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             resolved_ids.items().copied().collect(),
             None,
             None,

@@ -135,7 +135,7 @@ impl Coordinator {
         plan: plan::AlterClusterPlan,
     ) -> Result<ClusterStage, AdapterError> {
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::new(),
             Some(plan.id.clone()),
             None,

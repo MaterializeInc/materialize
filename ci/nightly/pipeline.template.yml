@@ -2588,6 +2588,17 @@ steps:
                args: [--runtime=1500, --scenario=concurrent]
          skip: "Not stable yet, not clear if this is a product issue"
 
+       - id: race-condition-rotate-keys
+         label: "ALTER CONNECTION ROTATE KEYS vs SET race"
+         depends_on: build-x86_64
+         timeout_in_minutes: 15
+         agents:
+           queue: hetzner-x86-64-4cpu-8gb
+         plugins:
+           - ./ci/plugins/mzcompose:
+               composition: race-condition
+               run: rotate-keys-race
+
   - group: Language
     key: language-tests
     steps:

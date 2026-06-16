@@ -202,6 +202,7 @@ class Action:
                     "another session modified the catalog while this DDL transaction was open",
                     "was dropped while executing a statement",
                     "' was dropped",  # ConcurrentDependencyDrop (collection, schema, etc.)
+                    "was concurrently modified",  # ConcurrentDependencyMutation (SQL-272)
                     "non-temporary items cannot depend on temporary item",  # TODO(def-): Fix?
                     "is not readable at any timestamp",  # Expected, due to object drops
                 ]

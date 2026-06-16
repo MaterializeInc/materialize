@@ -124,13 +124,8 @@ impl Coordinator {
                 tracing::debug!(%conn_id, "deferring plan for startup appends");
 
                 let role_metadata = ctx.session().role_metadata().clone();
-                let validity = PlanValidity::new(
-                    self.catalog.transient_revision(),
-                    dependencies,
-                    None,
-                    None,
-                    role_metadata,
-                );
+                let validity =
+                    PlanValidity::new(&self.catalog, dependencies, None, None, role_metadata);
                 let deferred_plan = DeferredPlan {
                     ctx,
                     plan,
