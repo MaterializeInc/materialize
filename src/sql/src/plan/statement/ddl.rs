@@ -28,8 +28,8 @@ use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -4934,9 +4934,15 @@ pub fn unplan_create_cluster(
             let replication_factor = match &schedule {
                 ClusterScheduleOptionValue::Manual => Some(replication_factor),
                 ClusterScheduleOptionValue::Refresh { .. } => {
-                    assert!(
+                    // A cluster with a refresh schedule is turned On/Off by the cluster scheduling
+                    // policy, so its replication factor should always be 0 or 1, and CREATE/ALTER
+                    // reject setting both a non-MANUAL schedule and a higher replication factor. If
+                    // we nevertheless find one (e.g., a cluster left in an invalid state by an
+                    // older version), log loudly rather than crashing the coordinator: the
+                    // replication factor is omitted from the rendered statement regardless.
+                    soft_assert_or_log!(
                         replication_factor <= 1,
-                        "replication factor, {replication_factor:?}, must be <= 1"
+                        "replication factor, {replication_factor:?}, must be <= 1 with a refresh schedule"
                     );
                     None
                 }
@@ -6176,6 +6182,24 @@ pub fn plan_alter_cluster(
                         && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                     {
                         scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
+
+                        // A cluster with a non-MANUAL schedule is automatically turned On/Off by
+                        // the cluster scheduling policy, which means its replication factor is
+                        // always 0 or 1. If the cluster currently has a higher replication factor
+                        // and the user is not lowering it in the same statement (which would be
+                        // rejected just below), then reject the schedule change: otherwise we'd
+                        // leave the cluster in an invalid state with both a non-MANUAL schedule and
+                        // a replication factor > 1 (which would, e.g., make SHOW CREATE CLUSTER
+                        // panic).
+                        if replication_factor.is_none()
+                            && cluster.replication_factor().is_some_and(|rf| rf > 1)
+                        {
+                            sql_bail!(
+                                "SCHEDULE cannot be set to anything other than MANUAL while the \
+                                cluster's REPLICATION FACTOR is greater than 1; \
+                                set the REPLICATION FACTOR to 1 first"
+                            );
+                        }
                     }
 
                     if replication_factor.is_some() {

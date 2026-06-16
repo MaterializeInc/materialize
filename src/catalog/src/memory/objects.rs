@@ -3508,6 +3508,15 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         }
     }
 
+    fn replication_factor(&self) -> Option<u32> {
+        match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                replication_factor, ..
+            }) => Some(*replication_factor),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
     fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
         self.try_to_plan()
     }
