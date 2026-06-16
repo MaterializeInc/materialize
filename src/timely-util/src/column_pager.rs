@@ -387,7 +387,29 @@ impl ColumnPager {
                     bytes: len_bytes,
                     policy: Arc::clone(&self.policy),
                 };
-                return PagedColumn::Resident(std::mem::take(col), ticket);
+                // A resident chunk joins a merge chain and may live there
+                // across many merge rounds. A `Column::Typed` body arrives
+                // carrying `Column::merge_from`'s worst-case `reserve_for`
+                // capacity — sized for the unconsolidated union of both merge
+                // inputs — and parking that slack in the chain is the dominant
+                // source of merge-batcher resident memory. Serialize the body
+                // into a `Vec<u64>` sized exactly to its content and store the
+                // fitting `Column::Align` instead, clearing `col` in place (as
+                // the codec paths below do) so the high-capacity typed buffer
+                // stays with the caller for recycling. `Align` / `Bytes`
+                // bodies are already fitting (or refcounted), so move them
+                // through unchanged.
+                let resident = if matches!(col, Column::Typed(_)) {
+                    debug_assert_eq!(len_bytes % 8, 0);
+                    let mut buf = Vec::with_capacity(len_bytes);
+                    col.into_bytes(&mut buf);
+                    debug_assert_eq!(buf.len() % 8, 0);
+                    col.clear();
+                    Column::Align(bytemuck::allocation::pod_collect_to_vec::<u8, u64>(&buf))
+                } else {
+                    std::mem::take(col)
+                };
+                return PagedColumn::Resident(resident, ticket);
             }
             PageDecision::Page { backend, codec } => (backend, codec),
         };
