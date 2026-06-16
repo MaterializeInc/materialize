@@ -215,10 +215,10 @@ r2 true
 ! SELECT * FROM mv_managed
 contains:unknown catalog item 'mv_managed'
 
-# No dangling comment is left behind.
-> SELECT count(*) FROM mz_internal.mz_comments c
-  JOIN mz_materialized_views mv ON (mv.id = c.id)
-  WHERE mv.name = 'mv_managed'
+# No dangling comment is left behind. Check mz_comments directly: joining to
+# mz_materialized_views would vacuously return 0 once the MV is dropped, even if
+# an orphaned comment row survived.
+> SELECT count(*) FROM mz_internal.mz_comments WHERE comment = 'pinned to r1'
 0
 
 # The cluster is still usable after the resize.
