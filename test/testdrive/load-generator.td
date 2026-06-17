@@ -97,8 +97,11 @@ regex:.*FOR SCHEMAS.*unsupported
 >[version<2600700] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (DETAILS = '1a040a021002');"
 
->[version>=2600700] SHOW CREATE TABLE accounts
+>[2600700<=version<2603000] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (DETAILS = '1a040a021002');"
+
+>[version>=2603000] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts);"
 
 > SHOW SOURCES
 auction_house           load-generator ${arg.single-replica-cluster}    ""
@@ -157,8 +160,11 @@ $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 >[version<2600700] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (<DETAILS>);"
 
->[version>=2600700] SHOW CREATE TABLE accounts
+>[2600700<=version<2603000] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (<DETAILS>);"
+
+>[version>=2603000] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts);"
 
 # CLOCK load generator source
 
