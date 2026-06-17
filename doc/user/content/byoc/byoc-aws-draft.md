@@ -25,7 +25,7 @@ BYOC is a good fit if you need:
 
 - **Data residency**: your data stays in your own cloud account and VPC.
 - **Network isolation**: no data path through Materialize-managed infrastructure.
-- **Compliance**: SOC 2 / HIPAA controls that require infrastructure ownership.
+- **Compliance**: when direct control of infrastructure is necessary or more suitable, possibly including HIPAA, PCI-DSS*, or other frameworks.
 - **Cost visibility**: compute and storage are billed directly to your AWS account.
 
 {{< note >}}
