@@ -176,7 +176,7 @@ pub mod v1alpha1 {
                 ),
                 ("materialize.cloud/app".to_owned(), "balancerd".to_owned()),
             ]);
-            labels.extend(recommended_k8s_labels("balancerd".into()));
+            labels.extend(recommended_k8s_labels(Some("balancerd")));
             labels
         }
 

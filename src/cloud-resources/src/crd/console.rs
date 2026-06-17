@@ -171,7 +171,7 @@ pub mod v1alpha1 {
                 ),
                 ("materialize.cloud/app".to_owned(), "console".to_owned()),
             ]);
-            labels.extend(recommended_k8s_labels("console".into()));
+            labels.extend(recommended_k8s_labels(Some("console")));
             labels
         }
 
