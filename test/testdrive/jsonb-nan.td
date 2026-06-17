@@ -32,7 +32,7 @@ $ set-arg-default default-storage-size=scale=1,workers=1
   SELECT '{"$serde_json::private::Number": "NaN"}'::jsonb AS j;
 
 > SELECT j::text FROM nan_jsonb_view;
-NaN
+"\"NaN\""
 
 > CREATE CLUSTER nan_sink_cluster SIZE '${arg.default-storage-size}';
 

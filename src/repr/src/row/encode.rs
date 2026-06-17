@@ -1046,7 +1046,6 @@ impl DatumColumnDecoder {
                 };
                 JsonbPacker::new(packer)
                     .pack_str(val)
-                    .map_err(|e| println!("failed to roundtrip json: {:?}", e))
                     .expect("failed to roundtrip JSON");
 
                 // Return early because we've already packed the necessary Datums.

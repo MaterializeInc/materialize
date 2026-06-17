@@ -163,7 +163,6 @@ fn cast_jsonbable_to_jsonb<'a>(a: JsonbRef<'a>) -> JsonbRef<'a> {
             let datum = if n.is_finite() {
                 Datum::from(n)
             } else if n.is_nan() {
-                // Datum::JsonNull
                 Datum::String("NaN")
             } else if n.is_negative() {
                 Datum::String("-Infinity")
