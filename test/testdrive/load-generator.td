@@ -103,6 +103,12 @@ materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n    
 >[version>=2603000] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts);"
 
+# Regression test for database-issues#10010: the fully-qualified `REFERENCE`
+# printed by `SHOW CREATE TABLE` must round-trip back into a `CREATE TABLE`.
+>[version>=2603000] CREATE TABLE accounts_roundtrip FROM SOURCE auction_house (REFERENCE mz_load_generators.auction.accounts);
+
+>[version>=2603000] DROP TABLE accounts_roundtrip;
+
 > SHOW SOURCES
 auction_house           load-generator ${arg.single-replica-cluster}    ""
 
