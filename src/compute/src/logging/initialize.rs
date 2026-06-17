@@ -25,7 +25,9 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::ContainerBuilder;
 use timely::container::{ContainerBuilder as _, PushInto};
-use timely::logging::{TimelyEvent, TimelyEventBuilder};
+use timely::logging::{
+    OperatesSummaryEvent, TimelyEvent, TimelyEventBuilder, TimelySummaryEventBuilder,
+};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
 use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
@@ -218,6 +220,20 @@ impl LoggingContext<'_> {
         registry.insert_logger(&format!("timely/reachability/{type_name}"), logger);
     }
 
+    /// Construct a new operator-summary logger for timestamp type `T`.
+    ///
+    /// Inserts a logger with the name `timely/summary/{type_name::<T>()}`, following
+    /// Timely naming convention.
+    fn register_summary_logger<T>(&self, registry: &mut Registry)
+    where
+        T: timely::progress::Timestamp,
+        T::Summary: ExtractSummary + std::fmt::Debug,
+    {
+        let logger = self.summary_logger::<T>();
+        let type_name = std::any::type_name::<T>();
+        registry.insert_logger(&format!("timely/summary/{type_name}"), logger);
+    }
+
     /// Register all loggers with the timely worker.
     ///
     /// Registers the timely, differential, compute, and reachability loggers.
@@ -233,6 +249,11 @@ impl LoggingContext<'_> {
         self.register_reachability_logger::<Timestamp>(&mut register, 0);
         self.register_reachability_logger::<Product<Timestamp, PointStamp<u64>>>(&mut register, 1);
         self.register_reachability_logger::<(Timestamp, Subtime)>(&mut register, 2);
+        // Operator-summary loggers. These project into shared state (drained by the timely
+        // demux), so unlike reachability they need no per-type event-queue link.
+        self.register_summary_logger::<Timestamp>(&mut register);
+        self.register_summary_logger::<Product<Timestamp, PointStamp<u64>>>(&mut register);
+        self.register_summary_logger::<(Timestamp, Subtime)>(&mut register);
         register.insert_logger("differential/arrange", d_logger);
         register.insert_logger("materialize/compute", c_logger.clone());
 
@@ -316,6 +337,75 @@ impl LoggingContext<'_> {
         };
 
         Logger::new(self.now, self.start_offset, action)
+    }
+
+    /// Construct an operator-summary logger for timestamp type `T`.
+    ///
+    /// The logger receives `OperatesSummaryEvent`s (one per operator, emitted at build
+    /// time) carrying the operator's internal connectivity (`Connectivity<T::Summary>`,
+    /// indexed by input port). It projects each path-summary element onto the outer
+    /// timestamp dimension and pushes the rows into shared state, where the timely demux
+    /// picks them up — the demux owns operator lifecycle and retracts the rows on shutdown.
+    fn summary_logger<T>(&self) -> Logger<TimelySummaryEventBuilder<T::Summary>>
+    where
+        T: timely::progress::Timestamp,
+        T::Summary: ExtractSummary + std::fmt::Debug,
+    {
+        let shared_state = Rc::clone(&self.shared_state);
+
+        let action = move |_batch_time: &Duration,
+                           data: &mut Option<Vec<(Duration, OperatesSummaryEvent<T::Summary>)>>| {
+            let Some(data) = data else {
+                return;
+            };
+            let mut shared_state = shared_state.borrow_mut();
+            for (_time, OperatesSummaryEvent { id, summary }) in data.drain(..) {
+                // `summary` is indexed by input port; each `PortConnectivity` maps an
+                // output port to an antichain of path summaries.
+                for (input_port, port_connectivity) in summary.iter().enumerate() {
+                    for (output_port, antichain) in port_connectivity.iter_ports() {
+                        for element in antichain.elements() {
+                            shared_state.pending_operator_summaries.push((
+                                id,
+                                input_port,
+                                output_port,
+                                element.outer_impact(),
+                                format!("{element:?}"),
+                            ));
+                        }
+                    }
+                }
+            }
+        };
+
+        Logger::new(self.now, self.start_offset, action)
+    }
+}
+
+/// Helper trait to project a path summary onto the outer timestamp dimension.
+///
+/// The outer dimension is the only one we surface; inner (iteration) coordinates of
+/// nested scopes are intentionally dropped, mirroring [`ExtractTimestamp`].
+trait ExtractSummary: Clone + 'static {
+    /// The delta this summary applies to the outer timestamp (`0` = identity / inner-only).
+    fn outer_impact(&self) -> Timestamp;
+}
+
+impl ExtractSummary for Timestamp {
+    fn outer_impact(&self) -> Timestamp {
+        *self
+    }
+}
+
+impl<I: Clone + 'static> ExtractSummary for Product<Timestamp, I> {
+    fn outer_impact(&self) -> Timestamp {
+        self.outer
+    }
+}
+
+impl<I: Clone + 'static> ExtractSummary for (Timestamp, I) {
+    fn outer_impact(&self) -> Timestamp {
+        self.0
     }
 }
 

@@ -110,6 +110,8 @@ pub enum TimelyLog {
     BatchesSent,
     /// TODO(database-issues#7533): Add documentation.
     BatchesReceived,
+    /// Per-operator internal connectivity summaries (input -> output path summaries).
+    Summary,
 }
 
 /// TODO(database-issues#7533): Add documentation.
@@ -289,6 +291,15 @@ impl LogVariant {
                 .with_column("port", SqlScalarType::UInt64.nullable(false))
                 .with_column("update_type", SqlScalarType::String.nullable(false))
                 .with_column("time", SqlScalarType::MzTimestamp.nullable(true))
+                .finish(),
+
+            LogVariant::Timely(TimelyLog::Summary) => RelationDesc::builder()
+                .with_column("id", SqlScalarType::UInt64.nullable(false))
+                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("input_port", SqlScalarType::UInt64.nullable(false))
+                .with_column("output_port", SqlScalarType::UInt64.nullable(false))
+                .with_column("outer_impact", SqlScalarType::MzTimestamp.nullable(false))
+                .with_column("summary", SqlScalarType::String.nullable(false))
                 .finish(),
 
             LogVariant::Differential(DifferentialLog::ArrangementBatches)

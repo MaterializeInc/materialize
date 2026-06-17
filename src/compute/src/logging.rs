@@ -150,6 +150,13 @@ impl<C, const N: usize> EventQueue<C, N> {
     }
 }
 
+/// A projected operator-summary row, shared from the per-timestamp-type summary loggers to the
+/// timely demux: `(operator_id, input_port, output_port, outer_impact, summary_detail)`.
+///
+/// `outer_impact` is the path summary's effect on the outer timestamp (`0` = identity / inner-only,
+/// as for a WMR feedback `+1`). `summary_detail` is a debug rendering of the path-summary element.
+pub(super) type OperatorSummaryDatum = (usize, usize, usize, Timestamp, String);
+
 /// State shared between different logging dataflow fragments.
 #[derive(Default)]
 struct SharedLoggingState {
@@ -157,6 +164,9 @@ struct SharedLoggingState {
     arrangement_size_activators: BTreeMap<usize, Activator>,
     /// Shared compute logger.
     compute_logger: Option<ComputeLogger>,
+    /// Operator-summary rows logged by the per-timestamp-type summary loggers, awaiting emission
+    /// by the timely demux (which owns the operator lifecycle and retracts them on shutdown).
+    pending_operator_summaries: Vec<OperatorSummaryDatum>,
 }
 
 /// Helper to pack collections of [`Datum`]s into key and value row.
