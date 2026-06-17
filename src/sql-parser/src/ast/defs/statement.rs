@@ -2185,7 +2185,7 @@ pub enum MetricOptionName {
     /// collision that bites the `generate_extracted_config!` snake-cased field.
     Ty,
     Help,
-    ValuesFrom,
+    SeriesFrom,
     ValueColumn,
 }
 
@@ -2194,7 +2194,7 @@ impl WithOptionName for MetricOptionName {
         match self {
             MetricOptionName::Ty
             | MetricOptionName::Help
-            | MetricOptionName::ValuesFrom
+            | MetricOptionName::SeriesFrom
             | MetricOptionName::ValueColumn => false,
         }
     }
@@ -2205,7 +2205,7 @@ impl AstDisplay for MetricOptionName {
         match self {
             MetricOptionName::Ty => f.write_str("TYPE"),
             MetricOptionName::Help => f.write_str("HELP"),
-            MetricOptionName::ValuesFrom => f.write_str("VALUES FROM"),
+            MetricOptionName::SeriesFrom => f.write_str("SERIES FROM"),
             MetricOptionName::ValueColumn => f.write_str("VALUE COLUMN"),
         }
     }

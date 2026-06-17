@@ -2435,7 +2435,7 @@ pub static MZ_METRICS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
             .with_column("api_id", SqlScalarType::String.nullable(false))
             .with_column("type", SqlScalarType::String.nullable(false))
             .with_column("help", SqlScalarType::String.nullable(false))
-            .with_column("values_from", SqlScalarType::String.nullable(false))
+            .with_column("series_from", SqlScalarType::String.nullable(false))
             .with_column("value_column", SqlScalarType::String.nullable(false))
             .with_column("owner_id", SqlScalarType::String.nullable(false))
             .finish(),
@@ -2460,12 +2460,12 @@ pub static MZ_METRICS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
                 "The Prometheus HELP text emitted in the exposition.",
             ),
             (
-                "values_from",
+                "series_from",
                 "The ID of the relation the metric reads rows from. Corresponds to `mz_catalog.mz_relations.id`.",
             ),
             (
                 "value_column",
-                "The name of the column in `values_from` that holds the metric value; the other columns become labels.",
+                "The name of the column in `series_from` that holds the metric value; the other columns become labels.",
             ),
             (
                 "owner_id",
@@ -2482,7 +2482,7 @@ WITH (
     ASSERT NOT NULL api_id,
     ASSERT NOT NULL type,
     ASSERT NOT NULL help,
-    ASSERT NOT NULL values_from,
+    ASSERT NOT NULL series_from,
     ASSERT NOT NULL value_column,
     ASSERT NOT NULL owner_id
 ) AS
@@ -2494,7 +2494,7 @@ SELECT
     mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'api_id' AS api_id,
     mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'metric_type' AS type,
     mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'help' AS help,
-    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'values_from' AS values_from,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'series_from' AS series_from,
     mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'value_column' AS value_column,
     mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id
 FROM mz_internal.mz_catalog_raw
@@ -2518,9 +2518,9 @@ WHERE
                     properties: LinkProperties::fk("api_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
-                    name: "values_from",
+                    name: "series_from",
                     target: "relation",
-                    properties: LinkProperties::fk("values_from", "id", Cardinality::ManyToOne),
+                    properties: LinkProperties::fk("series_from", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "owned_by",
@@ -2533,7 +2533,7 @@ WHERE
                 ("oid", SemanticType::OID),
                 ("schema_id", SemanticType::SchemaId),
                 ("api_id", SemanticType::CatalogItemId),
-                ("values_from", SemanticType::CatalogItemId),
+                ("series_from", SemanticType::CatalogItemId),
                 ("owner_id", SemanticType::RoleId),
             ]},
         }),

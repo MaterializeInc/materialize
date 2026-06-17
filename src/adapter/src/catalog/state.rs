@@ -465,9 +465,9 @@ impl CatalogState {
                     }
                 }
                 CatalogItem::Metric(metric) => {
-                    let values_from = metric.values_from;
-                    if seen.insert(values_from) {
-                        queue.push_back(values_from);
+                    let series_from = metric.series_from;
+                    if seen.insert(series_from) {
+                        queue.push_back(series_from);
                     }
                 }
                 CatalogItem::Table(_)
@@ -1575,7 +1575,7 @@ impl CatalogState {
                     api_id: metric.api_id,
                     metric_type: metric.metric_type,
                     help: metric.help,
-                    values_from: metric.values_from,
+                    series_from: metric.series_from,
                     value_column: metric.value_column,
                     resolved_ids,
                 })

@@ -573,10 +573,10 @@ fn generate_rbac_requirements(
                     role_id,
                 ),
             ];
-            // The metric peeks `values_from` whenever it is scraped, so
+            // The metric peeks `series_from` whenever it is scraped, so
             // require SELECT on the source view (and recursively on its
             // dependencies, like a sink).
-            let items = iter::once(metric.values_from);
+            let items = iter::once(metric.series_from);
             privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
             RbacRequirements {
                 privileges,

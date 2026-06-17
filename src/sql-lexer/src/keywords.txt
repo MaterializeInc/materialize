@@ -441,6 +441,7 @@ Seed
 Select
 Sequences
 Serializable
+Series
 Server
 Service
 Session

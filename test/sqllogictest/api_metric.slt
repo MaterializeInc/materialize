@@ -67,7 +67,7 @@ IN API materialize.public.metrics_a
 AS (
   TYPE 'gauge',
   HELP 'count of leads by status',
-  VALUES FROM materialize.public.leads_by_status,
+  SERIES FROM materialize.public.leads_by_status,
   VALUE COLUMN 'count'
 )
 
@@ -77,7 +77,7 @@ CREATE METRIC materialize.public.no_type
 IN API materialize.public.metrics_a
 AS (
   HELP 'x',
-  VALUES FROM materialize.public.leads_by_status,
+  SERIES FROM materialize.public.leads_by_status,
   VALUE COLUMN 'count'
 )
 
@@ -86,11 +86,11 @@ CREATE METRIC materialize.public.no_help
 IN API materialize.public.metrics_a
 AS (
   TYPE 'gauge',
-  VALUES FROM materialize.public.leads_by_status,
+  SERIES FROM materialize.public.leads_by_status,
   VALUE COLUMN 'count'
 )
 
-statement error CREATE METRIC requires a VALUES FROM option
+statement error CREATE METRIC requires a SERIES FROM option
 CREATE METRIC materialize.public.no_view
 IN API materialize.public.metrics_a
 AS (
@@ -105,7 +105,7 @@ IN API materialize.public.metrics_a
 AS (
   TYPE 'gauge',
   HELP 'x',
-  VALUES FROM materialize.public.leads_by_status
+  SERIES FROM materialize.public.leads_by_status
 )
 
 # Only `gauge` is supported today.
@@ -115,7 +115,7 @@ IN API materialize.public.metrics_a
 AS (
   TYPE 'counter',
   HELP 'x',
-  VALUES FROM materialize.public.leads_by_status,
+  SERIES FROM materialize.public.leads_by_status,
   VALUE COLUMN 'count'
 )
 
@@ -126,7 +126,7 @@ IN API materialize.public.metrics_a
 AS (
   TYPE 'gauge',
   HELP 'x',
-  VALUES FROM materialize.public.leads_by_status,
+  SERIES FROM materialize.public.leads_by_status,
   VALUE COLUMN 'missing'
 )
 
@@ -137,7 +137,7 @@ IN API materialize.public.metrics_a
 AS (
   TYPE 'gauge',
   HELP 'x',
-  VALUES FROM materialize.public.leads_by_status,
+  SERIES FROM materialize.public.leads_by_status,
   VALUE COLUMN 'status'
 )
 
@@ -148,18 +148,18 @@ IN API materialize.public.leads_by_status
 AS (
   TYPE 'gauge',
   HELP 'x',
-  VALUES FROM materialize.public.leads_by_status,
+  SERIES FROM materialize.public.leads_by_status,
   VALUE COLUMN 'count'
 )
 
-# VALUES FROM must reference a relation, not e.g. an API.
-statement error VALUES FROM target materialize\.public\.metrics_a is a api
-CREATE METRIC materialize.public.values_from_api
+# SERIES FROM must reference a relation, not e.g. an API.
+statement error SERIES FROM target materialize\.public\.metrics_a is a api
+CREATE METRIC materialize.public.series_from_api
 IN API materialize.public.metrics_a
 AS (
   TYPE 'gauge',
   HELP 'x',
-  VALUES FROM materialize.public.metrics_a,
+  SERIES FROM materialize.public.metrics_a,
   VALUE COLUMN 'count'
 )
 
@@ -177,7 +177,7 @@ IN API materialize.public.metrics_a
 AS (
   TYPE 'gauge',
   HELP 'x',
-  VALUES FROM materialize.public.leads_by_status,
+  SERIES FROM materialize.public.leads_by_status,
   VALUE COLUMN 'count'
 )
 
@@ -192,7 +192,7 @@ IN API materialize.public.metrics_a
 AS (
   TYPE 'gauge',
   HELP 'x',
-  VALUES FROM materialize.public.responses_by_class,
+  SERIES FROM materialize.public.responses_by_class,
   VALUE COLUMN 'count'
 )
 
@@ -203,7 +203,7 @@ IN API materialize.public.metrics_a
 AS (
   TYPE 'gauge',
   HELP '',
-  VALUES FROM materialize.public.leads_by_status,
+  SERIES FROM materialize.public.leads_by_status,
   VALUE COLUMN 'count'
 )
 
@@ -216,7 +216,7 @@ IN API materialize.public.metrics_a
 AS (
   TYPE 'gauge',
   HELP 'x',
-  VALUES FROM materialize.public.leads_by_status,
+  SERIES FROM materialize.public.leads_by_status,
   VALUE COLUMN 'count'
 )
 
@@ -241,12 +241,12 @@ metrics_a
 c
 materialize
 
-# mz_metrics resolves api_id and values_from into other catalog views.
+# mz_metrics resolves api_id and series_from into other catalog views.
 query TTTTTT rowsort
 SELECT m.name, a.name, m.type, m.help, v.name, m.value_column
 FROM mz_catalog.mz_metrics m
 JOIN mz_catalog.mz_apis a ON m.api_id = a.id
-JOIN mz_views v ON m.values_from = v.id
+JOIN mz_views v ON m.series_from = v.id
 WHERE m.name = 'leads'
 ----
 leads
@@ -295,7 +295,7 @@ CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1::int AS count
 statement ok
 CREATE METRIC materialize.public.from_mv
 IN API materialize.public.metrics_a
-AS (TYPE 'gauge', HELP 'mv', VALUES FROM materialize.public.mv, VALUE COLUMN 'count')
+AS (TYPE 'gauge', HELP 'mv', SERIES FROM materialize.public.mv, VALUE COLUMN 'count')
 
 statement error cannot drop materialized view "mv": still depended upon by metric "from_mv"
 DROP MATERIALIZED VIEW materialize.public.mv
@@ -309,7 +309,7 @@ CREATE TABLE t (count int)
 statement ok
 CREATE METRIC materialize.public.from_table
 IN API materialize.public.metrics_a
-AS (TYPE 'gauge', HELP 't', VALUES FROM materialize.public.t, VALUE COLUMN 'count')
+AS (TYPE 'gauge', HELP 't', SERIES FROM materialize.public.t, VALUE COLUMN 'count')
 
 statement error cannot drop table "t": still depended upon by metric "from_table"
 DROP TABLE materialize.public.t

@@ -1013,7 +1013,7 @@ impl Coordinator {
             metric,
             if_not_exists,
         } = plan;
-        // `resolved_ids` already contains `api_id` and `values_from`: both
+        // `resolved_ids` already contains `api_id` and `series_from`: both
         // appear in the persisted AST as `ResolvedItemName::Item`, which the
         // dependency visitor picks up during name resolution. The catalog
         // dependency graph then refuses `DROP VIEW`/`DROP API` without
@@ -1025,7 +1025,7 @@ impl Coordinator {
             api_id: metric.api_id,
             metric_type: metric.metric_type,
             help: metric.help,
-            values_from: metric.values_from,
+            series_from: metric.series_from,
             value_column: metric.value_column,
             resolved_ids,
         };
