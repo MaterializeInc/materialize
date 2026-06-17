@@ -434,6 +434,7 @@ pub(crate) fn render<'scope>(
                 &config,
                 connection.publication.clone(),
                 table_info.clone(),
+                connection.publication_details.get_is_physical_replica(),
             );
 
             // Instead of downgrading the capability for every transaction we process we only do it
@@ -526,6 +527,39 @@ pub(crate) fn render<'scope>(
                                     return Ok(());
                                 }
                                 Postgres(pg_error) => Err(TransientError::from(pg_error))?,
+                                PhysicalReplicaChanged { expected, actual } => {
+                                    // The upstream is no longer the kind of node the
+                                    // source was created against (e.g. a physical
+                                    // replica was promoted to a primary). Logical
+                                    // decoding cannot safely continue, so stall with a
+                                    // definite, non-retryable error.
+                                    let err = DefiniteError::InvalidPhysicalReplica {
+                                        expected,
+                                        actual,
+                                    };
+                                    for (oid, outputs) in table_info.iter() {
+                                        for output_index in outputs.keys() {
+                                            let update = (
+                                                (
+                                                    *oid,
+                                                    *output_index,
+                                                    Err(DataflowError::from(err.clone())),
+                                                ),
+                                                data_cap_set[0].time().clone(),
+                                                Diff::ONE,
+                                            );
+                                            let size = update.fuel_size();
+                                            data_output
+                                                .give_fueled(&data_cap_set[0], update, size)
+                                                .await;
+                                        }
+                                    }
+                                    definite_error_handle.give(
+                                        &definite_error_cap_set[0],
+                                        ReplicationError::Definite(Rc::new(err)),
+                                    );
+                                    return Ok(());
+                                }
                                 Schema {
                                     oid,
                                     output_index,
@@ -1138,6 +1172,10 @@ enum SchemaValidationError {
         output_index: usize,
         error: DefiniteError,
     },
+    /// The upstream's physical-replica status changed out from under us (e.g. a
+    /// physical replica was promoted to a primary). `expected` is the status the
+    /// source was created against; `actual` is what the upstream reports now.
+    PhysicalReplicaChanged { expected: bool, actual: bool },
 }
 
 fn spawn_schema_validator(
@@ -1145,6 +1183,7 @@ fn spawn_schema_validator(
     config: &RawSourceCreationConfig,
     publication: String,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
+    is_physical_replica: bool,
 ) -> mpsc::UnboundedReceiver<SchemaValidationError> {
     let (tx, rx) = mpsc::unbounded_channel();
     let source_id = config.id;
@@ -1155,6 +1194,24 @@ fn spawn_schema_validator(
             trace!(%source_id, "validating schemas");
 
             let validation_start = Instant::now();
+
+            // Detect a physical replica being promoted to a primary (or vice
+            // versa) while the stream is live. The startup check in raw_stream
+            // only catches this across a restart, so we re-check periodically
+            // here to surface a definite error proactively.
+            match mz_postgres_util::get_is_in_recovery(&*client).await {
+                Ok(actual) if actual != is_physical_replica => {
+                    let _ = tx.send(SchemaValidationError::PhysicalReplicaChanged {
+                        expected: is_physical_replica,
+                        actual,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = tx.send(SchemaValidationError::Postgres(error));
+                    continue;
+                }
+            }
 
             let upstream_info = match mz_postgres_util::publication_info(
                 &*client,
