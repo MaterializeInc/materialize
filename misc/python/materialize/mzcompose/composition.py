@@ -559,8 +559,9 @@ class Composition:
                         # freshly-built mzbuild image can briefly fail to
                         # resolve in the registry ("failed to resolve reference
                         # ... not found") before it has propagated. With a flat
-                        # 3s sleep, `up`'s 5 tries exhausted in ~12s, which was
-                        # too short to ride out the propagation delay.
+                        # 3s sleep, `up`'s tries exhausted in seconds, which was
+                        # too short to ride out the propagation delay; the cap
+                        # plus `up`'s try count govern the total wait (see there).
                         time.sleep(min(3 * 2 ** (retry - 1), 30))
                     continue
                 else:
@@ -1207,7 +1208,7 @@ class Composition:
         *services: str | Service,
         detach: bool = True,
         wait: bool = True,
-        max_tries: int = 5,  # increased since quay.io returns 502 sometimes
+        max_tries: int = 8,
     ) -> None:
         """Build, (re)create, and start the named services.
 

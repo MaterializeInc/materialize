@@ -13,6 +13,9 @@ mode cockroach
 
 reset-server
 
+# Mask churning transient global IDs (`t<N>`) with a stable placeholder.
+replace \bt\d+\b  t<id>
+
 # VIEW + INDEX
 
 statement ok
@@ -119,17 +122,17 @@ SELECT mz_unsafe.mz_sleep(8)
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-11  t66
+11  t<id>
 
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
 ----
-t66  5
-t66  4
-t66  3
-t66  2
-t66  1
+t<id>  5
+t<id>  4
+t<id>  3
+t<id>  2
+t<id>  1
 
 ## attribution queries
 
@@ -142,11 +145,11 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t66  5  NULL  Differential␠Join␠%0␠»␠%1
-t66  4  5  ␠␠Arrange␠(#0{y})
-t66  3  4  ␠␠␠␠Read␠u4
-t66  2  5  ␠␠Arrange␠(#0{x})
-t66  1  2  ␠␠␠␠Read␠u4
+t<id>  5  NULL  Differential␠Join␠%0␠»␠%1
+t<id>  4  5  ␠␠Arrange␠(#0{y})
+t<id>  3  4  ␠␠␠␠Read␠u4
+t<id>  2  5  ␠␠Arrange␠(#0{x})
+t<id>  1  2  ␠␠␠␠Read␠u4
 
 # omitting pg_size_pretty(sum(size)) as size
 query TIIT
@@ -157,11 +160,11 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t66  5  NULL  Differential␠Join␠%0␠»␠%1
-t66  4  5  ␠␠Arrange␠(#0{y})
-t66  3  4  ␠␠␠␠Read␠u4
-t66  2  5  ␠␠Arrange␠(#0{x})
-t66  1  2  ␠␠␠␠Read␠u4
+t<id>  5  NULL  Differential␠Join␠%0␠»␠%1
+t<id>  4  5  ␠␠Arrange␠(#0{y})
+t<id>  3  4  ␠␠␠␠Read␠u4
+t<id>  2  5  ␠␠Arrange␠(#0{x})
+t<id>  1  2  ␠␠␠␠Read␠u4
 
 statement ok
 DROP TABLE u CASCADE;
@@ -417,26 +420,26 @@ SELECT global_id, REPEAT(' ', nesting * 2) || operator AS operator
 FROM mz_internal.mz_lir_mapping mlm
 ORDER BY global_id, lir_id DESC;
 ----
-t83  Returning␠Distinct␠GroupAggregate
-t83  ␠␠Union
-t83  ␠␠␠␠Differential␠Join␠%0␠»␠%1
-t83  ␠␠␠␠␠␠Arrange␠(#0{messageid})
-t83  ␠␠␠␠␠␠␠␠Stream␠l0
-t83  ␠␠␠␠␠␠Arranged␠u15
-t83  ␠␠␠␠Arranged␠u13
-t83  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
-t83  ␠␠Distinct␠GroupAggregate
-t83  ␠␠␠␠Union
-t83  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
-t83  ␠␠␠␠␠␠␠␠Arrange␠(#0{messageid})
-t83  ␠␠␠␠␠␠␠␠␠␠Read␠l0
-t83  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentcommentid})
-t83  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
-t83  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
-t83  ␠␠␠␠␠␠␠␠Arranged␠u13
-t83  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentpostid})
-t83  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
-t83  ␠␠␠␠␠␠Arranged␠u13
+t<id>  Returning␠Distinct␠GroupAggregate
+t<id>  ␠␠Union
+t<id>  ␠␠␠␠Differential␠Join␠%0␠»␠%1
+t<id>  ␠␠␠␠␠␠Arrange␠(#0{messageid})
+t<id>  ␠␠␠␠␠␠␠␠Stream␠l0
+t<id>  ␠␠␠␠␠␠Arranged␠u15
+t<id>  ␠␠␠␠Arranged␠u13
+t<id>  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
+t<id>  ␠␠Distinct␠GroupAggregate
+t<id>  ␠␠␠␠Union
+t<id>  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#0{messageid})
+t<id>  ␠␠␠␠␠␠␠␠␠␠Read␠l0
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentcommentid})
+t<id>  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t<id>  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
+t<id>  ␠␠␠␠␠␠␠␠Arranged␠u13
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentpostid})
+t<id>  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t<id>  ␠␠␠␠␠␠Arranged␠u13
 u10  Arrange␠(#1{person1id})
 u10  ␠␠Stream␠u9
 u11  Arrange␠(#2{person2id})
@@ -592,7 +595,7 @@ materialize.public.v2_idx_x  u26  2
 materialize.public.v2_idx_x  u27  2
 materialize.public.v_idx_x  u28  5
 materialize.public.v_idx_x  u29  2
-materialize.public.w  t92  5
+materialize.public.w  t<id>  5
 
 # explain analyze SQL generation
 
