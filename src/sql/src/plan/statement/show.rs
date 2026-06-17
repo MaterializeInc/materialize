@@ -1055,13 +1055,24 @@ impl<'a> ShowColumnsSelect<'a> {
 
 /// Convert a SQL statement into a form that could be used as input, as well as
 /// is more amenable to human consumption.
+///
+/// Note that the bits we omit here (e.g. the internal `AS OF` of a materialized
+/// view, or the `DETAILS` of a `CREATE TABLE ... FROM SOURCE`) are not
+/// user-typeable, but remain accessible for debugging in the raw `create_sql`
+/// (and `redacted_create_sql`) column of catalog builtins like
+/// `mz_catalog.mz_materialized_views` and `mz_catalog.mz_tables`. They are not
+/// in the `definition` column, which is parsed back out of `create_sql` and only
+/// retains the inner query.
 fn humanize_sql_for_show_create(
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,
     sql: &str,
     redacted: bool,
 ) -> Result<String, PlanError> {
-    use mz_sql_parser::ast::{CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName};
+    use mz_sql_parser::ast::{
+        CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName,
+        TableFromSourceOptionName,
+    };
 
     let parsed = parse::parse(sql)?.into_element().ast;
     let (mut resolved, _) = names::resolve(catalog, parsed)?;
@@ -1073,6 +1084,18 @@ fn humanize_sql_for_show_create(
     match &mut resolved {
         // Strip internal `AS OF` syntax.
         Statement::CreateMaterializedView(stmt) => stmt.as_of = None,
+        // Strip the internal `DETAILS` option, which is not user-typeable and
+        // does not roundtrip.
+        Statement::CreateTableFromSource(stmt) => {
+            stmt.with_options.retain_mut(|o| match o.name {
+                TableFromSourceOptionName::TextColumns => true,
+                TableFromSourceOptionName::ExcludeColumns => true,
+                // Drop details, which does not roundtrip.
+                TableFromSourceOptionName::Details => false,
+                TableFromSourceOptionName::PartitionBy => true,
+                TableFromSourceOptionName::RetainHistory => true,
+            });
+        }
         // `CREATE SOURCE` statements should roundtrip. However, sources and
         // their subsources have a complex relationship, so we need to do a lot
         // of work to reconstruct the statement for multi-output sources.
