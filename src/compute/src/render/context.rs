@@ -27,7 +27,7 @@ use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Eval, Id, MapFilterProject, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
-use mz_repr::fixed_length::ToDatumIter;
+use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::batcher;
@@ -323,10 +323,12 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                           d,
                           ok_session: &mut Session<T, DCB>,
                           err_session: &mut Session<T, ECB<T>>| {
+            // Declared before the borrow so it outlives any datums that decode into it.
+            let temp_storage = RowArena::new();
             let mut datums_borrow = datums.borrow();
-            k.extend_datums(&mut datums_borrow, Some(max_demand));
+            k.extend_datums(&temp_storage, &mut datums_borrow, Some(max_demand));
             let max_demand = max_demand.saturating_sub(datums_borrow.len());
-            v.extend_datums(&mut datums_borrow, Some(max_demand));
+            v.extend_datums(&temp_storage, &mut datums_borrow, Some(max_demand));
             logic(&mut datums_borrow, t, d, ok_session, err_session)
         };
 
@@ -377,10 +379,12 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     {
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq, t, d, ok_session: &mut Session<T, DCB>| {
+            // Declared before the borrow so it outlives any datums that decode into it.
+            let temp_storage = RowArena::new();
             let mut datums_borrow = datums.borrow();
-            k.extend_datums(&mut datums_borrow, Some(max_demand));
+            k.extend_datums(&temp_storage, &mut datums_borrow, Some(max_demand));
             let max_demand = max_demand.saturating_sub(datums_borrow.len());
-            v.extend_datums(&mut datums_borrow, Some(max_demand));
+            v.extend_datums(&temp_storage, &mut datums_borrow, Some(max_demand));
             logic(&mut datums_borrow, t, d, ok_session)
         };
 
@@ -711,8 +715,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     )
     where
         Tr: for<'a> TraceReader<
-                Key<'a>: ToDatumIter,
-                Val<'a>: ToDatumIter,
+                Key<'a>: ExtendDatums,
+                Val<'a>: ExtendDatums,
                 Time = T,
                 Diff = mz_repr::Diff,
             > + Clone
@@ -810,8 +814,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     ) -> Stream<'scope, T, DCB::Container>
     where
         Tr: for<'a> TraceReader<
-                Key<'a>: ToDatumIter,
-                Val<'a>: ToDatumIter,
+                Key<'a>: ExtendDatums,
+                Val<'a>: ExtendDatums,
                 Time = T,
                 Diff = mz_repr::Diff,
             > + Clone

@@ -10,7 +10,7 @@ Packed-bytes differential dataflow spine layouts for `Row`-valued arrangements. 
 ## Public types
 
 * `DatumContainer` — packed-bytes container for `Row` keys or values; implements `columnar::Container` and serves as the storage type for `Row`-valued spine layouts. Also implements `PushInto<&RowRef>`, pushing the raw bytes of a `RowRef` directly into the backing byte container.
-* `DatumSeq<'a>` — borrowing view of a packed byte sequence, decoded datum-by-datum as `Datum`s; implements `ToDatumIter` and `PartialEq<&RowRef>` (comparing the underlying byte slices).
+* `DatumSeq<'a>` — borrowing view of a packed byte sequence, decoded datum-by-datum as `Datum`s; implements `ExtendDatums` and `PartialEq<&RowRef>` (comparing the underlying byte slices).
 * `OffsetOptimized` — offset list implementation wrapping `differential_dataflow`'s `OffsetList`, used in `OrdValBatch` and `OrdKeyBatch` layouts.
 
 ## Spine type aliases

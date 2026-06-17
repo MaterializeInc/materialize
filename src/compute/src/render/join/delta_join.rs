@@ -27,7 +27,7 @@ use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Eval, MirScalarExpr};
-use mz_repr::fixed_length::ToDatumIter;
+use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
@@ -338,7 +338,7 @@ where
     Tr: TraceReader<KeyContainer: BatchContainer<Owned = Row>, Time = T, Diff = Diff>
         + Clone
         + 'static,
-    for<'a> Tr::Val<'a>: ToDatumIter,
+    for<'a> Tr::Val<'a>: ExtendDatums,
     CF: Fn(Tr::TimeGat<'_>, &T) -> bool + 'static,
 {
     let use_half_join2 = ENABLE_HALF_JOIN2.get(&config_set);
@@ -392,7 +392,7 @@ where
     Tr: TraceReader<KeyContainer: BatchContainer<Owned = Row>, Time = T, Diff = Diff>
         + Clone
         + 'static,
-    for<'a> Tr::Val<'a>: ToDatumIter,
+    for<'a> Tr::Val<'a>: ExtendDatums,
     CF: Fn(Tr::TimeGat<'_>, &T) -> bool + 'static,
 {
     type CB<C> = CapacityContainerBuilder<C>;
@@ -416,7 +416,7 @@ where
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
-                lookup_row.extend_datums(&mut datums_local, None);
+                lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
 
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
 
@@ -464,7 +464,7 @@ where
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
-                lookup_row.extend_datums(&mut datums_local, None);
+                lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
 
                 if let Some(row) = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -500,7 +500,7 @@ where
     Tr: TraceReader<KeyContainer: BatchContainer<Owned = Row>, Time = T, Diff = Diff>
         + Clone
         + 'static,
-    for<'a> Tr::Val<'a>: ToDatumIter,
+    for<'a> Tr::Val<'a>: ExtendDatums,
     CF: Fn(Tr::TimeGat<'_>, &T) -> bool + 'static,
 {
     type CB<C> = CapacityContainerBuilder<C>;
@@ -527,7 +527,7 @@ where
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
-                lookup_row.extend_datums(&mut datums_local, None);
+                lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
 
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
 
@@ -574,7 +574,7 @@ where
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
-                lookup_row.extend_datums(&mut datums_local, None);
+                lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
 
                 if let Some(row) = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -610,8 +610,8 @@ where
     T: RenderTimestamp,
     for<'a, 'b> &'a T: PartialEq<Tr::TimeGat<'b>>,
     Tr: for<'a> TraceReader<Time = T, Diff = Diff> + Clone + 'static,
-    for<'a> Tr::Key<'a>: ToDatumIter,
-    for<'a> Tr::Val<'a>: ToDatumIter,
+    for<'a> Tr::Key<'a>: ExtendDatums,
+    for<'a> Tr::Val<'a>: ExtendDatums,
 {
     let mut inner_as_of = Antichain::new();
     for event_time in as_of.elements().iter() {
@@ -654,8 +654,8 @@ where
                                         let temp_storage = RowArena::new();
 
                                         let mut datums_local = datums.borrow();
-                                        key.extend_datums(&mut datums_local, None);
-                                        val.extend_datums(&mut datums_local, None);
+                                        key.extend_datums(&temp_storage, &mut datums_local, None);
+                                        val.extend_datums(&temp_storage, &mut datums_local, None);
 
                                         if !initial_closure.is_identity() {
                                             match initial_closure

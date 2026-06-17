@@ -25,7 +25,7 @@ use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
 use mz_expr::Eval;
-use mz_repr::fixed_length::ToDatumIter;
+use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -481,9 +481,9 @@ where
     where
         Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
         Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
-        for<'a> Tr1::Key<'a>: ToDatumIter,
-        for<'a> Tr1::Val<'a>: ToDatumIter,
-        for<'a> Tr2::Val<'a>: ToDatumIter,
+        for<'a> Tr1::Key<'a>: ExtendDatums,
+        for<'a> Tr1::Val<'a>: ExtendDatums,
+        for<'a> Tr2::Val<'a>: ExtendDatums,
     {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -496,9 +496,9 @@ where
                     let temp_storage = RowArena::new();
 
                     let mut datums_local = datums.borrow();
-                    key.extend_datums(&mut datums_local, None);
-                    old.extend_datums(&mut datums_local, None);
-                    new.extend_datums(&mut datums_local, None);
+                    key.extend_datums(&temp_storage, &mut datums_local, None);
+                    old.extend_datums(&temp_storage, &mut datums_local, None);
+                    new.extend_datums(&temp_storage, &mut datums_local, None);
 
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -524,9 +524,9 @@ where
                     let temp_storage = RowArena::new();
 
                     let mut datums_local = datums.borrow();
-                    key.extend_datums(&mut datums_local, None);
-                    old.extend_datums(&mut datums_local, None);
-                    new.extend_datums(&mut datums_local, None);
+                    key.extend_datums(&temp_storage, &mut datums_local, None);
+                    old.extend_datums(&temp_storage, &mut datums_local, None);
+                    new.extend_datums(&temp_storage, &mut datums_local, None);
 
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)

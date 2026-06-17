@@ -24,7 +24,7 @@ The lingua franca of Materialize: defines the core data types that all layers of
 * `namespaces` — well-known schema name constants
 * `optimize` — `OptimizerFeatures`, `OptimizerFeatureOverrides`, and `OverrideFrom` trait
 * `refresh_schedule` — REFRESH EVERY/AT schedule representation
-* `fixed_length` — `ToDatumIter` abstraction
+* `fixed_length` — `ExtendDatums` abstraction
 * `datum_vec` — reusable `Datum` scratch buffer
 * `bytes` — PostgreSQL-compatible `ByteSize`
 * `user` — external user auth metadata
