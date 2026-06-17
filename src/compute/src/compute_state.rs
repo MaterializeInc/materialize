@@ -49,7 +49,7 @@ use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_types::PersistLocation;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::fixed_length::ToDatumIter;
+use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
@@ -1615,9 +1615,9 @@ impl IndexPeek {
     ) -> PeekStatus
     where
         for<'a> Tr: TraceReader<
-                Key<'a>: ToDatumIter + Eq,
+                Key<'a>: ExtendDatums + Eq,
                 KeyContainer: BatchContainer<Owned = Row>,
-                Val<'a>: ToDatumIter,
+                Val<'a>: ExtendDatums,
                 TimeGat<'a>: PartialOrder<Timestamp>,
                 DiffGat<'a> = &'a Diff,
             >,

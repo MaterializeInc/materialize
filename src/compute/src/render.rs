@@ -133,7 +133,8 @@ use mz_compute_types::plan::{ArrangementStrategy, LirId};
 use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow};
+use mz_repr::fixed_length::ExtendDatums;
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, RowArena, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnation::ColumnationChunker;
@@ -646,9 +647,10 @@ where
                             oks,
                             start_signal.clone(),
                             move |k: DatumSeq, v: DatumSeq| {
+                                let temp_storage = RowArena::new();
                                 let mut datums_borrow = datums.borrow();
-                                datums_borrow.extend(k);
-                                datums_borrow.extend(v);
+                                k.extend_datums(&temp_storage, &mut datums_borrow, None);
+                                v.extend_datums(&temp_storage, &mut datums_borrow, None);
                                 SharedRow::pack(permutation.iter().map(|i| datums_borrow[*i]))
                             },
                         )

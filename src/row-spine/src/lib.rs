@@ -1400,33 +1400,27 @@ mod dictionary {
         type Item = Datum<'a>;
         #[inline(always)]
         fn next(&mut self) -> Option<Self::Item> {
-            // Fast path: no codec means raw row-encoded bytes. Parse directly off the
-            // cursor with a single `read_datum`, skipping the `ColumnsIter::next`
-            // round-trip that would size a slice and re-parse it.
-            if self.iter.index.is_none() {
-                if self.iter.data.is_empty() {
-                    return None;
-                }
-                return Some(unsafe { read_datum(&mut self.iter.data) });
-            }
+            // Delegate to `ColumnsIter`, which handles both the codec and no-codec
+            // cases. The no-codec scan hot path is served directly by `extend_datums`
+            // (which decodes without going through this iterator), so the only callers
+            // left here are the codec-encoded `extend_datums`/`to_row` paths and tests;
+            // none warrant a dedicated no-codec fast path.
             self.iter
                 .next()
                 .map(|mut bytes| unsafe { read_datum(&mut bytes) })
         }
     }
 
-    use mz_repr::fixed_length::ToDatumIter;
-    impl<'long> ToDatumIter for DatumSeq<'long> {
-        type DatumIter<'short>
-            = DatumSeq<'short>
-        where
-            Self: 'short;
-        #[inline(always)]
-        fn to_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
-            *self
-        }
+    use mz_repr::RowArena;
+    use mz_repr::fixed_length::ExtendDatums;
+    impl<'long> ExtendDatums for DatumSeq<'long> {
         #[inline]
-        fn extend_datums<'a>(&'a self, target: &mut Vec<Datum<'a>>, max: Option<usize>) {
+        fn extend_datums<'a>(
+            &'a self,
+            _arena: &'a RowArena,
+            target: &mut Vec<Datum<'a>>,
+            max: Option<usize>,
+        ) {
             // Branch on codec presence ONCE per row rather than once per datum.
             // With no codec (the common, feature-off case) push raw datums in a
             // tight loop, matching the pre-dictionary path; with a codec, fall
