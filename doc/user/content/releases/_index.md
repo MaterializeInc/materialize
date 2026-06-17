@@ -32,11 +32,11 @@ SET TRANSACTION_ISOLATION TO 'bounded staleness 10s';
 
 For more information, see [Bounded Staleness](/reference/isolation-level/#bounded-staleness).
 
-### Google Cloud Support for Iceberg Sinks {#v26.29-google-cloud-support-for-iceberg-sinks}
+### Iceberg Sinks {#v26.29-google-cloud-support-for-iceberg-sinks} for Google Cloud Platform
 
 {{< private-preview />}}
 
-Iceberg sinks can now deliver data into [GCP Lakehouse](https://docs.cloud.google.com/lakehouse/docs/introduction) managed Iceberg tables via Google Cloud BigLake. A new `GCP` connection type handles Google service account credentials, enabling Materialize to authenticate with BigLake's Iceberg REST catalog. AWS connection credentials for Iceberg sinks are now optional.
+Iceberg sinks can now deliver data into [GCP Lakehouse](https://docs.cloud.google.com/lakehouse/docs/introduction) managed Iceberg tables. A new `GCP` connection type handles Google service account credentials, enabling Materialize to authenticate with BigLake's Iceberg REST catalog.
 
 ```mzsql
 -- Create a GCP service account connection
