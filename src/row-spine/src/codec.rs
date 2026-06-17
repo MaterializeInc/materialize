@@ -25,6 +25,8 @@
 //! batch-wide stat); cross-row schemes (delta, RLE) would need a column-major
 //! layout and are out of scope.
 
+use std::collections::BTreeMap;
+
 use mz_repr::read_datum;
 
 use crate::huffman::{BitReader, BitWriter, FrequencyCounter, HuffmanCode};
@@ -43,6 +45,37 @@ pub enum ColumnCodec {
     /// costs only a discriminant + pointer in the per-column `Vec`, not the
     /// ~1.3 KB of a `HuffmanCode`'s inline tables.
     Huffman(Box<HuffmanCode>),
+    /// Frame-of-reference for fixed-width (<= 8 byte) values: interpret the bytes
+    /// as a big-endian integer, store `value - min` in the fewest bytes that hold
+    /// `max - min`. Reconstructs the exact original bytes (it is pure arithmetic
+    /// on the byte pattern, so no datum-type knowledge is needed); it simply does
+    /// not get *chosen* when the byte order makes residuals large.
+    For(Box<ForCodec>),
+    /// Map each distinct value to a fixed-width index into a value table.
+    Dictionary(Box<DictCodec>),
+}
+
+/// Frame-of-reference codec state.
+#[derive(Clone, Debug)]
+pub struct ForCodec {
+    /// Original (fixed) byte length of every value.
+    len: u8,
+    /// Minimum value (big-endian interpretation of the bytes).
+    min: u64,
+    /// Bytes used to store each residual (`value - min`).
+    width: u8,
+}
+
+/// Per-column dictionary codec state.
+#[derive(Clone, Debug)]
+pub struct DictCodec {
+    /// Distinct values, indexed by their code.
+    values: Vec<Box<[u8]>>,
+    /// Value -> code, for encoding (dead weight after `seal`, like the row
+    /// dictionary's encode map).
+    index: BTreeMap<Box<[u8]>, u32>,
+    /// Bytes used to store each code.
+    width: u8,
 }
 
 impl ColumnCodec {
@@ -56,6 +89,14 @@ impl ColumnCodec {
                 let mut writer = BitWriter::new();
                 code.encode(value, &mut writer);
                 out.extend_from_slice(&writer.finish());
+            }
+            ColumnCodec::For(c) => {
+                let residual = be_uint(value) - c.min;
+                put_be(residual, c.width, out);
+            }
+            ColumnCodec::Dictionary(c) => {
+                let code = self_code(&c.index, value);
+                put_be(u64::from(code), c.width, out);
             }
         }
     }
@@ -78,6 +119,15 @@ impl ColumnCodec {
                 code.decode_into(&mut reader, len, out);
                 *cursor = &rest[reader.bytes_consumed()..];
             }
+            ColumnCodec::For(c) => {
+                let residual = take_be(cursor, c.width);
+                let value = c.min + residual;
+                put_be(value, c.len, out);
+            }
+            ColumnCodec::Dictionary(c) => {
+                let code = take_be(cursor, c.width);
+                out.extend_from_slice(&c.values[usize::try_from(code).expect("code fits usize")]);
+            }
         }
     }
 
@@ -91,8 +141,56 @@ impl ColumnCodec {
                 callback(inline, inline);
                 code.heap_size(callback);
             }
+            ColumnCodec::For(_) => {
+                let inline = std::mem::size_of::<ForCodec>();
+                callback(inline, inline);
+            }
+            ColumnCodec::Dictionary(c) => {
+                let inline = std::mem::size_of::<DictCodec>();
+                callback(inline, inline);
+                for v in &c.values {
+                    callback(v.len(), v.len());
+                }
+                // The encode index holds the same keys again, plus map overhead.
+                let entry = std::mem::size_of::<(Box<[u8]>, u32)>();
+                callback(c.index.len() * entry, c.index.len() * entry);
+                for k in c.index.keys() {
+                    callback(k.len(), k.len());
+                }
+            }
         }
     }
+}
+
+/// Interpret `bytes` (length <= 8) as a big-endian unsigned integer.
+fn be_uint(bytes: &[u8]) -> u64 {
+    let mut value = 0u64;
+    for &b in bytes {
+        value = (value << 8) | u64::from(b);
+    }
+    value
+}
+
+/// Append the low `width` bytes of `value`, big-endian.
+fn put_be(value: u64, width: u8, out: &mut Vec<u8>) {
+    for shift in (0..width).rev() {
+        let byte = (value >> (u32::from(shift) * 8)) & 0xFF;
+        out.push(u8::try_from(byte).expect("masked to a byte"));
+    }
+}
+
+/// Read `width` big-endian bytes from the front of `cursor`, advancing it.
+fn take_be(cursor: &mut &[u8], width: u8) -> u64 {
+    let width = usize::from(width);
+    let value = be_uint(&cursor[..width]);
+    *cursor = &cursor[width..];
+    value
+}
+
+/// Look up a value's dictionary code, panicking if absent (the model was built
+/// from a superset of the encoded values).
+fn self_code(index: &BTreeMap<Box<[u8]>, u32>, value: &[u8]) -> u32 {
+    *index.get(value).expect("value present in dictionary")
 }
 
 /// One codec per column; encodes and decodes whole rows.
@@ -138,6 +236,10 @@ impl RowCodec {
     }
 }
 
+/// Max distinct values for which a dictionary is considered (keeps the code
+/// width <= 2 bytes and bounds the stats map).
+const DICT_MAX_CARDINALITY: usize = 1 << 16;
+
 /// Per-column statistics gathered over a batch to select a [`ColumnCodec`].
 #[derive(Clone, Debug, Default)]
 struct ColumnStats {
@@ -150,6 +252,17 @@ struct ColumnStats {
     constant: Option<Box<[u8]>>,
     /// Whether all values observed have been identical.
     is_constant: bool,
+    /// Common byte length while every value shares one (for frame-of-reference).
+    len: Option<usize>,
+    /// Whether all values have had the same byte length.
+    fixed_len: bool,
+    /// Min/max of the big-endian integer interpretation (valid when
+    /// `fixed_len` and `len <= 8`).
+    min_int: u64,
+    max_int: u64,
+    /// Distinct values -> code, while cardinality stays within the dictionary
+    /// bound; `None` once it is exceeded (dictionary no longer viable).
+    distinct: Option<BTreeMap<Box<[u8]>, u32>>,
 }
 
 impl ColumnStats {
@@ -159,9 +272,34 @@ impl ColumnStats {
         if self.count == 0 {
             self.constant = Some(bytes.into());
             self.is_constant = true;
-        } else if self.is_constant && self.constant.as_deref() != Some(bytes) {
-            self.is_constant = false;
-            self.constant = None;
+            self.len = Some(bytes.len());
+            self.fixed_len = true;
+            self.min_int = u64::MAX;
+            self.max_int = 0;
+            self.distinct = Some(BTreeMap::new());
+        } else {
+            if self.is_constant && self.constant.as_deref() != Some(bytes) {
+                self.is_constant = false;
+                self.constant = None;
+            }
+            if self.len != Some(bytes.len()) {
+                self.fixed_len = false;
+            }
+        }
+        if bytes.len() <= 8 {
+            let v = be_uint(bytes);
+            self.min_int = self.min_int.min(v);
+            self.max_int = self.max_int.max(v);
+        }
+        if let Some(distinct) = &mut self.distinct {
+            if !distinct.contains_key(bytes) {
+                if distinct.len() >= DICT_MAX_CARDINALITY {
+                    self.distinct = None;
+                } else {
+                    let code = u32::try_from(distinct.len()).expect("cardinality bounded");
+                    distinct.insert(bytes.into(), code);
+                }
+            }
         }
         self.count += 1;
     }
@@ -204,9 +342,58 @@ impl ColumnStats {
             }
         }
 
+        // Frame-of-reference: fixed-width (<= 8 byte) numeric-ish columns.
+        if self.fixed_len && self.len.is_some_and(|l| l <= 8) && self.max_int > self.min_int {
+            let width = byte_width(self.max_int - self.min_int);
+            let for_bytes = self
+                .count
+                .saturating_mul(usize::from(width))
+                .saturating_add(std::mem::size_of::<ForCodec>());
+            if for_bytes < best_bytes {
+                best = ColumnCodec::For(Box::new(ForCodec {
+                    len: u8::try_from(self.len.unwrap()).expect("len <= 8"),
+                    min: self.min_int,
+                    width,
+                }));
+                best_bytes = for_bytes;
+            }
+        }
+
+        // Dictionary: low-cardinality columns -> fixed-width code into a table.
+        if let Some(distinct) = &self.distinct {
+            if distinct.len() >= 2 {
+                let width = byte_width(u64::try_from(distinct.len() - 1).unwrap_or(u64::MAX));
+                let table_bytes: usize = distinct.keys().map(|k| k.len()).sum::<usize>()
+                    + distinct.len() * std::mem::size_of::<Box<[u8]>>();
+                let dict_bytes = self
+                    .count
+                    .saturating_mul(usize::from(width))
+                    .saturating_add(table_bytes)
+                    .saturating_add(std::mem::size_of::<DictCodec>());
+                if dict_bytes < best_bytes {
+                    let mut values: Vec<Box<[u8]>> = vec![Box::default(); distinct.len()];
+                    for (value, &code) in distinct {
+                        values[usize::try_from(code).expect("code fits usize")] = value.clone();
+                    }
+                    best = ColumnCodec::Dictionary(Box::new(DictCodec {
+                        values,
+                        index: distinct.clone(),
+                        width,
+                    }));
+                    best_bytes = dict_bytes;
+                }
+            }
+        }
+
         let _ = best_bytes;
         best
     }
+}
+
+/// Number of bytes needed to hold the unsigned value `max` (at least 1).
+fn byte_width(max: u64) -> u8 {
+    let bits = 64 - max.leading_zeros();
+    u8::try_from(bits.div_ceil(8).max(1)).expect("width <= 8")
 }
 
 /// Gathers per-column statistics across a batch to build a [`RowCodec`].
@@ -357,7 +544,31 @@ mod tests {
             })
             .collect();
         let codec = round_trip(&rows).expect("a codec is chosen");
-        assert!(matches!(codec.columns[0], ColumnCodec::Huffman(_)));
+        // Four distinct values -> a 1-byte dictionary code beats Huffman.
+        assert!(matches!(codec.columns[0], ColumnCodec::Dictionary(_)));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn round_trip_for_numeric() {
+        // A fixed-width numeric column with values in a narrow range -> FoR.
+        let rows: Vec<Row> = (0..4000i64)
+            .map(|i| Row::pack_slice(&[Datum::Int64(1_000_000 + (i % 500))]))
+            .collect();
+        let codec = round_trip(&rows).expect("a codec is chosen");
+        assert!(matches!(codec.columns[0], ColumnCodec::For(_)));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn round_trip_dictionary_lowcard() {
+        // A handful of distinct longer strings -> dictionary.
+        let opts = ["alpha-value", "beta-value", "gamma-value"];
+        let rows: Vec<Row> = (0..3000usize)
+            .map(|i| Row::pack_slice(&[Datum::String(opts[i % opts.len()])]))
+            .collect();
+        let codec = round_trip(&rows).expect("a codec is chosen");
+        assert!(matches!(codec.columns[0], ColumnCodec::Dictionary(_)));
     }
 
     #[mz_ore::test]
