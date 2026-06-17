@@ -234,6 +234,12 @@ bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_ra
 bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  4  port  NULL  false
 bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  5  update_type  NULL  false
 bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  6  time  NULL  true
+bar  mz_dataflow_operator_summaries_raw  mz_dataflow_operator_summaries_raw_u7_primary_idx  1  id  NULL  false
+bar  mz_dataflow_operator_summaries_raw  mz_dataflow_operator_summaries_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_operator_summaries_raw  mz_dataflow_operator_summaries_raw_u7_primary_idx  3  input_port  NULL  false
+bar  mz_dataflow_operator_summaries_raw  mz_dataflow_operator_summaries_raw_u7_primary_idx  4  output_port  NULL  false
+bar  mz_dataflow_operator_summaries_raw  mz_dataflow_operator_summaries_raw_u7_primary_idx  5  outer_impact  NULL  false
+bar  mz_dataflow_operator_summaries_raw  mz_dataflow_operator_summaries_raw_u7_primary_idx  6  summary  NULL  false
 bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u7_primary_idx  1  id  NULL  false
 bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_message_batch_counts_received_raw  mz_message_batch_counts_received_raw_u7_primary_idx  1  channel_id  NULL  false
@@ -407,7 +413,7 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-32
+33
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -420,7 +426,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE 'scale=1,workers=1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-300
+307
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -428,7 +434,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-268
+274
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize

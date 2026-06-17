@@ -1194,3 +1194,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17087  mz_builtin_sources
 17088  mz_cluster_replica_size_internal
 17089  mz_cluster_replica_size_internal_ind
+17090  mz_dataflow_operator_summaries_raw
+17091  mz_dataflow_operator_summaries_per_worker
+17092  mz_dataflow_operator_summaries
+17093  mz_dataflow_operator_frontiers_per_worker
+17094  mz_dataflow_operator_frontiers

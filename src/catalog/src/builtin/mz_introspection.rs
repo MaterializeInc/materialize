@@ -2001,7 +2001,7 @@ pub static MZ_DATAFLOW_OPERATOR_FRONTIERS_PER_WORKER: LazyLock<BuiltinView> =
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::UInt64.nullable(false))
             .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
-            .with_column("time", SqlScalarType::MzTimestamp.nullable(true))
+            .with_column("time", SqlScalarType::MzTimestamp.nullable(false))
             .with_key(vec![0, 1])
             .finish(),
         column_comments: BTreeMap::new(),
@@ -2058,7 +2058,7 @@ pub static MZ_DATAFLOW_OPERATOR_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new
     oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_FRONTIERS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::UInt64.nullable(false))
-        .with_column("time", SqlScalarType::MzTimestamp.nullable(true))
+        .with_column("time", SqlScalarType::MzTimestamp.nullable(false))
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::new(),
@@ -2082,6 +2082,8 @@ pub static MZ_DATAFLOW_OPERATOR_SUMMARIES: LazyLock<BuiltinView> = LazyLock::new
         .with_column("output_port", SqlScalarType::UInt64.nullable(false))
         .with_column("outer_impact", SqlScalarType::MzTimestamp.nullable(false))
         .with_column("summary", SqlScalarType::String.nullable(false))
+        // `SELECT DISTINCT` over all columns makes the full row a key.
+        .with_key(vec![0, 1, 2, 3, 4])
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "

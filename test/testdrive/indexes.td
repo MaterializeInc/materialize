@@ -327,6 +327,7 @@ mz_databases_ind                                            mz_databases        
 mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresses_per_worker             mz_catalog_server    {id,worker_id}                              ""
 mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_catalog_server    {id,worker_id}                              ""
 mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_catalog_server    {id,worker_id,source,port,update_type,time} ""
+mz_dataflow_operator_summaries_raw_s2_primary_idx           mz_dataflow_operator_summaries_raw           mz_catalog_server    {id,worker_id,input_port,output_port,outer_impact,summary} ""
 mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_catalog_server    {id,worker_id}                              ""
 mz_frontiers_ind                                            mz_frontiers                                 mz_catalog_server    {object_id}                                 ""
 mz_hydration_statuses_ind                                   mz_hydration_statuses                        mz_catalog_server    {object_id,replica_id}                      ""
