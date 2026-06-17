@@ -32,7 +32,7 @@ use mz_compute_types::plan::reduce::{
     ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
 };
 use mz_compute_types::plan::scalar::LirScalarExpr;
-use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MfpPlan, SafeMfpPlan};
+use mz_expr::{AggregateExpr, AggregateFunc, EvalError, SafeMfpPlan};
 use mz_ore::cast::CastLossy;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ExtendDatums;
@@ -69,18 +69,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         input: CollectionBundle<'scope, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
-        mfp_after: Option<MfpPlan<LirScalarExpr>>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
         temporal_bucketing_strategy: ArrangementStrategy,
     ) -> CollectionBundle<'scope, T>
     where
         T: crate::render::MaybeBucketByTime,
     {
-        // Convert `mfp_after` to an actionable plan (non-temporal SafeMfpPlan).
-        let mfp_after = mfp_after.map(|m| {
-            m.into_nontemporal()
-                .expect("Fused Reduce MFPs do not have temporal predicates")
-        });
-
         input.scope().region_named("Reduce", |inner| {
             let KeyValPlan {
                 mut key_plan,

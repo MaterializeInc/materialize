@@ -18,7 +18,9 @@ use std::fmt::Debug;
 
 use differential_dataflow::lattice::Lattice;
 use itertools::zip_eq;
-use mz_expr::{EvalError, Id, LetRecLimit, LocalId, MfpPlan, RECURSION_LIMIT, TableFunc};
+use mz_expr::{
+    EvalError, Id, LetRecLimit, LocalId, MfpPlan, RECURSION_LIMIT, SafeMfpPlan, TableFunc,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{assert_none, soft_panic_or_log};
@@ -101,7 +103,7 @@ pub trait Interpreter {
         input: Self::Domain,
         key_val_plan: &KeyValPlan,
         plan: &ReducePlan,
-        mfp_after: &MfpPlan<LirScalarExpr>,
+        mfp_after: &SafeMfpPlan<LirScalarExpr>,
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.

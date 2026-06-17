@@ -1927,18 +1927,14 @@ SELECT DISTINCT a, b FROM t
             "plan": "Distinct",
             "mfp_after": {
               "mfp": {
-                "mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1
-                  ],
-                  "input_arity": 2
-                }
-              },
-              "lower_bounds": [],
-              "upper_bounds": []
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1
+                ],
+                "input_arity": 2
+              }
             },
             "temporal_bucketing_strategy": "Direct"
           }
@@ -2092,19 +2088,15 @@ GROUP BY a
             },
             "mfp_after": {
               "mfp": {
-                "mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1,
-                    2
-                  ],
-                  "input_arity": 3
-                }
-              },
-              "lower_bounds": [],
-              "upper_bounds": []
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1,
+                  2
+                ],
+                "input_arity": 3
+              }
             },
             "temporal_bucketing_strategy": "Direct"
           }
@@ -2278,18 +2270,14 @@ FROM t
                   },
                   "mfp_after": {
                     "mfp": {
-                      "mfp": {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          0,
-                          1
-                        ],
-                        "input_arity": 2
-                      }
-                    },
-                    "lower_bounds": [],
-                    "upper_bounds": []
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    }
                   },
                   "temporal_bucketing_strategy": "Direct"
                 }
@@ -2602,19 +2590,15 @@ SELECT * FROM hierarchical_group_by
             },
             "mfp_after": {
               "mfp": {
-                "mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1,
-                    2
-                  ],
-                  "input_arity": 3
-                }
-              },
-              "lower_bounds": [],
-              "upper_bounds": []
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1,
+                  2
+                ],
+                "input_arity": 3
+              }
             },
             "temporal_bucketing_strategy": "Direct"
           }
@@ -2748,18 +2732,14 @@ MATERIALIZED VIEW hierarchical_global_mv
                   },
                   "mfp_after": {
                     "mfp": {
-                      "mfp": {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          0,
-                          1
-                        ],
-                        "input_arity": 2
-                      }
-                    },
-                    "lower_bounds": [],
-                    "upper_bounds": []
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    }
                   },
                   "temporal_bucketing_strategy": "Direct"
                 }
@@ -3094,18 +3074,14 @@ SELECT * FROM hierarchical_global
                   },
                   "mfp_after": {
                     "mfp": {
-                      "mfp": {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          0,
-                          1
-                        ],
-                        "input_arity": 2
-                      }
-                    },
-                    "lower_bounds": [],
-                    "upper_bounds": []
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    }
                   },
                   "temporal_bucketing_strategy": "Direct"
                 }
@@ -3594,18 +3570,14 @@ GROUP BY a
                     },
                     "mfp_after": {
                       "mfp": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      },
-                      "lower_bounds": [],
-                      "upper_bounds": []
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -3860,18 +3832,14 @@ GROUP BY a
                     },
                     "mfp_after": {
                       "mfp": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      },
-                      "lower_bounds": [],
-                      "upper_bounds": []
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -4249,17 +4217,13 @@ FROM t
                                 },
                                 "mfp_after": {
                                   "mfp": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 1
-                                    }
-                                  },
-                                  "lower_bounds": [],
-                                  "upper_bounds": []
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0
+                                    ],
+                                    "input_arity": 1
+                                  }
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -4485,17 +4449,13 @@ FROM t
                                 },
                                 "mfp_after": {
                                   "mfp": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 1
-                                    }
-                                  },
-                                  "lower_bounds": [],
-                                  "upper_bounds": []
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0
+                                    ],
+                                    "input_arity": 1
+                                  }
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -4804,19 +4764,15 @@ MATERIALIZED VIEW collated_group_by_mv
                     },
                     "mfp_after": {
                       "mfp": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            2
-                          ],
-                          "input_arity": 3
-                        }
-                      },
-                      "lower_bounds": [],
-                      "upper_bounds": []
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1,
+                          2
+                        ],
+                        "input_arity": 3
+                      }
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -4950,19 +4906,15 @@ MATERIALIZED VIEW collated_group_by_mv
                     },
                     "mfp_after": {
                       "mfp": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            2
-                          ],
-                          "input_arity": 3
-                        }
-                      },
-                      "lower_bounds": [],
-                      "upper_bounds": []
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1,
+                          2
+                        ],
+                        "input_arity": 3
+                      }
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -5217,18 +5169,14 @@ MATERIALIZED VIEW collated_group_by_mv
                     },
                     "mfp_after": {
                       "mfp": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      },
-                      "lower_bounds": [],
-                      "upper_bounds": []
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -5483,18 +5431,14 @@ MATERIALIZED VIEW collated_group_by_mv
                     },
                     "mfp_after": {
                       "mfp": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      },
-                      "lower_bounds": [],
-                      "upper_bounds": []
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -6245,19 +6189,15 @@ SELECT * FROM collated_group_by
                     },
                     "mfp_after": {
                       "mfp": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            2
-                          ],
-                          "input_arity": 3
-                        }
-                      },
-                      "lower_bounds": [],
-                      "upper_bounds": []
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1,
+                          2
+                        ],
+                        "input_arity": 3
+                      }
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -6391,19 +6331,15 @@ SELECT * FROM collated_group_by
                     },
                     "mfp_after": {
                       "mfp": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            2
-                          ],
-                          "input_arity": 3
-                        }
-                      },
-                      "lower_bounds": [],
-                      "upper_bounds": []
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1,
+                          2
+                        ],
+                        "input_arity": 3
+                      }
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -6658,18 +6594,14 @@ SELECT * FROM collated_group_by
                     },
                     "mfp_after": {
                       "mfp": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      },
-                      "lower_bounds": [],
-                      "upper_bounds": []
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -6924,18 +6856,14 @@ SELECT * FROM collated_group_by
                     },
                     "mfp_after": {
                       "mfp": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      },
-                      "lower_bounds": [],
-                      "upper_bounds": []
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
                     },
                     "temporal_bucketing_strategy": "Direct"
                   }
@@ -7736,18 +7664,14 @@ MATERIALIZED VIEW collated_global_mv
                                 },
                                 "mfp_after": {
                                   "mfp": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0,
-                                        1
-                                      ],
-                                      "input_arity": 2
-                                    }
-                                  },
-                                  "lower_bounds": [],
-                                  "upper_bounds": []
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0,
+                                      1
+                                    ],
+                                    "input_arity": 2
+                                  }
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -7852,18 +7776,14 @@ MATERIALIZED VIEW collated_global_mv
                                 },
                                 "mfp_after": {
                                   "mfp": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0,
-                                        1
-                                      ],
-                                      "input_arity": 2
-                                    }
-                                  },
-                                  "lower_bounds": [],
-                                  "upper_bounds": []
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0,
+                                      1
+                                    ],
+                                    "input_arity": 2
+                                  }
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -8089,17 +8009,13 @@ MATERIALIZED VIEW collated_global_mv
                                 },
                                 "mfp_after": {
                                   "mfp": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 1
-                                    }
-                                  },
-                                  "lower_bounds": [],
-                                  "upper_bounds": []
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0
+                                    ],
+                                    "input_arity": 1
+                                  }
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -8325,17 +8241,13 @@ MATERIALIZED VIEW collated_global_mv
                                 },
                                 "mfp_after": {
                                   "mfp": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 1
-                                    }
-                                  },
-                                  "lower_bounds": [],
-                                  "upper_bounds": []
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0
+                                    ],
+                                    "input_arity": 1
+                                  }
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -9144,18 +9056,14 @@ SELECT * FROM collated_global
                                 },
                                 "mfp_after": {
                                   "mfp": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0,
-                                        1
-                                      ],
-                                      "input_arity": 2
-                                    }
-                                  },
-                                  "lower_bounds": [],
-                                  "upper_bounds": []
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0,
+                                      1
+                                    ],
+                                    "input_arity": 2
+                                  }
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -9260,18 +9168,14 @@ SELECT * FROM collated_global
                                 },
                                 "mfp_after": {
                                   "mfp": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0,
-                                        1
-                                      ],
-                                      "input_arity": 2
-                                    }
-                                  },
-                                  "lower_bounds": [],
-                                  "upper_bounds": []
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0,
+                                      1
+                                    ],
+                                    "input_arity": 2
+                                  }
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -9497,17 +9401,13 @@ SELECT * FROM collated_global
                                 },
                                 "mfp_after": {
                                   "mfp": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 1
-                                    }
-                                  },
-                                  "lower_bounds": [],
-                                  "upper_bounds": []
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0
+                                    ],
+                                    "input_arity": 1
+                                  }
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }
@@ -9733,17 +9633,13 @@ SELECT * FROM collated_global
                                 },
                                 "mfp_after": {
                                   "mfp": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 1
-                                    }
-                                  },
-                                  "lower_bounds": [],
-                                  "upper_bounds": []
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0
+                                    ],
+                                    "input_arity": 1
+                                  }
                                 },
                                 "temporal_bucketing_strategy": "Direct"
                               }

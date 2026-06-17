@@ -14,7 +14,7 @@ use std::cmp::Reverse;
 use std::collections::BTreeSet;
 
 use differential_dataflow::lattice::Lattice;
-use mz_expr::{EvalError, Id, MfpPlan, TableFunc};
+use mz_expr::{EvalError, Id, MfpPlan, SafeMfpPlan, TableFunc};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use timely::PartialOrder;
 
@@ -184,7 +184,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _input: Self::Domain,
         _key_val_plan: &KeyValPlan,
         _plan: &ReducePlan,
-        _mfp_after: &MfpPlan<LirScalarExpr>,
+        _mfp_after: &SafeMfpPlan<LirScalarExpr>,
     ) -> Self::Domain {
         // In a recursive context, reduce will advance across timestamps
         // and may need to retract. Outside of a recursive context, the

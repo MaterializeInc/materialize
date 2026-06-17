@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use columnar::Columnar;
 use mz_expr::{
     CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MfpPlan, MirScalarExpr,
-    OptimizedMirRelationExpr, TableFunc,
+    OptimizedMirRelationExpr, SafeMfpPlan, TableFunc,
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::str::Indent;
@@ -315,10 +315,9 @@ pub enum PlanNode {
         plan: ReducePlan,
         /// An MFP that must be applied to results. The projection part of this
         /// MFP must preserve the key for the reduction; otherwise, the results
-        /// become undefined. Additionally, the MFP must be free from temporal
-        /// predicates so that it can be readily evaluated.
-        /// TODO(ggevay): should we wrap this in [`mz_expr::SafeMfpPlan`]?
-        mfp_after: MfpPlan<LirScalarExpr>,
+        /// become undefined. Additionally, the MFP is guaranteed to be free from
+        /// temporal predicates so that it can be readily evaluated.
+        mfp_after: SafeMfpPlan<LirScalarExpr>,
         /// Strategy for forming the internal input arrangement built by `Reduce`
         /// (materialized via `key_val_plan`).
         ///

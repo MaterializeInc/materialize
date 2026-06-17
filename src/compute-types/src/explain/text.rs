@@ -322,7 +322,8 @@ impl Plan {
                 if !mfp_after.is_identity() {
                     writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                     ctx.indent += 1;
-                    fmt_mfp_default_text(mfp_after, &mode, f, ctx)?;
+                    mode.expr(mfp_after.deref(), None)
+                        .fmt_default_text(f, ctx)?;
                     ctx.indent += 1;
                 }
 
@@ -860,7 +861,7 @@ impl Plan {
                     }
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
-                        ctx.indented(|ctx| fmt_mfp_verbose_text(mfp_after, &mode, f, ctx))?;
+                        ctx.indented(|ctx| mode.expr(mfp_after.deref(), None).fmt_text(f, ctx))?;
                     }
 
                     input.fmt_text(f, ctx)

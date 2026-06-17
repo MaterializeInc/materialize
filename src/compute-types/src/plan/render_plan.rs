@@ -14,7 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
-use mz_expr::{CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MfpPlan, TableFunc};
+use mz_expr::{
+    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MfpPlan, SafeMfpPlan, TableFunc,
+};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::{CompactScalars, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -212,8 +214,8 @@ pub enum Expr {
         plan: ReducePlan,
         /// An MFP that must be applied to results. The projection part of this MFP must preserve
         /// the key for the reduction; otherwise, the results become undefined. Additionally, the
-        /// MFP must be free from temporal predicates so that it can be readily evaluated.
-        mfp_after: MfpPlan<LirScalarExpr>,
+        /// MFP is guaranteed be free from temporal predicates so that it can be readily evaluated.
+        mfp_after: SafeMfpPlan<LirScalarExpr>,
         /// How the renderer should form the internal input arrangement built by `Reduce`.
         /// Mirrors [`PlanNode::Reduce::temporal_bucketing_strategy`].
         temporal_bucketing_strategy: ArrangementStrategy,
