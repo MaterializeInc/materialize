@@ -503,7 +503,7 @@ where
                     // These are rare and interesting enough that we always log
                     // them at info!.
                     info!(
-                        "compare_and_append received an indeterminate error, retrying in {:?}: {}",
+                        "compare_and_append received an indeterminate error, retrying in ~{:?} (+/- jitter): {}",
                         retry.next_sleep(),
                         err
                     );
@@ -768,13 +768,13 @@ where
             };
             if retry.attempt() >= INFO_MIN_ATTEMPTS {
                 info!(
-                    "become_tombstone received an indeterminate error, retrying in {:?}: {}",
+                    "become_tombstone received an indeterminate error, retrying in ~{:?} (+/- jitter): {}",
                     retry.next_sleep(),
                     err
                 );
             } else {
                 debug!(
-                    "become_tombstone received an indeterminate error, retrying in {:?}: {}",
+                    "become_tombstone received an indeterminate error, retrying in ~{:?} (+/- jitter): {}",
                     retry.next_sleep(),
                     err
                 );
@@ -970,7 +970,7 @@ where
                         current_upper =? upper.elements(),
                         current_seqno =? seqno,
                         wait_for = &metrics.name,
-                        "didn't find new data, retrying in {:?}",
+                        "didn't find new data, retrying in ~{:?} (+/- jitter)",
                         sleeps.next_sleep(),
                     );
                     sleep_fut.set(
@@ -1015,14 +1015,14 @@ where
                 Err(err) => {
                     if retry.attempt() >= INFO_MIN_ATTEMPTS {
                         info!(
-                            "apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}",
+                            "apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in ~{:?} (+/- jitter): {}",
                             cmd.name,
                             retry.next_sleep(),
                             err
                         );
                     } else {
                         debug!(
-                            "apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}",
+                            "apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in ~{:?} (+/- jitter): {}",
                             cmd.name,
                             retry.next_sleep(),
                             err
@@ -1189,14 +1189,14 @@ where
             Err(err) => {
                 if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
-                        "external operation {} failed, retrying in {:?}: {}",
+                        "external operation {} failed, retrying in ~{:?} (+/- jitter): {}",
                         metrics.name,
                         retry.next_sleep(),
                         err.display_with_causes()
                     );
                 } else {
                     debug!(
-                        "external operation {} failed, retrying in {:?}: {}",
+                        "external operation {} failed, retrying in ~{:?} (+/- jitter): {}",
                         metrics.name,
                         retry.next_sleep(),
                         err.display_with_causes()
@@ -1238,7 +1238,7 @@ where
                 // helpful. As a result, this intentionally ignores
                 // INFO_MIN_ATTEMPTS and always logs at debug.
                 debug!(
-                    "external operation {} failed, retrying in {:?}: {}",
+                    "external operation {} failed, retrying in ~{:?} (+/- jitter): {}",
                     metrics.name,
                     retry.next_sleep(),
                     err.display_with_causes()

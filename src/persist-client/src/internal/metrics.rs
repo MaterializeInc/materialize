@@ -1082,7 +1082,9 @@ impl MetricsRetryStream {
         self.retry.attempt()
     }
 
-    /// The next sleep (without jitter for easy printing in logs).
+    /// The next sleep (nominal value, without jitter, for easy printing in
+    /// logs). The actual sleep performed by [Self::sleep] is this value
+    /// adjusted by a random jitter factor.
     pub fn next_sleep(&self) -> Duration {
         self.retry.next_sleep()
     }
@@ -1093,9 +1095,9 @@ impl MetricsRetryStream {
     /// accidental mis-use.
     pub async fn sleep(self) -> Self {
         self.retries.inc();
-        self.sleep_seconds
-            .inc_by(self.retry.next_sleep().as_secs_f64());
-        let retry = self.retry.sleep().await;
+        let (retry, slept) = self.retry.sleep().await;
+        // Record the actual (jittered) duration we slept, not the nominal one.
+        self.sleep_seconds.inc_by(slept.as_secs_f64());
         MetricsRetryStream {
             retry,
             retries: self.retries,
