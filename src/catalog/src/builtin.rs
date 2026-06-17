@@ -1225,8 +1225,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_SUMMARIES_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_SUMMARIES),
-        Builtin::View(&MZ_DATAFLOW_OPERATOR_FRONTIERS_PER_WORKER),
-        Builtin::View(&MZ_DATAFLOW_OPERATOR_FRONTIERS),
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION),
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER),
@@ -1236,6 +1234,9 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
+        // After the reachability and channel-operator views they depend on.
+        Builtin::View(&MZ_DATAFLOW_OPERATOR_FRONTIERS_PER_WORKER),
+        Builtin::View(&MZ_DATAFLOW_OPERATOR_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS_PER_WORKER),
         Builtin::View(&MZ_MESSAGE_COUNTS),

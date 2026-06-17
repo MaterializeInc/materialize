@@ -69,6 +69,7 @@ pub fn initialize(
         start_offset,
         t_event_queue: EventQueue::new("t"),
         r_event_queue: EventQueue::new("r"),
+        s_event_queue: EventQueue::new("s"),
         d_event_queue: EventQueue::new("d"),
         c_event_queue: EventQueue::new("c"),
         shared_state: Default::default(),
@@ -100,6 +101,14 @@ pub fn initialize(
 
 pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, Diff)>);
 
+/// A projected operator-summary event: the operator id, plus one
+/// `(input_port, output_port, outer_impact, summary_detail)` entry per path-summary element of
+/// the operator's internal connectivity.
+///
+/// `outer_impact` is the path summary's effect on the outer timestamp (`0` = identity / inner-only,
+/// as for a WMR feedback `+1`). `summary_detail` is a debug rendering of the path-summary element.
+pub(super) type SummaryEvent = (usize, Vec<(usize, usize, Timestamp, String)>);
+
 struct LoggingContext<'a> {
     worker: &'a mut timely::worker::Worker,
     config: &'a LoggingConfig,
@@ -108,6 +117,7 @@ struct LoggingContext<'a> {
     start_offset: Duration,
     t_event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     r_event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>, 3>,
+    s_event_queue: EventQueue<Column<(Duration, SummaryEvent)>, 3>,
     d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
@@ -140,6 +150,7 @@ impl LoggingContext<'_> {
                 scope,
                 self.config,
                 self.t_event_queue.clone(),
+                self.s_event_queue.clone(),
                 Rc::clone(&self.shared_state),
                 self.storage_log_reader.take(),
             );
@@ -224,12 +235,12 @@ impl LoggingContext<'_> {
     ///
     /// Inserts a logger with the name `timely/summary/{type_name::<T>()}`, following
     /// Timely naming convention.
-    fn register_summary_logger<T>(&self, registry: &mut Registry)
+    fn register_summary_logger<T>(&self, registry: &mut Registry, index: usize)
     where
         T: timely::progress::Timestamp,
         T::Summary: ExtractSummary + std::fmt::Debug,
     {
-        let logger = self.summary_logger::<T>();
+        let logger = self.summary_logger::<T>(index);
         let type_name = std::any::type_name::<T>();
         registry.insert_logger(&format!("timely/summary/{type_name}"), logger);
     }
@@ -249,11 +260,12 @@ impl LoggingContext<'_> {
         self.register_reachability_logger::<Timestamp>(&mut register, 0);
         self.register_reachability_logger::<Product<Timestamp, PointStamp<u64>>>(&mut register, 1);
         self.register_reachability_logger::<(Timestamp, Subtime)>(&mut register, 2);
-        // Operator-summary loggers. These project into shared state (drained by the timely
-        // demux), so unlike reachability they need no per-type event-queue link.
-        self.register_summary_logger::<Timestamp>(&mut register);
-        self.register_summary_logger::<Product<Timestamp, PointStamp<u64>>>(&mut register);
-        self.register_summary_logger::<(Timestamp, Subtime)>(&mut register);
+        // Operator-summary loggers, one unique link per timestamp type (as for reachability).
+        // The replayed streams feed the timely demux as a second input, so summaries are emitted
+        // and retracted on the same operator lifecycle as `operates`/`addresses`.
+        self.register_summary_logger::<Timestamp>(&mut register, 0);
+        self.register_summary_logger::<Product<Timestamp, PointStamp<u64>>>(&mut register, 1);
+        self.register_summary_logger::<(Timestamp, Subtime)>(&mut register, 2);
         register.insert_logger("differential/arrange", d_logger);
         register.insert_logger("materialize/compute", c_logger.clone());
 
@@ -346,34 +358,52 @@ impl LoggingContext<'_> {
     /// indexed by input port). It projects each path-summary element onto the outer
     /// timestamp dimension and pushes the rows into shared state, where the timely demux
     /// picks them up — the demux owns operator lifecycle and retracts the rows on shutdown.
-    fn summary_logger<T>(&self) -> Logger<TimelySummaryEventBuilder<T::Summary>>
+    fn summary_logger<T>(&self, index: usize) -> Logger<TimelySummaryEventBuilder<T::Summary>>
     where
         T: timely::progress::Timestamp,
         T::Summary: ExtractSummary + std::fmt::Debug,
     {
-        let shared_state = Rc::clone(&self.shared_state);
+        let link = Rc::clone(&self.s_event_queue.links[index]);
+        let mut logger = BatchLogger::new(link, self.interval_ms);
+        let mut massaged: Vec<(usize, usize, Timestamp, String)> = Vec::new();
+        let mut builder = ColumnBuilder::default();
+        let activator = self.s_event_queue.activator.clone();
 
-        let action = move |_batch_time: &Duration,
+        let action = move |batch_time: &Duration,
                            data: &mut Option<Vec<(Duration, OperatesSummaryEvent<T::Summary>)>>| {
-            let Some(data) = data else {
-                return;
-            };
-            let mut shared_state = shared_state.borrow_mut();
-            for (_time, OperatesSummaryEvent { id, summary }) in data.drain(..) {
-                // `summary` is indexed by input port; each `PortConnectivity` maps an
-                // output port to an antichain of path summaries.
-                for (input_port, port_connectivity) in summary.iter().enumerate() {
-                    for (output_port, antichain) in port_connectivity.iter_ports() {
-                        for element in antichain.elements() {
-                            shared_state.pending_operator_summaries.push((
-                                id,
-                                input_port,
-                                output_port,
-                                element.outer_impact(),
-                                format!("{element:?}"),
-                            ));
+            if let Some(data) = data {
+                for (time, OperatesSummaryEvent { id, summary }) in data.drain(..) {
+                    // `summary` is indexed by input port; each `PortConnectivity` maps an
+                    // output port to an antichain of path summaries. Project each element onto
+                    // the outer timestamp.
+                    for (input_port, port_connectivity) in summary.iter().enumerate() {
+                        for (output_port, antichain) in port_connectivity.iter_ports() {
+                            for element in antichain.elements() {
+                                massaged.push((
+                                    input_port,
+                                    output_port,
+                                    element.outer_impact(),
+                                    format!("{element:?}"),
+                                ));
+                            }
                         }
                     }
+
+                    builder.push_into((time, (id, &massaged)));
+                    massaged.clear();
+
+                    while let Some(container) = builder.extract() {
+                        logger.publish_batch(std::mem::take(container));
+                    }
+                }
+            } else {
+                // Handle a flush.
+                while let Some(container) = builder.finish() {
+                    logger.publish_batch(std::mem::take(container));
+                }
+
+                if logger.report_progress(*batch_time) {
+                    activator.activate();
                 }
             }
         };

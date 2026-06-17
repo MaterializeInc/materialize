@@ -21,7 +21,7 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::Scope;
@@ -38,6 +38,7 @@ use tracing::error;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ComputeEvent, DataflowShutdown};
+use crate::logging::initialize::SummaryEvent;
 use crate::logging::{
     EventQueue, LogVariant, OutputSessionColumnar, OutputSessionVec, PermutedRowPacker, TimelyLog,
     Update,
@@ -62,6 +63,7 @@ pub(super) fn construct(
     scope: Scope<'_, Timestamp>,
     config: &LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
+    summary_event_queue: EventQueue<Column<(Duration, SummaryEvent)>, 3>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
     storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 ) -> Return {
@@ -98,10 +100,27 @@ pub(super) fn construct(
             None => Rc::new(()),
         };
 
+        // Replay the operator-summary streams (one link per timestamp type). These feed the demux
+        // as a second input so summaries share the operator lifecycle: emitted on build, retracted
+        // on shutdown. Summaries carry a `String` and have no retraction event of their own, so
+        // routing them through the demux (which owns `Shutdown`) is what lets them be retracted.
+        let (summary_logs, summary_token) = if enable_logging {
+            summary_event_queue.links.mz_replay(
+                scope,
+                "summary logs",
+                config.interval,
+                summary_event_queue.activator,
+            )
+        } else {
+            let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
+            (empty(scope), token)
+        };
+
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Timely Logging Demux".to_string(), scope.clone());
         let mut input = demux.new_input(logs, Pipeline);
+        let mut summary_input = demux.new_input(summary_logs, Pipeline);
         let (operates_out, operates) = demux.new_output();
         let mut operates_out = OutputBuilder::from(operates_out);
         let (channels_out, channels) = demux.new_output();
@@ -142,6 +161,36 @@ pub(super) fn construct(
                 let mut schedules_duration = schedules_duration_out.activate();
                 let mut schedules_histogram = schedules_histogram_out.activate();
                 let mut summaries = summaries_out.activate();
+
+                // Process operator summaries first, so that an operator's summary is recorded
+                // before a shutdown for the same operator in this batch can retract it.
+                summary_input.for_each(|cap, data| {
+                    let mut session = summaries.session_with_builder(&cap);
+                    for (duration, (id, rows)) in data.borrow().into_index_iter() {
+                        let ts: Timestamp = ((duration.as_millis() / logging_interval_ms + 1)
+                            * logging_interval_ms)
+                            .try_into()
+                            .expect("must fit");
+                        // If the operator already shut down (its summary arrived late, on this
+                        // separate stream), drop the summary rather than emit an un-retractable +1.
+                        if demux_state.shutdown_before_summary.remove(&id) {
+                            continue;
+                        }
+                        let mut owned = Vec::new();
+                        for (input_port, output_port, outer_impact, detail) in
+                            rows.into_index_iter()
+                        {
+                            let detail = std::str::from_utf8(detail).expect("valid string");
+                            session.give((
+                                ((id, input_port, output_port, outer_impact, detail), ()),
+                                ts,
+                                Diff::ONE,
+                            ));
+                            owned.push((input_port, output_port, outer_impact, detail.to_owned()));
+                        }
+                        demux_state.operator_summaries.insert(id, owned);
+                    }
+                });
 
                 input.for_each(|cap, data| {
                     let mut output_buffers = DemuxOutput {
@@ -449,8 +498,11 @@ pub(super) fn construct(
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
-                let combined_token: Rc<dyn std::any::Any> =
-                    Rc::new((Rc::clone(&token), Rc::clone(&storage_token)));
+                let combined_token: Rc<dyn std::any::Any> = Rc::new((
+                    Rc::clone(&token),
+                    Rc::clone(&storage_token),
+                    Rc::clone(&summary_token),
+                ));
                 let collection = LogCollection {
                     trace,
                     token: combined_token,
@@ -484,9 +536,11 @@ struct DemuxState {
     /// Emitted operator-summary rows, keyed by operator ID, retained so they can be retracted
     /// when the operator shuts down. Each value is `(input_port, output_port, outer_impact, detail)`.
     operator_summaries: BTreeMap<usize, Vec<(usize, usize, Timestamp, String)>>,
-    /// Operators whose shutdown was observed before their summary was drained from shared state.
-    /// Their summary, once drained, must be dropped rather than emitted (it would never be
-    /// retracted). Entries are cleared when the corresponding summary is drained.
+    /// Operators whose shutdown was observed (on the timely input) before their summary arrived
+    /// (on the separate summary input). The late summary must then be dropped rather than emitted,
+    /// since there is no longer a shutdown to retract it. This set is bounded: Timely logs exactly
+    /// one `OperatesSummaryEvent` per operator, so every entry is removed once that operator's
+    /// (single) summary arrives.
     shutdown_before_summary: BTreeSet<usize>,
 }
 
@@ -599,10 +653,6 @@ impl DemuxHandler<'_, '_, '_> {
     fn handle(&mut self, event: TimelyEvent) {
         use TimelyEvent::*;
 
-        // Emit any operator summaries logged (on the separate per-timestamp-type streams) since
-        // the last event. Done here so emission shares the operator lifecycle owned by this demux.
-        self.drain_summaries();
-
         match event {
             Operates(e) => self.handle_operates(e),
             Channels(e) => self.handle_channels(e),
@@ -611,43 +661,6 @@ impl DemuxHandler<'_, '_, '_> {
             Messages(e) => self.handle_messages(e),
             Schedule(e) => self.handle_schedule(e),
             _ => (),
-        }
-    }
-
-    /// Drain operator-summary rows accumulated by the summary loggers in shared state, emitting
-    /// each (`+1`) and retaining it for retraction at the operator's shutdown. Rows for operators
-    /// already shut down (summary arrived late) are dropped instead of emitted.
-    fn drain_summaries(&mut self) {
-        if self.shared_state.pending_operator_summaries.is_empty() {
-            return;
-        }
-        let ts = self.ts();
-        let pending = std::mem::take(&mut self.shared_state.pending_operator_summaries);
-        let mut handled_dead = BTreeSet::new();
-        for (id, input_port, output_port, outer_impact, detail) in pending {
-            if self.state.shutdown_before_summary.contains(&id) {
-                handled_dead.insert(id);
-                continue;
-            }
-            // Push borrows `detail` as `&str` (the columnar `Strings` column accepts `&str`, not
-            // an owned `String`); the borrow ends before `detail` is moved into the state below.
-            self.output.summaries.give((
-                (
-                    (id, input_port, output_port, outer_impact, detail.as_str()),
-                    (),
-                ),
-                ts,
-                Diff::ONE,
-            ));
-            self.state.operator_summaries.entry(id).or_default().push((
-                input_port,
-                output_port,
-                outer_impact,
-                detail,
-            ));
-        }
-        for id in handled_dead {
-            self.state.shutdown_before_summary.remove(&id);
         }
     }
 
@@ -689,18 +702,11 @@ impl DemuxHandler<'_, '_, '_> {
         // operator announcement.
         // Remove logging for this operator.
 
-        let Some(operator) = self.state.operators.remove(&event.id) else {
-            error!(operator_id = ?event.id, "missing operator entry at time of shutdown");
-            return;
-        };
-
-        // Retract operator information.
         let ts = self.ts();
-        let datum = (operator.id, operator.name);
-        self.output.operates.give((datum, ts, Diff::MINUS_ONE));
 
-        // Retract operator-summary rows. If the summary has not been drained yet (it lives on a
-        // separate stream), mark the operator so the summary is dropped rather than emitted.
+        // Retract operator-summary rows. If the summary has not arrived yet (it lives on a separate
+        // stream), mark the operator so the late summary is dropped rather than emitted. Done before
+        // the `operators` lookup below so it runs even on the (unexpected) missing-operator path.
         match self.state.operator_summaries.remove(&event.id) {
             Some(rows) => {
                 for (input_port, output_port, outer_impact, detail) in &rows {
@@ -724,6 +730,15 @@ impl DemuxHandler<'_, '_, '_> {
                 self.state.shutdown_before_summary.insert(event.id);
             }
         }
+
+        let Some(operator) = self.state.operators.remove(&event.id) else {
+            error!(operator_id = ?event.id, "missing operator entry at time of shutdown");
+            return;
+        };
+
+        // Retract operator information.
+        let datum = (operator.id, operator.name);
+        self.output.operates.give((datum, ts, Diff::MINUS_ONE));
 
         // Retract schedules information for the operator
         if let Some(schedules) = self.state.schedules_data.remove(&event.id) {

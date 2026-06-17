@@ -2008,10 +2008,19 @@ pub static MZ_DATAFLOW_OPERATOR_FRONTIERS_PER_WORKER: LazyLock<BuiltinView> =
         // The output frontier of each dataflow operator, reconstructed from progress
         // reachability and the operator graph. Held capabilities (`held`) are propagated
         // forward along channels (`edges`); an operator's frontier is the minimum
-        // capability time reachable to it (including its own). Outer-time path summaries
-        // are identity in compute dataflows, so edges transfer the frontier unchanged
-        // (see `mz_dataflow_operator_summaries.outer_impact`), and a recursive cycle (WMR)
-        // resolves to a single shared frontier across its operators.
+        // capability time reachable to it (including its own). A recursive cycle (WMR)
+        // resolves to a single shared frontier across its operators (the `UNION` over a
+        // finite `(id, worker_id, t)` domain bounds the recursion).
+        //
+        // ASSUMPTION: outer-time path summaries are identity, so each edge transfers the
+        // frontier unchanged. This holds for all compute dataflows today — every
+        // `mz_dataflow_operator_summaries.outer_impact` is `0`, because scope ingress/egress
+        // and feedback (`+1`) summaries act only on the inner iteration coordinate. If an
+        // operator ever imposed a non-zero outer delay, this view would under-report its
+        // downstream frontiers. Folding `outer_impact` in would require port-level
+        // propagation (the summary is keyed by input/output port) and is left as follow-up;
+        // `outer_impact` is surfaced in `mz_dataflow_operator_summaries` so the assumption
+        // is observable.
         sql: "
 WITH MUTUALLY RECURSIVE
     held(id uint8, worker_id uint8, t mz_timestamp) AS (
