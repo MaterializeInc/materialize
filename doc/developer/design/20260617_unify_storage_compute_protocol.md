@@ -57,7 +57,8 @@ SS-199 itself; the fix lands with the runtime-unification follow-up.
   storage and compute runtimes.
   Runtime unification is the follow-up that the total order enables.
 * Extending sequential hydration to storage collections.
-  Storage has no `Schedule`/suspend protocol; adding one is a separate feature.
+  Storage would benefit from the same hardening, but it is compute-only today and
+  applying it to storage is a separate follow-up (see Alternatives).
 * Independent failure domains for storage and compute.
   We accept shared fate, consistent with the existing recommendation to keep
   storage and compute objects on separate replicas.
@@ -97,6 +98,8 @@ A single physical connection per process is deliberate: CTP is framed FIFO, so
 the wire preserves the task's send order with no explicit sequence number in the
 happy path, and one connection matches the accepted shared-fate model (the
 connection dies, both subsystems' incarnation ends).
+The single CTP `version` now covers both subsystems; a shared version is
+acceptable, since storage and compute are already built and rolled out together.
 
 ### Delegating `PartitionedState`
 
@@ -143,6 +146,18 @@ The single union `Partitioned` client owns the write, so there is no separate
 sequencer to build and no second writer to race with.
 `specialize_command` (Hello nonce, `CreateInstance`/config) is dispatched by
 variant.
+
+All three `select!` branches must be cancel safe, since a branch may be dropped
+when another fires.
+Both command channels use `mpsc::UnboundedReceiver::recv`, which is documented
+cancel safe, and `GenericClient::recv` (here the union `Partitioned`) is required
+to be cancel safe — the existing per-subsystem loops already depend on exactly
+this.
+The `client.send` calls inside a branch are not cancel safe, but they execute to
+completion within the selected branch before the loop polls `select!` again,
+exactly as in today's `client.send(command).await?`.
+This must be re-checked against the union `Partitioned` and the hydration state
+machine when implemented.
 
 ### Cluster-side demultiplexer
 
@@ -195,6 +210,11 @@ supervisor merge:
   into its command channel; only failure detection, respawn, and epoch are
   unified.
 
+Reconciliation is order-independent: there is no dependence between storage and
+compute reconciliation as long as the protocol invariants hold, so the order in
+which the two controllers replay is irrelevant.
+Where a choice is forced, reconcile compute first by slight preference.
+
 ## Minimal Viable Prototype
 
 Land the union type, delegating `PartitionedState`, unified `ReplicaTask`, and
@@ -208,12 +228,12 @@ nothing yet.
 
 ### Sequential hydration for all objects, including storage
 
-Rejected.
-Storage broadcasts every command and self-coordinates ordering internally; it
-has no `Schedule`/suspend protocol.
-Gating storage through sequential hydration would require inventing a
-storage-side suspend mechanism — a separate feature with changed semantics, not
-step-1 plumbing.
+Deferred, not rejected.
+Storage does not gate hydration today, but it would benefit from the same
+hardening; the only reason it is compute-only so far is that compute has the more
+complex setups where the limit matters most.
+Applying the mechanism to storage is a reasonable follow-up, but it is out of
+scope for step 1, which must stay behavior-preserving.
 
 ### Keep `SequentialHydration` as a wrapper, generalized to `ClusterCommand`, in front of the unified task
 
@@ -248,11 +268,14 @@ intrinsically, with no separate component to keep consistent.
   a respawn can distinguish stale storage responses.
   Confirm there is no other storage-side assumption that the absence of an epoch
   encodes.
-* **Protocol versioning.**
-  CTP `connect` takes a single `version`.
-  Unifying the connection means storage and compute are versioned together from
-  now on; confirm this does not break independent rollout assumptions.
-* **Reconcile ordering on respawn.**
-  Both controllers replay into the fresh task; confirm there is no implicit
-  dependency on storage reconciling before compute (or vice versa) that the
-  separate-connection model accidentally provided.
+
+Resolved during review:
+
+* **Protocol versioning** — a single shared CTP `version` is acceptable; storage
+  and compute are already built and rolled out together.
+* **Reconcile ordering on respawn** — reconciliation is order-independent; there
+  is no storage/compute dependence. Reconcile compute first by slight preference
+  if a choice is forced.
+* **Select-branch cancel safety** — both command `mpsc` receivers and
+  `GenericClient::recv` are cancel safe; re-verify against the union
+  `Partitioned` and the hydration state machine at implementation time.
