@@ -19,13 +19,11 @@ use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
-use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+#[cfg(feature = "tracing")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "tracing")]
 use tracing::error;
-
-use crate::str::separated;
 
 /// The red zone is the amount of stack space that must be available on the
 /// current stack in order for [`maybe_grow`] to call the supplied closure
@@ -260,18 +258,25 @@ impl RecursionGuard {
 #[derive(Debug)]
 pub struct RecursionLimitError {
     limit: usize,
-    id: u64,
+    id: Option<u64>,
 }
 
 impl RecursionLimitError {
     /// Emits a backtrace of the too-deep recursion to logs
     /// and produces
     pub fn new(limit: usize) -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "tracing")]
+        let id = {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let id = COUNTER.fetch_add(1, Ordering::Relaxed);
 
-        let backtrace = Backtrace::force_capture().to_string();
-        error!(backtrace = %backtrace, "recursion limit error (backtrace id #{id})");
+            let backtrace = Backtrace::force_capture().to_string();
+            error!(backtrace = %backtrace, "recursion limit error (backtrace id #{id})");
+
+            Some(id)
+        };
+        #[cfg(not(feature = "tracing"))]
+        let id = None;
 
         RecursionLimitError { limit, id }
     }
@@ -280,10 +285,11 @@ impl RecursionLimitError {
 impl fmt::Display for RecursionLimitError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let RecursionLimitError { limit, id } = self;
-        writeln!(
-            f,
-            "exceeded recursion limit of {limit} (backtrace id #{id} in logs)",
-        )
+        write!(f, "exceeded recursion limit of {limit}",)?;
+        if let Some(id) = id {
+            write!(f, " (backtrace id #{id} in logs)")?;
+        }
+        writeln!(f)
     }
 }
 
