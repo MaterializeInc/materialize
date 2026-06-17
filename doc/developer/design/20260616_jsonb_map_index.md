@@ -92,13 +92,24 @@ occupy the first `len - 4 * n` bytes. Empty maps keep an **empty** payload (no
 suffix), so they stay byte-identical to `DatumMap::empty()` and the encoding of
 every value remains canonical.
 
-The index is built once, at the end of `RowPacker::push_dict_with`
-(`finish_dict`), by walking the just-written entries. Because this runs on the
-hot path that decodes every `Row` out of persist, it is written to be cheap: the
-suffix layout lets us **append** the index instead of splicing it in front (no
-memmove), and each offset is written straight into the buffer as it is computed
-(no temporary allocation). The only inherent cost is the single `O(n)` walk of
-the entries. Pushing an existing `Datum::Map` copies its bytes verbatim, so the
+The index is built once, when a map is packed, as a suffix that is **appended**
+rather than spliced in front (no memmove). There are two builders:
+
+* `RowPacker::push_dict_with` (`finish_dict`) handles the general closure that
+  pushes arbitrary datums. It cannot know entry boundaries up front, so it walks
+  the just-written entries once to recover them — an `O(n)` re-pass.
+* `RowPacker::push_indexed_dict_with` (`DictBuilder` + `finish_dict_from_offsets`)
+  is used by the callers that already iterate entry-by-entry: JSON packing
+  (`jsonb::pack_dict`) and the columnar/proto decode paths. Each `push_entry`
+  records the entry's start offset as it writes it, so the suffix is built with
+  **no re-walk**. Offsets accumulate in an inline `SmallVec` (no heap allocation
+  for typical objects). The two builders emit byte-identical suffixes, so the map
+  encoding stays canonical regardless of which path produced it.
+
+The re-walk matters because Jsonb persists as JSON **text** (Arrow `Utf8`), and
+every decode out of persist re-parses it through `jsonb::pack_dict`; routing that
+path through the push-time builder removes the redundant pass entirely (see
+Performance). Pushing an existing `Datum::Map` copies its bytes verbatim, so the
 index is never rebuilt or duplicated.
 
 `DatumMap::iter()` skips the header (so the columnar encoder, proto conversion,
@@ -128,19 +139,25 @@ awkward. Reverting is a redeploy.
 
 * Single access: `O(n)` → `O(log n)`.
 * "JSON to columns" (`k` fields): `O(n * k)` → `O(k * log n)` per row.
-* Cost: a `4 * n`-byte header per non-empty map (memory + a memmove at pack
-  time). Negligible for typical objects; see follow-ups if write-heavy
-  ingestion of large maps regresses.
+* Cost: a `4 * n`-byte suffix per non-empty map (memory only — appended, no
+  memmove). On the hot decode/JSON-pack paths the index is built without a
+  re-walk and without a heap allocation for typical objects.
 
 The `JsonbToColumns` Feature Benchmark scenario
 (`misc/python/materialize/feature_benchmark/scenarios/benchmark_main.py`) reads
 50 fields back out of a 50-key object per row and aggregates, exercising exactly
-this path.
+this path. The `jsonb_to_columns` group in `src/repr/benches/row.rs` isolates the
+same workload at the `repr` layer (decode, indexed access, and a linear-scan
+baseline). On a 50-key object × 10k rows it measures indexed access at ~7× the
+linear scan, and decode + access at ~3× the pre-index path; the push-time builder
+removes the decode re-walk (~13% off decode alone). Note the decode cost is
+dominated by re-parsing the JSON text, not by field access — so the index's win
+is largest when access dominates (large objects, many lookups).
 
 ## Follow-ups
 
-* Consider `SmallVec`/scratch reuse in `finish_dict` to avoid per-map
-  allocations on write-heavy paths.
+* The generic `finish_dict` (closure-based `push_dict_with`) still re-walks; if a
+  hot write path is found to use it, give it a push-time builder too.
 * Idea 1 (multi-output `jsonb_access`) for the `k ≈ n` "explode everything"
   case, where a single `O(n)` decode wins.
 * The same index trick could extend to list element access if profiling shows

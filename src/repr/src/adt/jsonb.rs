@@ -550,12 +550,11 @@ fn pack_dict<'a, 'scratch>(
     // value for the key, as ordered by appearance in the source JSON, per
     // PostgreSQL's implementation.
     scratch.sort_by_key(|entry| entry.key);
-    packer.push_dict_with(|packer| {
+    packer.push_indexed_dict_with(|builder| {
         for i in 0..scratch.len() {
             if i == scratch.len() - 1 || scratch[i].key != scratch[i + 1].key {
                 let DictEntry { key, val } = scratch[i];
-                packer.push(Datum::String(key));
-                pack_value(packer, scratch.fresh(), val);
+                builder.push_entry(key, |packer| pack_value(packer, scratch.fresh(), val));
             }
         }
     });
