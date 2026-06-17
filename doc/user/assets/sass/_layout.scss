@@ -94,7 +94,7 @@ table.inline-headings {
 
             .DocSearch-Button-Placeholder,
             .DocSearch-Search-Icon {
-                color: var(--important);
+                color: #2bddc2;
             }
 
             .DocSearch-Button-Key {
@@ -199,7 +199,7 @@ table.inline-headings {
     overflow-y: auto;
     height: calc(100vh - var(--nav-height));
     display: flex;
-    font-size: rem(1.45);
+    font-size: rem(1.3);
     overflow-x: hidden;
     overscroll-behavior: contain;
 
@@ -249,7 +249,7 @@ table.inline-headings {
                 bottom: rem(0.7);
                 left: rem(0.35);
                 width: 1px;
-                background: var(--highlight);
+                background: #2bddc2;
             }
         }
 
@@ -355,6 +355,7 @@ table.inline-headings {
     }
 
     li.level-2>a {
+        font-size: rem(1.5);
         padding-left: 10px;
         margin-left: -10px;
 
@@ -364,6 +365,7 @@ table.inline-headings {
     }
 
     li.level-3>a {
+        font-size: rem(1.5);
         padding-left: 10px;
         margin-left: -10px;
 
@@ -373,6 +375,7 @@ table.inline-headings {
     }
 
     li.level-4>a {
+        font-size: rem(1.5);
         padding-left: 10px;
         margin-left: -10px;
 
@@ -452,18 +455,18 @@ table.inline-headings {
     }
 
     .btn-ghost {
-        margin: var(--x-small) var(--milli) var(--milli);
+        margin: 0 rem(2) var(--pico);
     }
 }
 
 .toc {
     max-width: fit-content;
     min-width: 180px;
-    padding: var(--x-small) rem(2);
+    padding: var(--nano) rem(2);
     position: sticky;
     top: 0;
     overflow-y: auto;
-    font-size: var(--sm);
+    font-size: rem(1.45);
     padding-bottom: 8.5rem;
     height: 100vh;
 
@@ -472,37 +475,58 @@ table.inline-headings {
     }
 
     h2 {
-        font-size: var(--xsm);
-        letter-spacing: 0.1em;
-        margin: 0 0 rem(0.75) 0;
+        font-size: rem(1.4);
+        font-weight: 300;
+        letter-spacing: 0;
+        margin: 0 0 rem(1.4) 0;
         padding: 0;
         display: inline-block;
-        color: var(--highlight);
-        text-transform: uppercase;
+        color: var(--sub);
+        text-transform: none;
     }
 
     ul {
+        border-left: 2px solid var(--divider-light);
         list-style-type: none;
         margin: 0;
-        padding: 0;
+        padding: 0 0 0 rem(1.4);
     }
 
     ul ul {
-        margin-left: var(--milli);
+        border-left: none;
+        margin-left: 0;
+        padding-left: rem(1.4);
     }
 
     li {
-        padding: rem(0.25) 0;
+        padding: rem(0.35) 0;
     }
 
     a {
+        display: block;
+        color: var(--sub);
+        font-weight: 300;
+        line-height: 1.35;
+        position: relative;
         text-decoration: none;
 
         &.active {
 
             &,
             code {
-                font-weight: 400;
+                color: #2bddc2 !important;
+                font-weight: inherit;
+                text-shadow: 0 0 0.35px currentColor;
+            }
+
+            &::before {
+                content: "";
+                position: absolute;
+                top: rem(0.1);
+                bottom: rem(0.1);
+                left: calc(-1 * #{rem(1.4)} - 2px);
+                width: 2px;
+                background: #2bddc2;
             }
         }
 
@@ -512,9 +536,13 @@ table.inline-headings {
 
             &,
             code {
-                color: var(--highlight);
                 text-decoration: none;
             }
+        }
+
+        &:hover,
+        &:focus {
+            color: var(--important);
         }
     }
 
@@ -522,11 +550,31 @@ table.inline-headings {
         font-family: "Geist Mono", Courier, monospace;
         font-variant-ligatures: none;
     }
+
+    .toc-scroll-top {
+        display: block;
+        margin-top: var(--x-small);
+        padding-top: var(--x-small);
+        border-top: 1px solid var(--divider-light);
+        color: var(--sub);
+        font-size: var(--sm);
+        font-weight: 300;
+        text-decoration: none;
+
+        &:hover,
+        &:focus {
+            color: var(--important);
+            text-decoration: none;
+        }
+    }
 }
 
-.sidebar a,
-.toc a {
+.sidebar a {
     white-space: initial;
+}
+
+.toc a {
+    white-space: nowrap;
 }
 
 .footer {

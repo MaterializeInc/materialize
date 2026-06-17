@@ -37,6 +37,7 @@
   <div class="toc">
     <h2 class="gradient_text dark">On this page</h2>
     <nav id="TableOfContents">{{ .TableOfContents }}</nav>
+    <a href="#top" class="toc-scroll-top">Scroll to top ↑</a>
   </div>
   {{end}}
 </aside>
@@ -217,6 +218,12 @@
     const $clickedLink = $(this);
     const href = $clickedLink.attr("href");
     if (!href || !href.startsWith("#")) return;
+
+    if (href === "#top") {
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
 
     const targetId = href.substring(1); // Remove the # from href
     const targetElement = document.getElementById(targetId);

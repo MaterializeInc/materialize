@@ -67,6 +67,28 @@ $rem-scale: 0.585;
     --gray-lightest: #eeeeee;
 
     --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} #{rem(0)} rgba(0, 0, 0, 0.08);
+
+    --table-surface: #111115;
+    --table-surface-raised: #15151a;
+    --table-surface-header: #19191f;
+    --table-border: #2a2b32;
+    --table-grid: #24252b;
+    --table-heading: #5e606a;
+    --table-text: #d9d9de;
+    --table-body: #a3a3ad;
+    --table-muted: #5f606a;
+    --table-link: #8b97ff;
+    --table-green: #3ff47a;
+    --table-green-bg: #0f2a1c;
+    --table-green-border: #1b5d37;
+    --table-blue: #8b97ff;
+    --table-blue-bg: #1b1d33;
+    --table-blue-border: #333b75;
+    --table-orange: #ff9a3d;
+    --table-orange-bg: #332113;
+    --table-orange-border: #704017;
+    --table-radius: 14px;
+    --table-shadow: 0 18px 50px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
 }
 
 body.dark {
