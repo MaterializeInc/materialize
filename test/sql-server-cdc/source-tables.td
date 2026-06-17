@@ -73,6 +73,13 @@ a "hello world"
 b "foobar"
 c "anotha one"
 
+# Regression test for database-issues#10010: the fully-qualified 3-part
+# `REFERENCE` (database.schema.table) printed by `SHOW CREATE TABLE` must
+# round-trip back into a `CREATE TABLE`.
+>[version>=2603000] CREATE TABLE t_roundtrip FROM SOURCE ms_src (REFERENCE test.dbo.t1_pk);
+
+>[version>=2603000] DROP TABLE t_roundtrip;
+
 # source tables see updates
 $ sql-server-execute name=sql-server
 DELETE FROM t1_pk WHERE key_col = 'a';
