@@ -17,12 +17,13 @@
 
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use tracing::error;
 
 use crate::str::separated;
 
@@ -259,92 +260,30 @@ impl RecursionGuard {
 #[derive(Debug)]
 pub struct RecursionLimitError {
     limit: usize,
-    backtrace: std::io::Result<String>,
+    id: u64,
 }
 
 impl RecursionLimitError {
-    /// Captures a backtrace of the too-deep recursion.
+    /// Emits a backtrace of the too-deep recursion to logs
+    /// and produces
     pub fn new(limit: usize) -> Self {
-        let backtrace = RecursionLimitError::capture_backtrace();
-
-        RecursionLimitError { limit, backtrace }
-    }
-
-    const BACKTRACE_LINES_TO_SAVE_IN_HEAD_AND_TAIL: usize = 50;
-    const BACKTRACE_CAPTURED_FRAMES_THRESHOLD: usize =
-        RecursionLimitError::BACKTRACE_LINES_TO_SAVE_IN_HEAD_AND_TAIL * 2;
-
-    fn capture_backtrace() -> std::io::Result<String> {
-        let (logfile, path) = RecursionLimitError::create_backtrace_logfile()?;
-
-        // capture full log to a file, keeping first and last sections
-        // avoids copying or materializing lines from the captured trace
-        let mut head =
-            Vec::with_capacity(RecursionLimitError::BACKTRACE_LINES_TO_SAVE_IN_HEAD_AND_TAIL);
-        let mut tail =
-            VecDeque::with_capacity(RecursionLimitError::BACKTRACE_LINES_TO_SAVE_IN_HEAD_AND_TAIL);
-        let mut total = 0;
-
-        let mut writer = BufWriter::new(&logfile);
-        let backtrace = Backtrace::force_capture().to_string();
-        for line in backtrace.lines() {
-            writeln!(writer, "{line}")?;
-
-            if total < Self::BACKTRACE_LINES_TO_SAVE_IN_HEAD_AND_TAIL {
-                head.push(line);
-            } else {
-                if tail.len() == Self::BACKTRACE_LINES_TO_SAVE_IN_HEAD_AND_TAIL {
-                    tail.pop_front();
-                }
-                tail.push_back(line);
-            }
-            total += 1;
-        }
-        writer.flush()?;
-        drop(writer);
-
-        let backtrace = if total > RecursionLimitError::BACKTRACE_CAPTURED_FRAMES_THRESHOLD {
-            let head = separated("\n", head);
-            let tail = separated("\n", tail);
-            let path = path.display();
-
-            let omitted = total - RecursionLimitError::BACKTRACE_CAPTURED_FRAMES_THRESHOLD;
-            format!(
-                "{head}\n\n... ({omitted} lines omitted; full backtrace at {path}) ...\n\n{tail}\n",
-            )
-        } else {
-            backtrace
-        };
-
-        Ok(backtrace)
-    }
-
-    // NB we could use `tempfile`, but we want to _keep_ the file (and minimize ore deps).
-    fn create_backtrace_logfile() -> std::io::Result<(std::fs::File, PathBuf)> {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
 
-        let dir = std::env::temp_dir();
-        let pid = std::process::id();
-        loop {
-            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path = dir.join(format!("recursion_limit_error_{pid}_{n}.log"));
-            match std::fs::File::create_new(&path) {
-                Ok(file) => return Ok((file, path)),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(e),
-            }
-        }
+        let backtrace = Backtrace::force_capture().to_string();
+        error!(backtrace = %backtrace, "recursion limit error (backtrace id #{id})");
+
+        RecursionLimitError { limit, id }
     }
 }
 
 impl fmt::Display for RecursionLimitError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "exceeded recursion limit of {}", self.limit)?;
-        writeln!(f, "backtrace:")?;
-        match &self.backtrace {
-            Ok(backtrace) => write!(f, "{backtrace}"),
-            Err(e) => write!(f, "<failed to capture backtrace: {e}>"),
-        }
+        let RecursionLimitError { limit, id } = self;
+        writeln!(
+            f,
+            "exceeded recursion limit of {limit} (backtrace id #{id} in logs)",
+        )
     }
 }
 
