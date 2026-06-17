@@ -246,9 +246,10 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     ) {
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq| {
+            let temp_storage = RowArena::new();
             let mut datums_borrow = datums.borrow();
-            datums_borrow.extend(k);
-            datums_borrow.extend(v);
+            k.extend_datums(&temp_storage, &mut datums_borrow, None);
+            v.extend_datums(&temp_storage, &mut datums_borrow, None);
             SharedRow::pack(&**datums_borrow)
         };
         match &self {
