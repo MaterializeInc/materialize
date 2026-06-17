@@ -21,19 +21,58 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ### Bounded Staleness Isolation Level {#v26.29-bounded-staleness-isolation-level}
 
-New SQL isolation level `BOUNDED STALENESS <duration>` that picks the freshest available read timestamp within a bounded staleness window, returning `SQLSTATE 40001` when no timestamp is available within the specified duration instead of blocking. This provides an explicit ceiling on data staleness without blocking on input frontiers. Writes and `real_time_recency` are rejected under bounded staleness.
+{{< public-preview />}}
+
+Bounded staleness is a new SQL isolation level that lets you set a freshness target for your queries. For example, you can configure a session to only serve data that is at most 10 seconds stale. If sufficiently fresh data is unavailable, the query immediately returns an error (`SQLSTATE 40001`) rather than blocking. This positions bounded staleness between [Serializable](/reference/isolation-level/#serializable) and [Strict Serializable](/reference/isolation-level/#strict-serializable): it never blocks on input frontiers, but errors immediately when the staleness bound cannot be met. Bounded staleness is read-only and can be set at the session or connection level.
+
+```mzsql
+-- Serve data no more than 10 seconds stale; error immediately if unavailable.
+SET TRANSACTION_ISOLATION TO 'bounded staleness 10s';
+
+-- A tighter bound for low-latency dashboards.
+SET TRANSACTION_ISOLATION TO 'bounded staleness 250ms';
+```
+
+For more information, see [Bounded Staleness](/reference/isolation-level/#bounded-staleness).
 
 ### Google Cloud Support for Iceberg Sinks {#v26.29-google-cloud-support-for-iceberg-sinks}
 
-Iceberg sinks now support Google Cloud BigLake catalogs through a new `GCP` connection type for Google service account credentials, with validation of the `token_uri` field at connection creation. AWS connection credentials for Iceberg sinks are now optional.
+{{< private-preview />}}
+
+Iceberg sinks can now deliver data into [GCP Lakehouse](https://docs.cloud.google.com/lakehouse/docs/introduction) managed Iceberg tables via Google Cloud BigLake. A new `GCP` connection type handles Google service account credentials, enabling Materialize to authenticate with BigLake's Iceberg REST catalog. AWS connection credentials for Iceberg sinks are now optional.
+
+```mzsql
+-- Create a GCP service account connection
+CREATE CONNECTION gcp_connection TO GCP (
+  SERVICE ACCOUNT KEY = SECRET gcp_sa_key
+);
+
+-- Create an Iceberg catalog connection using BigLake
+CREATE CONNECTION biglake_catalog TO ICEBERG CATALOG (
+  CATALOG TYPE = 'rest',
+  URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
+  GCP CONNECTION = gcp_connection,
+  WAREHOUSE = 'gs://my-gcs-bucket'
+);
+
+-- Create an Iceberg sink writing into a GCP Lakehouse managed Iceberg table
+CREATE SINK my_gcp_iceberg_sink
+  IN CLUSTER sink_cluster
+  FROM my_materialized_view
+  INTO ICEBERG CATALOG CONNECTION biglake_catalog (
+    NAMESPACE = 'my_namespace',
+    TABLE = 'my_table'
+  )
+  KEY (id)
+  MODE UPSERT
+  WITH (COMMIT INTERVAL = '60s');
+```
+
+For more information, see [Syntax: CREATE SINK... INTO ICEBERG](/sql/create-sink/iceberg).
 
 ### Improvements {#v26.29-improvements}
-
-- **MCP OAuth discovery**: The MCP server now advertises OAuth metadata via RFC 9728 Protected Resource Metadata, enabling MCP clients that use standard OAuth discovery (e.g., Claude Desktop, ChatGPT) to connect to Materialize's MCP endpoints.
 - **Correct SQLSTATEs for evaluation errors**: Evaluation errors such as division by zero, out-of-range casts, and invalid input now return their correct PostgreSQL-standard SQLSTATE codes instead of the generic `XX000` (internal error).
 - **PostgreSQL-compatible binary encoding diagnostics**: When a type has no binary output function (e.g., `list`, `map`, `aclitem`), Materialize now returns PostgreSQL's `SQLSTATE 42883` with the message `no binary output function available for type <t>`.
-- **Self-Managed info-level Prometheus metrics**: Self-managed deployments now expose info-level Prometheus metrics (e.g., `mz_cluster_info`, `mz_cluster_replica_info`) that allow joining metric label IDs with human-readable cluster and object names in Grafana dashboards.
-- **Fivetran Destination removed**: The Fivetran Destination integration has been removed from Materialize.
 
 ### Bug Fixes {#v26.29-bug-fixes}
 
