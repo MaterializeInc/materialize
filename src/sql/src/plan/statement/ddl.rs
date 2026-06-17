@@ -178,6 +178,9 @@ mod connection;
 // more strict.
 const MAX_NUM_COLUMNS: usize = 256;
 
+const MAX_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
 static MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
 
@@ -1221,6 +1224,11 @@ fn plan_kafka_source_connection(
         // This is a librdkafka-enforced restriction that, if violated,
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    }
+    if topic_metadata_refresh_interval < Duration::from_secs(1) {
+        // This is a librdkafka-enforced restriction that, if violated,
+        // would result in a runtime error for the source.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
     let metadata_columns = include_metadata
         .into_iter()
@@ -3795,10 +3803,14 @@ fn kafka_sink_builder(
 
     let topic_name = topic.ok_or_else(|| sql_err!("KAFKA CONNECTION must specify TOPIC"))?;
 
-    if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
+    if topic_metadata_refresh_interval > MAX_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
         // This is a librdkafka-enforced restriction that, if violated,
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    } else if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
+        // We enforce a minimum of 1 second here to prevent excessive refreshes, and ensure that
+        // tokio::time::interval receives a valid (positive) duration.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
 
     let assert_positive = |val: Option<i32>, name: &str| {
