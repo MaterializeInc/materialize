@@ -28,9 +28,6 @@ Bounded staleness is a new SQL isolation level that lets you set a freshness tar
 ```mzsql
 -- Serve data no more than 10 seconds stale; error immediately if unavailable.
 SET TRANSACTION_ISOLATION TO 'bounded staleness 10s';
-
--- A tighter bound for low-latency dashboards.
-SET TRANSACTION_ISOLATION TO 'bounded staleness 250ms';
 ```
 
 For more information, see [Bounded Staleness](/reference/isolation-level/#bounded-staleness).
