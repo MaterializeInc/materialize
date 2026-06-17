@@ -73,4 +73,4 @@ contains:TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '1ms'
   )
-contains:TOPIC METADATA REFRESH INTERVAL cannot be less than 1 second
+contains:TOPIC METADATA REFRESH INTERVAL must be at least 1 second
