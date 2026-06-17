@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/memory/objects.rs
-revision: 7f722d60df
+revision: 75d653ae9e
 ---
 
 # catalog::memory::objects

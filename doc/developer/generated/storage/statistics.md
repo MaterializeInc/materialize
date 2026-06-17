@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/statistics.rs
-revision: c151574dec
+revision: 82dac06732
 ---
 
 # mz-storage::statistics

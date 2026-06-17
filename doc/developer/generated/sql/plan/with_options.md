@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/with_options.rs
-revision: 44d6b9ac6a
+revision: 53f595e71f
 ---
 
 # mz-sql::plan::with_options

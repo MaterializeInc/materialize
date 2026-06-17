@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/metrics.rs
-revision: 11109fe8ed
+revision: 82dac06732
 ---
 
 # mz-compute::metrics
