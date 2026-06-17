@@ -493,6 +493,16 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: LazyLock<BuiltinLog> =
         ontology: None,
     });
 
+pub static MZ_DATAFLOW_OPERATOR_SUMMARIES_RAW: LazyLock<BuiltinLog> =
+    LazyLock::new(|| BuiltinLog {
+        name: "mz_dataflow_operator_summaries_raw",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::LOG_MZ_DATAFLOW_OPERATOR_SUMMARIES_RAW_OID,
+        variant: LogVariant::Timely(TimelyLog::Summary),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
 pub static MZ_DATAFLOWS_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_dataflows_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -1961,6 +1971,127 @@ GROUP BY id, port, update_type, time",
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
+
+pub static MZ_DATAFLOW_OPERATOR_SUMMARIES_PER_WORKER: LazyLock<BuiltinView> =
+    LazyLock::new(|| BuiltinView {
+        name: "mz_dataflow_operator_summaries_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_SUMMARIES_PER_WORKER_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::UInt64.nullable(false))
+            .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
+            .with_column("input_port", SqlScalarType::UInt64.nullable(false))
+            .with_column("output_port", SqlScalarType::UInt64.nullable(false))
+            .with_column("outer_impact", SqlScalarType::MzTimestamp.nullable(false))
+            .with_column("summary", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "
+SELECT id, worker_id, input_port, output_port, outer_impact, summary
+FROM mz_introspection.mz_dataflow_operator_summaries_raw",
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
+pub static MZ_DATAFLOW_OPERATOR_FRONTIERS_PER_WORKER: LazyLock<BuiltinView> =
+    LazyLock::new(|| BuiltinView {
+        name: "mz_dataflow_operator_frontiers_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_FRONTIERS_PER_WORKER_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::UInt64.nullable(false))
+            .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
+            .with_column("time", SqlScalarType::MzTimestamp.nullable(false))
+            .with_key(vec![0, 1])
+            .finish(),
+        column_comments: BTreeMap::new(),
+        // The output frontier of each dataflow operator, reconstructed from progress
+        // reachability and the operator graph. Held capabilities (`held`) are propagated
+        // forward along channels (`edges`); an operator's frontier is the minimum
+        // capability time reachable to it (including its own). A recursive cycle (WMR)
+        // resolves to a single shared frontier across its operators (the `UNION` over a
+        // finite `(id, worker_id, t)` domain bounds the recursion).
+        //
+        // ASSUMPTION: outer-time path summaries are identity, so each edge transfers the
+        // frontier unchanged. This holds for all compute dataflows today — every
+        // `mz_dataflow_operator_summaries.outer_impact` is `0`, because scope ingress/egress
+        // and feedback (`+1`) summaries act only on the inner iteration coordinate. If an
+        // operator ever imposed a non-zero outer delay, this view would under-report its
+        // downstream frontiers. Folding `outer_impact` in would require port-level
+        // propagation (the summary is keyed by input/output port) and is left as follow-up;
+        // `outer_impact` is surfaced in `mz_dataflow_operator_summaries` so the assumption
+        // is observable.
+        sql: "
+WITH MUTUALLY RECURSIVE
+    held(id uint8, worker_id uint8, t mz_timestamp) AS (
+        SELECT id, worker_id, pg_catalog.min(time)
+        FROM (
+            SELECT id, worker_id, time, pg_catalog.sum(count) AS net
+            FROM mz_introspection.mz_dataflow_operator_reachability_per_worker
+            WHERE update_type = 'source'
+            GROUP BY id, worker_id, time
+        )
+        WHERE net > 0 AND time IS NOT NULL
+        GROUP BY id, worker_id
+    ),
+    edges(from_id uint8, to_id uint8, worker_id uint8) AS (
+        SELECT from_operator_id, to_operator_id, worker_id
+        FROM mz_introspection.mz_dataflow_channel_operators_per_worker
+        WHERE from_operator_id IS NOT NULL AND to_operator_id IS NOT NULL
+    ),
+    reach(id uint8, worker_id uint8, t mz_timestamp) AS (
+        SELECT id, worker_id, t FROM held
+        UNION
+        SELECT e.to_id, e.worker_id, r.t
+        FROM edges e JOIN reach r ON r.id = e.from_id AND r.worker_id = e.worker_id
+    )
+SELECT id, worker_id, pg_catalog.min(t) AS time
+FROM reach
+GROUP BY id, worker_id",
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
+pub static MZ_DATAFLOW_OPERATOR_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_dataflow_operator_frontiers",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_FRONTIERS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::UInt64.nullable(false))
+        .with_column("time", SqlScalarType::MzTimestamp.nullable(false))
+        .with_key(vec![0])
+        .finish(),
+    column_comments: BTreeMap::new(),
+    // The reconstructed output frontier of each operator, taken as the minimum across
+    // workers (matching `mz_compute_frontiers`).
+    sql: "
+SELECT id, pg_catalog.min(time) AS time
+FROM mz_introspection.mz_dataflow_operator_frontiers_per_worker
+GROUP BY id",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+pub static MZ_DATAFLOW_OPERATOR_SUMMARIES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_dataflow_operator_summaries",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_SUMMARIES_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::UInt64.nullable(false))
+        .with_column("input_port", SqlScalarType::UInt64.nullable(false))
+        .with_column("output_port", SqlScalarType::UInt64.nullable(false))
+        .with_column("outer_impact", SqlScalarType::MzTimestamp.nullable(false))
+        .with_column("summary", SqlScalarType::String.nullable(false))
+        // `SELECT DISTINCT` over all columns makes the full row a key.
+        .with_key(vec![0, 1, 2, 3, 4])
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+SELECT DISTINCT id, input_port, output_port, outer_impact, summary
+FROM mz_introspection.mz_dataflow_operator_summaries_per_worker",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
 
 pub static MZ_ARRANGEMENT_SIZES_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|| {
     BuiltinView {
