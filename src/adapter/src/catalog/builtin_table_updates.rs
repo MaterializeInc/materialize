@@ -17,15 +17,15 @@ use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
-    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_COMMENTS, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS,
-    MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS,
-    MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES,
-    MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-    MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS,
-    MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH,
-    MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SQL_SERVER_SOURCE_TABLES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_COMMENTS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
+    MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
+    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES,
+    MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES,
+    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS,
+    MZ_SOURCE_REFERENCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES,
+    MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -43,14 +43,14 @@ use mz_persist_client::batch::ProtoBatch;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
 };
 use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
-use mz_sql::catalog::{CatalogType, DefaultPrivilegeObject, TypeCategory};
+use mz_sql::catalog::{CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, SchemaSpecifier};
 use mz_sql::plan::{ConnectionDetails, SshKey};
@@ -1555,52 +1555,6 @@ impl CatalogState {
                 Datum::from(conn.client_ip().map(|ip| ip.to_string()).as_deref()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),
-            diff,
-        )
-    }
-
-    pub fn pack_default_privileges_update(
-        &self,
-        default_privilege_object: &DefaultPrivilegeObject,
-        grantee: &RoleId,
-        acl_mode: &AclMode,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        BuiltinTableUpdate::row(
-            &*MZ_DEFAULT_PRIVILEGES,
-            Row::pack_slice(&[
-                default_privilege_object.role_id.to_string().as_str().into(),
-                default_privilege_object
-                    .database_id
-                    .map(|database_id| database_id.to_string())
-                    .as_deref()
-                    .into(),
-                default_privilege_object
-                    .schema_id
-                    .map(|schema_id| schema_id.to_string())
-                    .as_deref()
-                    .into(),
-                default_privilege_object
-                    .object_type
-                    .to_string()
-                    .to_lowercase()
-                    .as_str()
-                    .into(),
-                grantee.to_string().as_str().into(),
-                acl_mode.to_string().as_str().into(),
-            ]),
-            diff,
-        )
-    }
-
-    pub fn pack_system_privileges_update(
-        &self,
-        privileges: MzAclItem,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        BuiltinTableUpdate::row(
-            &*MZ_SYSTEM_PRIVILEGES,
-            Row::pack_slice(&[privileges.into()]),
             diff,
         )
     }

@@ -5254,6 +5254,10 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                 func::MzValidateRolePrivilege,
             ) => Bool, oid::FUNC_MZ_VALIDATE_ROLE_PRIVILEGE_OID;
         },
+        "parse_catalog_acl_mode" => Scalar {
+            params!(Jsonb) => UnaryFunc::ParseCatalogAclMode(func::ParseCatalogAclMode)
+                => String, oid::FUNC_PARSE_CATALOG_ACL_MODE_OID;
+        },
         "parse_catalog_create_sql" => Scalar {
             params!(String) => UnaryFunc::ParseCatalogCreateSql(func::ParseCatalogCreateSql)
                 => Jsonb, oid::FUNC_PARSE_CATALOG_CREATE_SQL_OID;
