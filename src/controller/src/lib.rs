@@ -64,6 +64,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 pub mod clusters;
+pub mod protocol;
 pub mod replica_http_locator;
 
 // Export this on behalf of the storage controller to provide a unified
