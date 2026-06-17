@@ -13,6 +13,7 @@ use std::hint::black_box;
 use arrow::array::StructArray;
 use criterion::{Bencher, Criterion, Throughput, criterion_group, criterion_main};
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec;
@@ -473,6 +474,118 @@ fn bench_json(c: &mut Criterion) {
     });
 }
 
+/// Mimics the `JsonbToColumns` feature benchmark at the `repr` layer: a flat
+/// `jsonb` object with `N_KEYS` entries, from which a query pulls every field.
+/// Splitting decode and access apart lets us see which side the in-map index
+/// helps and which it taxes.
+fn bench_jsonb_to_columns(c: &mut Criterion) {
+    const NUM_ROWS: u64 = 10_000;
+    const N_KEYS: usize = 50;
+
+    let keys: Vec<String> = (0..N_KEYS).map(|i| format!("k{i:02}")).collect();
+
+    let mut row = Row::default();
+    row.packer().push_dict_with(|packer| {
+        for (i, key) in keys.iter().enumerate() {
+            packer.push(Datum::String(key));
+            packer.push(Datum::from(Numeric::from(u64::cast_from(i))));
+        }
+    });
+
+    let mut group = c.benchmark_group("jsonb_to_columns");
+    group.throughput(Throughput::Elements(NUM_ROWS));
+
+    let schema =
+        RelationDesc::from_names_and_types(vec![("a", SqlScalarType::Jsonb.nullable(false))]);
+
+    // Decode-only: exercises `finish_dict` (which rebuilds the index on every
+    // decode out of persist).
+    group.bench_function("decode", |b| {
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
+        builder.push(&row, &(), 1u64, 1i64);
+        let part = builder.finish();
+        let col = part
+            .key
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("struct array");
+        let decoder =
+            <RelationDesc as Schema<Row>>::decoder(&schema, col.clone()).expect("success");
+        let mut out = Row::default();
+        b.iter(|| {
+            for _ in 0..NUM_ROWS {
+                decoder.decode(0, black_box(&mut out));
+                black_box(&mut out);
+            }
+        });
+    });
+
+    // Access-only: every field looked up via the binary-searched index, on a
+    // row that is already decoded.
+    group.bench_function("access", |b| {
+        b.iter(|| {
+            for _ in 0..NUM_ROWS {
+                let map = match black_box(&row).unpack_first() {
+                    Datum::Map(map) => map,
+                    _ => unreachable!(),
+                };
+                for key in &keys {
+                    black_box(map.get(key));
+                }
+            }
+        });
+    });
+
+    // Access via a linear scan (the pre-index behavior), for comparison.
+    group.bench_function("access_linear", |b| {
+        b.iter(|| {
+            for _ in 0..NUM_ROWS {
+                let map = match black_box(&row).unpack_first() {
+                    Datum::Map(map) => map,
+                    _ => unreachable!(),
+                };
+                for key in &keys {
+                    let mut found = None;
+                    for (k, v) in &map {
+                        if k == key.as_str() {
+                            found = Some(v);
+                            break;
+                        }
+                    }
+                    black_box(found);
+                }
+            }
+        });
+    });
+
+    // Decode + access together, the shape of the real query.
+    group.bench_function("decode_and_access", |b| {
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
+        builder.push(&row, &(), 1u64, 1i64);
+        let part = builder.finish();
+        let col = part
+            .key
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("struct array");
+        let decoder =
+            <RelationDesc as Schema<Row>>::decoder(&schema, col.clone()).expect("success");
+        let mut out = Row::default();
+        b.iter(|| {
+            for _ in 0..NUM_ROWS {
+                decoder.decode(0, black_box(&mut out));
+                let map = match out.unpack_first() {
+                    Datum::Map(map) => map,
+                    _ => unreachable!(),
+                };
+                for key in &keys {
+                    black_box(map.get(key));
+                }
+            }
+        });
+    });
+}
+
 fn bench_string(c: &mut Criterion) {
     const NUM_ROWS: u64 = 10_000;
 
@@ -528,6 +641,7 @@ criterion_group!(
     bench_filter,
     bench_roundtrip,
     bench_json,
+    bench_jsonb_to_columns,
     bench_string
 );
 criterion_main!(benches);
