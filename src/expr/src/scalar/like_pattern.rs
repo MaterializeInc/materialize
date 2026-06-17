@@ -156,10 +156,22 @@ pub fn compile(pattern: &str, case_insensitive: bool) -> Result<Matcher, EvalErr
     // like `%a%a%a` against a long run of `a`s takes time proportional to
     // `len(text)^(number of %)`, which can stall a worker for many minutes. The
     // regex engine matches the same patterns in linear time with no backtracking,
-    // so fall back to it whenever more than one `many` subpattern is present (and
+    // so fall back to it whenever more than one backtracking `%` is present (and
     // for the existing case-insensitive / too-many-subpatterns reasons).
-    let many_subpatterns = subpatterns.iter().filter(|s| s.many).count();
-    let use_regex = case_insensitive || subpatterns.len() > MAX_SUBPATTERNS || many_subpatterns > 1;
+    //
+    // A `%` with an *empty* suffix short-circuits in `is_match_subpatterns`
+    // without any `rfind`/backtracking, and (per `build_subpatterns`) such a `%`
+    // can only ever be the trailing subpattern. Only `%` subpatterns with a
+    // non-empty suffix nest the backtracking loops, so we count just those. This
+    // keeps the common "contains" pattern `%foo%` — which decomposes into one
+    // non-empty-suffix `%` plus a trailing empty-suffix `%` — on the fast string
+    // matcher, where a single `rfind` is far cheaper than a forward regex scan.
+    let backtracking_manys = subpatterns
+        .iter()
+        .filter(|s| s.many && !s.suffix.is_empty())
+        .count();
+    let use_regex =
+        case_insensitive || subpatterns.len() > MAX_SUBPATTERNS || backtracking_manys > 1;
     let matcher_impl = match use_regex {
         false => MatcherImpl::String(subpatterns),
         true => MatcherImpl::Regex(build_regex(&subpatterns, case_insensitive)?),
@@ -546,5 +558,45 @@ mod test {
                 "pattern {pat:?} against {text:?}"
             );
         }
+    }
+
+    // Only `%` subpatterns with a non-empty suffix nest the back-tracking loops,
+    // so only two or more of *those* should reroute to the regex engine. A `%`
+    // with an empty suffix (always trailing) short-circuits without back-tracking
+    // and must not count. In particular the ubiquitous "contains"/prefix/suffix
+    // shapes (`%foo%`, `%foo`, `foo%`) must stay on the fast string matcher, where
+    // a single `rfind` is far cheaper than a forward regex scan. Lock the routing
+    // decision in so a future tweak to the predicate can't silently de-optimize
+    // the common case.
+    #[mz_ore::test]
+    fn test_string_matcher_routing() {
+        let uses_regex = |pat: &str| -> bool {
+            match compile(pat, false).unwrap().matcher_impl {
+                MatcherImpl::String(_) => false,
+                MatcherImpl::Regex(_) => true,
+            }
+        };
+        // Fast string-matcher path: at most one back-tracking `%`. The trailing
+        // `%` in `%foo%` has an empty suffix and short-circuits, so it does not
+        // count.
+        for pat in ["%foo%", "%foo", "foo%", "foo", "f_o", "%_%_%", "%%%%"] {
+            assert!(
+                !uses_regex(pat),
+                "pattern {pat:?} should use the fast string matcher"
+            );
+        }
+        // Regex path: two or more non-empty-suffix `%`, which are super-linear in
+        // the string matcher.
+        for pat in ["%foo%bar%", "%foo%bar", "a%b%c", "%a%a%a"] {
+            assert!(
+                uses_regex(pat),
+                "pattern {pat:?} should use the regex engine"
+            );
+        }
+        // Case-insensitive always uses regex, regardless of `%` count.
+        assert!(matches!(
+            compile("%foo%", true).unwrap().matcher_impl,
+            MatcherImpl::Regex(_)
+        ));
     }
 }
