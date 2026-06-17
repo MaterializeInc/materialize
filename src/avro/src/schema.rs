@@ -851,6 +851,89 @@ impl UnionSchema {
     ) -> Option<(usize, &SchemaPieceOrNamed)> {
         self.match_ref(other.as_ref(), names_map)
     }
+
+    /// Like [`UnionSchema::match_`], but additionally honors Avro numeric
+    /// promotion. Here `self` is the *reader* union and `writer` is a writer
+    /// variant being resolved against it.
+    pub fn match_promote_writer(
+        &self,
+        writer: &SchemaPieceOrNamed,
+        names_map: &BTreeMap<usize, usize>,
+    ) -> Option<(usize, &SchemaPieceOrNamed)> {
+        self.match_ref_promote_writer(writer.as_ref(), names_map)
+    }
+
+    /// Like [`UnionSchema::match_ref`], but additionally honors Avro numeric
+    /// promotion. `self` is the *reader* union and `writer` is a concrete
+    /// writer piece. An exact match (by kind for anonymous pieces, by name for
+    /// named ones) is preferred; otherwise the first reader variant in
+    /// declaration order that `writer` can be promoted into is returned. See
+    /// `can_promote`.
+    pub fn match_ref_promote_writer(
+        &self,
+        writer: SchemaPieceRefOrNamed,
+        names_map: &BTreeMap<usize, usize>,
+    ) -> Option<(usize, &SchemaPieceOrNamed)> {
+        if let Some(hit) = self.match_ref(writer, names_map) {
+            return Some(hit);
+        }
+        let SchemaPieceRefOrNamed::Piece(wp) = writer else {
+            return None;
+        };
+        self.schemas
+            .iter()
+            .enumerate()
+            .find_map(|(idx, variant)| match variant {
+                SchemaPieceOrNamed::Piece(rp) if can_promote(wp, rp) => Some((idx, variant)),
+                _ => None,
+            })
+    }
+
+    /// Like [`UnionSchema::match_ref`], but additionally honors Avro numeric
+    /// promotion. `self` is the *writer* union and `reader` is a concrete
+    /// reader piece. An exact match is preferred; otherwise the first writer
+    /// variant in declaration order that can be promoted into `reader` is
+    /// returned. See `can_promote`.
+    pub fn match_ref_promote_reader(
+        &self,
+        reader: SchemaPieceRefOrNamed,
+        names_map: &BTreeMap<usize, usize>,
+    ) -> Option<(usize, &SchemaPieceOrNamed)> {
+        if let Some(hit) = self.match_ref(reader, names_map) {
+            return Some(hit);
+        }
+        let SchemaPieceRefOrNamed::Piece(rp) = reader else {
+            return None;
+        };
+        self.schemas
+            .iter()
+            .enumerate()
+            .find_map(|(idx, variant)| match variant {
+                SchemaPieceOrNamed::Piece(wp) if can_promote(wp, rp) => Some((idx, variant)),
+                _ => None,
+            })
+    }
+}
+
+/// Returns `true` if a value written with primitive schema `writer` can be read
+/// as primitive `reader` under Avro's numeric promotion rules: `int` →
+/// `long`/`float`/`double`, `long` → `float`/`double`, and `float` → `double`.
+///
+/// These are exactly the promotions performed during schema resolution in
+/// `reader.rs` (`ResolveIntLong`, `ResolveIntDouble`, ...). The two must be
+/// kept in sync: only return `true` here for a pair that resolution can
+/// actually decode, otherwise a union variant would match but fail to resolve.
+fn can_promote(writer: &SchemaPiece, reader: &SchemaPiece) -> bool {
+    use SchemaPiece::*;
+    matches!(
+        (writer, reader),
+        (Int, Long)
+            | (Int, Float)
+            | (Int, Double)
+            | (Long, Float)
+            | (Long, Double)
+            | (Float, Double)
+    )
 }
 
 // No need to compare variant_index, it is derivative of schemas.
