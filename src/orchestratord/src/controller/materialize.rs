@@ -15,6 +15,7 @@ use std::{
 
 use anyhow::Context as _;
 use http::HeaderValue;
+use k8s_controller::TraceMetadata;
 use k8s_openapi::{
     api::core::v1::{Affinity, ResourceRequirements, Secret, Toleration},
     apimachinery::pkg::apis::meta::v1::{Condition, Time},
@@ -273,6 +274,7 @@ impl k8s_controller::Context for Context {
         &self,
         client: Client,
         mz: &Self::Resource,
+        _metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
         let balancer_api: Api<Balancer> = Api::namespaced(client.clone(), &mz.namespace());
@@ -888,6 +890,7 @@ impl k8s_controller::Context for Context {
         &self,
         _client: Client,
         mz: &Self::Resource,
+        _metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         self.set_needs_update(mz, false);
 
