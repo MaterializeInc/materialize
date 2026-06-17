@@ -181,6 +181,31 @@ Target cluster: quickstart
 
 EOF
 
+# Nested chain: a CASE in a result arm folds independently of the outer chain.
+# The inner chain on z (in the x = 1 arm) and the outer chain on x both become
+# case_lookups.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE
+    WHEN x = 1 THEN CASE WHEN z = 10 THEN 100 WHEN z = 20 THEN 200 ELSE 0 END
+    WHEN x = 2 THEN 50
+    WHEN x = 3 THEN 60
+    ELSE 0
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case_lookup #0{x} when 1 then case_lookup #2{z} when 10 then 100 when 20 then 200 else 0 end when 2 then 50 when 3 then 60 else 0 end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
 statement ok
 INSERT INTO t VALUES (1, 'dup', 0), (2, 'two', 0), (99, 'miss', 0), (NULL, 'null', 0)
 
