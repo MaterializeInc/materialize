@@ -808,12 +808,21 @@ pub struct DatumDictTypedIter<'a, T> {
 /// `RowArena` is used to hold on to temporary `Row`s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
 #[derive(Debug)]
 pub struct RowArena {
-    // Semantically, this field would be better represented by a `Vec<Box<[u8]>>`,
-    // as once the arena takes ownership of a byte vector the vector is never
-    // modified. But `RowArena::push_bytes` takes ownership of a `Vec<u8>`, so
-    // storing that `Vec<u8>` directly avoids an allocation. The cost is
-    // additional memory use, as the vector may have spare capacity, but row
-    // arenas are short lived so this is the better tradeoff.
+    // A stack of byte regions, used as a bump allocator. Bytes handed to
+    // `push_bytes` are *copied* into the active (last) region and a reference
+    // into that region is returned.
+    //
+    // The invariant that keeps returned references valid for the arena's
+    // lifetime is that a region is never reallocated once it holds data: when
+    // the active region lacks spare capacity for a push we allocate a *new*,
+    // larger region rather than growing the current one (which would move its
+    // bytes and dangle outstanding references). The outer `Vec` may itself
+    // reallocate as regions are added, but that only moves the `Vec<u8>`
+    // headers, not the heap buffers they own, so references remain valid.
+    //
+    // `clear` retains only the largest region (emptied) to right-size the arena
+    // for reuse; reusing one region across `clear` cycles makes a steady-state
+    // workload (e.g. decoding rows one at a time) allocation-free.
     inner: RefCell<Vec<Vec<u8>>>,
 }
 
@@ -3036,45 +3045,88 @@ impl RowArena {
         }
     }
 
-    /// Creates a `RowArena` with a hint of how many rows will be created in the arena, to avoid
-    /// reallocations of its internal vector.
+    /// Creates a `RowArena` with an initial region sized to hold `capacity` bytes, to avoid
+    /// reallocations as the first datums are created in the arena.
     pub fn with_capacity(capacity: usize) -> Self {
+        let mut inner = Vec::new();
+        if capacity > 0 {
+            inner.push(Vec::with_capacity(capacity));
+        }
         RowArena {
-            inner: RefCell::new(Vec::with_capacity(capacity)),
+            inner: RefCell::new(inner),
         }
     }
 
-    /// Does a `reserve` on the underlying `Vec`. Call this when you expect `additional` more datums
-    /// to be created in this arena.
+    /// Ensures the active region can hold at least `additional` more bytes without allocating a
+    /// new region. Call this when you expect to push roughly `additional` bytes next.
     pub fn reserve(&self, additional: usize) {
-        self.inner.borrow_mut().reserve(additional);
+        if additional == 0 {
+            return;
+        }
+        let mut inner = self.inner.borrow_mut();
+        match inner.last_mut() {
+            // The active region is empty, so nothing references it yet and it is safe to grow it
+            // in place (a reallocation cannot dangle a live reference).
+            Some(active) if active.is_empty() => {
+                if active.capacity() < additional {
+                    active.reserve_exact(additional);
+                }
+            }
+            // The active region holds live data; we cannot grow it without moving those bytes, so
+            // stage a fresh region for the upcoming pushes instead.
+            Some(_) => inner.push(Vec::with_capacity(additional)),
+            None => inner.push(Vec::with_capacity(additional)),
+        }
     }
 
-    /// Take ownership of `bytes` for the lifetime of the arena.
+    /// Copies `bytes` into the arena and returns a reference valid for its lifetime.
+    ///
+    /// Accepts anything that derefs to `[u8]` (e.g. `Vec<u8>`, `&[u8]`); the bytes are copied, so
+    /// the caller's allocation is not retained.
     #[allow(clippy::transmute_ptr_to_ptr)]
-    pub fn push_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
+    pub fn push_bytes<'a, B: Deref<Target = [u8]>>(&'a self, bytes: B) -> &'a [u8] {
+        let bytes: &[u8] = &bytes;
+        let need = bytes.len();
+        if need == 0 {
+            return &[];
+        }
         let mut inner = self.inner.borrow_mut();
-        inner.push(bytes);
-        let owned_bytes = &inner[inner.len() - 1];
+
+        // Find or create a region with spare capacity for `need` bytes, never growing a region
+        // that already holds data (see the type-level comment for why this preserves references).
+        let has_room = inner
+            .last()
+            .map_or(false, |region| region.capacity() - region.len() >= need);
+        if !has_room {
+            let last_cap = inner.last().map_or(0, |region| region.capacity());
+            let new_cap = std::cmp::max(need, last_cap.saturating_mul(2));
+            inner.push(Vec::with_capacity(new_cap));
+        }
+
+        let region = inner.last_mut().expect("region present");
+        let start = region.len();
+        region.extend_from_slice(bytes);
+        let copied = &region[start..];
         unsafe {
             // This is safe because:
-            //   * We only ever append to self.inner, so the byte vector
-            //     will live as long as the arena.
-            //   * We return a reference to the byte vector's contents, so it's
-            //     okay if self.inner reallocates and moves the byte
-            //     vector.
-            //   * We don't allow access to the byte vector itself, so it will
-            //     never reallocate.
-            transmute::<&[u8], &'a [u8]>(owned_bytes)
+            //   * `copied` references bytes inside `region`'s heap buffer, which we just sized to
+            //     fit without reallocating; that buffer is never resized again while it holds data
+            //     (we allocate a new region instead), so the reference stays valid.
+            //   * The buffer lives as long as the arena: regions are only dropped by `clear`/`drop`,
+            //     both of which take `&mut`/ownership, so no `&'a self`-tied reference can outlive
+            //     them.
+            //   * Pushing further regions may reallocate `self.inner`, but that moves only the
+            //     `Vec<u8>` headers, not the heap buffers they own.
+            transmute::<&[u8], &'a [u8]>(copied)
         }
     }
 
-    /// Take ownership of `string` for the lifetime of the arena.
+    /// Copies `string` into the arena and returns a reference valid for its lifetime.
     pub fn push_string<'a>(&'a self, string: String) -> &'a str {
-        let owned_bytes = self.push_bytes(string.into_bytes());
+        let copied = self.push_bytes(string.as_bytes());
         unsafe {
-            // This is safe because we know it was a `String` just before.
-            std::str::from_utf8_unchecked(owned_bytes)
+            // This is safe because we just copied the bytes of a valid `String`.
+            std::str::from_utf8_unchecked(copied)
         }
     }
 
@@ -3084,19 +3136,12 @@ impl RowArena {
     /// If we had an owned datum type, this method would be much clearer, and
     /// would be called `push_owned_datum`.
     pub fn push_unary_row<'a>(&'a self, row: Row) -> Datum<'a> {
-        let mut inner = self.inner.borrow_mut();
-        inner.push(row.data.into_vec());
+        let copied = self.push_bytes(row.data());
         unsafe {
-            // This is safe because:
-            //   * We only ever append to self.inner, so the row data will live
-            //     as long as the arena.
-            //   * We force the row data into its own heap allocation--
-            //     importantly, we do NOT store the SmallVec, which might be
-            //     storing data inline--so it's okay if self.inner reallocates
-            //     and moves the row.
-            //   * We don't allow access to the byte vector itself, so it will
-            //     never reallocate.
-            let datum = read_datum(&mut &inner[inner.len() - 1][..]);
+            // This is safe because `copied` is a valid encoding of a single datum (we just packed
+            // it into `row`), backed by the arena for the lifetime `'a`. Copying the bytes also
+            // sidesteps the `Row`'s inline (`SmallVec`) storage entirely.
+            let datum = read_datum(&mut &copied[..]);
             transmute::<Datum<'_>, Datum<'a>>(datum)
         }
     }
@@ -3104,19 +3149,10 @@ impl RowArena {
     /// Equivalent to `push_unary_row` but returns a `DatumNested` rather than a
     /// `Datum`.
     fn push_unary_row_datum_nested<'a>(&'a self, row: Row) -> DatumNested<'a> {
-        let mut inner = self.inner.borrow_mut();
-        inner.push(row.data.into_vec());
+        let copied = self.push_bytes(row.data());
         unsafe {
-            // This is safe because:
-            //   * We only ever append to self.inner, so the row data will live
-            //     as long as the arena.
-            //   * We force the row data into its own heap allocation--
-            //     importantly, we do NOT store the SmallVec, which might be
-            //     storing data inline--so it's okay if self.inner reallocates
-            //     and moves the row.
-            //   * We don't allow access to the byte vector itself, so it will
-            //     never reallocate.
-            let nested = DatumNested::extract(&mut &inner[inner.len() - 1][..]);
+            // Safe for the same reasons as `push_unary_row`.
+            let nested = DatumNested::extract(&mut &copied[..]);
             transmute::<DatumNested<'_>, DatumNested<'a>>(nested)
         }
     }
@@ -3183,8 +3219,17 @@ impl RowArena {
     }
 
     /// Clear the contents of the arena.
+    ///
+    /// Retains the single largest region (emptied) so the arena can be reused without
+    /// reallocating; a workload that clears between uses of similar size becomes allocation-free.
     pub fn clear(&mut self) {
-        self.inner.borrow_mut().clear();
+        let inner = self.inner.get_mut();
+        // Keep only the largest-capacity region, reset to empty, and drop the rest.
+        if let Some(largest) = (0..inner.len()).max_by_key(|&i| inner[i].capacity()) {
+            inner.swap(0, largest);
+            inner.truncate(1);
+            inner[0].clear();
+        }
     }
 }
 
@@ -3329,6 +3374,49 @@ mod tests {
             row.push(Datum::String("c"));
         });
         assert_eq!(arena.push_unary_row(row.clone()), row.unpack_first());
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_growth_keeps_references() {
+        // References returned by `push_bytes` must stay valid as later pushes allocate new
+        // regions; this exercises the "never resize a region that holds data" invariant.
+        let arena = RowArena::new();
+        let chunks: Vec<Vec<u8>> = (0..128u16)
+            .map(|i| vec![u8::try_from(i % 256).unwrap(); usize::from(i % 13) + 1])
+            .collect();
+        let refs: Vec<&[u8]> = chunks
+            .iter()
+            .map(|c| arena.push_bytes(c.as_slice()))
+            .collect();
+        for (i, r) in refs.iter().enumerate() {
+            assert_eq!(*r, chunks[i].as_slice());
+        }
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_unary_row_at_offset() {
+        // A row pushed after other bytes lands at a non-zero offset within a region; reading it
+        // back must not depend on the row starting at offset zero or on any alignment.
+        let arena = RowArena::new();
+        arena.reserve(4096);
+        let _pad = arena.push_bytes(vec![0xAB; 5]);
+        let row = Row::pack_slice(&[Datum::String("hello"), Datum::Int64(42), Datum::True]);
+        assert_eq!(arena.push_unary_row(row.clone()), row.unpack_first());
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_clear_reuse() {
+        // After `clear` the arena retains a region and remains usable across cycles.
+        let mut arena = RowArena::new();
+        for i in 0..100u8 {
+            let _ = arena.push_bytes(vec![i; 16]);
+        }
+        arena.clear();
+        assert_eq!(arena.push_bytes(vec![7u8; 8]), &[7u8; 8]);
+        assert_eq!(arena.push_string("after clear".to_owned()), "after clear");
+        arena.clear();
+        let empty: &[u8] = &[];
+        assert_eq!(arena.push_bytes(Vec::<u8>::new()), empty);
     }
 
     #[mz_ore::test]
