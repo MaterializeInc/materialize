@@ -46,6 +46,9 @@ SERVICES = [
     Materialized(
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::postgres=trace,info",
+            # Validate schemas (and detect standby promotion) every 2s rather
+            # than the 15s default, so promotion/schema-change tests don't wait.
+            "pg_schema_validation_interval": "2s",
         },
         default_replication_factor=1,
     ),

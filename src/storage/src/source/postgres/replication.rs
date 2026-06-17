@@ -543,7 +543,8 @@ pub(crate) fn render<'scope>(
                                                     *output_index,
                                                     Err(DataflowError::from(err.clone())),
                                                 ),
-                                                data_cap_set[0].time().clone(),
+                                                // We don't have a clean way to align on when the replica changed so jump straight to u64::MAX to avoid conflicts.
+                                                MzOffset::from(u64::MAX),
                                                 Diff::ONE,
                                             );
                                             let size = update.fuel_size();
