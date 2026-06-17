@@ -207,6 +207,9 @@ name="exactly-once-delivery" >}}
 
 ### Limitations
 
+- {{< include-from-yaml data="examples/create_sink_iceberg"
+  name="restrictions-limitations-regions" >}}
+
 {{% include-headless "/headless/iceberg-sinks/limitations-list" %}}
 
 ## Troubleshooting

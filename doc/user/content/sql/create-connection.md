@@ -161,7 +161,7 @@ CREATE CONNECTION aws_credentials TO AWS (
 {{< /tabs >}}
 
 ### S3 compatible object storage
-You can use an AWS connection to perform bulk exports and bulk imports with any S3 compatible object
+You can use an AWS connection to perform bulk exports ([`COPY TO`](/sql/copy-to)) and bulk imports ([`COPY FROM`](/sql/copy-from)) with any S3 compatible object
 storage service, such as Google Cloud Storage, Cloudflare R2, or MinIO. While connecting to S3
 compatible object storage, you need to provide static access key credentials, specify the endpoint,
 and the region.
@@ -178,13 +178,13 @@ CREATE CONNECTION gcs_connection TO AWS (
 );
 ```
 
-### GCP
+If you are exporting to Google Cloud Storage using [Iceberg sinks](/sql/create-sink/iceberg), use a [GCP connection](#gcp).
 
-A Google Cloud Platform (GCP) connection gives Materialize
-a [service account](https://docs.cloud.google.com/iam/docs/service-account-overview)
-in your GCP project. You can use a GCP connection to authenticate with
-[Lakehouse/BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog)
-when creating an [Iceberg catalog connection](#iceberg-catalog).
+### GCP
+{{< private-preview />}}
+
+A GCP connection stores a [GCP service account key](https://docs.cloud.google.com/iam/docs/keys-create-delete).
+You can use a GCP connection to export data to [Lakehouse/BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) via [Iceberg sinks](/sql/create-sink/iceberg).
 
 #### Syntax {#gcp-syntax}
 
@@ -821,12 +821,10 @@ catalog. You can use Iceberg catalog connections to create [Iceberg sinks](/sql/
 
 Materialize supports two catalog types:
 
-- `'s3tablesrest'` — [AWS S3
-  Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html).
-  Authenticates with an [AWS connection](#aws).
-- `'rest'` — Generic Iceberg REST catalog, currently [Google Cloud
-  BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog).
-  Authenticates with a [GCP connection](#gcp).
+| Catalog type | Destination | Authentication |
+| --- | --- | --- |
+| `'s3tablesrest'` | [AWS S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) | [AWS connection](#aws) |
+| `'rest'` | [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) {{< private-preview-inline />}} | [GCP connection](#gcp) |
 
 #### Syntax {#iceberg-catalog-syntax}
 
@@ -837,6 +835,8 @@ Materialize supports two catalog types:
 
 {{< /tab >}}
 {{< tab "GCP BigLake" >}}
+
+{{< private-preview />}}
 
 {{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-biglake" %}}
 
@@ -853,6 +853,8 @@ example="example-iceberg-catalog-connection" %}}
 
 {{< /tab >}}
 {{< tab "GCP BigLake" >}}
+
+{{< private-preview />}}
 
 {{% include-example file="examples/create_connection"
 example="example-iceberg-catalog-gcp-connection" %}}

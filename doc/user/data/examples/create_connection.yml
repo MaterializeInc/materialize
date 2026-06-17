@@ -658,7 +658,7 @@
 
 - name: "syntax-gcp"
   code: |
-    CREATE SECRET <secret_name> AS decode('<service_account_key>', 'base64');
+    CREATE SECRET <secret_name> AS decode('<service_account_key_json_base64>', 'base64');
 
     CREATE CONNECTION <connection_name> TO GCP (
         SERVICE ACCOUNT KEY = SECRET <secret_name>
@@ -668,15 +668,17 @@
     - name: "`<connection_name>`"
       description: |
         A name for the connection.
-    - name: "`<service_account_key>`"
+    - name: "`<service_account_key_json_base64>`"
       description: |
         *Value:* base64-encoded JSON. Required.
 
-        Create a Materialize secret with a Google Cloud [service account
-        key](https://docs.cloud.google.com/iam/docs/keys-create-delete).
-        We recommend you base64-encode the key to avoid pasting a multi-line JSON literal into SQL.
+        Create a [GCP service account](https://docs.cloud.google.com/iam/docs/service-account-overview)
+        for Materialize to use.
 
-        Materialize uses the key to authenticate to Google Cloud services.
+        Create a [service account key](https://docs.cloud.google.com/iam/docs/keys-create-delete) (JSON).
+
+        Base64-encode the entire JSON service account key and paste it into the `CREATE SECRET` statement.
+        (e.g. `base64 < sa_key.json`)
     - name: "`WITH (<with_options>)`"
       description: |
         The following `<with_options>` are supported:
@@ -691,40 +693,25 @@
         CATALOG TYPE = 's3tablesrest',
         URL = '<catalog_url>',
         WAREHOUSE = '<warehouse>',
-        AWS CONNECTION = <aws_connection>,
+        AWS CONNECTION = <aws_connection>
     );
   syntax_elements:
     - name: "`<connection_name>`"
       description: |
         A name for the connection.
-    - name: "`CATALOG TYPE`"
-      description: |
-        *Value:* `text`. Required.
-
-        The type of Iceberg catalog:
-
-        - `'s3tablesrest'` — [AWS S3
-          Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html).
-          Requires `AWS CONNECTION`.
     - name: "`URL`"
       description: |
         *Value:* `text`. Required.
 
-        The URL of the Iceberg catalog endpoint.
-
-        - AWS S3 Tables: `https://s3tables.<region>.amazonaws.com/iceberg`.
+        S3 Tables Iceberg catalog URL: `https://s3tables.<region>.amazonaws.com/iceberg`
     - name: "`WAREHOUSE`"
       description: |
-        *Value:* `text`.
+        *Value:* `text`. Required.
 
-        Identifies the catalog's warehouse — the object-storage location for
-        table data. Required for `'s3tablesrest'`. Required for `'rest'` with GCP BigLake.
-
-        - AWS S3 Tables: the S3 Tables bucket ARN
-          (`arn:aws:s3tables:<region>:<account-id>:bucket/<bucket-name>`).
+        S3 Tables bucket ARN: `arn:aws:s3tables:<region>:<account-id>:bucket/<bucket-name>`
     - name: "`AWS CONNECTION`"
       description: |
-        *Value:* object name.
+        *Value:* object name. Required.
 
         The name of an [AWS connection](#aws) to use for authentication.
 
@@ -740,33 +727,19 @@
     - name: "`<connection_name>`"
       description: |
         A name for the connection.
-    - name: "`CATALOG TYPE`"
-      description: |
-        *Value:* `text`. Required.
-
-        The type of Iceberg catalog:
-
-        - `'rest'` - Generic Iceberg REST catalog, currently
-          [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog).
-          Requires `GCP CONNECTION`.
     - name: "`URL`"
       description: |
         *Value:* `text`. Required.
 
-        The URL of the Iceberg catalog endpoint.
-
-        - GCP BigLake: `https://biglake.googleapis.com/iceberg/v1/restcatalog`.
+        GCP BigLake Iceberg catalog URL: `https://biglake.googleapis.com/iceberg/v1/restcatalog`
     - name: "`WAREHOUSE`"
       description: |
-        *Value:* `text`.
+        *Value:* `text`. Required.
 
-        Identifies the catalog's warehouse — the object-storage location for
-        table data. Required for `'s3tablesrest'`. Required for `'rest'` with GCP BigLake.
-
-        - GCP BigLake: the GCS bucket URI (`gs://<bucket>`).
+        GCS bucket URI: `gs://<bucket>`
     - name: "`GCP CONNECTION`"
       description: |
-        *Value:* object name.
+        *Value:* object name. Required.
 
         The name of a [GCP connection](#gcp) to use for authentication.
 
@@ -791,7 +764,9 @@
   description: |
     The following example creates a GCP connection and an Iceberg catalog connection for Google Cloud BigLake:
   code: |
-    -- The service-account key JSON, base64-encoded (e.g., `base64 < key.json`).
+    -- Base64-encode the entire JSON payload of the GCP service account key.
+    -- e.g. `base64 < sa_key.json`
+    -- Paste the resulting base64-encoded string into a CREATE SECRET statement.
     CREATE SECRET gcp_service_account_key
       AS decode('<base64-encoded service account key JSON>', 'base64');
 

@@ -180,6 +180,7 @@ example="example-iceberg-catalog-connection" %}}
 
 {{< /tab >}}
 {{< tab "GCP BigLake" >}}
+{{< private-preview />}}
 
 {{% include-example file="examples/create_connection"
 example="example-iceberg-catalog-gcp-connection" %}}

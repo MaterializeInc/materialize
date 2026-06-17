@@ -8,20 +8,26 @@ menu:
     weight: 20
 ---
 
-{{< public-preview />}}
+{{< private-preview />}}
+
+{{< warning >}}
+{{< include-from-yaml data="examples/create_sink_iceberg" name="restrictions-limitations-gcp-maintenance" >}}
+{{< /warning >}}
 
 This guide walks you through the steps required to set up Iceberg sinks in
 Materialize Cloud.
 
 ## Prerequisites
 
-Google Cloud [documents the Lakehouse/BigLake setup process here](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog). The parts you'll need:
-- A Google Cloud project with the BigLake API enabled.
-- A Google Cloud Storage bucket to serve as the Iceberg warehouse.
-- A Lakehouse runtime catalog backed by your warehouse bucket.
-  - _NOTE: Materialize uses a service account key, not catalog-vended credentials, to write Iceberg data files._
-  So you may configure your catalog with either "End-user credentials" or "Credential vending mode".
-- A namespace in the BigLake catalog.
+- Google Cloud project with the [BigLake API enabled](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog#before_you_begin).
+- Google Cloud [Storage bucket](https://console.cloud.google.com/storage/browser) to serve as the Iceberg warehouse.
+- [Lakehouse runtime catalog](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog#create_a_catalog) backed by your warehouse bucket.<br/>
+- [Namespace in the catalog](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog#create_a_namespace_or_schema).
+
+{{< note >}}
+  You may configure your catalog with either _End-user credentials_ or _Credential vending mode_.
+  You will provide Materialize with a [GCP service account key](https://docs.cloud.google.com/iam/docs/keys-create-delete#iam-service-account-keys-create-gcloud) for authentication in the next step.
+{{< /note >}}
 
 ## Create the Iceberg catalog connection in Materialize
 
@@ -30,13 +36,14 @@ Google Cloud [documents the Lakehouse/BigLake setup process here](https://docs.c
 Materialize authenticates to BigLake as a Google Cloud [service
 account](https://docs.cloud.google.com/iam/docs/service-account-overview) you own.
 
-1. Create the service account.
+1. Create the [service account](https://console.cloud.google.com/iam-admin/serviceaccounts).
 2. Grant the service account these roles on your **project**:
     - `biglake.editor` (BigLake Editor)
     - `serviceusage.serviceUsageConsumer` (Service Usage Consumer)
 3. Grant the service account this role on your **Iceberg warehouse bucket**:
     - `storage.objectUser` (Storage Object User)
-4. [Create a service account key.](https://docs.cloud.google.com/iam/docs/keys-create-delete#iam-service-account-keys-create-gcloud)
+4. [Create a service account key in JSON format.](https://docs.cloud.google.com/iam/docs/keys-create-delete#iam-service-account-keys-create-gcloud)
+   You will need the entire JSON payload for the next step.
 
 ### Step 2. Create a GCP connection and Iceberg catalog connection in Materialize
 
@@ -71,6 +78,8 @@ name="exactly-once-delivery" >}}
   "/headless/iceberg-sinks/type-mapping" %}}
 
 ### Limitations
+
+- {{< include-from-yaml data="examples/create_sink_iceberg" name="restrictions-limitations-gcp-maintenance" >}}
 
 {{% include-headless "/headless/iceberg-sinks/limitations-list" %}}
 

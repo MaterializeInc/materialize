@@ -23,7 +23,7 @@ table.
 Follow the guide for the platform hosting your Iceberg tables:
 
 - [AWS S3 Tables](/serve-results/sink/iceberg-aws/)
-- [GCP BigLake](/serve-results/sink/iceberg-gcp/)
+- [GCP BigLake](/serve-results/sink/iceberg-gcp/) {{< private-preview-inline />}}
 
 [^1]: [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
 large-scale analytics datasets.
