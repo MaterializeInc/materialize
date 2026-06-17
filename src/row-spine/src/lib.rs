@@ -1473,6 +1473,8 @@ mod dictionary {
         }
     }
 
+    use std::cell::RefCell;
+
     use mz_repr::{Datum, read_datum};
 
     /// A reference that can be resolved to a sequence of `Datum`s.
@@ -1552,8 +1554,8 @@ mod dictionary {
     thread_local! {
         // Reusable per-thread decode buffers for comparing column-codec-encoded
         // items. Two, so a comparison can hold both operands decoded at once.
-        static CMP_SCRATCH_A: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
-        static CMP_SCRATCH_B: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+        static CMP_SCRATCH_A: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        static CMP_SCRATCH_B: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     }
 
     impl<'a> Copy for DatumSeq<'a> {}
