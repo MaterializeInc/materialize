@@ -868,7 +868,7 @@ impl UnionSchema {
     /// writer piece. An exact match (by kind for anonymous pieces, by name for
     /// named ones) is preferred; otherwise the first reader variant in
     /// declaration order that `writer` can be promoted into is returned. See
-    /// [`can_promote`].
+    /// `can_promote`.
     pub fn match_ref_promote_writer(
         &self,
         writer: SchemaPieceRefOrNamed,
@@ -893,7 +893,7 @@ impl UnionSchema {
     /// promotion. `self` is the *writer* union and `reader` is a concrete
     /// reader piece. An exact match is preferred; otherwise the first writer
     /// variant in declaration order that can be promoted into `reader` is
-    /// returned. See [`can_promote`].
+    /// returned. See `can_promote`.
     pub fn match_ref_promote_reader(
         &self,
         reader: SchemaPieceRefOrNamed,
