@@ -1,27 +1,11 @@
-# Reproducer: NaN-bearing JSONB crashes the JSON sink encoder.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
-# `strconv::parse_numeric` accepts positive quiet NaN. `Jsonb::from_str`
-# recognises the magic `$serde_json::private::Number` map key and calls
-# `parse_numeric` on the payload (see src/repr/src/adt/jsonb.rs), so a
-# user-supplied JSON text with that magic key smuggles `Datum::Numeric(NaN)`
-# past the `cast_jsonbable_to_jsonb` defence
-# (src/expr/src/scalar/func/impls/jsonb.rs:159) that the rest of the system
-# relies on.
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
 #
-# Once stored, sinks reach this datum via `JsonbRef::to_serde_json`
-# (src/repr/src/adt/jsonb.rs:213), which calls `serde_json::to_value(...)`
-# on a writer that produces the literal token `NaN`. `serde_json::to_value`
-# rejects that token as "invalid number"; the `.expect("conversion to
-# serde_json::Value known to be valid")` panics the calling thread.
-#
-# Used by:
-#   * src/interchange/src/json.rs:161           (Kafka JSON sink)
-#   * src/interchange/src/avro/encode.rs:366    (Kafka Avro sink)
-#   * src/arrow-util/src/builder.rs:926, 929    (COPY TO PARQUET / Iceberg)
-#
-# Expected behaviour after the fix: either `'...'::jsonb` rejects positive
-# NaN, or the sink encoder substitutes the string "NaN" the way
-# `cast_jsonbable_to_jsonb` already does for the SQL cast path.
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.# Reproducer: NaN-bearing JSONB crashes the JSON sink encoder.
 
 $ set-arg-default default-storage-size=scale=1,workers=1
 

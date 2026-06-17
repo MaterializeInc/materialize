@@ -613,10 +613,7 @@ impl Serialize for JsonbDatum<'_> {
                 //     }
                 //
                 let mut s = serializer.serialize_struct(SERDE_JSON_NUMBER_TOKEN, 1)?;
-                s.serialize_field(
-                    SERDE_JSON_NUMBER_TOKEN,
-                    &n.to_standard_notation_string(),
-                )?;
+                s.serialize_field(SERDE_JSON_NUMBER_TOKEN, &n.to_standard_notation_string())?;
                 s.end()
             }
             Datum::String(s) => serializer.serialize_str(s),
