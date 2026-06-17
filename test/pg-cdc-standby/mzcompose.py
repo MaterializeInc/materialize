@@ -231,6 +231,10 @@ def promote_standby(c: Composition) -> None:
     background check notices the changed physical-replica status while the stream
     is live and stalls the source permanently -- no restart required.
     """
+    # Primary dies, then standby takes over as primary.
+    if c.is_running("pg-primary"):
+        c.kill("pg-primary")
+
     conn = _pg_connect(c, "pg-standby")
     try:
         # pg_promote() waits (default 60s) for promotion to complete and returns

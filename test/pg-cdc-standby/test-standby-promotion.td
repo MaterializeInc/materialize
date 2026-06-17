@@ -29,3 +29,19 @@ contains: upstream physical replica status changed
 # against the promoted (now primary) node. Drop it here so we leave a clean slate
 # -- otherwise the post-workflow sanity restart fails on the stalled source.
 > DROP SOURCE mz_source CASCADE
+
+# sanity check we can write into the primary.
+
+$ postgres-execute connection=postgres://postgres:postgres@pg-standby
+INSERT INTO t VALUES (100001, 'post-promotion');
+
+# create a new source and read from the promoted replica successfully
+> CREATE SOURCE mz_source2
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+
+> CREATE TABLE t2 FROM SOURCE mz_source2 (REFERENCE t)
+
+> SELECT id, v FROM t2 WHERE id = 100001
+100001 post-promotion
+
+> DROP SOURCE mz_source2 CASCADE
