@@ -159,7 +159,8 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
-    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
+    ComputeEvent, DataflowAsOf, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
+    OperatorHydration,
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
@@ -418,14 +419,13 @@ pub fn build_compute_dataflow(
                     );
                     let global_id = object.id;
 
-                    context.log_dataflow_global_id(
-                        *bundle
-                            .scope()
-                            .addr()
-                            .first()
-                            .expect("Dataflow root id must exist"),
-                        global_id,
-                    );
+                    let dataflow_index = *bundle
+                        .scope()
+                        .addr()
+                        .first()
+                        .expect("Dataflow root id must exist");
+                    context.log_dataflow_global_id(dataflow_index, global_id);
+                    context.log_dataflow_as_of(dataflow_index);
                     context.insert_id(Id::Global(object.id), bundle);
                 }
 
@@ -510,14 +510,13 @@ pub fn build_compute_dataflow(
                         },
                     );
                     let global_id = object.id;
-                    context.log_dataflow_global_id(
-                        *bundle
-                            .scope()
-                            .addr()
-                            .first()
-                            .expect("Dataflow root id must exist"),
-                        global_id,
-                    );
+                    let dataflow_index = *bundle
+                        .scope()
+                        .addr()
+                        .first()
+                        .expect("Dataflow root id must exist");
+                    context.log_dataflow_global_id(dataflow_index, global_id);
+                    context.log_dataflow_as_of(dataflow_index);
                     context.insert_id(Id::Global(object.id), bundle);
                 }
 
@@ -1388,6 +1387,15 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             logger.log(&ComputeEvent::DataflowGlobal(DataflowGlobal {
                 dataflow_index,
                 global_id,
+            }));
+        }
+    }
+
+    fn log_dataflow_as_of(&self, dataflow_index: usize) {
+        if let Some(logger) = &self.compute_logger {
+            logger.log(&ComputeEvent::DataflowAsOf(DataflowAsOf {
+                dataflow_index,
+                as_of: self.as_of_frontier.as_option().copied(),
             }));
         }
     }

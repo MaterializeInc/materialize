@@ -198,6 +198,16 @@ pub struct DataflowGlobal {
     pub global_id: GlobalId,
 }
 
+/// Announce the initial `as_of` of a dataflow.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct DataflowAsOf {
+    /// The identifier of the dataflow.
+    pub dataflow_index: usize,
+    /// The dataflow's `as_of` timestamp. `None` if the dataflow's `as_of`
+    /// frontier is empty (the dataflow is closed).
+    pub as_of: Option<Timestamp>,
+}
+
 /// A logged compute event.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub enum ComputeEvent {
@@ -234,6 +244,8 @@ pub enum ComputeEvent {
     /// Cf. `ComputeLog::LirMaping`
     LirMapping(LirMapping),
     DataflowGlobal(DataflowGlobal),
+    /// The initial `as_of` of a dataflow.
+    DataflowAsOf(DataflowAsOf),
 }
 
 /// A peek type distinguishing between index and persist peeks.
@@ -355,6 +367,8 @@ pub(super) fn construct<'scope>(
         let mut lir_mapping_out = OutputBuilder::from(lir_mapping_out);
         let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
         let mut dataflow_global_ids_out = OutputBuilder::from(dataflow_global_ids_out);
+        let (dataflow_as_of_out, dataflow_as_of) = demux.new_output();
+        let mut dataflow_as_of_out = OutputBuilder::from(dataflow_as_of_out);
 
         let mut demux_state = DemuxState::new(activations, scope.index());
         demux.build(move |_capability| {
@@ -372,6 +386,7 @@ pub(super) fn construct<'scope>(
                 let mut operator_hydration_status = operator_hydration_status_out.activate();
                 let mut lir_mapping = lir_mapping_out.activate();
                 let mut dataflow_global_ids = dataflow_global_ids_out.activate();
+                let mut dataflow_as_of = dataflow_as_of_out.activate();
 
                 input.for_each(|cap, data| {
                     let mut output_sessions = DemuxOutput {
@@ -391,6 +406,7 @@ pub(super) fn construct<'scope>(
                             .session_with_builder(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
                         dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
+                        dataflow_as_of: dataflow_as_of.session_with_builder(&cap),
                     };
 
                     let shared_state = &mut shared_state.borrow_mut();
@@ -413,6 +429,7 @@ pub(super) fn construct<'scope>(
             (ArrangementHeapAllocations, arrangement_heap_allocations),
             (ArrangementHeapCapacity, arrangement_heap_capacity),
             (ArrangementHeapSize, arrangement_heap_size),
+            (DataflowAsOf, dataflow_as_of),
             (DataflowCurrent, export),
             (DataflowGlobal, dataflow_global_ids),
             (ErrorCount, error_count),
@@ -488,6 +505,8 @@ struct DemuxState {
     lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, LirMetadata>>,
     /// Dataflow -> `GlobalId` mapping (many-to-one).
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
+    /// Dataflow -> initial `as_of` mapping (one-to-one).
+    dataflow_as_of: BTreeMap<usize, Option<Timestamp>>,
     /// A row packer for the arrangement heap allocations output.
     arrangement_heap_allocations_packer: PermutedRowPacker,
     /// A row packer for the arrangement heap capacity output.
@@ -496,6 +515,8 @@ struct DemuxState {
     arrangement_heap_size_packer: PermutedRowPacker,
     /// A row packer for the dataflow global output.
     dataflow_global_packer: PermutedRowPacker,
+    /// A row packer for the dataflow as-of output.
+    dataflow_as_of_packer: PermutedRowPacker,
     /// A row packer for the error count output.
     error_count_packer: PermutedRowPacker,
     /// A row packer for the exports output.
@@ -528,6 +549,7 @@ impl DemuxState {
             arrangement_size: Default::default(),
             lir_mapping: Default::default(),
             dataflow_global_ids: Default::default(),
+            dataflow_as_of: Default::default(),
             arrangement_heap_allocations_packer: PermutedRowPacker::new(
                 ComputeLog::ArrangementHeapAllocations,
             ),
@@ -536,6 +558,7 @@ impl DemuxState {
             ),
             arrangement_heap_size_packer: PermutedRowPacker::new(ComputeLog::ArrangementHeapSize),
             dataflow_global_packer: PermutedRowPacker::new(ComputeLog::DataflowGlobal),
+            dataflow_as_of_packer: PermutedRowPacker::new(ComputeLog::DataflowAsOf),
             error_count_packer: PermutedRowPacker::new(ComputeLog::ErrorCount),
             export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
             frontier_packer: PermutedRowPacker::new(ComputeLog::FrontierCurrent),
@@ -587,6 +610,23 @@ impl DemuxState {
             Datum::UInt64(u64::cast_from(dataflow_index)),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             make_string_datum(global_id, &mut self.scratch_string_a),
+        ])
+    }
+
+    /// Pack a dataflow as-of update key-value for the given dataflow index and `as_of`.
+    fn pack_dataflow_as_of_update(
+        &mut self,
+        dataflow_index: usize,
+        as_of: Option<Timestamp>,
+    ) -> (&RowRef, &RowRef) {
+        let time = match as_of {
+            Some(time) => Datum::MzTimestamp(time),
+            None => Datum::Null,
+        };
+        self.dataflow_as_of_packer.pack_slice(&[
+            Datum::UInt64(u64::cast_from(dataflow_index)),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            time,
         ])
     }
 
@@ -773,6 +813,7 @@ struct DemuxOutput<'a, 'b> {
     error_count: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     lir_mapping: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     dataflow_global_ids: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    dataflow_as_of: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
 }
 
 /// Event handler of the demux operator.
@@ -822,6 +863,7 @@ impl DemuxHandler<'_, '_, '_> {
             OperatorHydration(hydration) => self.handle_operator_hydration(hydration),
             LirMapping(mapping) => self.handle_lir_mapping(mapping),
             DataflowGlobal(global) => self.handle_dataflow_global(global),
+            DataflowAsOf(as_of) => self.handle_dataflow_as_of(as_of),
         }
     }
 
@@ -898,6 +940,14 @@ impl DemuxHandler<'_, '_, '_> {
         DataflowShutdownReference { dataflow_index }: Ref<'_, DataflowShutdown>,
     ) {
         let ts = self.ts();
+
+        // Retract the dataflow's `as_of` row.
+        if let Some(as_of) = self.state.dataflow_as_of.remove(&dataflow_index) {
+            let datum = self.state.pack_dataflow_as_of_update(dataflow_index, as_of);
+            self.output
+                .dataflow_as_of
+                .give((datum, ts, Diff::MINUS_ONE));
+        }
 
         // We deal with any `GlobalId` based mappings in this event.
         if let Some(global_ids) = self.state.dataflow_global_ids.remove(&dataflow_index) {
@@ -1294,6 +1344,32 @@ impl DemuxHandler<'_, '_, '_> {
             .state
             .pack_dataflow_global_update(dataflow_index, global_id);
         self.output.dataflow_global_ids.give((datum, ts, Diff::ONE));
+    }
+
+    fn handle_dataflow_as_of(
+        &mut self,
+        DataflowAsOfReference {
+            dataflow_index,
+            as_of,
+        }: Ref<'_, DataflowAsOf>,
+    ) {
+        let as_of = Columnar::into_owned(as_of);
+
+        // The `as_of` is logged once per object built into the dataflow, but it is
+        // identical across those objects. Only emit a row the first time we see a
+        // given dataflow, so the row is retracted exactly once on shutdown.
+        if self
+            .state
+            .dataflow_as_of
+            .insert(dataflow_index, as_of)
+            .is_some()
+        {
+            return;
+        }
+
+        let ts = self.ts();
+        let datum = self.state.pack_dataflow_as_of_update(dataflow_index, as_of);
+        self.output.dataflow_as_of.give((datum, ts, Diff::ONE));
     }
 }
 
