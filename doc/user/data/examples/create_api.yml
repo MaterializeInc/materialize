@@ -13,7 +13,7 @@
         The identifier for the API.
     - name: "`FORMAT PROMETHEUS`"
       description: |
-        The exposition format served at `/metrics/custom/...` for the API.
+        The exposition format served at `/api/metrics/custom/...` for the API.
         `PROMETHEUS` is the only supported format today.
     - name: "`IN CLUSTER <cluster_name>`"
       description: |

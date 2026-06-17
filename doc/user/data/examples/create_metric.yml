@@ -4,7 +4,7 @@
       IN API <api_name> AS (
         TYPE '<metric_type>',
         HELP '<help_text>',
-        VALUES FROM <relation>,
+        SERIES FROM <relation>,
         VALUE COLUMN '<column_name>'
       );
   syntax_elements:
@@ -26,7 +26,7 @@
       description: |
         A human-readable description, emitted as the `# HELP` line in the
         exposition.
-    - name: "`VALUES FROM <relation>`"
+    - name: "`SERIES FROM <relation>`"
       description: |
         The view, materialized view, source, or table whose rows are scraped
         each time the API is queried. Every row becomes one sample; columns

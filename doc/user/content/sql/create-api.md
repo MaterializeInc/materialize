@@ -11,7 +11,7 @@ menu:
 `CREATE API` defines a Prometheus scrape endpoint backed by views in
 Materialize. After creating the API, any [`CREATE METRIC`](../create-metric)
 in the same API is exposed at
-`GET /metrics/custom/<database>/<schema>/<api_name>` on every HTTP listener
+`GET /api/metrics/custom/<database>/<schema>/<api_name>` on every HTTP listener
 whose configuration enables the custom-metrics route.
 
 ## Syntax
@@ -22,7 +22,7 @@ whose configuration enables the custom-metrics route.
 
 ### Endpoint exposure
 
-Whether `/metrics/custom/...` is reachable on a given HTTP listener is a
+Whether `/api/metrics/custom/...` is reachable on a given HTTP listener is a
 deployment-time decision controlled by the listener's configuration, not by
 the `CREATE API` statement. APIs are not bound to a specific listener; on
 listeners where the route is enabled, every API the requesting role can see
@@ -30,7 +30,7 @@ is reachable.
 
 ### Scraping
 
-Each request to `/metrics/custom/<database>/<schema>/<api_name>` re-evaluates
+Each request to `/api/metrics/custom/<database>/<schema>/<api_name>` re-evaluates
 every metric in the API on the API's cluster. Empty exposures (an API with no
 metrics, or metrics whose backing relation is empty) return `200 OK` with no
 samples.
@@ -44,15 +44,17 @@ The privileges required to execute this statement are:
 ### Scrape-time privileges
 
 `CREATE API` and `CREATE METRIC` only check the privileges of the role
-creating those objects. When `/metrics/custom/<database>/<schema>/<api_name>`
+creating those objects. When `/api/metrics/custom/<database>/<schema>/<api_name>`
 is scraped, Materialize evaluates each metric's source relation as the role
 that authenticated the HTTP request. That role must hold:
 
 {{% include-headless "/headless/sql-command-privileges/scrape-api" %}}
 
-On a listener with `authenticator_kind = "None"`, unauthenticated requests
-run as `anonymous_http_user`. Grant the required privileges to that role
-(or to `PUBLIC`) if you intend to expose the API without authentication.
+On a listener with `authenticator_kind = "None"`, the role is taken from the
+basic-auth username in the request (the password is not checked); a request
+with no credentials runs as `anonymous_http_user`. Grant the required
+privileges to the role you scrape as (or to `PUBLIC`) if you intend to expose
+the API without authentication.
 
 ## Examples
 
@@ -78,7 +80,7 @@ CREATE METRIC materialize.public.orders_open
   IN API materialize.public.app_metrics AS (
     TYPE 'gauge',
     HELP 'Number of open orders by status',
-    VALUES FROM materialize.public.orders_by_status,
+    SERIES FROM materialize.public.orders_by_status,
     VALUE COLUMN 'count'
   );
 ```
@@ -86,7 +88,7 @@ CREATE METRIC materialize.public.orders_open
 Scrape it:
 
 ```
-curl https://<region-host>/metrics/custom/materialize/public/app_metrics
+curl https://<region-host>/api/metrics/custom/materialize/public/app_metrics
 ```
 
 ## Related pages

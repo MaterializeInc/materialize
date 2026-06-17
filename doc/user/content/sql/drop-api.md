@@ -40,7 +40,7 @@ DROP API materialize.public.app_metrics CASCADE;
 ```
 
 After a successful `DROP API`, subsequent requests to
-`/metrics/custom/<database>/<schema>/<api_name>` return `404`.
+`/api/metrics/custom/<database>/<schema>/<api_name>` return `404`.
 
 ## Privileges
 

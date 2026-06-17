@@ -67,7 +67,7 @@ CREATE METRIC materialize.public.orders_open
   IN API materialize.public.app_metrics AS (
     TYPE 'gauge',
     HELP 'Number of open orders by status',
-    VALUES FROM materialize.public.orders_by_status,
+    SERIES FROM materialize.public.orders_by_status,
     VALUE COLUMN 'count'
   );
 ```
