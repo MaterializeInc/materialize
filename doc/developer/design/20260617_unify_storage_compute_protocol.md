@@ -202,12 +202,45 @@ mixed-version window.
 ### Phase 3 — unify the runtimes
 
 With a total order on the wire, the two timely runtimes can be merged into one on
-the cluster side.
-This is a localized, worker-side change — the rendering path consumes one
-totally-ordered command stream rather than two racing ones — rather than a
-protocol redesign.
+the cluster side, so the rendering path consumes one totally-ordered command
+stream rather than two racing ones.
 This phase eliminates the cross-subsystem hold-back behind SS-199 and is detailed
 in a follow-up design once Phase 1 and Phase 2 land.
+
+It has a non-obvious prerequisite: **the storage self-channel must become
+controller-ordered first.**
+The wire total order from Phase 2 orders controller→cluster commands, but it is
+not the only source of dataflow construction on the storage side.
+Storage does not render a dataflow directly in response to the controller's
+`RunIngestion`; that command only sets up reporting state and kicks an async
+worker, which computes resume-uppers from persist and then broadcasts an
+`InternalStorageCommand::CreateIngestionDataflow` over storage's internal command
+fabric — and *that* internal command is what actually renders the dataflow on
+every worker (`src/storage/src/storage_state.rs`, the `RunIngestion` flow; the
+internal command is documented to be able to "overtake" the external command).
+`SuspendAndRestart` (self-healing on a source error) and `DropDataflow` originate
+the same way.
+Today this is sound because storage broadcasts internal commands across its own
+workers via the timely fabric — so all storage workers render identically — and
+storage has its own timely id space.
+
+Under one shared runtime with one id allocator, that self-channel becomes a
+second, controller-invisible source of timely-id allocation.
+Even though it is consistent across storage workers, its interleaving with
+compute's controller-driven `CreateDataflow` is pinned to no single total order:
+two workers can allocate storage-vs-compute dataflow ids in different relative
+orders and diverge — exactly the [#34713] failure class.
+The fix is to make storage's dataflow lifecycle controller-ordered, as compute's
+already is.
+The async/persist computation has to stay on the cluster (it reads persist), but
+the *decision to render* and its *ordering* — `CreateIngestionDataflow`,
+`SuspendAndRestart`, `DropDataflow` — must round-trip through the controller and
+re-enter the single totally-ordered stream, leaving exactly one ordering
+authority.
+This collapses storage toward compute's model, where the worker never
+self-allocates and the controller drives all construction.
+It is a behavioral change — a source restart gains a controller round-trip — and
+is its own work item within Phase 3, not a detail of merging the allocators.
 
 ## Minimal viable prototype
 
@@ -280,3 +313,11 @@ intrinsically, with no separate component to keep consistent.
   Reconciliation is order-independent; there is no storage/compute dependence, so
   the order in which the two controllers replay is irrelevant.
   Reconcile compute first by slight preference if a choice is forced.
+* **De-self-channeling storage (Phase 3 prerequisite).**
+  How to move storage's dataflow-lifecycle decisions
+  (`CreateIngestionDataflow`, `SuspendAndRestart`, `DropDataflow`) onto the
+  controller-ordered stream while keeping the async resume-upper computation on
+  the cluster: what the cluster reports to the controller, what the controller
+  re-issues, and how source restarts behave with the added round-trip.
+  Scoped during Phase 3 design; flagged here because it is invisible until the
+  runtimes actually share an id space.
