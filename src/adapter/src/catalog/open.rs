@@ -881,7 +881,16 @@ fn add_new_remove_old_builtin_items_migration(
             | Builtin::Index(_)
             | Builtin::Connection(_) => continue,
         };
-        txn.drop_comments(&BTreeSet::from_iter([comment_id]))?;
+        // Drop comments under every relation-style `CommentObjectId` variant
+        // for this id, not just the current one. When a builtin's type changes
+        // (e.g. Table -> MaterializedView) but its catalog id is preserved, the
+        // prior type's comment rows would otherwise linger forever.
+        txn.drop_comments(&BTreeSet::from_iter([
+            CommentObjectId::Table(id),
+            CommentObjectId::View(id),
+            CommentObjectId::MaterializedView(id),
+            CommentObjectId::Source(id),
+        ]))?;
 
         let mut comments = comments.clone();
         for (col_idx, name) in desc.iter_names().enumerate() {
