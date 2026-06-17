@@ -331,7 +331,7 @@ pub async fn handle_metrics_custom(
 
         // Enforce USAGE on the API itself. The SQL execution path below
         // catches missing cluster USAGE and missing SELECT on each metric's
-        // VALUES FROM relation, but it never touches the API entry — so
+        // SERIES FROM relation, but it never touches the API entry — so
         // without this check, any role on a listener with `endpoint_api`
         // enabled could scrape any API as long as the relations happened to
         // be readable. We gate on `is_rbac_enforced_for_session` so this
@@ -365,7 +365,7 @@ pub async fn handle_metrics_custom(
                 mz_catalog::memory::objects::CatalogItem::Metric(m) if m.api_id == api_id => m,
                 _ => continue,
             };
-            let view_entry = catalog.get_entry(&metric.values_from);
+            let view_entry = catalog.get_entry(&metric.series_from);
             let view_full = catalog.resolve_full_name(view_entry.name(), Some(&conn_id));
             // Pre-quote the view's dotted name so it cannot break out of
             // identifier context when interpolated into SELECT below.

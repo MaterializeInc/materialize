@@ -71,7 +71,7 @@ pub struct HttpRoutesEnabled {
     /// Include /api/console/config endpoint for unauthenticated console configuration.
     #[serde(default)]
     pub console_config: bool,
-    /// Expose `/metrics/custom/{database}/{schema}/{api_name}` for APIs
+    /// Expose `/api/metrics/custom/{database}/{schema}/{api_name}` for APIs
     /// created with `CREATE API`. The endpoint is served on every listener
     /// that sets this flag; APIs themselves are not bound to a specific
     /// listener.

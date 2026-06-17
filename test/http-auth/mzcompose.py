@@ -22,7 +22,7 @@ SERVICES = [
 ]
 
 # The canonical no-auth CI listener config enables the `endpoint_api` route
-# (`/metrics/custom`) on the external HTTP listener (6876), like CI/orchestratord.
+# (`/api/metrics/custom`) on the external HTTP listener (6876), like CI/orchestratord.
 NO_AUTH_LISTENERS = f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json"
 
 
@@ -199,7 +199,7 @@ def workflow_default(c: Composition) -> None:
                         f"CREATE METRIC materialize.public.{trig.metric_ident}"
                         f" IN API materialize.public.{api} AS (TYPE 'gauge',"
                         f" HELP '{trig.help_text}',"
-                        f" VALUES FROM materialize.public.{view},"
+                        f" SERIES FROM materialize.public.{view},"
                         f" VALUE COLUMN 'count')",
                         print_statement=False,
                     )
@@ -211,7 +211,7 @@ def workflow_default(c: Composition) -> None:
                 # On the buggy path the abort resets the connection mid-request.
                 url = (
                     f"http://localhost:{c.port('materialized', 6876)}"
-                    f"/metrics/custom/materialize/public/{api}"
+                    f"/api/metrics/custom/materialize/public/{api}"
                 )
                 try:
                     requests.get(url, timeout=30)

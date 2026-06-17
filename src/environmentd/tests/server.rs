@@ -6383,7 +6383,7 @@ fn test_inject_audit_events_malformed() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
-/// End-to-end check of `/metrics/custom/{database}/{schema}/{name}`:
+/// End-to-end check of `/api/metrics/custom/{database}/{schema}/{name}`:
 ///
 /// * a `CREATE API` followed by a `CREATE METRIC` produces a working
 ///   Prometheus exposition on every HTTP listener whose config has
@@ -6463,7 +6463,7 @@ async fn test_metrics_custom_endpoint() {
              IN API materialize.public.api1 AS ( \
                TYPE 'gauge', \
                HELP 'leads', \
-               VALUES FROM materialize.public.v, \
+               SERIES FROM materialize.public.v, \
                VALUE COLUMN 'count' \
              )",
         )
@@ -6471,11 +6471,11 @@ async fn test_metrics_custom_endpoint() {
         .unwrap();
 
     let external_url = format!(
-        "http://{}/metrics/custom/materialize/public/api1",
+        "http://{}/api/metrics/custom/materialize/public/api1",
         server.http_local_addr(),
     );
     let internal_url = format!(
-        "http://{}/metrics/custom/materialize/public/api1",
+        "http://{}/api/metrics/custom/materialize/public/api1",
         server.internal_http_local_addr(),
     );
 
@@ -6502,7 +6502,7 @@ async fn test_metrics_custom_endpoint() {
 
     // Unknown API name -> 404 on every listener.
     let bogus_url = format!(
-        "http://{}/metrics/custom/materialize/public/no_such_api",
+        "http://{}/api/metrics/custom/materialize/public/no_such_api",
         server.http_local_addr(),
     );
     let resp = reqwest::get(&bogus_url).await.unwrap();
@@ -6539,7 +6539,7 @@ async fn test_metrics_custom_endpoint() {
              IN API materialize.public.api1 AS ( \
                TYPE 'gauge', \
                HELP 'leads', \
-               VALUES FROM materialize.public.v, \
+               SERIES FROM materialize.public.v, \
                VALUE COLUMN 'count' \
              )",
         )
@@ -6624,7 +6624,7 @@ fn test_metrics_custom_endpoint_persistence() {
                  IN API materialize.public.api1 AS ( \
                    TYPE 'gauge', \
                    HELP 'h', \
-                   VALUES FROM materialize.public.v, \
+                   SERIES FROM materialize.public.v, \
                    VALUE COLUMN 'count' \
                  )",
             )
@@ -6657,7 +6657,7 @@ fn test_metrics_custom_endpoint_persistence() {
                  IN API materialize.public.api1 AS ( \
                    TYPE 'gauge', \
                    HELP 'h', \
-                   VALUES FROM materialize.public.v, \
+                   SERIES FROM materialize.public.v, \
                    VALUE COLUMN 'count' \
                  )",
             )

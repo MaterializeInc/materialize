@@ -502,7 +502,7 @@ impl HttpServer {
         if routes_enabled.endpoint_api {
             let endpoint_api_router = Router::new()
                 .route(
-                    "/metrics/custom/{database}/{schema}/{name}",
+                    "/api/metrics/custom/{database}/{schema}/{name}",
                     routing::get(sql::handle_metrics_custom),
                 )
                 .layer(auth_middleware.clone())

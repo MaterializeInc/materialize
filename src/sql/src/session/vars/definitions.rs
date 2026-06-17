@@ -2141,7 +2141,7 @@ feature_flags!(
     },
     {
         name: enable_prometheus_metrics_api,
-        desc: "Whether to allow CREATE API / CREATE METRIC and the matching /metrics/custom HTTP endpoint.",
+        desc: "Whether to allow CREATE API / CREATE METRIC and the matching /api/metrics/custom HTTP endpoint.",
         default: false,
         enable_for_item_parsing: true,
     },
