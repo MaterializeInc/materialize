@@ -25,11 +25,12 @@ use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::ArrangementStrategy;
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
 use mz_expr::func::CastUint64ToInt64;
-use mz_expr::{BinaryFunc, Columns, Eval, EvalError, MirScalarExpr, UnaryFunc, func};
+use mz_expr::{BinaryFunc, Columns, Eval, EvalError, UnaryFunc, func};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
@@ -307,7 +308,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         offset: usize,
-        limit: Option<mz_expr::MirScalarExpr>,
+        limit: Option<LirScalarExpr>,
         arity: usize,
         buckets: Vec<u64>,
     ) -> (
@@ -343,10 +344,10 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 
                 if let Some(new_limit) = new_limit {
                     limit =
-                        MirScalarExpr::literal_ok(Datum::Int64(new_limit), ReprScalarType::Int64);
+                        LirScalarExpr::literal_ok(Datum::Int64(new_limit), ReprScalarType::Int64);
                 } else {
                     limit = limit.call_binary(
-                        MirScalarExpr::literal_ok(
+                        LirScalarExpr::literal_ok(
                             Datum::UInt64(u64::cast_from(offset)),
                             ReprScalarType::UInt64,
                         )
@@ -437,7 +438,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         order_key: Vec<mz_expr::ColumnOrder>,
         modulus: u64,
         offset: usize,
-        limit: Option<mz_expr::MirScalarExpr>,
+        limit: Option<LirScalarExpr>,
         arity: usize,
         validating: bool,
     ) -> (
@@ -580,7 +581,7 @@ fn build_topk_negated_stage<'s, T, Bu, Tr>(
     input: &VecCollection<'s, T, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
-    limit: Option<mz_expr::MirScalarExpr>,
+    limit: Option<LirScalarExpr>,
     arity: usize,
 ) -> (
     Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
@@ -736,7 +737,7 @@ where
 fn render_intra_ts_thinning<'s, T>(
     collection: VecCollection<'s, T, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
-    limit: mz_expr::MirScalarExpr,
+    limit: LirScalarExpr,
 ) -> VecCollection<'s, T, (Row, Row), Diff>
 where
     T: timely::progress::Timestamp + Lattice,

@@ -25,6 +25,7 @@ use std::ops::Deref;
 
 use itertools::Itertools;
 use mz_expr::Id;
+use mz_expr::MfpPlan;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::{IndentLike, StrExt, separated};
@@ -32,8 +33,6 @@ use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     CompactScalarSeq, CompactScalars, ExplainConfig, ExprHumanizer, Indices, PlanRenderingContext,
 };
-
-use mz_expr::MfpPlan;
 
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;

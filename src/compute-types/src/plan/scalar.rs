@@ -24,7 +24,7 @@ use mz_expr::{
 use mz_ore::str::separated;
 use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::explain::ScalarOps;
-use mz_repr::{Datum, ReprColumnType, Row, RowArena};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena};
 use serde::{Deserialize, Serialize};
 
 /// Scalar expressions, as appear in MFPs.
@@ -79,6 +79,56 @@ impl LirScalarExpr {
     /// Generates an LSE representing the given column reference.
     pub fn column(c: usize) -> Self {
         LirScalarExpr::Column(c, TreatAsEqual(None))
+    }
+
+    /// Packs a `Datum` or `EvalError` into a literal row of the given type.
+    pub fn literal(res: Result<Datum, EvalError>, typ: ReprScalarType) -> Self {
+        let typ = ReprColumnType {
+            scalar_type: typ,
+            nullable: matches!(res, Ok(Datum::Null)),
+        };
+        let row = res.map(|datum| Row::pack_slice(&[datum]));
+        LirScalarExpr::Literal(row, typ)
+    }
+
+    /// Generates a literal of the given type.
+    pub fn literal_ok(datum: Datum, typ: ReprScalarType) -> Self {
+        LirScalarExpr::literal(Ok(datum), typ)
+    }
+
+    /// If the expression is a literal, this returns the literal's Datum or the literal's EvalError.
+    /// Otherwise, it returns None.
+    pub fn as_literal(&self) -> Option<Result<Datum<'_>, &EvalError>> {
+        if let LirScalarExpr::Literal(lit, _column_type) = self {
+            Some(lit.as_ref().map(|row| row.unpack_first()))
+        } else {
+            None
+        }
+    }
+
+    /// If the expression is an int64, returns the literal.
+    pub fn as_literal_int64(&self) -> Option<i64> {
+        match self.as_literal() {
+            Some(Ok(Datum::Int64(i))) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// Calls a unary function, with `self` as the argument.
+    pub fn call_unary<U: Into<UnaryFunc>>(self, func: U) -> Self {
+        LirScalarExpr::CallUnary {
+            func: func.into(),
+            expr: Box::new(self),
+        }
+    }
+
+    /// Calls a binary function, with `self` as the first argument `other` as the second.
+    pub fn call_binary<B: Into<BinaryFunc>>(self, other: Self, func: B) -> Self {
+        LirScalarExpr::CallBinary {
+            func: func.into(),
+            expr1: Box::new(self),
+            expr2: Box::new(other),
+        }
     }
 
     /// Visits all subexpressions in DFS preorder.

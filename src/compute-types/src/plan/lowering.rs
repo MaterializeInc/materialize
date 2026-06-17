@@ -888,7 +888,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     group_key.clone(),
                     order_key.clone(),
                     *offset,
-                    limit.clone(),
+                    limit
+                        .as_ref()
+                        .map(|limit| LirScalarExpr::try_from(limit).expect("lowerable MIR")),
                     arity,
                     *monotonic,
                     *expected_group_size,
