@@ -489,6 +489,11 @@ impl<'a> ActiveComputeState<'a> {
             config.arrangement_dictionary_compression,
             std::sync::atomic::Ordering::Relaxed,
         );
+        // Same one-shot treatment for per-column compression; see the note above.
+        mz_row_spine::COLUMN_COMPRESSION.store(
+            config.arrangement_column_compression,
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         if let Some(offset) = config.expiration_offset {
             self.compute_state.apply_expiration_offset(offset);

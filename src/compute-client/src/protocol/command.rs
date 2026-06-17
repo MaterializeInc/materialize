@@ -281,6 +281,13 @@ pub struct InstanceConfig {
     /// held fixed for the replica's lifetime, so flipping the flag only affects replicas created
     /// afterwards rather than retroactively changing arrangements across the environment.
     pub arrangement_dictionary_compression: bool,
+    /// Whether arrangements created by this replica use per-column compression.
+    ///
+    /// Captured from `enable_arrangement_column_compression_alpha` when the replica is created and
+    /// held fixed for the replica's lifetime, exactly like `arrangement_dictionary_compression`.
+    /// The two are independent; per-column compression layers over raw row bytes, not over
+    /// dictionary-compressed bytes.
+    pub arrangement_column_compression: bool,
 }
 
 impl InstanceConfig {
@@ -303,12 +310,14 @@ impl InstanceConfig {
             peek_stash_persist_location: self_peek_stash_persist_location,
             // Captured at replica creation; intentionally not part of compatibility (see above).
             arrangement_dictionary_compression: _,
+            arrangement_column_compression: _,
         } = self;
         let InstanceConfig {
             logging: other_logging,
             expiration_offset: other_offset,
             peek_stash_persist_location: other_peek_stash_persist_location,
             arrangement_dictionary_compression: _,
+            arrangement_column_compression: _,
         } = other;
 
         // Logging is compatible if exactly the same.
