@@ -23,6 +23,11 @@ pub use self::spines::{
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
+// The entropy layer. Its API is exercised by tests today and wired into the
+// containers in a follow-up; allow it to land unused in the meantime.
+#[allow(dead_code)]
+mod huffman;
+
 /// Enable per-column dictionary compression in row containers.
 pub static DICTIONARY_COMPRESSION: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
