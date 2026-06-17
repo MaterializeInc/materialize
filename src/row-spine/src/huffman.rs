@@ -108,6 +108,12 @@ impl HuffmanCode {
         &self.lengths
     }
 
+    /// Visit the heap allocations backing this code (the fixed-size arrays live
+    /// inline and are not reported).
+    pub fn heap_size(&self, callback: &mut impl FnMut(usize, usize)) {
+        callback(self.sorted.len(), self.sorted.capacity());
+    }
+
     /// Encode `bytes`, appending the bits to `out`. Every byte must be present
     /// in the model (`lengths[b] > 0`); this holds when the model was built from
     /// a superset of `bytes`, as it is for batch-wide column models.
@@ -265,7 +271,8 @@ impl BitWriter {
             // Mask to the byte we are flushing; `acc` keeps already-flushed bits
             // in higher positions, which we discard here.
             let byte = (self.acc >> self.nbits) & 0xFF;
-            self.out.push(u8::try_from(byte).expect("masked to one byte"));
+            self.out
+                .push(u8::try_from(byte).expect("masked to one byte"));
         }
     }
 
@@ -273,7 +280,8 @@ impl BitWriter {
     pub fn finish(mut self) -> Vec<u8> {
         if self.nbits > 0 {
             let byte = (self.acc << (8 - self.nbits)) & 0xFF;
-            self.out.push(u8::try_from(byte).expect("masked to one byte"));
+            self.out
+                .push(u8::try_from(byte).expect("masked to one byte"));
         }
         self.out
     }
@@ -310,6 +318,12 @@ impl<'a> BitReader<'a> {
             self.byte += 1;
         }
         value
+    }
+
+    /// Number of whole bytes consumed so far, rounding up a partially-read byte.
+    /// Used to advance past a byte-aligned bitstream embedded in a larger buffer.
+    pub fn bytes_consumed(&self) -> usize {
+        self.byte + usize::from(self.bit > 0)
     }
 }
 

@@ -23,8 +23,10 @@ pub use self::spines::{
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
-// The entropy layer. Its API is exercised by tests today and wired into the
+// The per-column compression layer. Exercised by tests today and wired into the
 // containers in a follow-up; allow it to land unused in the meantime.
+#[allow(dead_code)]
+mod codec;
 #[allow(dead_code)]
 mod huffman;
 
