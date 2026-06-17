@@ -218,6 +218,53 @@ def rebuild_standby(c: Composition) -> None:
     _allow_replication(c, "pg-standby")
 
 
+def promote_standby(c: Composition) -> None:
+    """Promote the physical standby to a primary, as an operator would during a
+    failover.
+
+    Promotion flips pg_is_in_recovery() to false and switches the WAL timeline.
+    The source was created against this node *as a standby*, so once it is no
+    longer one, logical decoding can no longer safely continue: a periodic
+    background check notices the changed physical-replica status while the stream
+    is live and stalls the source permanently -- no restart required.
+    """
+    conn = _pg_connect(c, "pg-standby")
+    try:
+        # pg_promote() waits (default 60s) for promotion to complete and returns
+        # whether it succeeded.
+        promoted = _query_scalar(conn, "SELECT pg_promote()")
+        assert promoted, "pg_promote() did not complete"
+        in_recovery = _query_scalar(conn, "SELECT pg_is_in_recovery()")
+        assert not in_recovery, "expected the promoted standby to leave recovery"
+    finally:
+        conn.close()
+
+
+def workflow_promotion(c: Composition) -> None:
+    """Promoting the standby to a primary stalls the source.
+
+    Deliberately kept on its own clean slate -- setup_standby() tears everything
+    down first -- so this scenario is isolated from workflow_default's CDC,
+    rebuild, and drop assertions and cannot regress them. Promotion is also
+    irreversible, so it must run against a freshly built standby.
+    """
+    setup_standby(c)
+
+    with nudge_standby_snapshots(c):
+        # Source creation + initial snapshot create slots on the standby, which
+        # block until a standby-snapshot record arrives -- hence the nudger.
+        c.run_testdrive_files("configure-materialize.td", "verify-snapshot.td")
+
+    # Confirm we really decoded from the standby before promoting it; otherwise a
+    # subsequent stall would not prove anything about promotion.
+    _verify_reading_from_standby(c)
+
+    # Promotion needs no nudger: the live physical-replica check stalls the source
+    # without (re)creating a slot, so nothing blocks on a standby snapshot.
+    promote_standby(c)
+    c.run_testdrive_files("test-standby-promotion.td")
+
+
 def workflow_default(c: Composition) -> None:
     setup_standby(c)
 
@@ -249,6 +296,11 @@ def workflow_default(c: Composition) -> None:
     # though the source stalled. Dropping a slot (unlike creating one) does not
     # block on a standby snapshot, so this runs outside the nudger.
     _verify_slot_cleaned_up_on_drop(c)
+
+    # Finally, the promotion scenario. It runs on its own clean slate (see the
+    # docstring) so it stays isolated from everything above; we run it here so it
+    # is exercised by the default CI invocation, which passes no workflow name.
+    workflow_promotion(c)
 
 
 def _verify_reading_from_standby(c: Composition) -> None:
