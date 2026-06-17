@@ -79,22 +79,27 @@ For a map with `n > 0` entries the payload (the bytes counted by the existing
 `u64` length) becomes:
 
 ```text
-[ count: u32 ][ offset_1: u32 ] .. [ offset_{n-1}: u32 ][ entries.. ]
+[ entries.. ][ offset_1: u32 ] .. [ offset_{n-1}: u32 ][ count: u32 ]
 ```
 
-* `count` is `n`.
-* `offset_i` is the start of entry `i` relative to the first entry. Entry 0 is
-  always at offset 0 and is omitted, so the header is exactly `n` little-endian
-  `u32`s and the entries begin `4 * n` bytes in.
 * Entries are unchanged: `(key, value)` datum pairs sorted ascending by key.
+* `offset_i` is the start of entry `i` relative to the first entry. Entry 0 is
+  always at offset 0 and is omitted.
+* `count` is `n`.
 
-Empty maps keep an **empty** payload (no header), so they stay byte-identical to
-`DatumMap::empty()` and the encoding of every value remains canonical.
+The index is a **suffix** of exactly `n` little-endian `u32`s, so the entries
+occupy the first `len - 4 * n` bytes. Empty maps keep an **empty** payload (no
+suffix), so they stay byte-identical to `DatumMap::empty()` and the encoding of
+every value remains canonical.
 
 The index is built once, at the end of `RowPacker::push_dict_with`
-(`finish_dict`), by walking the just-written entries to record their offsets and
-splicing the header in front of them. Pushing an existing `Datum::Map` copies
-its bytes verbatim, so the index is never rebuilt or duplicated.
+(`finish_dict`), by walking the just-written entries. Because this runs on the
+hot path that decodes every `Row` out of persist, it is written to be cheap: the
+suffix layout lets us **append** the index instead of splicing it in front (no
+memmove), and each offset is written straight into the buffer as it is computed
+(no temporary allocation). The only inherent cost is the single `O(n)` walk of
+the entries. Pushing an existing `Datum::Map` copies its bytes verbatim, so the
+index is never rebuilt or duplicated.
 
 `DatumMap::iter()` skips the header (so the columnar encoder, proto conversion,
 equality, hashing, and ordering — all iter-based — are unaffected), and the new

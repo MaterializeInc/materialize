@@ -907,19 +907,21 @@ impl<T> PartialOrd for DatumList<'_, T> {
 /// # Payload layout
 ///
 /// `data` points at the map's serialized payload, which carries a small index
-/// so that a key can be located with a binary search instead of a linear scan.
-/// For a map with `n > 0` entries the layout is:
+/// *suffix* so that a key can be located with a binary search instead of a
+/// linear scan. For a map with `n > 0` entries the layout is:
 ///
 /// ```text
-/// [ count: u32 ][ offset_1: u32 ] .. [ offset_{n-1}: u32 ][ entries.. ]
+/// [ entries.. ][ offset_1: u32 ] .. [ offset_{n-1}: u32 ][ count: u32 ]
 /// ```
 ///
-/// where `count` is `n`, `offset_i` is the start of entry `i` relative to the
-/// first entry (entry 0 is always at offset 0 and so is omitted), and the
-/// entries are `(key, value)` datum pairs **sorted in ascending key order**.
-/// The index is thus exactly `n` little-endian `u32`s, so the entries begin
-/// `4 * n` bytes into the payload. An empty map has an empty payload (no
-/// header), keeping its encoding canonical.
+/// where the entries are `(key, value)` datum pairs **sorted in ascending key
+/// order**, `offset_i` is the start of entry `i` relative to the first entry
+/// (entry 0 is always at offset 0 and so is omitted), and `count` is `n`. The
+/// suffix is thus exactly `n` little-endian `u32`s, so the entries occupy the
+/// first `data.len() - 4 * n` bytes. The index lives at the end so the packer
+/// can append it (rather than splice it in front) once the entries are written.
+/// An empty map has an empty payload (no suffix), keeping its encoding
+/// canonical.
 ///
 /// The type parameter `T` represents the value type of the map. It is a
 /// phantom parameter — the actual values are stored as serialized bytes and
@@ -1244,64 +1246,50 @@ fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
 ///
 /// On entry, `data[entries_start..]` holds the dictionary's entries as a
 /// sequence of sorted `(key, value)` datum pairs. This walks those entries to
-/// compute the byte offset of each one, then splices an index header in just
-/// before them. The resulting payload layout is documented on [`DatumMap`].
+/// compute the byte offset of each one and appends an index *suffix*. The
+/// resulting payload layout is documented on [`DatumMap`].
+///
+/// The suffix layout lets us append the index rather than splice it in front
+/// (no memmove), and we write each offset straight into the buffer as we go
+/// (no temporary allocation) — both matter because this runs on the hot path
+/// that decodes every `Row` out of persist.
 ///
 /// Empty dictionaries are left untouched so that they keep a canonical,
 /// header-free encoding (identical to [`DatumMap::empty`]). This keeps the
 /// encoding of any given map value deterministic, which `Row`'s byte-based
 /// equality relies on.
 fn finish_dict(data: &mut CompactBytes, entries_start: usize) {
-    // Walk the freshly written entries, recording the start offset of each one
-    // relative to `entries_start`.
-    let mut offsets: Vec<u32> = Vec::new();
-    {
-        let entries = &data[entries_start..];
-        let entries_len = entries.len();
-        let mut cursor: &[u8] = entries;
-        while !cursor.is_empty() {
-            let offset = entries_len - cursor.len();
-            offsets.push(u32::try_from(offset).expect("map larger than 4 GiB cannot be indexed"));
-            // SAFETY: `cursor` points at the key/value datums just written by
-            // the packer, which are well-formed per `push_dict_with`'s contract.
-            unsafe {
-                let _key = read_datum(&mut cursor);
-                let _val = read_datum(&mut cursor);
-            }
-        }
-    }
-
-    let n = offsets.len();
-    if n == 0 {
+    let entries_end = data.len();
+    if entries_end == entries_start {
         return;
     }
 
-    // The header stores the entry count followed by the start offsets of
-    // entries `1..n`; entry 0 always starts at offset 0 and is omitted. This is
-    // exactly `n` little-endian `u32`s, so the entries begin `4 * n` bytes into
-    // the payload.
-    let mut header = Vec::with_capacity(size_of::<u32>() * n);
-    header.extend_from_slice(
-        &u32::try_from(n)
-            .expect("map with more than 4 billion entries")
-            .to_le_bytes(),
-    );
-    for offset in &offsets[1..] {
-        header.extend_from_slice(&offset.to_le_bytes());
+    // Walk the entries, appending the start offset of entries `1..count`
+    // (entry 0 is always at offset 0 and is omitted), then append `count`.
+    let mut p = entries_start;
+    let mut count: u32 = 0;
+    while p < entries_end {
+        if count > 0 {
+            let offset =
+                u32::try_from(p - entries_start).expect("map larger than 4 GiB cannot be indexed");
+            data.extend_from_slice(&offset.to_le_bytes());
+        }
+        count = count
+            .checked_add(1)
+            .expect("map with more than 4 billion entries");
+        // Re-borrow `data` here (after the append above) so the borrow never
+        // overlaps a mutation; `entries_end` keeps us within the entries.
+        let mut cursor: &[u8] = &data[p..entries_end];
+        let before = cursor.len();
+        // SAFETY: `cursor` points at the key/value datums just written by the
+        // packer, which are well-formed per `push_dict_with`'s contract.
+        unsafe {
+            read_datum(&mut cursor);
+            read_datum(&mut cursor);
+        }
+        p += before - cursor.len();
     }
-    let header_len = header.len();
-    let entries_len = data.len() - entries_start;
-
-    // Insert `header` just before the entries. `CompactBytes` has no `splice`,
-    // so we grow the buffer (reusing `header` as filler), shift the entries
-    // right to open a gap, then write the header into the gap. This mirrors the
-    // in-place shift in `push_list_with`'s `long_list`.
-    data.extend_from_slice(&header);
-    data.copy_within(
-        entries_start..entries_start + entries_len,
-        entries_start + header_len,
-    );
-    data[entries_start..entries_start + header_len].copy_from_slice(&header);
+    data.extend_from_slice(&count.to_le_bytes());
 }
 
 /// Read a data whose length is encoded in the row before its contents.
@@ -3039,7 +3027,9 @@ impl<'a, T> DatumMap<'a, T> {
         if self.data.is_empty() {
             0
         } else {
-            let count = u32::from_le_bytes(self.data[..size_of::<u32>()].try_into().unwrap());
+            // `count` is the final `u32` of the suffix.
+            let n = self.data.len();
+            let count = u32::from_le_bytes(self.data[n - size_of::<u32>()..].try_into().unwrap());
             usize::cast_from(count)
         }
     }
@@ -3049,26 +3039,30 @@ impl<'a, T> DatumMap<'a, T> {
         self.data.is_empty()
     }
 
-    /// The slice holding the entries, with the index header stripped off.
+    /// The number of bytes the entries occupy, i.e. the payload minus the index
+    /// suffix (which is exactly `len()` little-endian `u32`s).
+    fn entries_len(&self) -> usize {
+        self.data.len() - size_of::<u32>() * self.len()
+    }
+
+    /// The slice holding the entries, with the index suffix stripped off.
     ///
     /// See the type-level docs for the payload layout.
     fn entries(&self) -> &'a [u8] {
         if self.data.is_empty() {
             return self.data;
         }
-        // The header is exactly `len()` little-endian `u32`s.
-        let header_len = size_of::<u32>() * self.len();
-        &self.data[header_len..]
+        &self.data[..self.entries_len()]
     }
 
     /// The start offset of entry `i` relative to the start of the entries
     /// region. Entry 0 is implicitly at offset 0; the rest are read from the
-    /// index header. `i` must be in `0..len()`.
-    fn entry_offset(&self, i: usize) -> usize {
+    /// index suffix, which begins at `entries_len`. `i` must be in `0..len()`.
+    fn entry_offset(&self, entries_len: usize, i: usize) -> usize {
         if i == 0 {
             0
         } else {
-            let at = size_of::<u32>() * i;
+            let at = entries_len + size_of::<u32>() * (i - 1);
             let offset =
                 u32::from_le_bytes(self.data[at..at + size_of::<u32>()].try_into().unwrap());
             usize::cast_from(offset)
@@ -3084,13 +3078,14 @@ impl<'a, T> DatumMap<'a, T> {
         if n == 0 {
             return None;
         }
-        let entries = self.entries();
+        let entries_len = self.entries_len();
+        let entries = &self.data[..entries_len];
 
         let mut lo = 0;
         let mut hi = n;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let mut cursor = &entries[self.entry_offset(mid)..];
+            let mut cursor = &entries[self.entry_offset(entries_len, mid)..];
             // SAFETY: `cursor` points at a well-formed entry (a string key
             // followed by its value), per the `DatumMap` payload contract.
             let mid_key = unsafe { read_datum(&mut cursor) }.unwrap_str();
