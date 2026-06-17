@@ -24,3 +24,8 @@
 
 ! SELECT count(*) FROM t
 contains: upstream physical replica status changed
+
+# The stall is permanent; an operator's only recourse is to recreate the source
+# against the promoted (now primary) node. Drop it here so we leave a clean slate
+# -- otherwise the post-workflow sanity restart fails on the stalled source.
+> DROP SOURCE mz_source CASCADE
