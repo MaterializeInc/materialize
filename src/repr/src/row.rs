@@ -3897,7 +3897,11 @@ mod tests {
         let map = datum.unwrap_map();
         assert_eq!(map.get("scalar"), Some(Datum::Int64(7)));
         assert_eq!(
-            map.get("list").unwrap().unwrap_list().iter().collect::<Vec<_>>(),
+            map.get("list")
+                .unwrap()
+                .unwrap_list()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Datum::Int64(1), Datum::Int64(2)],
         );
         assert_eq!(map.get("missing"), None);
