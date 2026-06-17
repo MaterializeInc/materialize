@@ -321,6 +321,7 @@ impl ConnectionOptionExtracted {
                 ConnectionDetails::AwsPrivatelink(connection)
             }
             CreateConnectionType::Gcp => {
+                scx.require_feature_flag(&vars::ENABLE_GCP_CONNECTION)?;
                 let credentials_json = self
                     .service_account_key
                     .ok_or_else(|| sql_err!("SERVICE ACCOUNT KEY option is required"))?
@@ -730,6 +731,7 @@ impl ConnectionOptionExtracted {
                                 scope: self.scope.clone(),
                             },
                             (None, Some(gcp_connection)) => {
+                                scx.require_feature_flag(&vars::ENABLE_GCP_CONNECTION)?;
                                 /// All BigLake Iceberg REST Catalogs use the same catalog URI.
                                 const BIGLAKE_CATALOG_URI: &str =
                                     "https://biglake.googleapis.com/iceberg/v1/restcatalog";

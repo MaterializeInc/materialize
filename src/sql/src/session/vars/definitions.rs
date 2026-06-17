@@ -1977,6 +1977,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_gcp_connection,
+        desc: "CREATE CONNECTION ... TO GCP",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_alter_set_cluster,
         desc: "ALTER ... SET CLUSTER syntax",
         default: false,
