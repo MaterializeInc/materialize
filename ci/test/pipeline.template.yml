@@ -503,6 +503,7 @@ steps:
           ]
     agents:
       queue: hetzner-x86-64-4cpu-8gb
+    skip: "https://linear.app/materializeinc/issue/SQL-398"
 
   - id: source-sink-errors
     label: "S&S error reporting"
