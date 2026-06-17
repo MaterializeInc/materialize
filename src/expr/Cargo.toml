@@ -80,7 +80,6 @@ mz-expr = { path = ".", features = ["proptest"] }
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
-mz-transform = { path = "../transform" }
 proptest.workspace = true
 proptest-derive.workspace = true
 rand.workspace = true
