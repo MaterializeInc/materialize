@@ -95,6 +95,16 @@ pub struct ReplicaAllocation {
     /// T-shirt size.
     #[serde(default = "default_true")]
     pub is_cc: bool,
+    /// The size *family* this size belongs to, e.g. the size `D.1-xsmall`
+    /// belongs to family `D` and the legacy t-shirt sizes belong to family
+    /// `legacy`. The family is the coarse axis and is *not* a prefix of the size
+    /// name in general. Used as the
+    /// `replica_size_family` attribute when evaluating replica-local scoped
+    /// feature flags (see the scoped feature flags design). When unset, the
+    /// family falls back to a value derived from [`Self::is_cc`] via
+    /// [`ReplicaAllocation::family`].
+    #[serde(default)]
+    pub family: Option<String>,
     /// Whether instances of this type use swap as the spill-to-disk mechanism.
     #[serde(default)]
     pub swap_enabled: bool,
@@ -104,6 +114,24 @@ pub struct ReplicaAllocation {
     /// Additional node selectors.
     #[serde(default)]
     pub selectors: BTreeMap<String, String>,
+}
+
+impl ReplicaAllocation {
+    /// The name of the size family this allocation belongs to, used as the
+    /// `replica_size_family` attribute when evaluating replica-local scoped
+    /// feature flags.
+    ///
+    /// Falls back to a value derived from [`Self::is_cc`] when [`Self::family`]
+    /// is unset: `"cc"` for modern sizes and `"legacy"` for the legacy t-shirt
+    /// sizes. This keeps the legacy family targetable even before every size
+    /// gains an explicit `family` in the size configuration.
+    pub fn family(&self) -> &str {
+        match &self.family {
+            Some(family) => family.as_str(),
+            None if self.is_cc => "cc",
+            None => "legacy",
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -146,6 +174,7 @@ fn test_replica_allocation_deserialization() {
             cpu_request: None,
             cpu_exclusive: false,
             is_cc: true,
+            family: None,
             swap_enabled: true,
             scale: NonZero::new(16).unwrap(),
             workers: NonZero::new(1).unwrap(),
@@ -182,6 +211,7 @@ fn test_replica_allocation_deserialization() {
             cpu_request: None,
             cpu_exclusive: true,
             is_cc: true,
+            family: None,
             swap_enabled: false,
             scale: NonZero::new(1).unwrap(),
             workers: NonZero::new(1).unwrap(),
@@ -196,6 +226,40 @@ fn test_replica_allocation_deserialization() {
     assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
     let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#;
     assert_ok!(serde_json::from_str::<ReplicaAllocation>(data));
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+fn test_replica_allocation_family() {
+    let parse = |json: &str| -> ReplicaAllocation {
+        serde_json::from_str(json).expect("deserialization from JSON succeeds")
+    };
+
+    // An explicit `family` is used verbatim.
+    assert_eq!(
+        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "family": "D"}"#).family(),
+        "D"
+    );
+    // Without an explicit `family`, modern (`is_cc`) sizes fall back to "cc".
+    // `is_cc` defaults to true.
+    assert_eq!(
+        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#).family(),
+        "cc"
+    );
+    // Without an explicit `family`, legacy (non-`is_cc`) sizes fall back to
+    // "legacy".
+    assert_eq!(
+        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "is_cc": false}"#).family(),
+        "legacy"
+    );
+    // An explicit family wins even for a legacy size.
+    assert_eq!(
+        parse(
+            r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "is_cc": false, "family": "legacy-special"}"#
+        )
+        .family(),
+        "legacy-special"
+    );
 }
 
 /// Configures the location of a cluster replica.

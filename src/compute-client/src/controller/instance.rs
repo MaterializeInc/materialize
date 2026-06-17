@@ -26,7 +26,7 @@ use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
     ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::channel::instrumented_unbounded_channel;
@@ -140,6 +140,13 @@ pub(super) struct Instance {
     workload_class: Option<String>,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, ReplicaState>,
+    /// Per-replica dyncfg overrides, merged into the `UpdateConfiguration`
+    /// command sent to each replica (and into the command-history replay used
+    /// to hydrate new replicas). Populated from the scoped feature flags
+    /// (replica-local) layer; empty by default, in which case every replica
+    /// receives the unmodified environment-wide configuration. Stores only the
+    /// values that differ from the environment-wide value, so the map is sparse.
+    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
     /// Currently installed compute collections.
     ///
     /// New entries are added for all collections exported from dataflows created through
@@ -845,6 +852,7 @@ impl Instance {
             read_only,
             workload_class,
             replicas,
+            replica_dyncfg_overrides: _,
             collections,
             log_sources: _,
             peeks,
@@ -950,6 +958,7 @@ impl Instance {
             read_only,
             workload_class: None,
             replicas: Default::default(),
+            replica_dyncfg_overrides: Default::default(),
             collections,
             log_sources,
             peeks: Default::default(),
@@ -1091,19 +1100,55 @@ impl Instance {
     #[mz_ore::instrument(level = "debug")]
     fn send(&mut self, cmd: ComputeCommand) {
         // Record the command so that new replicas can be brought up to speed.
+        // We record the *base* (un-specialized) command, so that the per-replica
+        // dyncfg overrides are re-applied at replay time in `add_replica` rather
+        // than baked into the shared history.
         self.history.push(cmd.clone());
 
         let target_replica = self.target_replica(&cmd);
 
+        // Borrow the overrides separately from `self.replicas` so the per-replica
+        // specialization below does not conflict with the mutable replica borrow.
+        let overrides = &self.replica_dyncfg_overrides;
+
         if let Some(rid) = target_replica {
             if let Some(replica) = self.replicas.get_mut(&rid) {
+                let cmd = Self::specialize_command_for_replica(cmd, rid, overrides);
                 let _ = replica.client.send(cmd);
             }
         } else {
-            for replica in self.replicas.values_mut() {
-                let _ = replica.client.send(cmd.clone());
+            for (rid, replica) in self.replicas.iter_mut() {
+                let cmd = Self::specialize_command_for_replica(cmd.clone(), *rid, overrides);
+                let _ = replica.client.send(cmd);
             }
         }
+    }
+
+    /// Specializes a command for a specific replica by merging that replica's
+    /// dyncfg override (if any) into an `UpdateConfiguration` command. All other
+    /// commands, and replicas without an override, are returned unchanged.
+    fn specialize_command_for_replica(
+        mut cmd: ComputeCommand,
+        replica_id: ReplicaId,
+        overrides: &BTreeMap<ReplicaId, ConfigUpdates>,
+    ) -> ComputeCommand {
+        if let ComputeCommand::UpdateConfiguration(params) = &mut cmd
+            && let Some(over) = overrides.get(&replica_id)
+            && !over.updates.is_empty()
+        {
+            params.dyncfg_updates.extend(over.clone());
+        }
+        cmd
+    }
+
+    /// Replaces the per-replica dyncfg overrides. Callers should follow this
+    /// with a configuration push (e.g. `update_configuration`) so that existing
+    /// replicas observe the new overrides.
+    pub(super) fn update_replica_dyncfg_overrides(
+        &mut self,
+        overrides: BTreeMap<ReplicaId, ConfigUpdates>,
+    ) {
+        self.replica_dyncfg_overrides = overrides;
     }
 
     /// Determine the target replica for a compute command. Retrieves the
@@ -1183,7 +1228,13 @@ impl Instance {
                 continue;
             }
 
-            if client.send(command.clone()).is_err() {
+            // Re-apply this replica's dyncfg override to replayed config commands.
+            let command = Self::specialize_command_for_replica(
+                command.clone(),
+                id,
+                &self.replica_dyncfg_overrides,
+            );
+            if client.send(command).is_err() {
                 // We swallow the error here. On the next send, we will fail again, and
                 // restart the connection as well as this rehydration.
                 tracing::warn!("Replica {:?} connection terminated during hydration", id);
