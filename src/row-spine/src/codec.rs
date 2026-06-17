@@ -39,7 +39,10 @@ pub enum ColumnCodec {
     /// row, and the value is reproduced on decode.
     Constant(Box<[u8]>),
     /// Huffman-code the datum's bytes: `uvarint(decoded_len) ++ byte-aligned bits`.
-    Huffman(HuffmanCode),
+    /// Boxed so the enum stays pointer-sized — a `Raw`/`Constant` column then
+    /// costs only a discriminant + pointer in the per-column `Vec`, not the
+    /// ~1.3 KB of a `HuffmanCode`'s inline tables.
+    Huffman(Box<HuffmanCode>),
 }
 
 impl ColumnCodec {
@@ -82,7 +85,12 @@ impl ColumnCodec {
         match self {
             ColumnCodec::Raw => {}
             ColumnCodec::Constant(bytes) => callback(bytes.len(), bytes.len()),
-            ColumnCodec::Huffman(code) => code.heap_size(callback),
+            ColumnCodec::Huffman(code) => {
+                // The boxed `HuffmanCode`'s inline tables, plus its own heap.
+                let inline = std::mem::size_of::<HuffmanCode>();
+                callback(inline, inline);
+                code.heap_size(callback);
+            }
         }
     }
 }
@@ -182,9 +190,16 @@ impl ColumnStats {
             }
             let data_bytes = usize::try_from(bits.div_ceil(8)).unwrap_or(usize::MAX);
             let overhead = self.count * 2; // ~1 byte varint + ~1 byte alignment per row
-            let huffman_bytes = data_bytes.saturating_add(overhead);
+            // The model itself costs storage (its inline tables + sorted symbols),
+            // counted once for the whole column; only adopt Huffman when the
+            // per-row savings outweigh it. This keeps Huffman off small columns,
+            // where the table would dwarf the data.
+            let model_bytes = std::mem::size_of::<HuffmanCode>() + code.lengths().len();
+            let huffman_bytes = data_bytes
+                .saturating_add(overhead)
+                .saturating_add(model_bytes);
             if huffman_bytes < best_bytes {
-                best = ColumnCodec::Huffman(code);
+                best = ColumnCodec::Huffman(Box::new(code));
                 best_bytes = huffman_bytes;
             }
         }
@@ -329,7 +344,9 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn round_trip_text_heavy() {
-        let rows: Vec<Row> = (0..300i64)
+        // Enough rows that Huffman's savings outweigh its (storage-charged) table,
+        // so the selector actually adopts it and we exercise the Huffman decode.
+        let rows: Vec<Row> = (0..5000i64)
             .map(|i| {
                 Row::pack_slice(&[Datum::String(match i % 4 {
                     0 => "mz_catalog",
@@ -339,7 +356,8 @@ mod tests {
                 })])
             })
             .collect();
-        round_trip(&rows).expect("a codec is chosen");
+        let codec = round_trip(&rows).expect("a codec is chosen");
+        assert!(matches!(codec.columns[0], ColumnCodec::Huffman(_)));
     }
 
     #[mz_ore::test]
