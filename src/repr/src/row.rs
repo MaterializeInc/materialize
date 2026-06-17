@@ -3073,8 +3073,13 @@ impl RowArena {
                 }
             }
             // The active region holds live data; we cannot grow it without moving those bytes, so
-            // stage a fresh region for the upcoming pushes instead.
-            Some(_) => inner.push(Vec::with_capacity(additional)),
+            // stage a fresh region. Size it like `push_bytes` does (at least double the current
+            // region) so a sequence of small `reserve`s still yields at most log-many regions
+            // rather than many small ones.
+            Some(active) => {
+                let new_cap = std::cmp::max(additional, active.capacity().saturating_mul(2));
+                inner.push(Vec::with_capacity(new_cap));
+            }
             None => inner.push(Vec::with_capacity(additional)),
         }
     }
@@ -3224,7 +3229,9 @@ impl RowArena {
     /// reallocating; a workload that clears between uses of similar size becomes allocation-free.
     pub fn clear(&mut self) {
         let inner = self.inner.get_mut();
-        // Keep only the largest-capacity region, reset to empty, and drop the rest.
+        // Keep only the largest-capacity region, reset to empty, and drop the rest. Because region
+        // capacities only ever grow (each new region at least doubles the previous), the largest is
+        // normally the last; we scan for it defensively, which is cheap given log-many regions.
         if let Some(largest) = (0..inner.len()).max_by_key(|&i| inner[i].capacity()) {
             inner.swap(0, largest);
             inner.truncate(1);
