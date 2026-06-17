@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Lowering [`DataflowDescription`]s from MIR ([`MirRelationExpr`]) to LIR ([`Plan`]).
+//! Lowering [`DataflowDescription`]s from MIR ([`MirRelationExpr`]) to LIR ([`LirRelationExpr`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,7 +28,9 @@ use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::scalar::{LirScalarExpr, lses_from_mses, mfp_mir_to_lir, mfp_mir_to_lir_plan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Plan, PlanNode};
+use crate::plan::{
+    ArrangementStrategy, AvailableCollections, GetPlan, LirId, LirRelationExpr, LirRelationNode,
+};
 
 /// Pick an [`ArrangementStrategy`] based on whether the input may contain future-stamped
 /// updates. Future updates are the only case where temporal bucketing pays off.
@@ -43,10 +45,10 @@ fn strategy_from_future(has_future_updates: bool) -> ArrangementStrategy {
     }
 }
 
-/// The result of lowering a [`MirRelationExpr`] to a [`Plan`].
+/// The result of lowering a [`MirRelationExpr`] to a [`LirRelationExpr`].
 struct LoweredExpr {
     /// The lowered plan.
-    plan: Plan,
+    plan: LirRelationExpr,
     /// The arrangement keys that the plan is certain to produce.
     keys: AvailableCollections,
     /// Whether the plan's output may contain updates at future timestamps,
@@ -96,7 +98,7 @@ impl Context {
     pub fn lower(
         mut self,
         desc: DataflowDescription<OptimizedMirRelationExpr>,
-    ) -> Result<DataflowDescription<Plan>, String> {
+    ) -> Result<DataflowDescription<LirRelationExpr>, String> {
         // Sources might provide arranged forms of their data, in the future.
         // Indexes provide arranged forms of their data.
         for IndexImport {
@@ -169,7 +171,7 @@ impl Context {
     /// `Let` bindings (by the end of the call it should contain the same bindings as when it
     /// started).
     ///
-    /// The result of the method is both a `Plan`, but also a list of arrangements that
+    /// The result of the method is both a `LirRelationExpr`, but also a list of arrangements that
     /// are certain to be produced, which can be relied on by the next steps in the plan.
     /// Each of the arrangement keys is associated with an MFP that must be applied if that
     /// arrangement is used, to back out the permutation associated with that arrangement.
@@ -214,10 +216,10 @@ impl Context {
             MirRelationExpr::Project { .. } => {
                 panic!("This operator should have been extracted");
             }
-            // These operators may not have been extracted, and need to result in a `Plan`.
+            // These operators may not have been extracted, and need to result in a `LirRelationExpr`.
             MirRelationExpr::Constant { rows, typ: _ } => {
                 let lir_id = self.allocate_lir_id();
-                let node = PlanNode::Constant {
+                let node = LirRelationNode::Constant {
                     rows: rows.clone().map(|rows| {
                         rows.into_iter()
                             .map(|(row, diff)| (row, Timestamp::MIN, diff))
@@ -313,7 +315,7 @@ impl Context {
                     };
 
                 let lir_id = self.allocate_lir_id();
-                let node = PlanNode::Get {
+                let node = LirRelationNode::Get {
                     id: id.clone(),
                     keys: in_keys,
                     plan,
@@ -354,7 +356,7 @@ impl Context {
                 // Return the plan, and any `body` arrangements.
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
-                    plan: PlanNode::Let {
+                    plan: LirRelationNode::Let {
                         id: id.clone(),
                         value: Box::new(value),
                         body: Box::new(body),
@@ -406,9 +408,9 @@ impl Context {
                         // We forward `v_future` for honesty; bucketing has no observable effect
                         // inside an iterative scope, but the field should reflect reality.
                         lir_value = match lir_value {
-                            Plan {
+                            LirRelationExpr {
                                 node:
-                                    PlanNode::LetRec {
+                                    LirRelationNode::LetRec {
                                         ids,
                                         values,
                                         limits,
@@ -417,12 +419,12 @@ impl Context {
                                 lir_id,
                             } => {
                                 let inner_lir_id = self.allocate_lir_id();
-                                PlanNode::LetRec {
+                                LirRelationNode::LetRec {
                                     ids,
                                     values,
                                     limits,
                                     body: Box::new(
-                                        PlanNode::ArrangeBy {
+                                        LirRelationNode::ArrangeBy {
                                             input_key,
                                             input: body,
                                             input_mfp: mfp_mir_to_lir_plan(input_mfp),
@@ -436,7 +438,7 @@ impl Context {
                             }
                             lir_value => {
                                 let lir_id = self.allocate_lir_id();
-                                PlanNode::ArrangeBy {
+                                LirRelationNode::ArrangeBy {
                                     input_key,
                                     input: Box::new(lir_value),
                                     input_mfp: mfp_mir_to_lir_plan(input_mfp),
@@ -484,7 +486,7 @@ impl Context {
                 // without forcing bucketing on a fully non-temporal LetRec.
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
-                    plan: PlanNode::LetRec {
+                    plan: LirRelationNode::LetRec {
                         ids: ids.clone(),
                         values: lir_values,
                         limits: limits.clone(),
@@ -659,7 +661,7 @@ impl Context {
                     let has_future_updates = input_future || mfp.has_temporal_predicates();
                     // Return the plan, and no arrangements.
                     LoweredExpr {
-                        plan: PlanNode::FlatMap {
+                        plan: LirRelationNode::FlatMap {
                             input_key,
                             input: Box::new(input),
                             exprs: lses_from_mses(&exprs),
@@ -799,7 +801,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         let lir_id = self.allocate_lir_id();
                         let raw_plan = std::mem::replace(
                             input_plan,
-                            PlanNode::Constant {
+                            LirRelationNode::Constant {
                                 rows: Ok(Vec::new()),
                             }
                             .as_plan(lir_id),
@@ -815,7 +817,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // flag is just the OR of its inputs.
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
-                    plan: PlanNode::Join {
+                    plan: LirRelationNode::Join {
                         inputs: plans,
                         plan,
                     }
@@ -898,7 +900,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let temporal_bucketing_strategy = strategy_from_future(input_future);
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
-                    plan: PlanNode::TopK {
+                    plan: LirRelationNode::TopK {
                         input: Box::new(input),
                         top_k_plan,
                         temporal_bucketing_strategy,
@@ -933,7 +935,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // Return the plan, and no arrangements.
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
-                    plan: PlanNode::Negate {
+                    plan: LirRelationNode::Negate {
                         input: Box::new(input),
                     }
                     .as_plan(lir_id),
@@ -970,7 +972,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // Return the plan, and any produced keys.
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
-                    plan: PlanNode::Threshold {
+                    plan: LirRelationNode::Threshold {
                         input: Box::new(plan),
                         threshold_plan,
                     }
@@ -995,7 +997,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // can be coupled with the per-input bucketing strategy.
                 let consolidate_output = lowered_inputs
                     .iter()
-                    .any(|l| matches!(l.plan.node, PlanNode::Negate { .. }));
+                    .any(|l| matches!(l.plan.node, LirRelationNode::Negate { .. }));
 
                 // Per-input bucketing strategies: only meaningful when the
                 // Union consolidates its output, since bucketing only pays off
@@ -1049,7 +1051,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // Return the plan and no arrangements.
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
-                    plan: PlanNode::Union {
+                    plan: LirRelationNode::Union {
                         inputs: plans,
                         consolidate_output,
                         temporal_bucketing_strategies,
@@ -1120,7 +1122,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     assert!(!forms.arranged.is_empty()); // i.e., we do build an arrangement
                     let has_future_updates = false;
                     LoweredExpr {
-                        plan: PlanNode::ArrangeBy {
+                        plan: LirRelationNode::ArrangeBy {
                             input_key,
                             input: Box::new(input),
                             input_mfp: mfp_mir_to_lir_plan(input_mfp),
@@ -1200,12 +1202,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 keys.arranged.retain(|(key2, _, _)| key2 == &key);
                 keys.raw = false;
 
-                // Creating a Plan::Mfp node is now logically unnecessary, but we
+                // Creating a LirRelationExpr::Mfp node is now logically unnecessary, but we
                 // should do so anyway when `val` is populated, so that
                 // the `key_val` optimization gets applied.
                 let lir_id = self.allocate_lir_id();
                 if val.is_some() {
-                    plan = PlanNode::Mfp {
+                    plan = LirRelationNode::Mfp {
                         input: Box::new(plan),
                         mfp: mfp_mir_to_lir_plan(mfp),
                         input_key_val: Some((key.clone(), val)),
@@ -1214,7 +1216,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 }
             } else {
                 let lir_id = self.allocate_lir_id();
-                plan = PlanNode::Mfp {
+                plan = LirRelationNode::Mfp {
                     input: Box::new(plan),
                     mfp: mfp_mir_to_lir_plan(mfp),
                     input_key_val,
@@ -1300,7 +1302,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
         // (This can't currently happen due to `extract_mfp_after` separating out any temporal part.)
         let has_future_updates = mfp_after.has_temporal_predicates();
         Ok(LoweredExpr {
-            plan: PlanNode::Reduce {
+            plan: LirRelationNode::Reduce {
                 input_key,
                 input: Box::new(input),
                 key_val_plan,
@@ -1318,15 +1320,15 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// that has the collection in some additional forms.
     pub fn arrange_by(
         &mut self,
-        plan: Plan,
+        plan: LirRelationExpr,
         collections: AvailableCollections,
         old_collections: &AvailableCollections,
         arity: usize,
         has_future_updates: bool,
-    ) -> Plan {
-        if let Plan {
+    ) -> LirRelationExpr {
+        if let LirRelationExpr {
             node:
-                PlanNode::ArrangeBy {
+                LirRelationNode::ArrangeBy {
                     input_key,
                     input,
                     input_mfp,
@@ -1340,7 +1342,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             forms.arranged.extend(collections.arranged);
             forms.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
             forms.arranged.dedup_by(|k1, k2| k1.0 == k2.0);
-            PlanNode::ArrangeBy {
+            LirRelationNode::ArrangeBy {
                 input_key,
                 input,
                 input_mfp,
@@ -1360,7 +1362,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             };
             let lir_id = self.allocate_lir_id();
 
-            PlanNode::ArrangeBy {
+            LirRelationNode::ArrangeBy {
                 input_key,
                 input: Box::new(plan),
                 input_mfp: mfp_mir_to_lir_plan(input_mfp),

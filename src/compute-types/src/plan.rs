@@ -176,16 +176,16 @@ impl std::fmt::Display for LirId {
 
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Plan {
+pub struct LirRelationExpr {
     /// A dataflow-local identifier.
     pub lir_id: LirId,
     /// The underlying operator.
-    pub node: PlanNode,
+    pub node: LirRelationNode,
 }
 
-/// The actual AST node of the `Plan`.
+/// The actual AST node of the `LirRelationExpr`.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub enum PlanNode {
+pub enum LirRelationNode {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
@@ -222,10 +222,10 @@ pub enum PlanNode {
         /// The local identifier to be used, available to `body` as `Id::Local(id)`.
         id: LocalId,
         /// The collection that should be bound to `id`.
-        value: Box<Plan>,
+        value: Box<LirRelationExpr>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan>,
+        body: Box<LirRelationExpr>,
     },
     /// Binds `values` to `ids`, evaluates them potentially recursively, and returns `body`.
     ///
@@ -237,12 +237,12 @@ pub enum PlanNode {
         /// The local identifiers to be used, available to `body` as `Id::Local(id)`.
         ids: Vec<LocalId>,
         /// The collection that should be bound to `id`.
-        values: Vec<Plan>,
+        values: Vec<LirRelationExpr>,
         /// Maximum number of iterations. See further info on the MIR `LetRec`.
         limits: Vec<Option<LetRecLimit>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan>,
+        body: Box<LirRelationExpr>,
     },
     /// Map, Filter, and Project operators.
     ///
@@ -251,7 +251,7 @@ pub enum PlanNode {
     /// and sometimes reduce stages are not able to absorb this operator.
     Mfp {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// Linear operator to apply to each record.
         mfp: MfpPlan<LirScalarExpr>,
         /// Whether the input is from an arrangement, and if so,
@@ -275,7 +275,7 @@ pub enum PlanNode {
         /// if any
         input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// Expressions that for each row prepare the arguments to `func`.
         exprs: Vec<LirScalarExpr>,
         /// The variable-record emitting function.
@@ -290,7 +290,7 @@ pub enum PlanNode {
     /// strategy we will use, and any pushed down per-record work.
     Join {
         /// An ordered list of inputs that will be joined.
-        inputs: Vec<Plan>,
+        inputs: Vec<LirRelationExpr>,
         /// Detailed information about the implementation of the join.
         ///
         /// This includes information about the implementation strategy, but also
@@ -304,7 +304,7 @@ pub enum PlanNode {
         /// if any
         input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// A plan for changing input records into key, value pairs.
         key_val_plan: KeyValPlan,
         /// A plan for performing the reduce.
@@ -336,7 +336,7 @@ pub enum PlanNode {
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// A plan for performing the Top-K.
         ///
         /// The implementation of reduction has several different strategies based
@@ -348,14 +348,14 @@ pub enum PlanNode {
         /// Set by the lowering from the input's `has_future_updates` flag. The
         /// renderer applies it to the per-row input stream at the top of
         /// `render_topk`, covering all three `TopKPlan` arms uniformly. See
-        /// `PlanNode::Reduce::temporal_bucketing_strategy` for the underlying
+        /// `LirRelationNode::Reduce::temporal_bucketing_strategy` for the underlying
         /// convention.
         temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Inverts the sign of each update.
     Negate {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
     },
     /// Filters records that accumulate negatively.
     ///
@@ -363,7 +363,7 @@ pub enum PlanNode {
     /// resources proportional to the number of records with non-zero accumulation.
     Threshold {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// A plan for performing the threshold.
         ///
         /// The implementation of reduction has several different strategies based
@@ -379,7 +379,7 @@ pub enum PlanNode {
     /// implementing the "distinct" operator.
     Union {
         /// The input collections
-        inputs: Vec<Plan>,
+        inputs: Vec<LirRelationExpr>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
         /// Per-input bucketing strategies. Lockstep with `inputs`: index `i` is the
@@ -388,7 +388,7 @@ pub enum PlanNode {
         /// Set by the lowering from each input's `has_future_updates` flag. Only
         /// consolidating Unions (`consolidate_output: true`) carry non-`Direct`
         /// entries, because bucketing only pays off ahead of a consolidating
-        /// downstream operator. See `PlanNode::Reduce::temporal_bucketing_strategy`
+        /// downstream operator. See `LirRelationNode::Reduce::temporal_bucketing_strategy`
         /// for the underlying convention.
         temporal_bucketing_strategies: Vec<ArrangementStrategy>,
     },
@@ -397,12 +397,12 @@ pub enum PlanNode {
     /// This operator does not change the logical contents of `input`, but ensures
     /// that certain arrangements are available in the results. This operator can
     /// be important for e.g. the `Join` stage which benefits from multiple arrangements
-    /// or to cap a `Plan` so that indexes can be exported.
+    /// or to cap a `LirRelationExpr` so that indexes can be exported.
     ArrangeBy {
         /// The key that must be used to access the input.
         input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// The MFP that must be applied to the input.
         input_mfp: MfpPlan<LirScalarExpr>,
         /// A list of arrangement keys, and possibly a raw collection,
@@ -414,15 +414,15 @@ pub enum PlanNode {
     },
 }
 
-impl PlanNode {
+impl LirRelationNode {
     /// Iterates through references to child expressions.
-    pub fn children(&self) -> impl Iterator<Item = &Plan> {
+    pub fn children(&self) -> impl Iterator<Item = &LirRelationExpr> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
         let mut last = None;
 
-        use PlanNode::*;
+        use LirRelationNode::*;
         match self {
             Constant { .. } | Get { .. } => (),
             Let { value, body, .. } => {
@@ -455,13 +455,13 @@ impl PlanNode {
     }
 
     /// Iterates through mutable references to child expressions.
-    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Plan> {
+    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut LirRelationExpr> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
         let mut last = None;
 
-        use PlanNode::*;
+        use LirRelationNode::*;
         match self {
             Constant { .. } | Get { .. } => (),
             Let { value, body, .. } => {
@@ -494,21 +494,21 @@ impl PlanNode {
     }
 }
 
-impl PlanNode {
-    /// Attach an `lir_id` to a `PlanNode` to make a complete `Plan`.
-    pub fn as_plan(self, lir_id: LirId) -> Plan {
-        Plan { lir_id, node: self }
+impl LirRelationNode {
+    /// Attach an `lir_id` to a `LirRelationNode` to make a complete `LirRelationExpr`.
+    pub fn as_plan(self, lir_id: LirId) -> LirRelationExpr {
+        LirRelationExpr { lir_id, node: self }
     }
 }
 
-impl Plan {
-    /// Pretty-print this [Plan] to a string.
+impl LirRelationExpr {
+    /// Pretty-print this [LirRelationExpr] to a string.
     pub fn pretty(&self) -> String {
         let config = ExplainConfig::default();
         self.debug_explain(&config, None)
     }
 
-    /// Pretty-print this [Plan] to a string using a custom
+    /// Pretty-print this [LirRelationExpr] to a string using a custom
     /// [ExplainConfig] and an optionally provided [ExprHumanizer].
     /// This is intended for debugging and tests, not users.
     pub fn debug_explain(
@@ -537,7 +537,7 @@ pub enum GetPlan {
     Collection(MfpPlan<LirScalarExpr>),
 }
 
-impl Plan {
+impl LirRelationExpr {
     /// Convert the dataflow description into one that uses render plans.
     #[mz_ore::instrument(
         target = "optimizer",
@@ -644,7 +644,7 @@ impl Plan {
                 while let Some(expression) = todo.pop() {
                     let lir_id = expression.lir_id;
                     let node = &mut expression.node;
-                    if let PlanNode::Get { id, plan, .. } = node {
+                    if let LirRelationNode::Get { id, plan, .. } = node {
                         if *id == mz_expr::Id::Global(source_id) {
                             match plan {
                                 GetPlan::Collection(mfp_plan) => {
@@ -718,7 +718,7 @@ impl Plan {
                 let mut todo = vec![&mut build_desc.plan];
                 while let Some(expression) = todo.pop() {
                     if let Some(replacement) = replacements.get(&expression.lir_id) {
-                        if let PlanNode::Get {
+                        if let LirRelationNode::Get {
                             plan: GetPlan::Collection(mfp_plan),
                             ..
                         } = &mut expression.node
@@ -757,7 +757,7 @@ impl Plan {
             while let Some(expression) = todo.pop() {
                 let node = &mut expression.node;
                 match node {
-                    PlanNode::Reduce { plan, .. } => {
+                    LirRelationNode::Reduce { plan, .. } => {
                         // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
                         match plan {
                             ReducePlan::Hierarchical(hierarchical) => {
@@ -769,11 +769,11 @@ impl Plan {
                         }
                         todo.extend(node.children_mut());
                     }
-                    PlanNode::TopK { top_k_plan, .. } => {
+                    LirRelationNode::TopK { top_k_plan, .. } => {
                         top_k_plan.as_monotonic(true);
                         todo.extend(node.children_mut());
                     }
-                    PlanNode::LetRec { body, .. } => {
+                    LirRelationNode::LetRec { body, .. } => {
                         // Only the non-recursive `body` is restricted to a single time.
                         todo.push(body);
                     }
@@ -814,11 +814,11 @@ impl Plan {
     }
 }
 
-impl CollectionPlan for PlanNode {
+impl CollectionPlan for LirRelationNode {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         match self {
-            PlanNode::Constant { rows: _ } => (),
-            PlanNode::Get {
+            LirRelationNode::Constant { rows: _ } => (),
+            LirRelationNode::Get {
                 id,
                 keys: _,
                 plan: _,
@@ -828,11 +828,11 @@ impl CollectionPlan for PlanNode {
                 }
                 Id::Local(_) => (),
             },
-            PlanNode::Let { id: _, value, body } => {
+            LirRelationNode::Let { id: _, value, body } => {
                 value.depends_on_into(out);
                 body.depends_on_into(out);
             }
-            PlanNode::LetRec {
+            LirRelationNode::LetRec {
                 ids: _,
                 values,
                 limits: _,
@@ -843,8 +843,8 @@ impl CollectionPlan for PlanNode {
                 }
                 body.depends_on_into(out);
             }
-            PlanNode::Join { inputs, plan: _ }
-            | PlanNode::Union {
+            LirRelationNode::Join { inputs, plan: _ }
+            | LirRelationNode::Union {
                 inputs,
                 consolidate_output: _,
                 temporal_bucketing_strategies: _,
@@ -853,26 +853,26 @@ impl CollectionPlan for PlanNode {
                     input.depends_on_into(out);
                 }
             }
-            PlanNode::Mfp {
+            LirRelationNode::Mfp {
                 input,
                 mfp: _,
                 input_key_val: _,
             }
-            | PlanNode::FlatMap {
+            | LirRelationNode::FlatMap {
                 input_key: _,
                 input,
                 exprs: _,
                 func: _,
                 mfp_after: _,
             }
-            | PlanNode::ArrangeBy {
+            | LirRelationNode::ArrangeBy {
                 input_key: _,
                 input,
                 input_mfp: _,
                 forms: _,
                 strategy: _,
             }
-            | PlanNode::Reduce {
+            | LirRelationNode::Reduce {
                 input_key: _,
                 input,
                 key_val_plan: _,
@@ -880,13 +880,13 @@ impl CollectionPlan for PlanNode {
                 mfp_after: _,
                 temporal_bucketing_strategy: _,
             }
-            | PlanNode::TopK {
+            | LirRelationNode::TopK {
                 input,
                 top_k_plan: _,
                 temporal_bucketing_strategy: _,
             }
-            | PlanNode::Negate { input }
-            | PlanNode::Threshold {
+            | LirRelationNode::Negate { input }
+            | LirRelationNode::Threshold {
                 input,
                 threshold_plan: _,
             } => {
@@ -896,7 +896,7 @@ impl CollectionPlan for PlanNode {
     }
 }
 
-impl CollectionPlan for Plan {
+impl CollectionPlan for LirRelationExpr {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         self.node.depends_on_into(out);
     }

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Planning of `Plan::Join` operators, and supporting types.
+//! Planning of `LirRelationExpr::Join` operators, and supporting types.
 //!
 //! Join planning proceeds by repeatedly introducing collections that
 //! extend the set of available output columns. The expected location

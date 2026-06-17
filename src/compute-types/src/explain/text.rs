@@ -11,10 +11,10 @@
 //!
 //! The format adheres to the following conventions:
 //! 1. In general, every line that starts with an uppercase character
-//!    corresponds to a [`Plan`] variant.
+//!    corresponds to a [`LirRelationExpr`] variant.
 //! 2. Whenever the variant has an attached `~Plan`, the printed name is
 //!    `$V::$P` where `$V` identifies the variant and `$P` the plan.
-//! 3. The fields of a `~Plan` struct attached to a [`Plan`] are rendered as if
+//! 3. The fields of a `~Plan` struct attached to a [`LirRelationExpr`] are rendered as if
 //!    they were part of the variant themself.
 //! 4. Non-recursive parameters of each sub-plan are written as `$key=$val`
 //!    pairs on the same line or as lowercase `$key` fields on indented lines.
@@ -42,13 +42,15 @@ use crate::plan::reduce::{
 };
 use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
-use crate::plan::{ArrangementStrategy, AvailableCollections, LirId, Plan, PlanNode};
+use crate::plan::{
+    ArrangementStrategy, AvailableCollections, LirId, LirRelationExpr, LirRelationNode,
+};
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for LirRelationExpr {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -58,7 +60,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
     }
 }
 
-impl Plan {
+impl LirRelationExpr {
     // NOTE: This code needs to be kept in sync with the `Display` instance for
     // `RenderPlan:ExprHumanizer`.
     //
@@ -67,9 +69,9 @@ impl Plan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
-        use PlanNode::*;
+        use LirRelationNode::*;
 
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let annotations = PlanAnnotations::new(ctx.config.clone(), self);
@@ -599,9 +601,9 @@ impl Plan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
-        use PlanNode::*;
+        use LirRelationNode::*;
 
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let annotations = PlanAnnotations::new(ctx.config.clone(), self);
@@ -1039,7 +1041,7 @@ fn fmt_mfp_default_text(
     mfp_plan: &MfpPlan<LirScalarExpr>,
     mode: &HumanizedExplain,
     f: &mut fmt::Formatter<'_>,
-    ctx: &mut PlanRenderingContext<'_, Plan>,
+    ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
 ) -> fmt::Result {
     mode.expr(mfp_plan.safe_mfp().deref(), None)
         .fmt_default_text(f, ctx)?;
@@ -1051,7 +1053,7 @@ fn fmt_mfp_verbose_text(
     mfp_plan: &MfpPlan<LirScalarExpr>,
     mode: &HumanizedExplain,
     f: &mut fmt::Formatter<'_>,
-    ctx: &mut PlanRenderingContext<'_, Plan>,
+    ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
 ) -> fmt::Result {
     mode.expr(mfp_plan.safe_mfp().deref(), None)
         .fmt_text(f, ctx)?;
@@ -1068,7 +1070,7 @@ fn fmt_temporal_bounds(
     mfp_plan: &MfpPlan<LirScalarExpr>,
     mode: &HumanizedExplain,
     f: &mut fmt::Formatter<'_>,
-    ctx: &mut PlanRenderingContext<'_, Plan>,
+    ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
 ) -> fmt::Result {
     let (_, lower_bounds, upper_bounds) = mfp_plan.as_parts();
 
@@ -1091,11 +1093,11 @@ fn fmt_temporal_bounds(
     Ok(())
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for AvailableCollections {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1108,7 +1110,7 @@ impl AvailableCollections {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let plural = if self.arranged.len() == 1 { "" } else { "s" };
         write!(
@@ -1140,7 +1142,7 @@ impl AvailableCollections {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         // raw field
         let raw = &self.raw;
@@ -1158,7 +1160,7 @@ impl AvailableCollections {
 
 /// Format a join implementation chain like `%0:t[#0{a}] » %1:u[#0{c}] » %2[×]`.
 ///
-/// Each position is rendered as `%pos:name` when an underlying [`PlanNode::Get`] can be
+/// Each position is rendered as `%pos:name` when an underlying [`LirRelationNode::Get`] can be
 /// dug out of the corresponding input plan (see [`humanize_input_name`]),
 /// otherwise just `%pos`. `[×]` (U+00D7) marks a cross product (empty lookup
 /// key). A `None` `source_key` renders the source position with no bracketed
@@ -1167,7 +1169,7 @@ fn fmt_join_chain<'a, I>(
     f: &mut fmt::Formatter<'_>,
     humanizer: &dyn ExprHumanizer,
     mode: &HumanizedExplain,
-    inputs: &[Plan],
+    inputs: &[LirRelationExpr],
     source_relation: usize,
     source_key: Option<&'a Vec<LirScalarExpr>>,
     stages: I,
@@ -1211,9 +1213,13 @@ fn fmt_join_key_brackets(
 /// Render a join input as `%pos:name` if we can dig a `Get` out of `plan`,
 /// otherwise just `%pos`. Mirrors `dig_name_from_expr` in
 /// `src/expr/src/explain/text.rs` for the MIR `EXPLAIN OPTIMIZED PLAN` output.
-fn humanize_input_name(humanizer: &dyn ExprHumanizer, plan: &Plan, pos: usize) -> String {
-    fn dig(humanizer: &dyn ExprHumanizer, plan: &Plan) -> Option<String> {
-        use crate::plan::PlanNode::*;
+fn humanize_input_name(
+    humanizer: &dyn ExprHumanizer,
+    plan: &LirRelationExpr,
+    pos: usize,
+) -> String {
+    fn dig(humanizer: &dyn ExprHumanizer, plan: &LirRelationExpr) -> Option<String> {
+        use crate::plan::LirRelationNode::*;
         match &plan.node {
             Get { id, .. } => match id {
                 Id::Local(lid) => Some(lid.to_string()),
@@ -1235,11 +1241,11 @@ fn humanize_input_name(humanizer: &dyn ExprHumanizer, plan: &Plan, pos: usize) -
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearJoinPlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for LinearJoinPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1258,7 +1264,7 @@ impl LinearJoinPlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         // Per-stage closures (natural 0..N order). The header chain already
         // shows each stage's position + key, so we only emit a block when
@@ -1281,7 +1287,7 @@ impl LinearJoinPlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let plan = self;
@@ -1321,11 +1327,11 @@ impl LinearJoinPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearStagePlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for LinearStagePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1339,7 +1345,7 @@ impl LinearStagePlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         // NB this code path should not be live, as fmt_default_text for
         // `LinearJoinPlan` prints out each stage already
@@ -1359,7 +1365,7 @@ impl LinearStagePlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
 
@@ -1391,11 +1397,11 @@ impl LinearStagePlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaJoinPlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for DeltaJoinPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1415,7 +1421,7 @@ impl DeltaJoinPlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         // The header chain already shows each path's positions + keys, so we
         // only print a `path %src:` block when at least one of its stage
@@ -1438,7 +1444,7 @@ impl DeltaJoinPlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         for (i, plan) in self.path_plans.iter().enumerate() {
             writeln!(f, "{}plan_path[{}]", ctx.indent, i)?;
@@ -1448,11 +1454,11 @@ impl DeltaJoinPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaPathPlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for DeltaPathPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1467,7 +1473,7 @@ impl DeltaPathPlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         for stage in self.stage_plans.iter() {
             if stage.closure.maps_or_filters() {
@@ -1487,7 +1493,7 @@ impl DeltaPathPlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let plan = self;
@@ -1519,11 +1525,11 @@ impl DeltaPathPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaStagePlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for DeltaStagePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1537,7 +1543,7 @@ impl DeltaStagePlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         // NB this code path should not be live, as fmt_default_text for
         // `DeltaPathPlan` prints out each stage already
@@ -1553,7 +1559,7 @@ impl DeltaStagePlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let plan = self;
@@ -1586,11 +1592,11 @@ impl DeltaStagePlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for JoinClosure {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for JoinClosure {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1603,7 +1609,7 @@ impl JoinClosure {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         if !self.before.is_identity() {
@@ -1625,7 +1631,7 @@ impl JoinClosure {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         mode.expr(self.before.deref(), None).fmt_text(f, ctx)?;
@@ -1642,11 +1648,11 @@ impl JoinClosure {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for AccumulablePlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for AccumulablePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1660,7 +1666,7 @@ impl AccumulablePlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
 
@@ -1688,7 +1694,7 @@ impl AccumulablePlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         // full_aggrs (skipped because they are repeated in simple_aggrs ∪ distinct_aggrs)
@@ -1713,11 +1719,11 @@ impl AccumulablePlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for HierarchicalPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1731,7 +1737,7 @@ impl HierarchicalPlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let aggr_funcs = mode.seq(self.aggr_funcs(), None);
@@ -1743,7 +1749,7 @@ impl HierarchicalPlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
@@ -1768,11 +1774,11 @@ impl HierarchicalPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for BasicPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1786,7 +1792,7 @@ impl BasicPlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
@@ -1815,7 +1821,7 @@ impl BasicPlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
@@ -1861,11 +1867,11 @@ impl<'a> From<&'a (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Arrangement<'a> {
+impl<'a> DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for Arrangement<'a> {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1880,7 +1886,7 @@ impl<'a> Arrangement<'a> {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &PlanRenderingContext<'_, Plan>,
+        ctx: &PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         if !self.key.is_empty() {
@@ -1896,7 +1902,7 @@ impl<'a> Arrangement<'a> {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &PlanRenderingContext<'_, Plan>,
+        ctx: &PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         // prepare key
@@ -1941,11 +1947,11 @@ struct PlanAnnotations {
 
 // The current implementation deviates from the `AnnotatedPlan` used in `Mir~`-based plans. This is
 // fine, since at the moment the only attribute we are going to explain is the `node_id`, which at
-// the moment is kept inline with the `Plan` variants. If at some point in the future we want to
+// the moment is kept inline with the `LirRelationExpr` variants. If at some point in the future we want to
 // start deriving and printing attributes that are derived ad-hoc, however, we might want to adopt
 // `AnnotatedPlan` here as well.
 impl PlanAnnotations {
-    fn new(config: ExplainConfig, plan: &Plan) -> Self {
+    fn new(config: ExplainConfig, plan: &LirRelationExpr) -> Self {
         let node_id = plan.lir_id;
         Self { config, node_id }
     }

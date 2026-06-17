@@ -67,7 +67,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 
         // Bucket the per-row input stream when lowering chose `TemporalBucketing`.
         // `TopK` builds its own arrangement(s) inside the variants below, bypassing
-        // `ensure_collections`, so the strategy is plumbed through `PlanNode::TopK`
+        // `ensure_collections`, so the strategy is plumbed through `LirRelationNode::TopK`
         // rather than inferred at the arrangement site. `apply_bucketing_strategy`
         // is a no-op for `Direct`.
         //

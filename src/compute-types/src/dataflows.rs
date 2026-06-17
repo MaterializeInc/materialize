@@ -21,7 +21,7 @@ use mz_storage_types::time_dependence::TimeDependence;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-use crate::plan::Plan;
+use crate::plan::LirRelationExpr;
 use crate::plan::render_plan::RenderPlan;
 use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
@@ -104,7 +104,7 @@ impl<P, S> DataflowDescription<P, S> {
     }
 }
 
-impl DataflowDescription<Plan, ()> {
+impl DataflowDescription<LirRelationExpr, ()> {
     /// Check invariants expected to be true about `DataflowDescription`s.
     pub fn check_invariants(&self) -> Result<(), String> {
         let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();

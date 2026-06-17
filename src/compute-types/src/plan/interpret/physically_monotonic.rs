@@ -61,7 +61,7 @@ impl PartialOrder for PhysicallyMonotonic {
 }
 
 /// Provides a concrete implementation of an interpreter that determines if
-/// the output of `Plan` expressions is physically monotonic in a single-time
+/// the output of `LirRelationExpr` expressions is physically monotonic in a single-time
 /// dataflow, potentially taking into account judgments about its inputs. We
 /// note that in a single-time dataflow, expressions in non-recursive contexts
 /// (i.e., outside of `LetRec` values) process streams that are at a minimum
@@ -105,7 +105,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _plan: &GetPlan,
     ) -> Self::Domain {
         // A get operator yields physically monotonic output iff the corresponding
-        // `Plan::Get` is on a local or global ID that is known to provide physically
+        // `LirRelationExpr::Get` is on a local or global ID that is known to provide physically
         // monotonic input. The way this becomes know is through the interpreter itself
         // for non-recursive local IDs or through configuration for the global IDs of
         // monotonic sources and indexes. Recursive local IDs are always assumed to
@@ -170,7 +170,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _plan: &JoinPlan,
     ) -> Self::Domain {
         // When we see a join, we must consider that the inputs could have
-        // been `Plan::Get`s on arrangements. These are not in general safe
+        // been `LirRelationExpr::Get`s on arrangements. These are not in general safe
         // wrt. producing physically monotonic data. So here, we conservatively
         // judge that output of a join to be physically monotonic iff all
         // inputs are physically monotonic.
@@ -246,7 +246,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _input_key: &Option<Vec<LirScalarExpr>>,
         _input_mfp: &MfpPlan<LirScalarExpr>,
     ) -> Self::Domain {
-        // `Plan::ArrangeBy` is better thought of as `ensure_collections`, i.e., it
+        // `LirRelationExpr::ArrangeBy` is better thought of as `ensure_collections`, i.e., it
         // makes sure that the requested `forms` are present and builds them only
         // if not already available. Many `forms` may be requested, as the downstream
         // consumers of this operator may be many different ones (as we support plan graphs,
