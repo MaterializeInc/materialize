@@ -1,14 +1,14 @@
-# Unify the storage and compute cluster protocol
+# Unify the storage and compute clusters
 
 - Associated: (TODO: link epic / issue)
 - Motivating instance: [SS-199: Elevated freshness in mz_catalog_server in staging](https://linear.app/materializeinc/issue/SS-199/elevated-freshness-in-mz-catalog-server-in-staging)
 
-## The Problem
+## The problem
 
 Storage and compute run as two independent timely runtimes inside a single
-`clusterd` process, each driven by its own controller-side protocol stack: a
-separate `transport::Client` connection per cluster process, a separate
-`Partitioned` fan-out client, and a separate per-replica `ReplicaTask`.
+`clusterd` process, each driven by its own controller-side stack: a separate
+`transport::Client` connection per cluster process, a separate `Partitioned`
+fan-out client, and a separate per-replica `ReplicaTask`.
 The two command streams reach a worker in a nondeterministic relative order,
 because they arrive on independent connections driven by independent async
 tasks.
@@ -32,219 +32,217 @@ know how to solve.
 Unifying the two runtimes would categorically eliminate this class of
 cross-subsystem hold-back — the two would share one progress domain rather than
 gating each other.
-This design is the prerequisite step toward that unification, not the fix for
-SS-199 itself; the fix lands with the runtime-unification follow-up.
+This design is the prerequisite work toward that unification, not the fix for
+SS-199 itself; the fix lands with the runtime-unification phase.
 
 [SS-199]: https://linear.app/materializeinc/issue/SS-199/elevated-freshness-in-mz-catalog-server-in-staging
 
-## Success Criteria
+## The dependency chain
 
-* A single, totally-ordered command stream carries both storage and compute
-  commands from the controller to each cluster process, established at one
-  serialization point.
-* Behavior is unchanged: with the unified protocol in place but the runtimes
-  still separate, the system behaves exactly as today.
-  The total order is present on the wire but dormant.
-* The change does not touch the timely allocator or the rendering path, so it
-  cannot reintroduce the [#34713] divergence class.
-* The result is a foundation on which runtime unification becomes a localized,
-  worker-side change rather than a protocol redesign.
+The end goal is one runtime, but it cannot be approached directly.
+The work decomposes into three links that must be built in order, because each
+depends on the one before it:
 
-## Out of Scope
+* **Runtime unification** needs a single, totally-ordered command stream.
+  Without it, workers render dataflows in divergent orders ([#34713]).
+* **A total order on the wire** needs a single serialization point that owns one
+  connection per cluster process and interleaves both subsystems' commands into
+  it.
+  That point can only live where both command streams already converge — and
+  today they never do, because each controller independently owns its own
+  connection, replica task, failure detection, reconcile, and epoch.
+* **A single serialization point** therefore needs the controller-side replica
+  management of the two subsystems to converge first: one component that owns the
+  connection and replica lifecycle, which both controllers feed.
 
-* Unifying the two timely runtimes on the cluster side.
-  This design only unifies the protocol and demultiplexes back to the existing
-  storage and compute runtimes.
-  Runtime unification is the follow-up that the total order enables.
-* Extending sequential hydration to storage collections.
-  Storage has no `Schedule`/suspend protocol; adding one is a separate feature.
+So the order is **controllers → protocol → runtime**, and the first link is the
+prerequisite that has been missing.
+
+An earlier iteration of this design attacked the middle link first (unify the
+protocol, demultiplex back to the existing runtimes).
+That work landed the easy parts cleanly — a union message type, a cluster-side
+demultiplexer, and a single-port server — but stalled on the controller side.
+Forcing one connection requires both controllers to give up connection
+ownership to a shared per-replica supervisor, which is a controller-side
+unification in all but name.
+Bolting that supervisor onto two still-independent controllers meant threading
+command channels and exposing response sinks across two mismatched
+architectures: the storage controller is synchronous, while the compute
+controller's `Instance` is a decoupled async task that owns its response sink and
+produces commands from within itself.
+The lesson is that the protocol cannot be cleanly unified before the controllers
+are.
+This revision reorders the work accordingly.
+
+## Success criteria
+
+* **Phase 1** establishes one replica-management component per replica that both
+  controllers register with; behavior is identical to today, with two connections
+  still under the hood, and it is fully validatable on a real cluster.
+* **Phase 2** collapses those two connections into one totally-ordered
+  `ClusterCommand` stream with no change to controller domain logic; the total
+  order is present on the wire but exercised by nothing yet.
+* **Phase 3** unifies the runtimes as a localized, worker-side change rather than
+  a protocol redesign, consuming the total order Phase 2 produced.
+* No phase touches the timely allocator or the rendering path until Phase 3, so
+  the [#34713] divergence class cannot reappear early.
+* Each phase is independently shippable and testable on its own merits.
+
+## Out of scope
+
+* Unifying the storage and compute *domain* controllers.
+  Their domain logic — storage collections, ingestions, sinks, persist,
+  frontiers; compute dataflows, peeks, subscribes, hydration — stays separate.
+  Only the replica-management and transport layer beneath them converges.
 * Independent failure domains for storage and compute.
   We accept shared fate, consistent with the existing recommendation to keep
   storage and compute objects on separate replicas.
+* The runtime unification itself (Phase 3) and the SS-199 fix it enables; both
+  follow this work.
 
-## Solution Proposal
+## Solution proposal
 
-Introduce a union message type and a single unified `ReplicaTask` per replica
-that owns one CTP connection per cluster process and interleaves storage and
-compute commands into it.
-The interleaving order chosen by that task is the total order, by construction:
-it is the single point that owns the connection write.
+### Phase 1 — unified replica-management layer (no wire change)
+
+Extract one per-replica component that owns the connection and replica lifecycle
+— connect, drop, failure detection, reconcile, and epoch — and refactor both
+controllers to be producers and consumers against it rather than each owning
+their own `ReplicaTask` and connection.
+
+Each domain controller registers, per replica, three things with the layer:
+
+* a command stream it produces (storage commands; compute commands),
+* a response sink it consumes, and
+* a reconcile hook the layer invokes on (re)connect to replay the controller's
+  command history.
+
+The layer owns the per-incarnation `epoch`, detects failure, respawns, and drives
+both controllers' reconcile hooks on respawn.
+Crucially, **Phase 1 keeps two connections under the hood**: the layer opens a
+storage connection and a compute connection internally.
+There is no total order yet, and behavior is identical to today, so Phase 1 is a
+pure refactor that can be exercised by the existing storage and compute
+integration tests and by replica kill/reconnect tests.
+
+This phase is where the controller asymmetry is resolved once, deliberately,
+rather than worked around under the pressure of also changing the wire.
+The storage controller is synchronous; the compute `Instance` is a decoupled
+async task reached via `instance.call(|i| ...)` that owns its response sink and
+produces commands internally.
+For both to register uniformly, the layer's interface is defined at the
+controller level (synchronous handles to a command stream, a response sink, and a
+reconcile hook), and the compute side either exposes those at its controller
+boundary or — preferably — adopts the same async-task shape as compute so the two
+register symmetrically.
+See [Open questions](#open-questions).
+
+### Phase 2 — collapse to one connection (the total order)
+
+With replica management unified, swapping two connections for one is localized to
+that single layer.
+The layer stops opening a storage connection and a compute connection and instead
+opens one `Client<ClusterCommand, ClusterResponse>` per cluster process,
+interleaving both subsystems' commands into it.
+The order in which the layer pulls from the two command streams is the total
+order, by construction, because it is the single point that owns the connection
+write.
 On the cluster side, a thin demultiplexer splits the union stream back into the
-existing storage and compute command handlers, preserving today's behavior.
-The divergent routing and merge logic is reused verbatim through delegation, not
-rewritten, because the underlying machinery (`Partitioned`, `Partitionable`,
-CTP `transport::Client`) is already generic over the message type.
+existing storage and compute worker handlers, preserving today's behavior.
 
-### Union message type
+The pieces this needs are small and largely already prototyped:
 
-```rust
-enum ClusterCommand {
-    Storage(StorageCommand),
-    Compute(ComputeCommand),
-}
+* **Union message type.**
 
-enum ClusterResponse {
-    Storage(StorageResponse),
-    Compute(ComputeResponse),
-}
-```
+  ```rust
+  enum ClusterCommand {
+      Storage(StorageCommand),
+      Compute(ComputeCommand),
+  }
 
-CTP (`src/service/src/transport.rs`) is already generic: `Client<Out, In>` with
-`(Out, In): Partitionable<Out, In>`.
-One `Client<ClusterCommand, ClusterResponse>` per cluster process replaces the
-two per-process connections.
-A single physical connection per process is deliberate: CTP is framed FIFO, so
-the wire preserves the task's send order with no explicit sequence number in the
-happy path, and one connection matches the accepted shared-fate model (the
-connection dies, both subsystems' incarnation ends).
-The single CTP `version` now covers both subsystems; a shared version is
-acceptable, since storage and compute are already built and rolled out together.
+  enum ClusterResponse {
+      Storage(StorageResponse),
+      Compute(ComputeResponse),
+  }
+  ```
 
-### Delegating `PartitionedState`
+  CTP (`src/service/src/transport.rs`) is already generic over the message type:
+  `Client<Out, In>` with `(Out, In): Partitionable<Out, In>`.
+  A single physical connection per process is deliberate: CTP is framed FIFO, so
+  the wire preserves the layer's send order with no explicit sequence number, and
+  one connection matches the accepted shared-fate model.
+  A single shared CTP `version` covers both subsystems, since storage and compute
+  are built and rolled out together.
 
-`Partitioned<P, C, R>` (`src/service/src/client.rs:110`) is a single generic
-struct; routing and merging live entirely in the two
-`PartitionedState<C, R>` impls.
-We add `impl PartitionedState<ClusterCommand, ClusterResponse>` that holds both
-existing states and dispatches by variant:
+* **Delegating `PartitionedState`.**
+  `Partitioned<P, C, R>` is one generic struct; routing and merging live in the
+  two `PartitionedState<C, R>` impls.
+  A delegating impl holds both existing states and dispatches by variant, reusing
+  the divergent routing (storage broadcasts all; compute unicasts to worker 0
+  except `Hello`/`UpdateConfiguration`) and merge logic (frontier union vs. meet,
+  peek/subscribe row merging) unchanged.
 
-* `split_command(Storage(c))` delegates to `PartitionedStorageState::split_command(c)`,
-  re-wrapping each part as `Storage(..)`.
-* `split_command(Compute(c))` delegates to `PartitionedComputeState::split_command(c)`,
-  re-wrapping as `Compute(..)`.
-* `absorb_response` dispatches by variant into the corresponding sub-state.
+* **Cluster-side demultiplexer.**
+  The receive path on each cluster process matches `ClusterCommand` and forwards
+  to the existing storage or compute handler, merging their responses back into
+  the union stream.
+  Relative order between a storage and a compute command is discarded here, which
+  is correct because the runtimes are still separate.
+  **Nothing may depend on cross-subsystem order until Phase 3.**
 
-The existing routing (storage broadcasts all; compute unicasts to worker 0
-except `Hello`/`UpdateConfiguration`) and merge logic (frontier union vs. meet,
-peek/subscribe row merging) are reused unchanged.
+* **Sequential hydration.**
+  `SequentialHydration` is refactored from a `GenericClient` wrapper into a
+  synchronous interceptor the layer pumps on the compute command and response
+  branches, dropping its forwarder task and two mpsc channels.
+  (This refactor is independent of the rest and can land early.)
 
-### Unified `ReplicaTask` — the serialization point
+This is a hard cutover: clusterd serves the union on one port in place of the two
+legacy ports, and clusterd and environmentd roll together, so there is no
+mixed-version window.
 
-Today storage (`src/storage-controller/src/instance.rs:852`) and compute
-(`src/compute-client/src/controller/replica.rs:159`) each run a structurally
-identical task: `connect()` (retry forever) then a `select!` loop over a command
-channel and `client.recv()`.
-The unified task replaces both:
+### Phase 3 — unify the runtimes
 
-```text
-run():
-  state = hydration state machine (fresh per incarnation)
-  client = connect()                       // one union CTP connection per process
-  loop select:
-    cmd from storage_cmd_rx  -> specialize -> client.send(Storage(cmd))
-    cmd from compute_cmd_rx  -> specialize -> for c in state.absorb_command(cmd):
-                                                  client.send(Compute(c))
-    resp from client.recv()  -> match:
-        Storage(r) -> storage_response_tx.send(r)
-        Compute(r) -> for c in state.observe_response(&r): client.send(Compute(c))
-                      compute_response_tx.send(r)
-```
+With a total order on the wire, the two timely runtimes can be merged into one on
+the cluster side.
+This is a localized, worker-side change — the rendering path consumes one
+totally-ordered command stream rather than two racing ones — rather than a
+protocol redesign.
+This phase eliminates the cross-subsystem hold-back behind SS-199 and is detailed
+in a follow-up design once Phase 1 and Phase 2 land.
 
-The task's pull order across the two command channels is the total order.
-The single union `Partitioned` client owns the write, so there is no separate
-sequencer to build and no second writer to race with.
-`specialize_command` (Hello nonce, `CreateInstance`/config) is dispatched by
-variant.
+## Minimal viable prototype
 
-All three `select!` branches must be cancel safe, since a branch may be dropped
-when another fires.
-Both command channels use `mpsc::UnboundedReceiver::recv`, which is documented
-cancel safe, and `GenericClient::recv` (here the union `Partitioned`) is required
-to be cancel safe — the existing per-subsystem loops already depend on exactly
-this.
-The `client.send` calls inside a branch are not cancel safe, but they execute to
-completion within the selected branch before the loop polls `select!` again,
-exactly as in today's `client.send(command).await?`.
-This must be re-checked against the union `Partitioned` and the hydration state
-machine when implemented.
-
-### Cluster-side demultiplexer
-
-The receive loop on each cluster process matches `ClusterCommand` and forwards
-to the existing storage or compute worker handler.
-Relative order between a storage and a compute command is discarded at this
-split — which is correct, because the two runtimes are still separate and do not
-consume cross-subsystem order yet.
-**Nothing may depend on cross-subsystem order until the runtimes are unified.**
-
-### Sequential hydration placement
-
-`SequentialHydration` (`src/compute-client/src/controller/sequential_hydration.rs`)
-is a per-replica feedback controller: it holds back `Schedule` commands and
-releases them as hydration capacity frees up, where capacity is freed by
-observing `Frontiers` responses.
-Its placement constraints (behind the controller; before the `Partitioned`
-split so all workers see `Schedule` in one order and so it observes every
-compute command) must be preserved.
-
-We refactor it from a `GenericClient<ComputeCommand, ComputeResponse>` wrapper
-into a synchronous interceptor state machine that the unified `ReplicaTask`
-pumps on the compute command and response branches.
-Its core (`collections`, `hydration_queue`, `hydration_token`, `absorb_command`,
-`observe_response`, `hydrate_collections`) is already synchronous; only the
-`GenericClient` impl, the forwarder task, and the two mpsc channels are removed.
-Those channels existed solely to make `recv` cancel-safe while internally
-sending to the wrapped client; once the unified loop owns the sends, that
-guarantee is provided by the loop, exactly as today's `client.send(cmd).await?`.
-State reset on reconnect is automatic: the state machine is recreated per
-incarnation, mirroring today's `SequentialHydration::new` inside `connect()`.
-
-### Reconnect and reconciliation
-
-Neither subsystem reconnects in-task today.
-On disconnect, `run_message_loop` returns `Err`, the task finishes, and
-`is_failed()`/`failed()` (`task.is_finished()`) flips.
-The instance controller watches that flag, drops the dead task, and spawns a
-fresh one with a new epoch; reconciliation is the controller replaying its full
-command stream into the fresh task.
-This die-and-respawn model is identical on both sides, so unification is a
-supervisor merge:
-
-* A unified replica supervisor (merging the two `Replica`/`ReplicaClient`
-  structs) owns the single task, one `connected` flag, and one `failed()` check.
-* On failure it bumps a shared epoch, respawns the unified task, and signals
-  **both** controllers to replay — even when only one subsystem triggered the
-  failure (shared fate).
-* Each controller keeps its existing reconcile logic and replays independently
-  into its command channel; only failure detection, respawn, and epoch are
-  unified.
-
-Reconciliation is order-independent: there is no dependence between storage and
-compute reconciliation as long as the protocol invariants hold, so the order in
-which the two controllers replay is irrelevant.
-Where a choice is forced, reconcile compute first by slight preference.
-
-## Minimal Viable Prototype
-
-Land the union type, delegating `PartitionedState`, unified `ReplicaTask`, and
-cluster-side demux behind the existing behavior, then verify the system is
-unchanged (existing storage and compute integration tests pass, replicas
-reconnect and reconcile correctly).
-The total order is observable on the wire (e.g. via tracing) but exercised by
-nothing yet.
+Phase 1 alone: extract the unified replica-management layer with two connections
+still under the hood, refactor both controllers to register against it, and verify
+the system is unchanged — existing storage and compute integration tests pass, and
+replicas reconnect and reconcile correctly after a kill.
+No wire change, no total order yet; the value is the foundation and the resolved
+controller asymmetry.
 
 ## Alternatives
+
+### Unify the protocol before the controllers
+
+Rejected, based on a prototype.
+Unifying the wire first lands the union type, demultiplexer, and single-port
+server cleanly, but the unified serialization point forces both controllers to
+surrender connection ownership to a shared supervisor — controller unification by
+another name.
+Doing that while the controllers remain independent means threading channels and
+exposing sinks across the synchronous storage controller and the decoupled async
+compute `Instance`, an asymmetric, hard-to-validate change.
+Building the controller layer first makes the protocol collapse a localized edit.
 
 ### Sequential hydration for all objects, including storage
 
 Rejected.
-Storage broadcasts every command and self-coordinates ordering internally; it
-has no `Schedule`/suspend protocol.
+Storage broadcasts every command and self-coordinates ordering internally; it has
+no `Schedule`/suspend protocol.
 Gating storage through sequential hydration would require inventing a
-storage-side suspend mechanism — a separate feature with changed semantics, not
-step-1 plumbing.
-
-### Keep `SequentialHydration` as a wrapper, generalized to `ClusterCommand`, in front of the unified task
-
-Rejected.
-It retains the forwarder task and two mpsc channels (needed only for the
-wrapper's `recv` cancel-safety), adds an outer layer above the merge point, and
-routes storage commands through compute-owned middleware as passthrough — extra
-task hop and latency on storage frontier commands for zero benefit.
+storage-side suspend mechanism — a separate feature with changed semantics.
 
 ### Two physical connections per process with explicit sequence numbers
 
-Rejected for step 1.
+Rejected for Phase 2.
 Two TCP streams race, so recovering the total order requires explicit sequence
 numbers plus a resequencing buffer on the cluster side.
 A single connection gets the order from CTP's FIFO framing for free and matches
@@ -255,26 +253,30 @@ the accepted shared-fate model.
 Rejected.
 Stamping epochs onto two independently-driven streams is a retrofit that can
 desync.
-Making one task own the single connection write produces the order
+Making one component own the single connection write produces the order
 intrinsically, with no separate component to keep consistent.
 
 ## Open questions
 
-None remaining; the items raised in review are resolved below.
-
-Resolved during review:
-
-* **Epoch unification** — storage adopts the same per-incarnation `epoch` compute
-  already carries to discard stale responses (`replica.rs:148`). Storage keys
-  responses by `ReplicaId` only today; the epoch is a beneficial hardening it
-  lacks (compute got it first because its setups are more complex), and the
-  unified respawn path needs it regardless. Add it to the storage response path
-  as part of unification.
-* **Protocol versioning** — a single shared CTP `version` is acceptable; storage
-  and compute are already built and rolled out together.
-* **Reconcile ordering on respawn** — reconciliation is order-independent; there
-  is no storage/compute dependence. Reconcile compute first by slight preference
-  if a choice is forced.
-* **Select-branch cancel safety** — both command `mpsc` receivers and
-  `GenericClient::recv` are cancel safe; re-verify against the union
-  `Partitioned` and the hydration state machine at implementation time.
+* **Phase 1 layer interface.**
+  The exact shape of the unified replica-management layer: the handles each
+  controller registers (command stream, response sink, reconcile hook), where the
+  layer lives, and how it owns failure detection, respawn, and epoch.
+  This is the core design work of Phase 1 and will be detailed before
+  implementation.
+* **Storage controller symmetry.**
+  The compute `Instance` is a decoupled async task; the storage controller is
+  synchronous.
+  Either the layer accommodates both shapes, or the storage controller is
+  refactored to the same async-task shape so both register symmetrically.
+  Making storage async is a larger, orthogonal refactor (full storage-controller
+  decoupling) and is not strictly required, but it yields a uniform integration.
+  Decide during Phase 1 design.
+* **Epoch ownership.**
+  The unified layer owns the per-incarnation `epoch`.
+  Compute already carries an epoch to discard stale responses; storage keys
+  responses by `ReplicaId` only and gains the epoch as beneficial hardening.
+* **Reconcile ordering on respawn.**
+  Reconciliation is order-independent; there is no storage/compute dependence, so
+  the order in which the two controllers replay is irrelevant.
+  Reconcile compute first by slight preference if a choice is forced.
