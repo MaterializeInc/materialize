@@ -57,8 +57,7 @@ SS-199 itself; the fix lands with the runtime-unification follow-up.
   storage and compute runtimes.
   Runtime unification is the follow-up that the total order enables.
 * Extending sequential hydration to storage collections.
-  Storage would benefit from the same hardening, but it is compute-only today and
-  applying it to storage is a separate follow-up (see Alternatives).
+  Storage has no `Schedule`/suspend protocol; adding one is a separate feature.
 * Independent failure domains for storage and compute.
   We accept shared fate, consistent with the existing recommendation to keep
   storage and compute objects on separate replicas.
@@ -228,12 +227,12 @@ nothing yet.
 
 ### Sequential hydration for all objects, including storage
 
-Deferred, not rejected.
-Storage does not gate hydration today, but it would benefit from the same
-hardening; the only reason it is compute-only so far is that compute has the more
-complex setups where the limit matters most.
-Applying the mechanism to storage is a reasonable follow-up, but it is out of
-scope for step 1, which must stay behavior-preserving.
+Rejected.
+Storage broadcasts every command and self-coordinates ordering internally; it
+has no `Schedule`/suspend protocol.
+Gating storage through sequential hydration would require inventing a
+storage-side suspend mechanism — a separate feature with changed semantics, not
+step-1 plumbing.
 
 ### Keep `SequentialHydration` as a wrapper, generalized to `ClusterCommand`, in front of the unified task
 
@@ -261,16 +260,16 @@ intrinsically, with no separate component to keep consistent.
 
 ## Open questions
 
-* **Epoch unification.**
-  Compute carries a per-incarnation `epoch` to discard stale responses
-  (`replica.rs:148`); storage keys responses by `ReplicaId` only.
-  The unified path needs the storage response path to honor the shared epoch so
-  a respawn can distinguish stale storage responses.
-  Confirm there is no other storage-side assumption that the absence of an epoch
-  encodes.
+None remaining; the items raised in review are resolved below.
 
 Resolved during review:
 
+* **Epoch unification** — storage adopts the same per-incarnation `epoch` compute
+  already carries to discard stale responses (`replica.rs:148`). Storage keys
+  responses by `ReplicaId` only today; the epoch is a beneficial hardening it
+  lacks (compute got it first because its setups are more complex), and the
+  unified respawn path needs it regardless. Add it to the storage response path
+  as part of unification.
 * **Protocol versioning** — a single shared CTP `version` is acceptable; storage
   and compute are already built and rolled out together.
 * **Reconcile ordering on respawn** — reconciliation is order-independent; there
