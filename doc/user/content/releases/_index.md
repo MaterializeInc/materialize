@@ -32,7 +32,7 @@ SET TRANSACTION_ISOLATION TO 'bounded staleness 10s';
 
 For more information, see [Bounded Staleness](/reference/isolation-level/#bounded-staleness).
 
-### Iceberg Sinks for Google Cloud Platform {#v26.29-google-cloud-support-for-iceberg-sinks} 
+### Iceberg Sinks for Google Cloud Platform {#v26.29-google-cloud-support-for-iceberg-sinks}
 
 {{< private-preview />}}
 
