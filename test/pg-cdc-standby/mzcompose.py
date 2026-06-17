@@ -197,6 +197,9 @@ def rebuild_standby(c: Composition) -> None:
     ahead of the LSN Materialize has durably committed. The slot can no longer
     serve the data Materialize still needs, so the source stalls permanently.
     """
+    # Stop the serving standby so we can overwrite its data directory with future
+    # data.
+    c.kill("pg-standby")
     # Advance the primary well past Materialize's committed LSN so the rebuilt
     # standby's fresh slot starts from a definitively later position.
     conn = _pg_connect(c, "pg-primary")
@@ -209,9 +212,6 @@ def rebuild_standby(c: Composition) -> None:
     finally:
         conn.close()
 
-    # Stop the serving standby so we can overwrite its data directory, then clone
-    # the (advanced) primary again from scratch.
-    c.kill("pg-standby")
     _basebackup_standby(c)
     c.up("pg-standby")
     _wait_for_standby(c)
