@@ -878,7 +878,14 @@ FROM
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
-WHERE mo.name = 'materialize.public.w' AND pwc.worker_id = pwm.worker_id
+WHERE
+    mo.name = 'materialize.public.w'
+        AND
+    (
+        pwc.worker_id = pwm.worker_id OR pwc.worker_id IS NULL
+            OR
+        pwm.worker_id IS NULL
+    )
 ORDER BY mlm.lir_id DESC, worker_id;
 EOF
 
@@ -1006,7 +1013,14 @@ FROM
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
-WHERE mo.name = 'materialize.public.w' AND pwm.worker_id = pwc.worker_id
+WHERE
+    mo.name = 'materialize.public.w'
+        AND
+    (
+        pwm.worker_id = pwc.worker_id OR pwm.worker_id IS NULL
+            OR
+        pwc.worker_id IS NULL
+    )
 ORDER BY mlm.lir_id DESC, worker_id;
 EOF
 
@@ -1172,7 +1186,14 @@ FROM
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
-WHERE mo.name = 'materialize.public.v2_idx_x' AND pwm.worker_id = pwc.worker_id
+WHERE
+    mo.name = 'materialize.public.v2_idx_x'
+        AND
+    (
+        pwm.worker_id = pwc.worker_id OR pwm.worker_id IS NULL
+            OR
+        pwc.worker_id IS NULL
+    )
 ORDER BY mlm.lir_id DESC, worker_id;
 EOF
 
@@ -1503,7 +1524,12 @@ FROM
         LEFT JOIN object_average_cpu AS oac USING(global_id)
         LEFT JOIN object_memory AS om USING(global_id)
         LEFT JOIN object_average_memory AS oam USING(global_id)
-WHERE om.worker_id = oc.worker_id
+WHERE
+    (
+        om.worker_id = oc.worker_id OR om.worker_id IS NULL
+            OR
+        oc.worker_id IS NULL
+    )
 ORDER BY
     max_operator_cpu_ratio DESC NULLS LAST,
     worker_elapsed DESC NULLS LAST,
@@ -1594,3 +1620,123 @@ EXPLAIN ANALYZE CLUSTER CPU, MEMORY WITH SKEW;
 
 statement ok
 EXPLAIN ANALYZE CLUSTER MEMORY, CPU WITH SKEW;
+
+# Regression test for SQL-356
+# Multi-property WITH SKEW must not drop operators/objects
+# that lack data for one of the requested properties.
+#
+# With the bug present, the all NULL rows do not appear.
+
+statement ok
+CREATE MATERIALIZED VIEW w2 AS SELECT x + 1 AS x FROM u;
+
+# let the introspection sources update
+statement ok
+SELECT mz_unsafe.mz_sleep(8)
+
+# precondition: w2's dataflow owns no arrangements, so there is no per-worker
+# memory data for any of its operators...
+query I
+SELECT COUNT(*)
+FROM mz_introspection.mz_mappable_objects mo
+JOIN mz_introspection.mz_lir_mapping mlm USING (global_id)
+CROSS JOIN generate_series(mlm.operator_id_start::int8, (mlm.operator_id_end - 1)::int8) valid_id
+JOIN mz_introspection.mz_arrangement_sizes_per_worker mas ON (mas.operator_id = valid_id)
+WHERE mo.name = 'materialize.public.w2';
+----
+0
+
+# ...and no attributable per-worker CPU data either (the fused Read's
+# operator-id range is empty), so all metric columns below are NULL
+query B
+SELECT COUNT(*) > 0
+FROM mz_introspection.mz_mappable_objects mo
+JOIN mz_introspection.mz_lir_mapping mlm USING (global_id)
+CROSS JOIN generate_series(mlm.operator_id_start::int8, (mlm.operator_id_end - 1)::int8) valid_id
+JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse ON (mse.id = valid_id)
+WHERE mo.name = 'materialize.public.w2';
+----
+false
+
+# single-property skew shows every operator
+query TIRTTTRIII
+EXPLAIN ANALYZE MEMORY WITH SKEW FOR MATERIALIZED VIEW w2;
+----
+Read␠u30  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# requesting both properties must show the same operators; with the bug the
+# worker-id equality predicate drops the all-NULL rows and returns nothing
+query TIRTTTRIIIRTTT
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR MATERIALIZED VIEW w2;
+----
+Read␠u30  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# same in the other property order
+query TIRTTTRTTTRIII
+EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR MATERIALIZED VIEW w2;
+----
+Read␠u30  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# The cluster variant has the same flaw one level up: a dataflow with no
+# per-worker data for one property disappears from EXPLAIN ANALYZE CLUSTER
+# (MEMORY, CPU) WITH SKEW while appearing in the single-property variants.
+
+statement ok
+CREATE CLUSTER no_arrangements REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+
+statement ok
+CREATE MATERIALIZED VIEW w3 IN CLUSTER no_arrangements AS SELECT x + 1 AS x FROM u;
+
+statement ok
+SET cluster = no_arrangements;
+
+# let the introspection sources update
+statement ok
+SELECT mz_unsafe.mz_sleep(8)
+
+query T
+SELECT name FROM mz_introspection.mz_mappable_objects ORDER BY name;
+----
+materialize.public.w3
+
+# precondition: no LIR-mapped dataflow on this cluster owns any arrangement
+query I
+SELECT COUNT(*)
+FROM mz_introspection.mz_lir_mapping mlm
+CROSS JOIN generate_series(mlm.operator_id_start::int8, (mlm.operator_id_end - 1)::int8) valid_id
+JOIN mz_introspection.mz_arrangement_sizes_per_worker mas ON (mas.operator_id = valid_id);
+----
+0
+
+# precondition: no attributable per-worker CPU data on this cluster either
+query B
+SELECT COUNT(*) > 0
+FROM mz_introspection.mz_mappable_objects mo
+JOIN mz_introspection.mz_lir_mapping mlm USING (global_id)
+CROSS JOIN generate_series(mlm.operator_id_start::int8, (mlm.operator_id_end - 1)::int8) valid_id
+JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse ON (mse.id = valid_id)
+WHERE mo.name = 'materialize.public.w3';
+----
+false
+
+# single-property skew shows the object
+query TTIRTTTRIII
+EXPLAIN ANALYZE CLUSTER MEMORY WITH SKEW;
+----
+materialize.public.w3  t<id>  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# requesting both properties must show the same object; with the bug the
+# worker-id equality predicate drops it entirely
+query TTIRTTTRIIIRTTT
+EXPLAIN ANALYZE CLUSTER MEMORY, CPU WITH SKEW;
+----
+materialize.public.w3  t<id>  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# same in the other property order
+query TTIRTTTRTTTRIII
+EXPLAIN ANALYZE CLUSTER CPU, MEMORY WITH SKEW;
+----
+materialize.public.w3  t<id> NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+statement ok
+RESET cluster;
