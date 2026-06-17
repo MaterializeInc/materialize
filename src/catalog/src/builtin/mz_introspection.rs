@@ -732,7 +732,7 @@ pub static MZ_COMPUTE_DATAFLOW_AS_OF: LazyLock<BuiltinView> = LazyLock::new(|| B
         ),
         (
             "time",
-            "The initial as-of frontier of the dataflow, or NULL if the dataflow's as-of frontier is empty.",
+            "The initial as-of frontier of the dataflow, or `NULL` if its as-of frontier is empty.",
         ),
     ]),
     // The as-of is identical across workers; take the minimum to be robust to a
