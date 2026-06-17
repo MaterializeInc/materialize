@@ -44,7 +44,9 @@ corepack enable
 
 ci_collapsed_heading "Installing dependencies"
 retry yarn install --immutable --network-timeout 30000
-retry yarn playwright install --with-deps
+# `retry` only re-runs on a non-zero exit, but a stalled browser download
+# hangs forever; wrap in `timeout` so a hung fetch is killed and retried.
+retry timeout -k 30 600 yarn playwright install --with-deps
 ci_collapsed_heading "Pulling Vercel production environment"
 npx vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
 mv .vercel/.env.production.local .vercel/.env.preview.local

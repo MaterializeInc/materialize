@@ -187,7 +187,9 @@ cd console
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 corepack enable
 retry yarn install --immutable --network-timeout 30000
-retry yarn playwright install --with-deps
+# `retry` only re-runs on a non-zero exit, but a stalled browser download
+# hangs forever; wrap in `timeout` so a hung fetch is killed and retried.
+retry timeout -k 30 600 yarn playwright install --with-deps
 
 # --- Run tests ---
 
