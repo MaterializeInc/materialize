@@ -252,6 +252,17 @@ pub struct Args {
         env = "ORCHESTRATOR_KUBERNETES_ENABLE_PROMETHEUS_SCRAPE_ANNOTATIONS"
     )]
     orchestrator_kubernetes_enable_prometheus_scrape_annotations: bool,
+    /// The Kubernetes node label key used to identify availability zones for
+    /// pod scheduling affinity rules.
+    ///
+    /// Defaults to `topology.kubernetes.io/zone`. Use
+    /// `topology.k8s.aws/zone-id` for AWS zone IDs, or any custom label.
+    #[clap(
+        long,
+        env = "ORCHESTRATOR_KUBERNETES_AZ_LABEL",
+        default_value = "topology.kubernetes.io/zone"
+    )]
+    orchestrator_kubernetes_az_label: String,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -837,6 +848,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .orchestrator_kubernetes_disable_pod_metrics_collection,
                         enable_prometheus_scrape_annotations: args
                             .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
+                        availability_zone_label: args.orchestrator_kubernetes_az_label.clone(),
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
