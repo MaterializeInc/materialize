@@ -635,7 +635,7 @@ impl<'a> SchemaResolver<'a> {
                     .iter()
                     .map(|w_variant| {
                         let (r_idx, r_variant) =
-                            r_inner.match_(w_variant, &w2r).ok_or_else(|| {
+                            r_inner.match_promote_writer(w_variant, &w2r).ok_or_else(|| {
                                 SchemaResolutionError::new(format!(
                                     "Failed to match writer union variant `{}` against any variant in the reader for field `{}`",
                                     w_variant.get_human_name(writer.root),
@@ -666,7 +666,7 @@ impl<'a> SchemaResolver<'a> {
                     .iter()
                     .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null));
                 let (index, r_inner) = r_inner
-                    .match_ref(other, &self.writer_to_reader_names)
+                    .match_ref_promote_writer(other, &self.writer_to_reader_names)
                     .ok_or_else(|| {
                         SchemaResolutionError::new(
                             format!("No matching schema in reader union for writer type `{}` for field `{}`",
@@ -684,7 +684,7 @@ impl<'a> SchemaResolver<'a> {
             // Writer is union; reader is concrete
             (SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(w_inner)), other) => {
                 let (index, w_inner) = w_inner
-                    .match_ref(other, &self.reader_to_writer_names)
+                    .match_ref_promote_reader(other, &self.reader_to_writer_names)
                     .ok_or_else(|| {
                         SchemaResolutionError::new(
                             format!("No matching schema in writer union for reader type `{}` for field `{}`",

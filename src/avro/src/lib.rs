@@ -522,6 +522,161 @@ mod tests {
         assert_none!(reader.next());
     }
 
+    // Regression test for SS-277: an `int` -> `double` promotion inside a union
+    // (i.e. a nullable column whose type was promoted). The writer's `int`
+    // variant of `["null", "int"]` must resolve against the reader's `double`
+    // variant of `["null", "double"]`. Previously this failed with "Failed to
+    // match writer union variant `Int` against any variant in the reader",
+    // because union variant matching ignored numeric promotion.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
+    fn test_union_int_to_double_promotion() {
+        let writer_raw_schema = r#"
+            {
+                "type": "record",
+                "name": "test",
+                "fields": [
+                    {"name": "f1", "type": ["null", "int"]}
+                ]
+            }
+        "#;
+        let reader_raw_schema = r#"
+            {
+                "type": "record",
+                "name": "test",
+                "fields": [
+                    {"name": "f1", "type": ["null", "double"]}
+                ]
+            }
+        "#;
+        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
+        let reader_schema = Schema::from_str(reader_raw_schema).unwrap();
+        let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+        let mut record = Record::new(writer_schema.top_node()).unwrap();
+        record.put(
+            "f1",
+            Value::Union {
+                index: 1,
+                inner: Box::new(Value::Int(123)),
+                n_variants: 2,
+                null_variant: Some(0),
+            },
+        );
+        writer.append(record).unwrap();
+        writer.flush().unwrap();
+        let input = writer.into_inner();
+        let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
+        assert_eq!(
+            reader.next().unwrap().unwrap(),
+            Value::Record(vec![(
+                "f1".to_string(),
+                Value::Union {
+                    index: 1,
+                    inner: Box::new(Value::Double(123.0)),
+                    n_variants: 2,
+                    null_variant: Some(0),
+                },
+            )]),
+        );
+        assert_none!(reader.next());
+    }
+
+    // Regression test for SS-277, concrete writer -> union reader: a column
+    // promoted from a non-nullable `int` to a nullable `double`. Exercises the
+    // `match_ref_promote_writer` resolution path.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
+    fn test_concrete_int_to_union_double_promotion() {
+        let writer_raw_schema = r#"
+            {
+                "type": "record",
+                "name": "test",
+                "fields": [
+                    {"name": "f1", "type": "int"}
+                ]
+            }
+        "#;
+        let reader_raw_schema = r#"
+            {
+                "type": "record",
+                "name": "test",
+                "fields": [
+                    {"name": "f1", "type": ["null", "double"]}
+                ]
+            }
+        "#;
+        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
+        let reader_schema = Schema::from_str(reader_raw_schema).unwrap();
+        let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+        let mut record = Record::new(writer_schema.top_node()).unwrap();
+        record.put("f1", Value::Int(123));
+        writer.append(record).unwrap();
+        writer.flush().unwrap();
+        let input = writer.into_inner();
+        let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
+        assert_eq!(
+            reader.next().unwrap().unwrap(),
+            Value::Record(vec![(
+                "f1".to_string(),
+                Value::Union {
+                    index: 1,
+                    inner: Box::new(Value::Double(123.0)),
+                    n_variants: 2,
+                    null_variant: Some(0),
+                },
+            )]),
+        );
+        assert_none!(reader.next());
+    }
+
+    // Regression test for SS-277, union writer -> concrete reader: a column
+    // promoted from a nullable `int` to a non-nullable `double`. Exercises the
+    // `match_ref_promote_reader` resolution path.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
+    fn test_union_int_to_concrete_double_promotion() {
+        let writer_raw_schema = r#"
+            {
+                "type": "record",
+                "name": "test",
+                "fields": [
+                    {"name": "f1", "type": ["null", "int"]}
+                ]
+            }
+        "#;
+        let reader_raw_schema = r#"
+            {
+                "type": "record",
+                "name": "test",
+                "fields": [
+                    {"name": "f1", "type": "double"}
+                ]
+            }
+        "#;
+        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
+        let reader_schema = Schema::from_str(reader_raw_schema).unwrap();
+        let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+        let mut record = Record::new(writer_schema.top_node()).unwrap();
+        record.put(
+            "f1",
+            Value::Union {
+                index: 1,
+                inner: Box::new(Value::Int(123)),
+                n_variants: 2,
+                null_variant: Some(0),
+            },
+        );
+        writer.append(record).unwrap();
+        writer.flush().unwrap();
+        let input = writer.into_inner();
+        let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
+        assert_eq!(
+            reader.next().unwrap().unwrap(),
+            Value::Record(vec![("f1".to_string(), Value::Double(123.0))]),
+        );
+        assert_none!(reader.next());
+    }
+
     //TODO: move where it fits better
     #[mz_ore::test]
     fn test_enum_no_reader_schema() {
