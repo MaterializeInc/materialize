@@ -66,8 +66,9 @@ pub use crate::relation::{
 pub use crate::row::encode::{RowColumnarDecoder, RowColumnarEncoder, preserves_order};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{
-    DatumDictTypedIter, DatumList, DatumListTypedIter, DatumMap, FromDatum, ProtoNumeric, ProtoRow,
-    Row, RowArena, RowArenaBuf, RowPacker, RowRef, SharedRow, StableRow, datum_list_size,
+    DatumDictTypedIter, DatumList, DatumListTypedIter, DatumMap, DictBuilder, FromDatum,
+    ProtoNumeric, ProtoRow, Row, RowArena, RowArenaBuf, RowPacker, RowRef, SharedRow, StableRow,
+    datum_list_size,
     datum_size, datums_size, read_datum, row_size,
 };
 pub use crate::scalar::{
