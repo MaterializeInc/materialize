@@ -85,6 +85,19 @@ Specifically, reductions can use more memory than we show here.
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_heap_capacity_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_heap_size_raw -->
 
+## `mz_compute_dataflow_as_of`
+
+The `mz_compute_dataflow_as_of` view describes the initial `as_of` frontier of each [dataflow] in the system.
+The `as_of` is the frontier before which the dataflow does not produce output; it is fixed when the dataflow is installed.
+
+<!-- RELATION_SPEC mz_introspection.mz_compute_dataflow_as_of -->
+| Field         | Type             | Meaning                                                                                |
+| ------------- | ---------------- | --------                                                                               |
+| `dataflow_id` | [`uint8`]        | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).             |
+| `time`        | [`mz_timestamp`] | The initial as-of frontier of the dataflow, or `NULL` if its as-of frontier is empty.  |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_dataflow_as_of_per_worker -->
+
 ## `mz_compute_error_counts`
 
 The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows][dataflow] in the system.

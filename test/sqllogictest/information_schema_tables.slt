@@ -897,6 +897,14 @@ mz_cluster_prometheus_metrics
 SOURCE
 materialize
 mz_introspection
+mz_compute_dataflow_as_of
+VIEW
+materialize
+mz_introspection
+mz_compute_dataflow_as_of_per_worker
+SOURCE
+materialize
+mz_introspection
 mz_compute_dataflow_global_ids_per_worker
 SOURCE
 materialize

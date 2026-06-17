@@ -234,6 +234,32 @@ pub static MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER: LazyLock<BuiltinLog> =
         }),
     });
 
+pub static MZ_COMPUTE_DATAFLOW_AS_OF_PER_WORKER: LazyLock<BuiltinLog> =
+    LazyLock::new(|| BuiltinLog {
+        name: "mz_compute_dataflow_as_of_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::LOG_MZ_COMPUTE_DATAFLOW_AS_OF_PER_WORKER_OID,
+        variant: LogVariant::Compute(ComputeLog::DataflowAsOf),
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "compute_dataflow_as_of_per_worker",
+            description: "Initial as-of frontier of each dataflow, per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "as_of_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::fk_composite(
+                        "dataflow_id",
+                        "dataflow_id",
+                        Cardinality::ManyToOne,
+                        &[("worker_id", "worker_id")],
+                    ),
+                }]
+            },
+            column_semantic_types: &[("time", SemanticType::MzTimestamp)],
+        }),
+    });
+
 pub static MZ_CLUSTER_PROMETHEUS_METRICS: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_cluster_prometheus_metrics",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -688,6 +714,46 @@ FROM mz_introspection.mz_compute_dataflow_global_ids_per_worker
 WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
     ontology: None,
+});
+
+pub static MZ_COMPUTE_DATAFLOW_AS_OF: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_compute_dataflow_as_of",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_DATAFLOW_AS_OF_OID,
+    desc: RelationDesc::builder()
+        .with_column("dataflow_id", SqlScalarType::UInt64.nullable(false))
+        .with_column("time", SqlScalarType::MzTimestamp.nullable(true))
+        .with_key(vec![0])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "dataflow_id",
+            "The ID of the dataflow. Corresponds to `mz_dataflows.id`.",
+        ),
+        (
+            "time",
+            "The initial as-of frontier of the dataflow, or `NULL` if its as-of frontier is empty.",
+        ),
+    ]),
+    // The as-of is identical across workers; take the minimum to be robust to a
+    // worker that has not reported yet.
+    sql: "
+SELECT dataflow_id, pg_catalog.min(time) AS time
+FROM mz_introspection.mz_compute_dataflow_as_of_per_worker
+GROUP BY dataflow_id",
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "compute_dataflow_as_of",
+        description: "Initial as-of frontier of each dataflow.",
+        links: &const {
+            [OntologyLink {
+                name: "as_of_of",
+                target: "dataflow",
+                properties: LinkProperties::fk("dataflow_id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[("time", SemanticType::MzTimestamp)],
+    }),
 });
 
 pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {

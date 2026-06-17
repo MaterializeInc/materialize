@@ -60,6 +60,12 @@ capacity  bigint  The␠capacity␠in␠bytes␠of␠the␠arrangement.␠Can␠
 allocations  bigint  The␠number␠of␠separate␠memory␠allocations␠backing␠the␠arrangement.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_dataflow_as_of' ORDER BY position
+----
+dataflow_id  uint8  The␠ID␠of␠the␠dataflow.␠Corresponds␠to␠`mz_dataflows.id`.
+time  mz_timestamp  The␠initial␠as-of␠frontier␠of␠the␠dataflow,␠or␠`NULL`␠if␠its␠as-of␠frontier␠is␠empty.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_error_counts' ORDER BY position
 ----
 export_id  text  The␠ID␠of␠the␠dataflow␠export.␠Corresponds␠to␠`mz_compute_exports.export_id`.
@@ -271,6 +277,8 @@ mz_arrangement_sharing_raw
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
 mz_cluster_prometheus_metrics
+mz_compute_dataflow_as_of
+mz_compute_dataflow_as_of_per_worker
 mz_compute_dataflow_global_ids_per_worker
 mz_compute_error_counts
 mz_compute_error_counts_per_worker
