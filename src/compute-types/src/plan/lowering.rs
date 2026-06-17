@@ -25,7 +25,7 @@ use mz_repr::{GlobalId, Timestamp};
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
-use crate::plan::scalar::{LirScalarExpr, lses_from_mses, mfp_plan_mir_to_lir};
+use crate::plan::scalar::{LirScalarExpr, lses_from_mses, mfp_mir_to_lir_plan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Plan, PlanNode};
@@ -274,11 +274,7 @@ impl Context {
                     // present when handling the leftover MFP after this big match.)
                     mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                     in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
-                    GetPlan::Arrangement(
-                        key.clone(),
-                        Some(val.clone()),
-                        mfp_plan_mir_to_lir(mfp.into_plan().expect("MFP planning failed")),
-                    )
+                    GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp_mir_to_lir_plan(mfp))
                 } else if !mfp.is_identity() {
                     // We need to ensure a collection exists, which means we must form it.
                     if let Some((key, permutation, thinning)) =
@@ -287,15 +283,9 @@ impl Context {
                         mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                         in_keys.arranged =
                             vec![(key.clone(), permutation.clone(), thinning.clone())];
-                        GetPlan::Arrangement(
-                            key.clone(),
-                            None,
-                            mfp_plan_mir_to_lir(mfp.into_plan().expect("MFP planning failed")),
-                        )
+                        GetPlan::Arrangement(key.clone(), None, mfp_mir_to_lir_plan(mfp))
                     } else {
-                        GetPlan::Collection(mfp_plan_mir_to_lir(
-                            mfp.into_plan().expect("MFP planning failed"),
-                        ))
+                        GetPlan::Collection(mfp_mir_to_lir_plan(mfp))
                     }
                 } else {
                     // By default, just pass input arrangements through.
@@ -435,9 +425,7 @@ impl Context {
                                         PlanNode::ArrangeBy {
                                             input_key,
                                             input: body,
-                                            input_mfp: mfp_plan_mir_to_lir(
-                                                input_mfp.into_plan().expect("MFP planning failed"),
-                                            ),
+                                            input_mfp: mfp_mir_to_lir_plan(input_mfp),
                                             forms,
                                             strategy: strategy_from_future(v_future),
                                         }
@@ -451,9 +439,7 @@ impl Context {
                                 PlanNode::ArrangeBy {
                                     input_key,
                                     input: Box::new(lir_value),
-                                    input_mfp: mfp_plan_mir_to_lir(
-                                        input_mfp.into_plan().expect("MFP planning failed"),
-                                    ),
+                                    input_mfp: mfp_mir_to_lir_plan(input_mfp),
                                     forms,
                                     strategy: strategy_from_future(v_future),
                                 }
@@ -678,9 +664,7 @@ impl Context {
                             input: Box::new(input),
                             exprs: lses_from_mses(&exprs),
                             func: func.clone(),
-                            mfp_after: mfp_plan_mir_to_lir(
-                                mfp.into_plan().expect("MFP planning failed"),
-                            ),
+                            mfp_after: mfp_mir_to_lir_plan(mfp),
                         }
                         .as_plan(lir_id),
                         keys: AvailableCollections::new_raw(),
@@ -1139,9 +1123,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         plan: PlanNode::ArrangeBy {
                             input_key,
                             input: Box::new(input),
-                            input_mfp: mfp_plan_mir_to_lir(
-                                input_mfp.into_plan().expect("MFP planning failed"),
-                            ),
+                            input_mfp: mfp_mir_to_lir_plan(input_mfp),
                             forms,
                             strategy,
                         }
@@ -1225,7 +1207,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 if val.is_some() {
                     plan = PlanNode::Mfp {
                         input: Box::new(plan),
-                        mfp: mfp_plan_mir_to_lir(mfp.into_plan().expect("MFP planning failed")),
+                        mfp: mfp_mir_to_lir_plan(mfp),
                         input_key_val: Some((key.clone(), val)),
                     }
                     .as_plan(lir_id)
@@ -1234,7 +1216,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let lir_id = self.allocate_lir_id();
                 plan = PlanNode::Mfp {
                     input: Box::new(plan),
-                    mfp: mfp_plan_mir_to_lir(mfp.into_plan().expect("MFP planning failed")),
+                    mfp: mfp_mir_to_lir_plan(mfp),
                     input_key_val,
                 }
                 .as_plan(lir_id);
@@ -1323,7 +1305,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 input: Box::new(input),
                 key_val_plan,
                 plan: reduce_plan,
-                mfp_after: mfp_plan_mir_to_lir(mfp_after.into_plan().expect("MFP planning failed")),
+                mfp_after: mfp_mir_to_lir_plan(mfp_after),
                 temporal_bucketing_strategy,
             }
             .as_plan(lir_id),
@@ -1381,7 +1363,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             PlanNode::ArrangeBy {
                 input_key,
                 input: Box::new(plan),
-                input_mfp: mfp_plan_mir_to_lir(input_mfp.into_plan().expect("MFP planning failed")),
+                input_mfp: mfp_mir_to_lir_plan(input_mfp),
                 forms: collections,
                 strategy: strategy_from_future(has_future_updates),
             }

@@ -736,12 +736,13 @@ pub fn safe_mfp_mir_to_lir(plan: SafeMfpPlan<MirScalarExpr>) -> SafeMfpPlan<LirS
     SafeMfpPlan::from_mfp(mfp_mir_to_lir(plan.into_mfp()))
 }
 
-/// Convert a MIR `MfpPlan` to LIR.
+/// Convert a MIR `MapFilterProject` into an LIR `MfpPlan`.
 ///
 /// The temporal bounds and the inner SafeMfpPlan are all `mz_now()`-free
 /// after temporal extraction, so conversion always succeeds.
 /// Panics if any expression unexpectedly contains unmaterializable functions.
-pub fn mfp_plan_mir_to_lir(plan: MfpPlan<MirScalarExpr>) -> MfpPlan<LirScalarExpr> {
+pub fn mfp_mir_to_lir_plan(mfp: MapFilterProject<MirScalarExpr>) -> MfpPlan<LirScalarExpr> {
+    let plan = mfp.into_plan().expect("MFP planning failed");
     let (safe, lower, upper) = plan.into_parts();
     MfpPlan::from_parts(
         safe_mfp_mir_to_lir(safe),

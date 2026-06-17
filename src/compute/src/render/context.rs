@@ -23,7 +23,7 @@ use mz_compute_types::dyncfgs::{
     ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION,
     ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
 };
-use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_plan_lir_to_mir, mfp_plan_mir_to_lir};
+use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Eval, Id, MfpPlan};
@@ -963,11 +963,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             let max_demand = mir_mfp.demand().last().map(|x| *x + 1).unwrap_or(0);
             mir_mfp.permute_fn(|c| c, max_demand);
             mir_mfp.optimize();
-            let plan = mfp_plan_mir_to_lir(
-                mir_mfp
-                    .into_plan()
-                    .expect("MFP re-planning after demand permutation"),
-            );
+            let plan = mfp_mir_to_lir_plan(mir_mfp);
             (plan, max_demand)
         };
 

@@ -271,7 +271,7 @@ mod tests {
     use mz_expr::{MapFilterProject, MirScalarExpr, UnmaterializableFunc};
     use mz_repr::Datum;
 
-    use crate::plan::scalar::mfp_plan_mir_to_lir;
+    use crate::plan::scalar::mfp_mir_to_lir_plan;
 
     use super::*;
 
@@ -343,7 +343,7 @@ mod tests {
         let monotonic_ids = BTreeSet::new();
         let interpreter = SingleTimeMonotonic::new(&monotonic_ids);
         let ctx = Context::default();
-        let mfp = mfp_plan_mir_to_lir(temporal_mfp(1).into_plan().unwrap());
+        let mfp = mfp_mir_to_lir_plan(temporal_mfp(1));
 
         // Even with a monotonicity-preserving table function and a monotonic
         // input, a temporal predicate in the after-MFP breaks monotonicity, as
@@ -364,7 +364,7 @@ mod tests {
         let monotonic_ids = BTreeSet::new();
         let interpreter = SingleTimeMonotonic::new(&monotonic_ids);
         let ctx = Context::default();
-        let mfp = mfp_plan_mir_to_lir(MapFilterProject::new(1).into_plan().unwrap());
+        let mfp = mfp_mir_to_lir_plan(MapFilterProject::new(1));
 
         // Without temporal predicates, the MFP just propagates its input's
         // monotonicity.
@@ -380,7 +380,7 @@ mod tests {
         let monotonic_ids = BTreeSet::new();
         let interpreter = SingleTimeMonotonic::new(&monotonic_ids);
         let ctx = Context::default();
-        let mfp = mfp_plan_mir_to_lir(temporal_mfp(1).into_plan().unwrap());
+        let mfp = mfp_mir_to_lir_plan(temporal_mfp(1));
 
         // A temporal predicate breaks monotonicity even for a monotonic input.
         let result = interpreter.mfp(&ctx, PhysicallyMonotonic(true), &mfp, &None);

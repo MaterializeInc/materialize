@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use crate::dataflows::DataflowDescription;
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
-use crate::plan::scalar::LirScalarExpr;
+use crate::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::transform::{Transform, TransformConfig};
@@ -630,7 +630,7 @@ impl Plan {
         fields(path.segment = "refine_source_mfps")
     )]
     fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
-        use crate::plan::scalar::{mfp_plan_lir_to_mir, mfp_plan_mir_to_lir};
+        use crate::plan::scalar::mfp_plan_lir_to_mir;
 
         for (source_id, source_import) in dataflow.source_imports.iter_mut() {
             let source = &mut source_import.desc;
@@ -708,16 +708,7 @@ impl Plan {
                     // Convert mutated MIR MFPs back to LIR MfpPlans.
                     mir_mfps
                         .into_iter()
-                        .map(|(lir_id, mir_mfp)| {
-                            (
-                                lir_id,
-                                mfp_plan_mir_to_lir(
-                                    mir_mfp
-                                        .into_plan()
-                                        .expect("MFP re-planning after extract_common"),
-                                ),
-                            )
-                        })
+                        .map(|(lir_id, mir_mfp)| (lir_id, mfp_mir_to_lir_plan(mir_mfp)))
                         .collect()
                 } else {
                     taken.into_iter().collect()
