@@ -589,7 +589,7 @@ def run_create_objects_part_2(
 
                 for child in source.get("children", {}).values():
                     if child["type"] == "table":
-                        # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/10034 is fixed
+                        # Required for existing workload captures even though https://github.com/MaterializeInc/database-issues/issues/10034 is fixed
                         create_sql = re.sub(
                             r",?\s*DETAILS\s*=\s*'[^']*'",
                             "",
@@ -600,7 +600,7 @@ def run_create_objects_part_2(
                             r"\sWITH \(\s*\)", "", create_sql, flags=re.IGNORECASE
                         )
                         if source["type"] == "load-generator":
-                            # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/10010 is fixed
+                            # Required for existing workload captures even though https://github.com/MaterializeInc/database-issues/issues/10010 is fixed
                             create_sql = re.sub(
                                 r"mz_load_generators\.",
                                 "",
