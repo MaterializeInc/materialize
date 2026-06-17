@@ -4704,8 +4704,10 @@ query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_system_privileges";
 ----
 mz_catalog.mz_system_privileges:
-  →Table Function unnest_array(parse_catalog_privileges(jsonb_build_array(jsonbable_to_jsonb(jsonb_build_object("grantee", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantee")), "grantor", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantor")), "acl_mode", jsonbable_to_jsonb(((#0{data} -> "value") -> "acl_mode")))))))
-    →Read mz_internal.mz_catalog_raw
+  →Fused with Child Map/Filter/Project
+    Project: #1
+      →Table Function unnest_array(parse_catalog_privileges(jsonb_build_array(jsonbable_to_jsonb(jsonb_build_object("grantee", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantee")), "grantor", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantor")), "acl_mode", jsonbable_to_jsonb(((#0{data} -> "value") -> "acl_mode")))))))
+        →Read mz_internal.mz_catalog_raw
 
 Source mz_internal.mz_catalog_raw
   filter=(("SystemPrivileges" = (#0{data} ->> "kind")))
