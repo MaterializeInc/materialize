@@ -22,6 +22,7 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.azurite import Azurite
+from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
@@ -59,6 +60,7 @@ SERVICES = [
         external_blob_store=True,
         sanity_restart=False,
     ),
+    FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_blob_store=True),
 ]
 
@@ -132,6 +134,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args, passthrough_args = parser.parse_known_args()
 
     dependencies = [
+        "fivetran-destination",
         "materialized",
         "postgres",
         "mysql",
@@ -165,6 +168,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         volumes_extra=["mzdata:/mzdata"],
         external_blob_store=True,
         blob_store_is_azure=args.azurite,
+        fivetran_destination=True,
+        fivetran_destination_files_path="/share/tmp",
         check_statement_logging=args.check_statement_logging,
         entrypoint_extra=[
             f"--var=uses-redpanda={args.redpanda}",
@@ -232,6 +237,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         def process(file: str) -> None:
             if not args.slow and file in (
                 "explain-pushdown.td",
+                "fivetran-destination.td",
                 # Slow but often fails, still run on test pipeline
                 # "introspection-sources.td",
                 "kafka-upsert-sources.td",

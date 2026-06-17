@@ -71,6 +71,7 @@
 /src/expr                           @MaterializeInc/cluster
 /src/expr-parser                    @MaterializeInc/cluster
 /src/expr-test-util                 @MaterializeInc/cluster
+/src/fivetran-destination           @MaterializeInc/adapter
 /src/frontegg-auth                  @MaterializeInc/adapter
 /src/http-util                      @MaterializeInc/adapter
 /src/interchange                    @MaterializeInc/cluster
