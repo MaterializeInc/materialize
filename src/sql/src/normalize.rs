@@ -482,7 +482,7 @@ pub fn create_statement(
         Statement::CreateMetric(stmt) => {
             stmt.name = allocate_name(&stmt.name)?;
             stmt.if_not_exists = false;
-            // `in_api` and the `VALUES FROM` option are already
+            // `in_api` and the `SERIES FROM` option are already
             // ResolvedItemName at this point; their AstDisplay impls render
             // them in ID-form, so we don't need to do anything extra here.
         }

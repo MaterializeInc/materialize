@@ -1679,8 +1679,8 @@ pub struct Metric {
     /// HELP text emitted in the Prometheus exposition.
     pub help: String,
     /// The view that produces metric rows. Resolved at plan time.
-    pub values_from: CatalogItemId,
-    /// Name of the column in `values_from` that holds the metric value;
+    pub series_from: CatalogItemId,
+    /// Name of the column in `series_from` that holds the metric value;
     /// other columns are emitted as labels.
     pub value_column: String,
     /// Catalog objects this metric depends on (the API and the view).

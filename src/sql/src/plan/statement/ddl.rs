@@ -5253,7 +5253,7 @@ generate_extracted_config!(
     MetricOption,
     (Ty, String),
     (Help, String),
-    (ValuesFrom, with_options::Object),
+    (SeriesFrom, with_options::Object),
     (ValueColumn, String)
 );
 
@@ -5276,7 +5276,7 @@ pub fn plan_create_metric(
         seen: _,
         ty,
         help,
-        values_from,
+        series_from,
         value_column,
     } = options.clone().try_into()?;
 
@@ -5287,13 +5287,13 @@ pub fn plan_create_metric(
         sql_bail!("CREATE METRIC only supports TYPE 'gauge' today; got {metric_type:?}");
     }
     let help = help.ok_or_else(|| sql_err!("CREATE METRIC requires a HELP option"))?;
-    let values_from_object: with_options::Object =
-        values_from.ok_or_else(|| sql_err!("CREATE METRIC requires a VALUES FROM option"))?;
+    let series_from_object: with_options::Object =
+        series_from.ok_or_else(|| sql_err!("CREATE METRIC requires a SERIES FROM option"))?;
     let value_column =
         value_column.ok_or_else(|| sql_err!("CREATE METRIC requires a VALUE COLUMN option"))?;
 
     // The name resolver already filled in IDs for `IN API <api>` and
-    // `VALUES FROM <view>`; extract them directly.
+    // `SERIES FROM <view>`; extract them directly.
     let api_id = match unresolved_api {
         ResolvedItemName::Item { id, .. } => *id,
         ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
@@ -5309,15 +5309,15 @@ pub fn plan_create_metric(
         );
     }
 
-    let values_from = CatalogItemId::from(&values_from_object);
-    let view_entry = scx.catalog.get_item(&values_from);
+    let series_from = CatalogItemId::from(&series_from_object);
+    let view_entry = scx.catalog.get_item(&series_from);
     match view_entry.item_type() {
         CatalogItemType::View
         | CatalogItemType::MaterializedView
         | CatalogItemType::Source
         | CatalogItemType::Table => {}
         other => sql_bail!(
-            "VALUES FROM target {} is a {}; expected a relation",
+            "SERIES FROM target {} is a {}; expected a relation",
             scx.catalog.resolve_full_name(view_entry.name()),
             other
         ),
@@ -5325,7 +5325,7 @@ pub fn plan_create_metric(
     let view_collection = view_entry.at_version(RelationVersionSelector::Latest);
     let view_desc = view_collection.relation_desc().ok_or_else(|| {
         sql_err!(
-            "VALUES FROM target {} does not produce rows",
+            "SERIES FROM target {} does not produce rows",
             scx.catalog.resolve_full_name(view_entry.name())
         )
     })?;
@@ -5404,7 +5404,7 @@ pub fn plan_create_metric(
             api_id,
             metric_type,
             help,
-            values_from,
+            series_from,
             value_column,
         },
         if_not_exists,
@@ -7723,7 +7723,7 @@ pub fn plan_alter_table_add_column(
         }
     }
 
-    // A METRIC's `VALUES FROM` relation contributes every non-value column as a
+    // A METRIC's `SERIES FROM` relation contributes every non-value column as a
     // Prometheus label, so a column added to a table that feeds a metric becomes
     // a new label at scrape time. A metric depends on its relation directly
     // (`used_by`), and a freshly added column can never be the metric's

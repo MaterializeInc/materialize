@@ -449,7 +449,7 @@ impl CatalogState {
                 self.introspection_dependencies_inner(on_item_id, out)
             }
             CatalogItem::Metric(metric) => {
-                self.introspection_dependencies_inner(metric.values_from, out)
+                self.introspection_dependencies_inner(metric.series_from, out)
             }
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
@@ -1533,7 +1533,7 @@ impl CatalogState {
                     api_id: metric.api_id,
                     metric_type: metric.metric_type,
                     help: metric.help,
-                    values_from: metric.values_from,
+                    series_from: metric.series_from,
                     value_column: metric.value_column,
                     resolved_ids,
                 })

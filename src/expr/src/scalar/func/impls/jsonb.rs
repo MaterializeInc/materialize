@@ -538,7 +538,7 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 let mut metric_type = None;
                 let mut help = None;
                 let mut value_column = None;
-                let mut values_from = None;
+                let mut series_from = None;
                 for opt in stmt.options {
                     match (opt.name, opt.value) {
                         (MetricOptionName::Ty, Some(WithOptionValue::Value(Value::String(s)))) => {
@@ -557,10 +557,10 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                             value_column = Some(s);
                         }
                         (
-                            MetricOptionName::ValuesFrom,
+                            MetricOptionName::SeriesFrom,
                             Some(WithOptionValue::Item(RawItemName::Id(id, _, _))),
                         ) => {
-                            values_from = Some(id);
+                            series_from = Some(id);
                         }
                         _ => {}
                     }
@@ -579,8 +579,8 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                     json!(value_column.ok_or("CREATE METRIC: missing VALUE COLUMN")?),
                 );
                 info.insert(
-                    "values_from",
-                    json!(values_from.ok_or("CREATE METRIC: missing VALUES FROM")?),
+                    "series_from",
+                    json!(series_from.ok_or("CREATE METRIC: missing SERIES FROM")?),
                 );
                 "metric"
             }

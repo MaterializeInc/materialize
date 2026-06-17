@@ -478,7 +478,7 @@ mz_metrics  owner_id
 mz_metrics  schema_id
 mz_metrics  type
 mz_metrics  value_column
-mz_metrics  values_from
+mz_metrics  series_from
 mz_notices  action
 mz_notices  action_type
 mz_notices  created_at

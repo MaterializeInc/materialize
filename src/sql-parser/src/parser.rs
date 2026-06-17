@@ -4897,7 +4897,7 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_item_name()?;
         self.expect_keywords(&[IN, API])?;
-        // `in_api` and `values_from` are parsed as `parse_raw_name` so the
+        // `in_api` and `series_from` are parsed as `parse_raw_name` so the
         // name resolver fills in IDs. Persisting them in ID-form keeps the
         // metric pointing at the right API/view across renames and lets
         // catalog rehydration discover the dependency for sort ordering.
@@ -4915,13 +4915,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_metric_option(&mut self) -> Result<MetricOption<Raw>, ParserError> {
-        // VALUES FROM is parsed eagerly as an item reference (rather than the
+        // SERIES FROM is parsed eagerly as an item reference (rather than the
         // generic option-value path) so the name resolver can fill in an ID;
         // see `parse_create_metric` for why ID-form matters here.
-        if self.parse_keywords(&[VALUES, FROM]) {
+        if self.parse_keywords(&[SERIES, FROM]) {
             let _ = self.consume_token(&Token::Eq);
             return Ok(MetricOption {
-                name: MetricOptionName::ValuesFrom,
+                name: MetricOptionName::SeriesFrom,
                 value: Some(WithOptionValue::Item(self.parse_raw_name()?)),
             });
         }
@@ -4934,7 +4934,7 @@ impl<'a> Parser<'a> {
         } else {
             return self.expected(
                 self.peek_pos(),
-                "TYPE, HELP, VALUES FROM, or VALUE COLUMN",
+                "TYPE, HELP, SERIES FROM, or VALUE COLUMN",
                 self.peek_token(),
             );
         };
