@@ -228,6 +228,7 @@ so it is executed.""",
     set_retry_on_agent_lost(pipeline)
     set_default_agents_queue(pipeline)
     unparallelize(pipeline)
+    expand_parallel_concurrency_groups(pipeline)
     set_parallelism_name(pipeline)
     check_depends_on(pipeline, args.pipeline)
     add_version_to_preflight_tests(pipeline)
@@ -322,7 +323,6 @@ def handle_sanitizer_skip(pipeline: Any, sanitizer: Sanitizer) -> None:
                 step["skip"] = True
 
     else:
-
         for step in steps(pipeline):
             if step.get("sanitizer") == "only":
                 step["skip"] = True
@@ -622,6 +622,70 @@ def set_parallelism_name(pipeline: Any) -> None:
     for step in steps(pipeline):
         if step.get("parallelism", 1) > 1:
             step["label"] += " %N"
+
+
+def _resolve_shard_marker(value: str, index: int) -> str:
+    # A template may write the Buildkite variable as `$$BUILDKITE_PARALLEL_JOB`
+    # (escaped `$`, the natural form) or `$BUILDKITE_PARALLEL_JOB`; resolve both
+    # to the concrete shard index.
+    return value.replace("$$BUILDKITE_PARALLEL_JOB", str(index)).replace(
+        "$BUILDKITE_PARALLEL_JOB", str(index)
+    )
+
+
+def expand_parallel_concurrency_groups(pipeline: Any) -> None:
+    """Fan out a `parallelism` step whose concurrency group is per-shard.
+
+    Buildkite resolves `concurrency_group` once, when the pipeline is processed --
+    not per parallel job. `BUILDKITE_PARALLEL_JOB` only exists at job runtime and
+    is never interpolated into `concurrency_group`. So a single `parallelism: N`
+    step with `concurrency_group: "...-$$BUILDKITE_PARALLEL_JOB"` puts all N jobs
+    in one group, and `concurrency: 1` then runs them serially rather than in
+    parallel -- defeating the point of sharding.
+
+    To get a distinct concurrency group per shard, we expand such a step here into
+    N explicit, non-parallel steps, substituting the shard index into the group
+    name and passing `BUILDKITE_PARALLEL_JOB` / `BUILDKITE_PARALLEL_JOB_COUNT` via
+    `env` so the mzcompose-side sharding (`buildkite.shard_list`) and any per-shard
+    resource selection keep working unchanged.
+    """
+
+    def fan_out(step: dict[str, Any]) -> list[dict[str, Any]]:
+        group = step.get("concurrency_group")
+        if not isinstance(group, str) or "BUILDKITE_PARALLEL_JOB" not in group:
+            return [step]
+        count = step.pop("parallelism", 1)
+        if count <= 1:
+            # Nothing to fan out (e.g. CI_UNPARALLELIZE stripped parallelism);
+            # just resolve the marker to a single concrete group.
+            step["concurrency_group"] = _resolve_shard_marker(group, 0)
+            return [step]
+        shards = []
+        for index in range(count):
+            shard = copy.deepcopy(step)
+            shard["concurrency_group"] = _resolve_shard_marker(group, index)
+            if "id" in shard:
+                shard["id"] = f"{step['id']}-{index}"
+            if "key" in shard:
+                shard["key"] = f"{step['key']}-{index}"
+            if "label" in shard:
+                shard["label"] = f"{step['label']} {index + 1}/{count}"
+            env = shard.setdefault("env", {})
+            env["BUILDKITE_PARALLEL_JOB"] = str(index)
+            env["BUILDKITE_PARALLEL_JOB_COUNT"] = str(count)
+            shards.append(shard)
+        return shards
+
+    def expand(step_list: list[Any]) -> list[Any]:
+        expanded: list[Any] = []
+        for step in step_list:
+            expanded.extend(fan_out(step))
+        return expanded
+
+    pipeline["steps"] = expand(pipeline["steps"])
+    for step in pipeline["steps"]:
+        if "group" in step and "steps" in step:
+            step["steps"] = expand(step["steps"])
 
 
 def check_depends_on(pipeline: Any, pipeline_name: str) -> None:

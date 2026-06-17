@@ -10,9 +10,91 @@
 priority: 40
 
 steps:
+  - group: Builds
+    key: builds
+    steps:
+      - id: build-x86_64
+        label: ":rust: Build x86_64"
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: l-builder-linux-x86_64
+
+      - id: build-aarch64
+        label: ":rust: Build aarch64"
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: l-builder-linux-aarch64
+
+      - id: build-x86_64-asan
+        label: ":rust: Build x86_64 (ASan)"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-x86_64
+        env:
+          CI_SANITIZER: address
+
+        sanitizer: skip
+        branches: "main"
+        skip: "currently broken"
+
+      - id: build-aarch64-asan
+        label: ":rust: Build aarch64 (ASan)"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-aarch64-mem
+        env:
+          CI_SANITIZER: address
+        sanitizer: skip
+        branches: "main"
+        skip: "currently broken"
+
+      - id: build-rust-latest-beta
+        label: "Build with Latest Rust Beta"
+        command: bin/ci-builder run stable ci/test/rust-beta-build.sh
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        branches: "main"
+
+      - id: devel-docker-tags
+        label: Tag development docker images
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.dev_tag
+        inputs:
+          - "*"
+        depends_on:
+          - build-x86_64
+          - build-aarch64
+        timeout_in_minutes: 20
+        agents:
+          queue: linux-aarch64-small
+        coverage: skip
+        # Fortify against intermittent DockerHub/GHCR issues
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 2
+
   - id: cluster-spec-sheet-cluster
     label: "Cluster spec sheet: Cluster (against Production)"
     timeout_in_minutes: 3600
+    depends_on: devel-docker-tags
     concurrency: 1
     concurrency_group: 'cluster-spec-sheet'
     plugins:
@@ -26,6 +108,7 @@ steps:
   - id: cluster-spec-sheet-source-ingestion
     label: "Cluster spec sheet: Source Ingestion (against Production)"
     timeout_in_minutes: 3600
+    depends_on: devel-docker-tags
     concurrency: 1
     concurrency_group: 'cluster-spec-sheet'
     plugins:
@@ -36,41 +119,22 @@ steps:
     agents:
       queue: linux-aarch64-small
 
-  - id: cluster-spec-sheet-envd-qps-scalability
-    label: "Cluster spec sheet: Envd QPS Scalability (against Staging)"
+  - id: cluster-spec-sheet-staging
+    label: "Cluster spec sheet: Staging"
     timeout_in_minutes: 3600
+    depends_on: devel-docker-tags
+    parallelism: 7
     concurrency: 1
-    concurrency_group: 'cluster-spec-sheet-cluster'
+    concurrency_group: "cluster-spec-sheet-account-$$BUILDKITE_PARALLEL_JOB"
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster-spec-sheet
           run: default
-          args: [--cleanup, --target=cloud-staging, envd_qps_scalability]
-    agents:
-      queue: linux-aarch64-small
-
-  - id: cluster-spec-sheet-envd-objects-scalability
-    label: "Cluster spec sheet: Envd Objects Scalability (against Staging)"
-    timeout_in_minutes: 3600
-    concurrency: 1
-    concurrency_group: 'cluster-spec-sheet-cluster'
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster-spec-sheet
-          run: default
-          args: [--cleanup, --target=cloud-staging, envd_objects_scalability]
-    agents:
-      queue: linux-aarch64-small
-
-  - id: cluster-spec-sheet-cluster-object-limits
-    label: "Cluster spec sheet: Cluster Object Limits (against Staging)"
-    timeout_in_minutes: 3600
-    concurrency: 1
-    concurrency_group: 'cluster-spec-sheet-cluster'
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster-spec-sheet
-          run: default
-          args: [--cleanup, --target=cloud-staging, cluster_object_limits]
+          args:
+            - --cleanup
+            - --target=cloud-staging
+            - envd_qps_scalability
+            - envd_objects_scalability
+            - cluster_object_limits
     agents:
       queue: linux-aarch64-small
