@@ -415,3 +415,37 @@ FROM t
   ]
 }
 EOF
+
+# Regression: float CASE-over-literals must NOT fold to case_lookup, because the
+# lookup's Row total-order disagrees with SQL `=` for -0.0 vs +0.0.
+# database-issues#11317 (Linear DB-59).
+statement ok
+CREATE TABLE f (a float8, b float8)
+
+statement ok
+INSERT INTO f VALUES (0.0, -1.0), (1.0, 1.0)
+
+# The -0.0 row (0.0 * -1.0) must match the WHEN 0.0 arm and return 'zero'.
+query TT
+SELECT a * b, CASE (a * b) WHEN 0.0 THEN 'zero' WHEN 1.0 THEN 'one' ELSE 'other' END FROM f ORDER BY 1
+----
+-0.000
+zero
+1.000
+one
+
+# The float CASE must stay `case when (...)` and NOT become `case_lookup`.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT CASE (a * b) WHEN 0.0 THEN 'zero' WHEN 1.0 THEN 'one' ELSE 'other' END FROM f
+----
+Explained Query:
+  Project (#2)
+    Map (case when (0 = (#0{a} * #1{b})) then "zero" else case when (1 = (#0{a} * #1{b})) then "one" else "other" end end)
+      ReadStorage materialize.public.f
+
+Source materialize.public.f
+
+Target cluster: quickstart
+
+EOF

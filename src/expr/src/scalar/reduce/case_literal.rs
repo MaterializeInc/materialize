@@ -16,7 +16,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_repr::{ReprColumnType, Row, SqlColumnType};
+use mz_repr::{ReprColumnType, ReprScalarType, Row, SqlColumnType};
 
 use crate::scalar::func::CaseLiteral;
 use crate::{BinaryFunc, MirScalarExpr, VariadicFunc};
@@ -38,7 +38,7 @@ fn try_fold_into_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColu
     let MirScalarExpr::If { cond, then, els } = expr else {
         return;
     };
-    let Some((common_candidate, literal_row)) = peek_eq_literal(cond) else {
+    let Some((common_candidate, literal_row)) = peek_eq_literal(cond, column_types) else {
         return;
     };
     let MirScalarExpr::CallVariadic {
@@ -87,13 +87,13 @@ fn try_fold_into_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColu
 /// Chain-walk rule: if node is an If-chain with >= 2 consecutive arms matching
 /// `Eq(same_expr, literal)`, create a new CaseLiteral.
 fn try_create_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
-    if !has_at_least_two_arms(expr) {
+    if !has_at_least_two_arms(expr, column_types) {
         return;
     }
 
     // Take the expression and dismantle it.
     let chain = expr.take();
-    let (collected_cases, common, els) = collect_if_chain_arms(chain);
+    let (collected_cases, common, els) = collect_if_chain_arms(chain, column_types);
 
     let common = common.expect("common expr must be set when arm_count >= 2");
 
@@ -135,7 +135,7 @@ fn try_create_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnT
 
 /// Returns `true` if the If-chain has at least 2 arms matching `Eq(same_expr, literal)`.
 /// Bails early once 2 are found to avoid unnecessary traversal.
-fn has_at_least_two_arms(expr: &MirScalarExpr) -> bool {
+fn has_at_least_two_arms(expr: &MirScalarExpr, column_types: &[ReprColumnType]) -> bool {
     let mut count = 0;
     let mut common_candidate: Option<&MirScalarExpr> = None;
     let mut current = expr;
@@ -143,7 +143,7 @@ fn has_at_least_two_arms(expr: &MirScalarExpr) -> bool {
     loop {
         match current {
             MirScalarExpr::If { cond, then: _, els } => {
-                if let Some((expr_side, _literal_row)) = peek_eq_literal(cond) {
+                if let Some((expr_side, _literal_row)) = peek_eq_literal(cond, column_types) {
                     match common_candidate {
                         None => {
                             common_candidate = Some(expr_side);
@@ -170,10 +170,64 @@ fn has_at_least_two_arms(expr: &MirScalarExpr) -> bool {
     false
 }
 
+/// A CaseLiteral lookup probes a BTreeMap keyed on Row total-order, which
+/// disagrees with SQL `=` for floating point (`-0.0 = 0.0` is true, but they
+/// sort distinct). Folding such a chain is therefore unsound (database-issues#11317).
+/// Returns true if `t` is or transitively contains a floating-point type, or is
+/// jsonb (which can hold f64).
+fn type_is_float_bearing(t: &ReprScalarType) -> bool {
+    match t {
+        // Floats themselves, and jsonb which can store an f64.
+        ReprScalarType::Float32 | ReprScalarType::Float64 | ReprScalarType::Jsonb => true,
+        // Composite types: float-bearing iff any contained type is.
+        ReprScalarType::Array(element_type)
+        | ReprScalarType::List { element_type }
+        | ReprScalarType::Map {
+            value_type: element_type,
+        }
+        | ReprScalarType::Range { element_type } => type_is_float_bearing(element_type),
+        ReprScalarType::Record { fields } => fields
+            .iter()
+            .any(|f| type_is_float_bearing(&f.scalar_type)),
+        // Lookup-safe scalar types: their Row total-order agrees with SQL `=`.
+        // Listed explicitly (no catch-all) so a new scalar type forces a
+        // conscious decision here.
+        ReprScalarType::Bool
+        | ReprScalarType::Int16
+        | ReprScalarType::Int32
+        | ReprScalarType::Int64
+        | ReprScalarType::UInt8
+        | ReprScalarType::UInt16
+        | ReprScalarType::UInt32
+        | ReprScalarType::UInt64
+        | ReprScalarType::Numeric
+        | ReprScalarType::Date
+        | ReprScalarType::Time
+        | ReprScalarType::Timestamp
+        | ReprScalarType::TimestampTz
+        | ReprScalarType::MzTimestamp
+        | ReprScalarType::Interval
+        | ReprScalarType::Bytes
+        | ReprScalarType::String
+        | ReprScalarType::Uuid
+        // Int2Vector is a vector of int2 (no floats).
+        | ReprScalarType::Int2Vector
+        | ReprScalarType::MzAclItem
+        | ReprScalarType::AclItem => false,
+    }
+}
+
 /// Inspects an `Eq(expr, literal)` condition and returns references to the
 /// non-literal expression and the literal `Row`.
 /// Returns `(non_literal_expr_ref, literal_row_ref)`.
-fn peek_eq_literal(cond: &MirScalarExpr) -> Option<(&MirScalarExpr, &Row)> {
+///
+/// Returns `None` for a comparison whose non-literal side has a float-bearing
+/// type: the CaseLiteral lookup uses Row total-order, which disagrees with SQL
+/// `=` for floats (database-issues#11317), so such chains must not fold.
+fn peek_eq_literal<'a>(
+    cond: &'a MirScalarExpr,
+    column_types: &[ReprColumnType],
+) -> Option<(&'a MirScalarExpr, &'a Row)> {
     let MirScalarExpr::CallBinary {
         func: BinaryFunc::Eq(_),
         expr1,
@@ -183,17 +237,27 @@ fn peek_eq_literal(cond: &MirScalarExpr) -> Option<(&MirScalarExpr, &Row)> {
         return None;
     };
 
-    if let Some(row) = expr1.as_literal_non_null_row() {
+    let result = if let Some(row) = expr1.as_literal_non_null_row() {
         if !expr2.is_literal() {
-            return Some((expr2.as_ref(), row));
+            Some((expr2.as_ref(), row))
+        } else {
+            None
         }
-    }
-    if let Some(row) = expr2.as_literal_non_null_row() {
+    } else if let Some(row) = expr2.as_literal_non_null_row() {
         if !expr1.is_literal() {
-            return Some((expr1.as_ref(), row));
+            Some((expr1.as_ref(), row))
+        } else {
+            None
         }
+    } else {
+        None
+    };
+
+    let (x, row) = result?;
+    if type_is_float_bearing(&x.typ(column_types).scalar_type) {
+        return None;
     }
-    None
+    Some((x, row))
 }
 
 /// Walks an If-chain and collects `(literal_row, result_expr)` pairs.
@@ -202,6 +266,7 @@ fn peek_eq_literal(cond: &MirScalarExpr) -> Option<(&MirScalarExpr, &Row)> {
 /// Returns `(cases, common_candidate, els)`.
 fn collect_if_chain_arms(
     chain: MirScalarExpr,
+    column_types: &[ReprColumnType],
 ) -> (
     Vec<(Row, MirScalarExpr)>,
     Option<MirScalarExpr>,
@@ -215,7 +280,7 @@ fn collect_if_chain_arms(
     loop {
         match remaining {
             MirScalarExpr::If { cond, then, els } => {
-                if let Some((expr_side, literal_row)) = peek_eq_literal(&cond) {
+                if let Some((expr_side, literal_row)) = peek_eq_literal(&cond, column_types) {
                     match &common_candidate {
                         None => {
                             common_candidate = Some(expr_side.clone());
@@ -257,8 +322,39 @@ mod tests {
     fn lit_i64(v: i64) -> MirScalarExpr {
         MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64)
     }
+    fn lit_f64(v: f64) -> MirScalarExpr {
+        MirScalarExpr::literal_ok(
+            Datum::Float64(ordered_float::OrderedFloat(v)),
+            ReprScalarType::Float64,
+        )
+    }
     fn eq(l: MirScalarExpr, r: MirScalarExpr) -> MirScalarExpr {
         l.call_binary(r, BinaryFunc::Eq(Eq))
+    }
+
+    #[mz_ore::test]
+    fn float_chain_is_not_folded() {
+        // CASE WHEN x = 0.0 THEN 1 WHEN x = 1.0 THEN 2 ELSE 0 END over a float8 column.
+        // Folding is unsound for floats (-0.0 vs +0.0), so it must stay an If.
+        let col = MirScalarExpr::column(0);
+        let mut expr = MirScalarExpr::If {
+            cond: Box::new(eq(col.clone(), lit_f64(0.0))),
+            then: Box::new(lit_i64(1)),
+            els: Box::new(MirScalarExpr::If {
+                cond: Box::new(eq(col.clone(), lit_f64(1.0))),
+                then: Box::new(lit_i64(2)),
+                els: Box::new(lit_i64(0)),
+            }),
+        };
+        let col_types = vec![ReprColumnType {
+            scalar_type: ReprScalarType::Float64,
+            nullable: true,
+        }];
+        crate::scalar::reduce::reduce(&mut expr, &col_types);
+        assert!(
+            matches!(expr, MirScalarExpr::If { .. }),
+            "float chain must NOT fold, got {expr:?}"
+        );
     }
 
     #[mz_ore::test]
