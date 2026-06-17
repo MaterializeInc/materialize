@@ -32,7 +32,7 @@ SET TRANSACTION_ISOLATION TO 'bounded staleness 10s';
 
 For more information, see [Bounded Staleness](/reference/isolation-level/#bounded-staleness).
 
-### Iceberg Sinks {#v26.29-google-cloud-support-for-iceberg-sinks} for Google Cloud Platform
+### Iceberg Sinks for Google Cloud Platform {#v26.29-google-cloud-support-for-iceberg-sinks} 
 
 {{< private-preview />}}
 
@@ -66,6 +66,12 @@ CREATE SINK my_gcp_iceberg_sink
 ```
 
 For more information, see [Syntax: CREATE SINK... INTO ICEBERG](/sql/create-sink/iceberg).
+
+### Advisory {#v26.29-advisory}
+
+- **MySQL zero-value YEAR columns**: This release changes how the MySQL source decodes zero-value `YEAR` columns (`0000`). Previously, zero values were decoded inconsistently: as `0` during the initial snapshot and as `1900` (an invalid year) from the binlog. Both are now decoded as the 4-digit string `0000`, matching MySQL's own representation. Non-zero years (1901–2155) are unaffected.
+
+  **Upgrade impact**: If you replicate a `YEAR` column that can hold zero values, rows ingested before the upgrade retain their old representation (`0` or `1900`) until the upstream row is modified and re-decoded. To make all rows consistent and avoid potential source errors, drop and recreate the affected source (or subsource/table) after upgrading. Sources without zero-value `YEAR` data require no action.
 
 ### Improvements {#v26.29-improvements}
 - **Correct SQLSTATEs for evaluation errors**: Evaluation errors such as division by zero, out-of-range casts, and invalid input now return their correct PostgreSQL-standard SQLSTATE codes instead of the generic `XX000` (internal error).
