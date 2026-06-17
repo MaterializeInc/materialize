@@ -1137,10 +1137,9 @@ impl DatumColumnDecoder {
                     .try_into()
                     .expect("unexpected negative offset");
 
-                packer.push_dict_with(|packer| {
+                packer.push_indexed_dict_with(|builder| {
                     for idx in start..end {
-                        packer.push(Datum::String(keys.value(idx)));
-                        vals.get(idx, packer);
+                        builder.push_entry(keys.value(idx), |packer| vals.get(idx, packer));
                     }
                 });
 
@@ -2120,17 +2119,18 @@ impl RowPacker<'_> {
                 }
                 .map_err(|err| err.to_string())?
             }
-            Some(DatumType::Dict(x)) => self.push_dict_with(|row| -> Result<(), String> {
-                for e in x.elements.iter() {
-                    row.push(Datum::from(e.key.as_str()));
-                    let val = e
-                        .val
-                        .as_ref()
-                        .ok_or_else(|| format!("missing val for key: {}", e.key))?;
-                    row.try_push_proto(val)?;
-                }
-                Ok(())
-            })?,
+            Some(DatumType::Dict(x)) => {
+                self.push_indexed_dict_with(|builder| -> Result<(), String> {
+                    for e in x.elements.iter() {
+                        let val = e
+                            .val
+                            .as_ref()
+                            .ok_or_else(|| format!("missing val for key: {}", e.key))?;
+                        builder.push_entry(e.key.as_str(), |row| row.try_push_proto(val))?;
+                    }
+                    Ok(())
+                })?
+            }
             Some(DatumType::Numeric(x)) => {
                 // Reminder that special values like NaN, PosInf, and NegInf are
                 // represented as variants of ProtoDatumOther.

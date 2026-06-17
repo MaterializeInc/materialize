@@ -31,6 +31,7 @@ use proptest::prelude::*;
 #[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::adt::array::{
@@ -752,6 +753,47 @@ pub struct RowPacker<'a> {
     row: &'a mut Row,
 }
 
+/// Builds a [`DatumMap`] one `(key, value)` entry at a time for
+/// [`RowPacker::push_indexed_dict_with`], capturing each entry's start offset as
+/// it is written so the in-map index can be appended without a second pass over
+/// the entries.
+pub struct DictBuilder<'a, 'row> {
+    packer: &'a mut RowPacker<'row>,
+    /// Start of the entries region within `packer.row.data`.
+    entries_start: usize,
+    /// Start offset of each entry pushed so far, relative to `entries_start`.
+    /// The inline capacity covers typical JSON objects without a heap
+    /// allocation, keeping the common case allocation-free.
+    offsets: SmallVec<[u32; 32]>,
+}
+
+impl Debug for DictBuilder<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DictBuilder")
+            .field("entries_start", &self.entries_start)
+            .field("entries_pushed", &self.offsets.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl DictBuilder<'_, '_> {
+    /// Pushes one `(key, value)` entry, recording its start offset for the
+    /// index. `value` is run with the underlying packer to write the value,
+    /// which may itself be a nested list or dict.
+    ///
+    /// Keys must be pushed in ascending order, per the [`DatumMap`] contract.
+    pub fn push_entry<F, R>(&mut self, key: &str, value: F) -> R
+    where
+        F: FnOnce(&mut RowPacker) -> R,
+    {
+        let offset = self.packer.row.data.len() - self.entries_start;
+        self.offsets
+            .push(u32::try_from(offset).expect("map larger than 4 GiB cannot be indexed"));
+        self.packer.push(Datum::String(key));
+        value(self.packer)
+    }
+}
+
 /// Infallible conversion from a [`Datum`] to a typed value.
 ///
 /// Used by [`DatumList::typed_iter`] to yield elements as `T` rather than
@@ -1289,6 +1331,30 @@ fn finish_dict(data: &mut CompactBytes, entries_start: usize) {
         }
         p += before - cursor.len();
     }
+    data.extend_from_slice(&count.to_le_bytes());
+}
+
+/// Appends the in-map index suffix from offsets captured while the entries were
+/// written, instead of re-walking them as [`finish_dict`] does.
+///
+/// `offsets[i]` is the start of entry `i` relative to the start of the entries
+/// region. This produces a byte-identical suffix to [`finish_dict`] — the index
+/// is the same deterministic function of the (already sorted) entries — so the
+/// two builders are interchangeable and `Row`'s byte equality is preserved.
+///
+/// Empty dictionaries are left untouched, matching [`finish_dict`] and
+/// [`DatumMap::empty`].
+fn finish_dict_from_offsets(data: &mut CompactBytes, offsets: &[u32]) {
+    let n = offsets.len();
+    if n == 0 {
+        return;
+    }
+    // Append the start offsets of entries `1..n` (entry 0 is always at offset 0
+    // and is omitted), then the count. See [`DatumMap`] for the layout.
+    for offset in &offsets[1..] {
+        data.extend_from_slice(&offset.to_le_bytes());
+    }
+    let count = u32::try_from(n).expect("map with more than 4 billion entries");
     data.extend_from_slice(&count.to_le_bytes());
 }
 
@@ -2497,6 +2563,48 @@ impl RowPacker<'_> {
         self.push_dict_with(f)
     }
 
+    /// Pushes a [`DatumMap`] built one `(key, value)` entry at a time via a
+    /// [`DictBuilder`].
+    ///
+    /// This is equivalent to [`push_dict_with`](Self::push_dict_with) but builds
+    /// the in-map index from offsets captured as each entry is written, rather
+    /// than walking the entries a second time afterwards. Callers that already
+    /// iterate entry-by-entry (JSON packing, the columnar/proto decode paths)
+    /// should prefer this to avoid the redundant pass on the hot decode path.
+    ///
+    /// The same contract as [`push_dict_with`](Self::push_dict_with) applies:
+    /// entries **must** be pushed with keys in ascending order, and the closure
+    /// **must not** call [`clear`](Self::clear), [`truncate`](Self::truncate),
+    /// or [`truncate_datums`](Self::truncate_datums).
+    pub fn push_indexed_dict_with<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut DictBuilder<'_, '_>) -> R,
+    {
+        self.row.data.push(Tag::Dict.into());
+        let start = self.row.data.len();
+        // Write a dummy len, fixed up below.
+        self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
+        let entries_start = self.row.data.len();
+
+        let mut builder = DictBuilder {
+            packer: self,
+            entries_start,
+            offsets: SmallVec::new(),
+        };
+        let res = f(&mut builder);
+        let offsets = std::mem::take(&mut builder.offsets);
+        // Drop the builder to release its borrow of `self` before we touch the
+        // row buffer again.
+        drop(builder);
+
+        finish_dict_from_offsets(&mut self.row.data, &offsets);
+
+        let len = u64::cast_from(self.row.data.len() - start - size_of::<u64>());
+        self.row.data[start..start + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
+
+        res
+    }
+
     /// Convenience function to construct an array from an iter of `Datum`s.
     ///
     /// Returns an error if the number of elements in `iter` does not match
@@ -2739,10 +2847,9 @@ impl RowPacker<'_> {
         I: IntoIterator<Item = (&'a str, D)>,
         D: Borrow<Datum<'a>>,
     {
-        self.push_dict_with(|packer| {
+        self.push_indexed_dict_with(|builder| {
             for (k, v) in iter {
-                packer.push(Datum::String(k));
-                packer.push(*v.borrow())
+                builder.push_entry(k, |packer| packer.push(*v.borrow()));
             }
         })
     }
