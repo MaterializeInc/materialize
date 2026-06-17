@@ -533,10 +533,8 @@ pub(crate) fn render<'scope>(
                                     // replica was promoted to a primary). Logical
                                     // decoding cannot safely continue, so stall with a
                                     // definite, non-retryable error.
-                                    let err = DefiniteError::InvalidPhysicalReplica {
-                                        expected,
-                                        actual,
-                                    };
+                                    let err =
+                                        DefiniteError::InvalidPhysicalReplica { expected, actual };
                                     for (oid, outputs) in table_info.iter() {
                                         for output_index in outputs.keys() {
                                             let update = (
@@ -1175,7 +1173,10 @@ enum SchemaValidationError {
     /// The upstream's physical-replica status changed out from under us (e.g. a
     /// physical replica was promoted to a primary). `expected` is the status the
     /// source was created against; `actual` is what the upstream reports now.
-    PhysicalReplicaChanged { expected: bool, actual: bool },
+    PhysicalReplicaChanged {
+        expected: bool,
+        actual: bool,
+    },
 }
 
 fn spawn_schema_validator(

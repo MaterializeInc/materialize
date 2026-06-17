@@ -297,10 +297,15 @@ def workflow_default(c: Composition) -> None:
     # block on a standby snapshot, so this runs outside the nudger.
     _verify_slot_cleaned_up_on_drop(c)
 
-    # Finally, the promotion scenario. It runs on its own clean slate (see the
-    # docstring) so it stays isolated from everything above; we run it here so it
-    # is exercised by the default CI invocation, which passes no workflow name.
-    workflow_promotion(c)
+    # Finally, run the other workflows (currently just promotion). Each runs on
+    # its own clean slate (see workflow_promotion's docstring) so it stays
+    # isolated from everything above; we run them here so they are exercised by
+    # the default CI invocation, which passes no workflow name.
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def _verify_reading_from_standby(c: Composition) -> None:
