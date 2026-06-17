@@ -734,7 +734,7 @@ materialize.public.enum_table "CREATE TABLE materialize.public.enum_table (a pg_
 materialize.public.enum_table "CREATE TABLE materialize.public.enum_table (a pg_catalog.text)\nFROM SOURCE materialize.public.enum_source (REFERENCE = postgres.public.enum_table)\nWITH (\n    TEXT COLUMNS = (a),\n    <DETAILS>\n);"
 
 >[version>=2603000] SHOW CREATE TABLE enum_table
-materialize.public.enum_table "CREATE TABLE materialize.public.enum_table (a pg_catalog.text)\nFROM SOURCE materialize.public.enum_source (REFERENCE = postgres.public.enum_table)\nWITH (TEXT COLUMNS = (a));"
+materialize.public.enum_table "CREATE TABLE materialize.public.enum_table\nFROM SOURCE materialize.public.enum_source (REFERENCE = postgres.public.enum_table)\nWITH (TEXT COLUMNS = (a));"
 
 # Test that TEXT COLUMN types can change
 $ postgres-execute connection=postgres://postgres:postgres@postgres
