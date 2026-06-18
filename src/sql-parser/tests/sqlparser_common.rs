@@ -1027,6 +1027,12 @@ fn postfix_access_receiver_reparenthesized_after_nested_stripped() {
         "SELECT (CAST(a AS int4))[1]",
         "SELECT (a[1])[2]",
         "SELECT (a + b)[1]",
+        // quantified-subquery dot receiver: the trailing `(query)` is a sub-part,
+        // so `.x`/`.*` would bind to it rather than the whole quantified expr.
+        "SELECT (a = ANY (SELECT b FROM t)).c",
+        "SELECT (a = ANY (SELECT b FROM t)).*",
+        "SELECT (a = ALL (SELECT b FROM t)).c",
+        "SELECT x BETWEEN (0 = ANY (SELECT b FROM t)).c AND y",
         // these are parser-shaped and must remain stable (no spurious parens)
         "SELECT (x).a.b",
         "SELECT a.b[1]",

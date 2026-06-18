@@ -572,6 +572,13 @@ impl_display_t!(Expr);
 /// is a `Nested`-stripped AST and must be re-parenthesized. A `FieldAccess` /
 /// `WildcardAccess` receiver *is* safe, because its own printing already
 /// parenthesizes a bare-name base (`(a).b.c`), so the chain stays self-delimiting.
+///
+/// The quantified-subquery forms (`AnySubquery`/`AllSubquery`, printed
+/// `<expr> <op> ANY (<query>)`) are likewise *not* safe: they end in a `(query)`
+/// that is only a sub-part, so a trailing `.x`/`.*` binds to that inner subquery
+/// rather than the whole expression. (Contrast `Subquery`/`ArraySubquery`/… which
+/// are a single `(…)`/`ARRAY(…)` primary, so a trailing dot attaches to the whole
+/// thing.)
 fn write_dot_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
     let safe = matches!(
         expr,
@@ -584,8 +591,6 @@ fn write_dot_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: 
             | Expr::Case { .. }
             | Expr::Exists(_)
             | Expr::Subquery(_)
-            | Expr::AnySubquery { .. }
-            | Expr::AllSubquery { .. }
             | Expr::Array(_)
             | Expr::ArraySubquery(_)
             | Expr::List(_)
