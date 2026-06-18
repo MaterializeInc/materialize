@@ -24,6 +24,7 @@ differential-dataflow.workspace = true
 itertools.workspace = true
 maplit.workspace = true
 mz-avro = { path = "../avro", features = ["snappy"] }
+mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry" }
 mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["network", "cli"] }
 mz-repr = { path = "../repr" }
