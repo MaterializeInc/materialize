@@ -19,7 +19,7 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::{ALL, ANY, AS, DISTINCT, Keyword, LIST, PREPARE, SOME, WHEN};
+use mz_sql_lexer::keywords::{ALL, ANY, AS, DISTINCT, INTO, Keyword, LIST, PREPARE, SOME, WHEN};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -350,6 +350,12 @@ impl Ident {
                         // ("expected an expression, found dot"). Quoting it keeps
                         // the operand an identifier.
                         || kw == WHEN
+                        // `COPY [INTO] <table> FROM …` accepts an optional `INTO`
+                        // keyword before the relation name, so a bare `into`
+                        // relation is consumed as that keyword on reparse
+                        // (`COPY into FROM x` -> `COPY INTO <name=from> …`, which
+                        // then fails expecting the FROM/TO direction).
+                        || kw == INTO
                 })
                 .unwrap_or(false)
     }
