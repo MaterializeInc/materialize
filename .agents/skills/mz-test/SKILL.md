@@ -171,6 +171,10 @@ Determine the right framework based on what you're testing:
 * **Raw pgwire messages** (COPY, extended protocol): pgtest (`.pt` in `test/pgtest/`).
   Wire new files in `src/environmentd/tests/pgwire.rs`.
 * **Pure logic, decoding, pure functions**: Rust `#[mz_ore::test]` (or `#[mz_ore::test(tokio::test)]` for async).
+* **Compute dataflow / replica protocol behavior** (drive a specific dataflow against specific persist state and exact timestamps, no `environmentd`/SQL/catalog): clusterd test driver — script-based golden tests in `test/clusterd-test-driver/scripts/`.
+  Run against a real `clusterd` with `bin/mzcompose --find clusterd-test-driver run default`, or on the host without Docker via `bin/pyactivate test/clusterd-test-driver/run-local.py`.
+  `REWRITE=1` regenerates the `----` expected-output blocks in place.
+  See `doc/developer/design/20260612_headless_clusterd_test_driver.md`.
 * **Restart/upgrade issues**: Platform Checks.
   See `doc/developer/platform-checks.md`, especially the "Writing a Check" section.
   Do not use the old Legacy Upgrade tests.
