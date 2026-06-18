@@ -522,159 +522,95 @@ mod tests {
         assert_none!(reader.next());
     }
 
-    // Regression test for SS-277: an `int` -> `double` promotion inside a union
-    // (i.e. a nullable column whose type was promoted). The writer's `int`
-    // variant of `["null", "int"]` must resolve against the reader's `double`
-    // variant of `["null", "double"]`. Previously this failed with "Failed to
-    // match writer union variant `Int` against any variant in the reader",
-    // because union variant matching ignored numeric promotion.
+    // Regression coverage for SS-277 (PR #37087): Avro numeric promotion across
+    // every `can_promote` pair and every union-resolution arm. Promotion
+    // previously worked only for concrete (non-nullable) columns; the union
+    // (nullable) arms ignored it and failed at decode time with "Failed to
+    // match writer union variant ... against any variant in the reader".
+    //
+    // For each promotable `(writer, reader)` pair we render the field both bare
+    // (`"int"`) and nullable (`["null", "int"]`) on each side. The four
+    // combinations exercise all three matchers added in `schema.rs`:
+    //   * bare     -> nullable : `match_ref_promote_writer` (concrete -> union)
+    //   * nullable -> bare     : `match_ref_promote_reader` (union -> concrete)
+    //   * nullable -> nullable : `match_promote_writer`     (union -> union)
+    //   * bare     -> bare     : the pre-existing concrete promotion path
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
-    fn test_union_int_to_double_promotion() {
-        let writer_raw_schema = r#"
-            {
-                "type": "record",
-                "name": "test",
-                "fields": [
-                    {"name": "f1", "type": ["null", "int"]}
-                ]
+    fn test_numeric_promotion_matrix() {
+        // `123` is exactly representable in int/long/float/double, so a value
+        // promoted to `kind` equals that kind's representative value.
+        fn value_of(kind: &str) -> Value {
+            match kind {
+                "int" => Value::Int(123),
+                "long" => Value::Long(123),
+                "float" => Value::Float(123.0),
+                "double" => Value::Double(123.0),
+                other => panic!("unhandled kind {other}"),
             }
-        "#;
-        let reader_raw_schema = r#"
-            {
-                "type": "record",
-                "name": "test",
-                "fields": [
-                    {"name": "f1", "type": ["null", "double"]}
-                ]
-            }
-        "#;
-        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
-        let reader_schema = Schema::from_str(reader_raw_schema).unwrap();
-        let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
-        let mut record = Record::new(writer_schema.top_node()).unwrap();
-        record.put(
-            "f1",
-            Value::Union {
-                index: 1,
-                inner: Box::new(Value::Int(123)),
-                n_variants: 2,
-                null_variant: Some(0),
-            },
-        );
-        writer.append(record).unwrap();
-        writer.flush().unwrap();
-        let input = writer.into_inner();
-        let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
-        assert_eq!(
-            reader.next().unwrap().unwrap(),
-            Value::Record(vec![(
-                "f1".to_string(),
+        }
+        fn record_schema_json(kind: &str, nullable: bool) -> String {
+            let ty = if nullable {
+                format!(r#"["null", "{kind}"]"#)
+            } else {
+                format!(r#""{kind}""#)
+            };
+            format!(r#"{{"type":"record","name":"test","fields":[{{"name":"f1","type":{ty}}}]}}"#)
+        }
+        // A nullable field is a `["null", T]` union, so the value lives in
+        // variant 1 with the null variant at 0.
+        fn maybe_union(v: Value, nullable: bool) -> Value {
+            if nullable {
                 Value::Union {
                     index: 1,
-                    inner: Box::new(Value::Double(123.0)),
+                    inner: Box::new(v),
                     n_variants: 2,
                     null_variant: Some(0),
-                },
-            )]),
-        );
-        assert_none!(reader.next());
-    }
+                }
+            } else {
+                v
+            }
+        }
 
-    // Regression test for SS-277, concrete writer -> union reader: a column
-    // promoted from a non-nullable `int` to a nullable `double`. Exercises the
-    // `match_ref_promote_writer` resolution path.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
-    fn test_concrete_int_to_union_double_promotion() {
-        let writer_raw_schema = r#"
-            {
-                "type": "record",
-                "name": "test",
-                "fields": [
-                    {"name": "f1", "type": "int"}
-                ]
-            }
-        "#;
-        let reader_raw_schema = r#"
-            {
-                "type": "record",
-                "name": "test",
-                "fields": [
-                    {"name": "f1", "type": ["null", "double"]}
-                ]
-            }
-        "#;
-        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
-        let reader_schema = Schema::from_str(reader_raw_schema).unwrap();
-        let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
-        let mut record = Record::new(writer_schema.top_node()).unwrap();
-        record.put("f1", Value::Int(123));
-        writer.append(record).unwrap();
-        writer.flush().unwrap();
-        let input = writer.into_inner();
-        let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
-        assert_eq!(
-            reader.next().unwrap().unwrap(),
-            Value::Record(vec![(
-                "f1".to_string(),
-                Value::Union {
-                    index: 1,
-                    inner: Box::new(Value::Double(123.0)),
-                    n_variants: 2,
-                    null_variant: Some(0),
-                },
-            )]),
-        );
-        assert_none!(reader.next());
-    }
+        // Every pair `can_promote` (schema.rs) accepts. Kept in sync with it.
+        let pairs = [
+            ("int", "long"),
+            ("int", "float"),
+            ("int", "double"),
+            ("long", "float"),
+            ("long", "double"),
+            ("float", "double"),
+        ];
+        for (writer_kind, reader_kind) in pairs {
+            for writer_nullable in [false, true] {
+                for reader_nullable in [false, true] {
+                    let writer_schema =
+                        Schema::from_str(&record_schema_json(writer_kind, writer_nullable))
+                            .unwrap();
+                    let reader_schema =
+                        Schema::from_str(&record_schema_json(reader_kind, reader_nullable))
+                            .unwrap();
+                    let mut writer =
+                        Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+                    let mut record = Record::new(writer_schema.top_node()).unwrap();
+                    record.put("f1", maybe_union(value_of(writer_kind), writer_nullable));
+                    writer.append(record).unwrap();
+                    writer.flush().unwrap();
+                    let input = writer.into_inner();
 
-    // Regression test for SS-277, union writer -> concrete reader: a column
-    // promoted from a nullable `int` to a non-nullable `double`. Exercises the
-    // `match_ref_promote_reader` resolution path.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
-    fn test_union_int_to_concrete_double_promotion() {
-        let writer_raw_schema = r#"
-            {
-                "type": "record",
-                "name": "test",
-                "fields": [
-                    {"name": "f1", "type": ["null", "int"]}
-                ]
+                    let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
+                    let expected = maybe_union(value_of(reader_kind), reader_nullable);
+                    assert_eq!(
+                        reader.next().unwrap().unwrap(),
+                        Value::Record(vec![("f1".to_string(), expected)]),
+                        "promotion {writer_kind}{} -> {reader_kind}{} decoded incorrectly",
+                        if writer_nullable { " (nullable)" } else { "" },
+                        if reader_nullable { " (nullable)" } else { "" },
+                    );
+                    assert_none!(reader.next());
+                }
             }
-        "#;
-        let reader_raw_schema = r#"
-            {
-                "type": "record",
-                "name": "test",
-                "fields": [
-                    {"name": "f1", "type": "double"}
-                ]
-            }
-        "#;
-        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
-        let reader_schema = Schema::from_str(reader_raw_schema).unwrap();
-        let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
-        let mut record = Record::new(writer_schema.top_node()).unwrap();
-        record.put(
-            "f1",
-            Value::Union {
-                index: 1,
-                inner: Box::new(Value::Int(123)),
-                n_variants: 2,
-                null_variant: Some(0),
-            },
-        );
-        writer.append(record).unwrap();
-        writer.flush().unwrap();
-        let input = writer.into_inner();
-        let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
-        assert_eq!(
-            reader.next().unwrap().unwrap(),
-            Value::Record(vec![("f1".to_string(), Value::Double(123.0))]),
-        );
-        assert_none!(reader.next());
+        }
     }
 
     //TODO: move where it fits better

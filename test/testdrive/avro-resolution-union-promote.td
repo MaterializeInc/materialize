@@ -64,3 +64,42 @@ $ kafka-ingest format=avro topic=resolution-union-promote schema=${reader-union-
 123
 234.5
 <null>
+
+#
+# The full numeric-promotion matrix for nullable (union) columns. A single
+# schema evolution widens one nullable column per `can_promote` pair, so one
+# source exercises every promotion (int->long/float/double, long->float/double,
+# float->double) through the Kafka + CSR source decode path. Records written
+# with the old (narrow) schema must promote to the new (wide) reader schema.
+#
+
+$ set writer-matrix={"type": "record", "name": "schema_promote_matrix", "fields": [ {"name": "f_i2l", "type": ["null", "int"]}, {"name": "f_i2f", "type": ["null", "int"]}, {"name": "f_i2d", "type": ["null", "int"]}, {"name": "f_l2f", "type": ["null", "long"]}, {"name": "f_l2d", "type": ["null", "long"]}, {"name": "f_f2d", "type": ["null", "float"]} ] }
+$ set reader-matrix={"type": "record", "name": "schema_promote_matrix", "fields": [ {"name": "f_i2l", "type": ["null", "long"]}, {"name": "f_i2f", "type": ["null", "float"]}, {"name": "f_i2d", "type": ["null", "double"]}, {"name": "f_l2f", "type": ["null", "float"]}, {"name": "f_l2d", "type": ["null", "double"]}, {"name": "f_f2d", "type": ["null", "double"]} ] }
+
+$ kafka-create-topic topic=resolution-union-promote-matrix
+
+# Old (narrow) schema: a row exercising every writer branch, plus an all-null row.
+$ kafka-ingest format=avro topic=resolution-union-promote-matrix schema=${writer-matrix} timestamp=1
+{"f_i2l": {"int": 1}, "f_i2f": {"int": 2}, "f_i2d": {"int": 3}, "f_l2f": {"long": 4}, "f_l2d": {"long": 5}, "f_f2d": {"float": 6.5} }
+{"f_i2l": null, "f_i2f": null, "f_i2d": null, "f_l2f": null, "f_l2d": null, "f_f2d": null }
+
+# New (wide) schema, registered as the latest version (the source's reader schema).
+$ kafka-ingest format=avro topic=resolution-union-promote-matrix schema=${reader-matrix} timestamp=2
+{"f_i2l": {"long": 10}, "f_i2f": {"float": 20.5}, "f_i2d": {"double": 30.5}, "f_l2f": {"float": 40.5}, "f_l2d": {"double": 50.5}, "f_f2d": {"double": 60.5} }
+
+> BEGIN
+> CREATE SOURCE resolution_union_promote_matrix
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-union-promote-matrix-${testdrive.seed}')
+
+> CREATE TABLE resolution_union_promote_matrix_tbl FROM SOURCE resolution_union_promote_matrix (REFERENCE "testdrive-resolution-union-promote-matrix-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+> COMMIT
+
+# The old-schema row promotes each column to the wider reader type; the
+# new-schema row decodes unchanged; the all-null row stays null.
+> SELECT f_i2l, f_i2f, f_i2d, f_l2f, f_l2d, f_f2d FROM resolution_union_promote_matrix_tbl
+1 2 3 4 5 6.5
+10 20.5 30.5 40.5 50.5 60.5
+<null> <null> <null> <null> <null> <null>
