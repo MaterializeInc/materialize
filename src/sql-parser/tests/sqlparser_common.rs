@@ -990,3 +990,64 @@ fn like_pattern_reparenthesized_after_nested_stripped() {
         );
     }
 }
+
+#[mz_ore::test]
+fn postfix_access_receiver_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // The receivers of the postfix `.field`/`.*` and `[…]` operators must stay
+    // self-delimiting once `Expr::Nested` is stripped, or the trailing token
+    // re-binds. A bare-name `FieldAccess`/`WildcardAccess` receiver prints as a
+    // dotted name and collides with a qualified identifier (`(a).b` -> `a.b` is
+    // `Identifier([a, b])`); a `Cast` subscript receiver lets the type parser eat
+    // the `[…]` as an array suffix (`(a::int4)[1]` -> `a::int4[1]` is `a::int4[]`);
+    // and a nested `Subscript` receiver flattens (`(a[1])[2]` -> `a[1][2]` is one
+    // two-position subscript).
+    for sql in [
+        // dot receiver
+        "SELECT (a).b",
+        "SELECT (a).*",
+        "SELECT ((a).b).c",
+        "SELECT ((a).*).*",
+        "SELECT (a).b[1]",
+        // subscript receiver
+        "SELECT (a::int4)[1]",
+        "SELECT (CAST(a AS int4))[1]",
+        "SELECT (a[1])[2]",
+        "SELECT (a + b)[1]",
+        // these are parser-shaped and must remain stable (no spurious parens)
+        "SELECT (x).a.b",
+        "SELECT a.b[1]",
+        "SELECT a[1][2]",
+        "SELECT f(x)[1]",
+        "SELECT (a + b).c",
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "postfix-access receiver display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
+        );
+    }
+}

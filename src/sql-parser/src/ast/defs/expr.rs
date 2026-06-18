@@ -561,14 +561,21 @@ impl_display_t!(Expr);
 /// the lexer and parser greedily extend adjacent tokens: `1.x` tokenizes the
 /// number `1.` and leaves `x` as an alias, and `'a'::T.x` consumes `T.x` as a
 /// qualified type name. The whitelist below covers receivers that print as
-/// self-terminating syntax (identifiers, parenthesized exprs, function calls,
-/// bracketed collections, etc.); anything else gets explicit parens.
+/// self-terminating syntax (parenthesized exprs, function calls, bracketed
+/// collections, etc.); anything else gets explicit parens.
+///
+/// A bare `Identifier`/`QualifiedWildcard` receiver is *not* safe: `a` then
+/// `.b`/`.*` prints as `a.b`/`a.*`, which reparses as the qualified identifier
+/// `Identifier([a, b])` / `QualifiedWildcard([a])` rather than a field/wildcard
+/// access. The parser only ever builds those accesses over a parenthesized
+/// receiver (`(a).b`), so it wraps the name in `Expr::Nested`; a bare name here
+/// is a `Nested`-stripped AST and must be re-parenthesized. A `FieldAccess` /
+/// `WildcardAccess` receiver *is* safe, because its own printing already
+/// parenthesizes a bare-name base (`(a).b.c`), so the chain stays self-delimiting.
 fn write_dot_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
     let safe = matches!(
         expr,
-        Expr::Identifier(_)
-            | Expr::QualifiedWildcard(_)
-            | Expr::FieldAccess { .. }
+        Expr::FieldAccess { .. }
             | Expr::WildcardAccess(_)
             | Expr::Parameter(_)
             | Expr::Nested(_)
@@ -879,14 +886,45 @@ fn prefix_operand_needs_parens<T: AstInfo>(operand: &Expr<T>) -> bool {
 /// regular subscript. Parenthesize identifiers whose last component is a
 /// context-sensitive keyword so the round trip stays an identifier subscript.
 fn write_subscript_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
-    let needs_parens = if let Expr::Identifier(idents) = expr {
-        idents
+    let needs_parens = match expr {
+        // A bare keyword identifier (`map`, `list`, …) dispatches to the
+        // map/list-literal grammar before `[`, so it needs parens even though
+        // identifiers are otherwise safe receivers.
+        Expr::Identifier(idents) => idents
             .last()
             .and_then(|id| id.as_keyword())
             .map(|kw| kw.is_context_sensitive_keyword())
-            .unwrap_or(false)
-    } else {
-        false
+            .unwrap_or(false),
+        // Self-delimiting primaries, the bracketed collections, and the postfix
+        // forms that end in an identifier or `)` are safe: a following `[…]`
+        // attaches to the whole receiver as a fresh subscript.
+        Expr::QualifiedWildcard(_)
+        | Expr::Parameter(_)
+        | Expr::Value(_)
+        | Expr::Function(_)
+        | Expr::HomogenizingFunction { .. }
+        | Expr::NullIf { .. }
+        | Expr::Nested(_)
+        | Expr::Subquery(_)
+        | Expr::Exists(_)
+        | Expr::Case { .. }
+        | Expr::Row { .. }
+        | Expr::Array(_)
+        | Expr::ArraySubquery(_)
+        | Expr::List(_)
+        | Expr::ListSubquery(_)
+        | Expr::Map(_)
+        | Expr::MapSubquery(_)
+        | Expr::FieldAccess { .. }
+        | Expr::WildcardAccess(_)
+        | Expr::Collate { .. } => false,
+        // `Cast`: the type parser swallows a following `[…]` as an array suffix
+        // (`a::int4[1]` is `a` cast to `int4[]`, not a subscript of `a::int4`).
+        // `Subscript`: consecutive `[…]` flatten into one node (`a[1][2]` is a
+        // single subscript), so a nested subscript receiver must be parenthesized
+        // to stay nested. Everything else (operators, `IS`/`LIKE`/… constructs)
+        // binds looser than `[` and would re-associate, so parenthesize by default.
+        _ => true,
     };
     if needs_parens {
         f.write_str("(");
