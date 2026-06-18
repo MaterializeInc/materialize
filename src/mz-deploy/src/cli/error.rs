@@ -271,7 +271,7 @@ impl CliError {
             Self::Connection(e) => match e {
                 ConnectionError::DeploymentNotFound { deploy_id } => Some(format!(
                     "verify the staging environment name '{}' is correct, or deploy to staging first using:\n  \
-                     {} {} {} --name {}",
+                     {} {} {} --deploy-id {}",
                     deploy_id.if_supports_color(Stream::Stderr, |t| t.yellow()),
                     "mz-deploy".if_supports_color(Stream::Stderr, |t| t.cyan()),
                     "stage".if_supports_color(Stream::Stderr, |t| t.cyan()),
@@ -306,12 +306,12 @@ impl CliError {
                     "the following schemas were updated in production after your deployment started:\n{}\n\n\
                      Rebase your deployment by running:\n  \
                      {} {} {}\n  \
-                     {} {} {} --name <staging-env>\n\n\
+                     {} {} {} --deploy-id <staging-env>\n\n\
                      Or use {} to force the deployment (may overwrite recent changes)",
                     conflict_list,
                     "mz-deploy".if_supports_color(Stream::Stderr, |t| t.cyan()),
                     "abort".if_supports_color(Stream::Stderr, |t| t.cyan()),
-                    "--name <staging-env>".if_supports_color(Stream::Stderr, |t| t.cyan()),
+                    "<staging-env>".if_supports_color(Stream::Stderr, |t| t.cyan()),
                     "mz-deploy".if_supports_color(Stream::Stderr, |t| t.cyan()),
                     "stage".if_supports_color(Stream::Stderr, |t| t.cyan()),
                     ".".if_supports_color(Stream::Stderr, |t| t.cyan()),
@@ -320,7 +320,7 @@ impl CliError {
             }
             Self::GitShaFailed => Some(
                 "either run mz-deploy from inside a git repository, or provide a staging environment name using:\n  \
-                 mz-deploy stage . --name <environment-name>"
+                 mz-deploy stage . --deploy-id <environment-name>"
                     .to_string(),
             ),
             Self::GitDirty => Some(
