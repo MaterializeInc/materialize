@@ -85,6 +85,13 @@ pub struct ObjectResult {
     /// executed inside a single BEGIN/COMMIT transaction block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction_group: Option<String>,
+    /// Statements that must run AFTER the object's transaction commits, outside
+    /// any BEGIN/COMMIT (indexes, GRANTs, and COMMENTs). Materialize forbids
+    /// mixing a GRANT or COMMENT with object creation in one transaction, so a
+    /// grouped object keeps only its bare CREATE statements in `statements` and
+    /// defers the rest here.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub post_statements: Vec<String>,
 }
 
 impl fmt::Display for ObjectResult {
@@ -303,6 +310,17 @@ impl ApplyPlan {
                         source,
                     }
                 })?;
+            }
+
+            for obj in &batch.objects {
+                for sql in &obj.post_statements {
+                    client.execute(sql, &[]).await.map_err(|source| {
+                        CliError::SqlExecutionFailed {
+                            statement: sql.clone(),
+                            source,
+                        }
+                    })?;
+                }
             }
         }
 

@@ -7,4 +7,6 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-CREATE TABLE products FROM SOURCE app.ingest.pg_source (REFERENCE public.products)
+CREATE TABLE products FROM SOURCE app.ingest.pg_source (REFERENCE public.products);
+
+GRANT SELECT ON TABLE app.ingest.products TO materialize
