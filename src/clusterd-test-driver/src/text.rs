@@ -27,6 +27,11 @@
 //! A `#` at column 0 is a comment; an indented `#0` is a column reference in MIR.
 //! Comments and blank lines are preserved across a rewrite.
 //!
+//! Output that itself contains blank lines (notably an `explain` plan render) uses
+//! the `datadriven` doubled-separator form: the directive, then `----`, then `----`,
+//! then the expected output, closed by a `----`/`----` pair. `REWRITE` emits this
+//! form automatically when the output contains a blank line.
+//!
 //! Command bodies are indentation-structured: `define-schema`/`write-rows`/`peek`
 //! carry rows or columns, and `define` carries `import`/`build`/`export`
 //! sub-commands, with a `build`'s MIR as its own deeper-indented sub-body.
@@ -35,7 +40,9 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, anyhow, bail, ensure};
 
-use crate::script::{BuildSpec, ColumnSpec, Command, ConfigSetting, ExportSpec, ImportSpec};
+use crate::script::{
+    BuildSpec, ColumnSpec, Command, ConfigSetting, ExplainTarget, ExportSpec, ImportSpec,
+};
 
 /// One element of a parsed script file, retained so a `REWRITE` reproduces the
 /// file faithfully.
@@ -82,12 +89,36 @@ pub fn parse_file(content: &str) -> anyhow::Result<Vec<Item>> {
         );
         let input = lines[start..i].join("\n");
         i += 1; // consume `----`
-        // The expected output runs to the next blank line (or end of file).
-        let exp_start = i;
-        while i < lines.len() && !lines[i].trim().is_empty() {
+        // A second `----` opens "blank-line mode" (the `datadriven` convention): the
+        // expected output may contain blank lines and runs until a closing `----`
+        // `----` pair, instead of ending at the first blank line. Used for the
+        // multi-object `explain` plan render.
+        let blank_mode = i < lines.len() && lines[i] == "----";
+        if blank_mode {
             i += 1;
         }
-        let expected = lines[exp_start..i].join("\n");
+        let exp_start = i;
+        let expected = if blank_mode {
+            while i < lines.len()
+                && !(lines[i] == "----" && i + 1 < lines.len() && lines[i + 1] == "----")
+            {
+                i += 1;
+            }
+            ensure!(
+                i < lines.len(),
+                "stanza starting at line {} has an unclosed `----`/`----` block",
+                start + 1
+            );
+            let expected = lines[exp_start..i].join("\n");
+            i += 2; // consume the closing `----` `----`
+            expected
+        } else {
+            // The expected output runs to the next blank line (or end of file).
+            while i < lines.len() && !lines[i].trim().is_empty() {
+                i += 1;
+            }
+            lines[exp_start..i].join("\n")
+        };
         let command = parse_command(&input)
             .with_context(|| format!("parsing stanza at line {}", start + 1))?;
         items.push(Item::Stanza(Stanza {
@@ -115,10 +146,18 @@ pub fn rewrite(items: &[Item], actuals: &[String]) -> String {
                 let actual = &actuals[next];
                 next += 1;
                 out.push_str(&stanza.input);
-                out.push_str("\n----\n");
-                out.push_str(actual);
-                if !actual.is_empty() {
-                    out.push('\n');
+                if actual.contains("\n\n") {
+                    // Blank lines in the output need the doubled-`----` form, else the
+                    // first blank line would truncate the block on the next parse.
+                    out.push_str("\n----\n----\n");
+                    out.push_str(actual);
+                    out.push_str("\n----\n----\n");
+                } else {
+                    out.push_str("\n----\n");
+                    out.push_str(actual);
+                    if !actual.is_empty() {
+                        out.push('\n');
+                    }
                 }
             }
         }
@@ -370,13 +409,24 @@ fn columns_from_body(body: &[Line]) -> anyhow::Result<Vec<ColumnSpec>> {
         .collect()
 }
 
-/// Parse a `create-dataflow` body of `import`/`build`/`export` sub-commands. The
-/// directive's bare flags carry the dataflow-level options (`optimize`).
-fn parse_create_dataflow(
+/// The parsed parts of a `create-dataflow` / `explain` body, shared by both verbs.
+struct DataflowBody {
+    name: Option<String>,
+    imports: Vec<ImportSpec>,
+    builds: Vec<BuildSpec>,
+    exports: Vec<ExportSpec>,
+    as_of: u64,
+    optimize: bool,
+}
+
+/// Parse a dataflow body of `import`/`build`/`export` sub-commands, shared by
+/// `create-dataflow` and `explain`. The directive's bare flags carry the
+/// dataflow-level options (`optimize`).
+fn parse_dataflow_body(
     args: &BTreeMap<String, String>,
     flags: &[String],
     body: &[Line],
-) -> anyhow::Result<Command> {
+) -> anyhow::Result<DataflowBody> {
     let name = opt_string(args, "name");
     let as_of = req_u64(args, "as-of")?;
     let optimize = flags.iter().any(|f| f == "optimize");
@@ -410,10 +460,10 @@ fn parse_create_dataflow(
                 });
             }
             "export" => exports.push(parse_export(&args)?),
-            other => bail!("unknown `create-dataflow` sub-command `{other}`"),
+            other => bail!("unknown dataflow sub-command `{other}`"),
         }
     }
-    Ok(Command::CreateDataflow {
+    Ok(DataflowBody {
         name,
         imports,
         builds,
@@ -495,7 +545,53 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
             up_to: req_u64(&args, "up-to")?,
             timeout_secs: opt_u64(&args, "timeout-secs")?,
         },
-        "create-dataflow" => parse_create_dataflow(&args, &flags, body)?,
+        "create-dataflow" => {
+            let DataflowBody {
+                name,
+                imports,
+                builds,
+                exports,
+                as_of,
+                optimize,
+            } = parse_dataflow_body(&args, &flags, body)?;
+            Command::CreateDataflow {
+                name,
+                imports,
+                builds,
+                exports,
+                as_of,
+                optimize,
+            }
+        }
+        "explain" => {
+            // `explain ref=<name>` renders a previously declared dataflow; otherwise
+            // the dataflow is given inline with the `create-dataflow` body.
+            let target = if let Some(reference) = opt_string(&args, "ref") {
+                ensure!(
+                    body.is_empty(),
+                    "`explain ref=...` takes no body; it renders the declared dataflow"
+                );
+                ExplainTarget::Reference { name: reference }
+            } else {
+                let DataflowBody {
+                    name,
+                    imports,
+                    builds,
+                    exports,
+                    as_of,
+                    optimize,
+                } = parse_dataflow_body(&args, &flags, body)?;
+                ExplainTarget::Inline {
+                    name,
+                    imports,
+                    builds,
+                    exports,
+                    as_of,
+                    optimize,
+                }
+            };
+            Command::Explain { target }
+        }
         "create-instance" => Command::CreateInstance {
             expiration_offset: opt_string(&args, "expiration-offset"),
             arrangement_dictionary_compression: args
@@ -653,6 +749,63 @@ mod tests {
         ));
     }
 
+    /// Inline `explain` shares the `create-dataflow` body grammar but parses into
+    /// `Command::Explain` with an `Inline` target carrying the same body.
+    #[mz_ore::test]
+    fn parses_explain_inline() {
+        let input = "explain name=j as-of=0 optimize\n  import source=1000 shard=l upper=1\n  import source=1001 shard=r upper=1\n  build id=2000\n    Join on=(#0 = #2)\n      Get u1000\n      Get u1001\n  export index=2001 on=2000 key=[0]";
+        let cmd = parse_command(input).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Explain {
+                target: ExplainTarget::Inline {
+                    name: Some("j".to_string()),
+                    imports: vec![
+                        ImportSpec::Source {
+                            id: 1000,
+                            shard: "l".to_string(),
+                            schema: None,
+                            upper: 1,
+                        },
+                        ImportSpec::Source {
+                            id: 1001,
+                            shard: "r".to_string(),
+                            schema: None,
+                            upper: 1,
+                        },
+                    ],
+                    builds: vec![BuildSpec {
+                        id: 2000,
+                        expr: "Join on=(#0 = #2)\n  Get u1000\n  Get u1001".to_string(),
+                    }],
+                    exports: vec![ExportSpec::Index {
+                        index_id: 2001,
+                        on_id: 2000,
+                        key: vec![0],
+                    }],
+                    as_of: 0,
+                    optimize: true,
+                }
+            }
+        );
+    }
+
+    /// `explain ref=<name>` parses into a `Reference` target and takes no body.
+    #[mz_ore::test]
+    fn parses_explain_ref() {
+        let cmd = parse_command("explain ref=join").unwrap();
+        assert_eq!(
+            cmd,
+            Command::Explain {
+                target: ExplainTarget::Reference {
+                    name: "join".to_string(),
+                },
+            }
+        );
+        // A body is rejected: the declared dataflow supplies it.
+        assert!(parse_command("explain ref=join\n  import source=1 shard=s upper=1").is_err());
+    }
+
     /// `create-dataflow` parses the sink export kinds: a materialized-view sink with
     /// a target shard, and a subscribe sink. The `copy-to` kind is rejected.
     #[mz_ore::test]
@@ -772,5 +925,27 @@ mod tests {
         // Rewriting with the same outputs reproduces the file.
         let actuals = vec!["ok".to_string(), "10000".to_string()];
         assert_eq!(rewrite(&items, &actuals), content);
+    }
+
+    /// Output with blank lines uses the doubled-`----` form: it parses with the
+    /// blanks intact, and rewriting an actual that contains a blank line emits that
+    /// form (so it round-trips).
+    #[mz_ore::test]
+    fn blank_mode_round_trips() {
+        let content = "explain name=j as-of=0\n----\n----\nu2001:\n  →Arrange (#0)\n\nu2000:\n  →Stream u1000\n----\n----\n";
+        let items = parse_file(content).unwrap();
+        let Item::Stanza(stanza) = &items[0] else {
+            panic!("expected a stanza");
+        };
+        // The blank line between the two objects is preserved in the expected block.
+        assert_eq!(
+            stanza.expected,
+            "u2001:\n  →Arrange (#0)\n\nu2000:\n  →Stream u1000"
+        );
+        // Rewriting with the same (blank-containing) output reproduces the file.
+        assert_eq!(
+            rewrite(&items, std::slice::from_ref(&stanza.expected)),
+            content
+        );
     }
 }

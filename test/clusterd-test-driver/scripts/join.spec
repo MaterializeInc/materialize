@@ -53,6 +53,29 @@ create-dataflow name=join as-of=0 optimize
 ----
 ok
 
+# Assert the optimized plan shape, not just the result: `optimize` must pick a
+# (differential) join, so optimizer or lowering drift that changed the plan would
+# surface here. `explain ref=join` renders the dataflow declared above without
+# repeating its body, and submits nothing.
+explain ref=join
+----
+----
+u2001:
+  →Arrange (#0)
+    →Stream u2000
+
+u2000:
+  →Differential Join %0:u1000[#0] » %1:u1001[#0]
+    →Arrange (#0)
+      →Stream u1000
+    →Arrange (#0)
+      →Stream u1001
+
+Source u1000
+Source u1001
+----
+----
+
 schedule id=2001
 ----
 ok

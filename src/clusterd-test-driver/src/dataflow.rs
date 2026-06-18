@@ -24,6 +24,7 @@
 //! [`ComputeCommand::CreateDataflow`]: mz_compute_client::protocol::command::ComputeCommand::CreateDataflow
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use mz_compute_types::dataflows::{
     BuildDesc, DataflowDescription, IndexDesc, IndexImport, SourceImport,
@@ -34,10 +35,12 @@ use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection, SubscribeSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
+use mz_expr::explain::ExplainContext;
 use mz_expr::{
     AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
 };
 use mz_persist_types::{PersistLocation, ShardId};
+use mz_repr::explain::{DummyHumanizer, Explain, ExplainConfig, ExplainFormat, UsedIndexes};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{GlobalId, RelationDesc, ReprRelationType, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
@@ -415,34 +418,73 @@ impl DataflowBuilder {
     /// column out of range, or an unbalanced object graph), so a caller driving
     /// this from external input — notably the script reader — can surface a clean
     /// error instead of crashing the process.
-    pub fn finish(mut self) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
+    pub fn finish(self) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
         let features = OptimizerFeatures::default();
+        let lowered = Self::lower(self.mir, self.optimize, &features)?;
+        augment(lowered, &self.sources, &self.sinks)
+    }
+
+    /// Render the lowered dataflow as `EXPLAIN PHYSICAL PLAN`-style text — the LIR
+    /// (`Plan`) the dataflow ships — so a script can golden-assert the optimized
+    /// plan shape and catch optimizer (or lowering) drift, which a result-only
+    /// assertion misses.
+    ///
+    /// Honors [`Self::optimize`] exactly like [`Self::finish`], so the explained
+    /// plan is the one that would be shipped. A no-catalog [`DummyHumanizer`]
+    /// renders ids as `u123` and columns as `#n` — stable and matching the `.spec`
+    /// MIR vocabulary, with no catalog to thread in.
+    pub fn explain(self) -> anyhow::Result<String> {
+        let features = OptimizerFeatures::default();
+        let mut lowered = Self::lower(self.mir, self.optimize, &features)?;
+        let config = ExplainConfig::default();
+        let context = ExplainContext {
+            config: &config,
+            features: &features,
+            humanizer: &DummyHumanizer,
+            cardinality_stats: BTreeMap::new(),
+            used_indexes: UsedIndexes::default(),
+            finishing: None,
+            duration: Duration::default(),
+            target_cluster: None,
+            optimizer_notices: Vec::new(),
+        };
+        lowered
+            .explain(&ExplainFormat::Text, &context)
+            .map_err(|e| anyhow::anyhow!("explaining dataflow failed: {e}"))
+    }
+
+    /// Optionally run the MIR dataflow optimizer, then lower MIR to LIR (`Plan`).
+    /// Shared by [`Self::finish`] (which augments the result with persist metadata)
+    /// and [`Self::explain`] (which renders it). Deterministic and self-contained.
+    fn lower(
+        mut mir: DataflowDescription<OptimizedMirRelationExpr, ()>,
+        optimize: bool,
+        features: &OptimizerFeatures,
+    ) -> anyhow::Result<DataflowDescription<Plan, ()>> {
         // Optionally run the MIR dataflow optimizer first (e.g. to fill a `Join`'s
         // implementation). The index oracle is built from this dataflow's own
         // `index_imports`, so the optimizer recognizes imported arrangements and
         // plans `Get`s over them as arrangement reads (not persist reads); the
         // statistics oracle is empty — no catalog stats — so join planning falls
         // back to a differential join, which lowers.
-        if self.optimize {
-            let indexes = ImportedIndexOracle::new(&self.mir.index_imports);
+        if optimize {
+            let indexes = ImportedIndexOracle::new(&mir.index_imports);
             let typecheck_ctx = empty_typechecking_context();
             let mut df_meta = DataflowMetainfo::default();
             let mut ctx = TransformCtx::global(
                 &indexes,
                 &EmptyStatisticsOracle,
-                &features,
+                features,
                 &typecheck_ctx,
                 &mut df_meta,
                 None,
             );
-            optimize_dataflow(&mut self.mir, &mut ctx, false)
+            optimize_dataflow(&mut mir, &mut ctx, false)
                 .map_err(|e| anyhow::anyhow!("optimizing dataflow failed: {e}"))?;
         }
         // Lower MIR -> LIR. Deterministic and self-contained.
-        let lowered: DataflowDescription<Plan, ()> =
-            Plan::finalize_dataflow(self.mir, &features)
-                .map_err(|e| anyhow::anyhow!("lowering dataflow failed: {e}"))?;
-        augment(lowered, &self.sources, &self.sinks)
+        Plan::finalize_dataflow(mir, features)
+            .map_err(|e| anyhow::anyhow!("lowering dataflow failed: {e}"))
     }
 }
 
@@ -814,6 +856,52 @@ mod tests {
         assert!(assemble(false).is_err());
         // With it, the optimizer fills the join implementation and the dataflow lowers.
         assert!(assemble(true).is_ok());
+    }
+
+    /// `explain` renders the lowered LIR plan as text, so a script can assert the
+    /// optimized plan shape. Build the optimized two-source join and confirm the
+    /// rendered plan mentions a `Join` (the operator the optimizer selected).
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn explain_join_renders_plan() {
+        let loc = PersistLocation {
+            blob_uri: "mem://".parse().unwrap(),
+            consensus_uri: "mem://".parse().unwrap(),
+        };
+        let mut builder = DataflowBuilder::new("headless-explain-test");
+        let left = builder.import_persist(
+            GlobalId::User(1000),
+            PersistSource {
+                shard: ShardId::new(),
+                location: loc.clone(),
+                desc: crate::data::sample_desc(),
+                upper: Timestamp::from(1),
+            },
+        );
+        let right = builder.import_persist(
+            GlobalId::User(1001),
+            PersistSource {
+                shard: ShardId::new(),
+                location: loc.clone(),
+                desc: crate::data::sample_desc(),
+                upper: Timestamp::from(1),
+            },
+        );
+        let join = MirRelationExpr::join_scalars(
+            vec![left.get(), right.get()],
+            vec![vec![MirScalarExpr::column(0), MirScalarExpr::column(2)]],
+        );
+        builder.build(GlobalId::User(2000), join);
+        builder.optimize();
+        builder.as_of(Timestamp::from(0));
+        builder.export_index(GlobalId::User(2001), GlobalId::User(2000), vec![0]);
+        let text = builder.explain().unwrap();
+        // Print so the rendered shape is visible under `--nocapture`.
+        println!("{text}");
+        assert!(
+            text.contains("Join"),
+            "explain output missing Join:\n{text}"
+        );
     }
 
     /// A single dataflow can export both an index and a materialized view over the

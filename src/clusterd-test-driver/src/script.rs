@@ -170,6 +170,41 @@ pub enum ExportSpec {
     },
 }
 
+/// What an `explain` command renders: a dataflow given inline, or a reference to one
+/// a prior `create-dataflow` declared by name. The reference form avoids repeating a
+/// dataflow's body just to assert its plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExplainTarget {
+    /// A dataflow declared inline, with the same body as `create-dataflow`.
+    Inline {
+        /// Debug name for the dataflow; defaults to `headless-create-dataflow`.
+        #[serde(default)]
+        name: Option<String>,
+        /// Collections to import (persist sources and/or existing indexes).
+        #[serde(default)]
+        imports: Vec<ImportSpec>,
+        /// MIR objects to compute, each bound to an id.
+        #[serde(default)]
+        builds: Vec<BuildSpec>,
+        /// Exports over imported or built ids.
+        #[serde(default)]
+        exports: Vec<ExportSpec>,
+        /// The dataflow's `as_of`.
+        as_of: u64,
+        /// Run the MIR optimizer before lowering. Off by default.
+        #[serde(default)]
+        optimize: bool,
+    },
+    /// A dataflow a prior `create-dataflow name=<name>` declared, rendered without
+    /// repeating its body. Reuses the recorded spec, so the plan matches what was
+    /// submitted.
+    Reference {
+        /// The `create-dataflow` name to render.
+        name: String,
+    },
+}
+
 /// Map a JSON type name to a [`SqlScalarType`]. The supported set is intentionally
 /// small and matches [`crate::data::Cell`]; extend both together.
 fn scalar_type_from_str(s: &str) -> anyhow::Result<SqlScalarType> {
@@ -492,6 +527,16 @@ pub enum Command {
         #[serde(default)]
         optimize: bool,
     },
+    /// Render a dataflow's lowered LIR plan as text, the output assertion being the
+    /// plan shape itself. It submits nothing and records no index, subscribe, or
+    /// materialized-view output. With `optimize`, this asserts the optimizer's plan
+    /// so subtle optimizer (or lowering) drift is caught, which a result-only assertion
+    /// misses. The dataflow is given either inline (the `create-dataflow` body) or by
+    /// reference to one a prior `create-dataflow` declared (see [`ExplainTarget`]).
+    Explain {
+        /// What to explain: an inline dataflow or a reference to a declared one.
+        target: ExplainTarget,
+    },
     /// Peek `id` at `ts` and emit the returned rows (sorted, one per line). The
     /// generic output assertion: the script's `----` block holds the expected rows.
     Peek {
@@ -555,6 +600,33 @@ struct IndexEntry {
     on_type: ReprRelationType,
 }
 
+/// Side-effect registrations a successful `create-dataflow` submit must apply:
+/// exported indexes (for later import / count), subscribe sinks (response buffers),
+/// and materialized-view outputs (for persist peeks). `explain` builds the same
+/// dataflow but discards these, since it submits nothing.
+#[derive(Default)]
+struct PendingRegistrations {
+    /// Exported indexes, by global id.
+    indexes: Vec<(u64, IndexEntry)>,
+    /// Subscribe sink ids needing a response buffer.
+    subscribes: Vec<u64>,
+    /// Materialized-view outputs: sink id and its target shard metadata.
+    mv_outputs: Vec<(u64, CollectionMetadata)>,
+}
+
+/// The `create-dataflow` body recorded under a dataflow's name, so a later
+/// `explain ref=<name>` can re-render its plan without repeating the body. Holds the
+/// parsed spec rather than a built plan: lowering is deterministic, so re-running it
+/// yields the same plan that was submitted.
+#[derive(Clone)]
+struct DataflowSpec {
+    imports: Vec<ImportSpec>,
+    builds: Vec<BuildSpec>,
+    exports: Vec<ExportSpec>,
+    as_of: u64,
+    optimize: bool,
+}
+
 /// The base for ephemeral global ids the count sugar allocates. Far above any
 /// id a script would use, so its dataflows never collide with user objects.
 const INTERNAL_ID_BASE: u64 = u64::MAX / 2;
@@ -573,6 +645,9 @@ pub struct ScriptState {
     /// Materialized-view sink outputs, by sink global id: the target shard's
     /// metadata, so a `peek` of the sink id reads its shard via a persist peek.
     mv_outputs: BTreeMap<u64, CollectionMetadata>,
+    /// `create-dataflow` specs by name, so `explain ref=<name>` can render a declared
+    /// dataflow's plan without repeating its body.
+    dataflows: BTreeMap<String, DataflowSpec>,
     /// Next ephemeral id for the count sugar's dataflows.
     next_internal: u64,
 }
@@ -590,6 +665,7 @@ impl ScriptState {
             shards: BTreeMap::new(),
             indexes: BTreeMap::new(),
             mv_outputs: BTreeMap::new(),
+            dataflows: BTreeMap::new(),
             next_internal: INTERNAL_ID_BASE,
         })
     }
@@ -704,6 +780,167 @@ impl ScriptState {
             on_type.column_types
         );
         Ok(())
+    }
+
+    /// Build (but do not submit) a [`DataflowBuilder`] from a `create-dataflow` /
+    /// `explain` body: import sources and existing indexes, build the MIR objects, and
+    /// wire the exports, setting `as_of`. Returns the configured builder plus the
+    /// [`PendingRegistrations`] a successful submit must apply — `create-dataflow`
+    /// applies them, `explain` discards them (it submits nothing).
+    fn configure_dataflow(
+        &mut self,
+        name: Option<String>,
+        imports: Vec<ImportSpec>,
+        builds: Vec<BuildSpec>,
+        exports: Vec<ExportSpec>,
+        as_of: u64,
+        optimize: bool,
+    ) -> anyhow::Result<(DataflowBuilder, PendingRegistrations)> {
+        let mut builder =
+            DataflowBuilder::new(name.unwrap_or_else(|| "headless-create-dataflow".to_string()));
+        if optimize {
+            builder.optimize();
+        }
+        // The parser's catalog resolves `Get u<n>` leaves by name; it assigns its own
+        // global ids, so we keep a name->our-id map and remap the parsed `Get`s back to
+        // the script's ids afterwards.
+        let mut catalog = TestCatalog::default();
+        let mut name_to_id: BTreeMap<String, GlobalId> = BTreeMap::new();
+        for import in imports {
+            match import {
+                ImportSpec::Source {
+                    id,
+                    shard,
+                    schema,
+                    upper,
+                } => {
+                    let desc = self.resolve_schema(&schema)?;
+                    let id = GlobalId::User(id);
+                    register_catalog_object(&mut catalog, &mut name_to_id, id, desc.typ().clone())?;
+                    let shard = self.shard_id(&shard);
+                    builder.import_persist(
+                        id,
+                        PersistSource {
+                            shard,
+                            location: self.loc.clone(),
+                            desc,
+                            upper: Timestamp::from(upper),
+                        },
+                    );
+                }
+                ImportSpec::Index { index_id } => {
+                    let entry = self.indexes.get(&index_id).ok_or_else(|| {
+                        anyhow::anyhow!("unknown index {index_id}; define it before importing it")
+                    })?;
+                    let on_id = GlobalId::User(entry.on_id);
+                    let key = entry.key.clone();
+                    let on_type = entry.on_type.clone();
+                    register_catalog_object(
+                        &mut catalog,
+                        &mut name_to_id,
+                        on_id,
+                        SqlRelationType::from_repr(&on_type),
+                    )?;
+                    builder.import_index(GlobalId::User(index_id), on_id, key, on_type, false);
+                }
+            }
+        }
+        for build in builds {
+            // Parse the pretty MIR spec against the catalog, then remap its
+            // catalog-assigned `Get` ids to the script's ids.
+            let mut expr = try_parse_mir(&catalog, &build.expr)
+                .map_err(|e| anyhow::anyhow!("parsing MIR for object {}: {e}", build.id))?;
+            remap_gets(&mut expr, &catalog, &name_to_id)?;
+            let id = GlobalId::User(build.id);
+            // Register the built object so later builds can `get` it.
+            register_catalog_object(
+                &mut catalog,
+                &mut name_to_id,
+                id,
+                SqlRelationType::from_repr(&expr.typ()),
+            )?;
+            builder.build(id, expr);
+        }
+        // Wire each export onto the builder. Index exports are captured for later
+        // import / count assertions; sink exports route their output either to a target
+        // shard (materialized view) or back as responses (subscribe). Sink output
+        // schemas must match the exported object's type, validated here so a mismatch
+        // fails before submission.
+        let mut registrations = PendingRegistrations::default();
+        for export in exports {
+            match export {
+                ExportSpec::Index {
+                    index_id,
+                    on_id,
+                    key,
+                } => {
+                    let on_type = builder.get(GlobalId::User(on_id))?.typ();
+                    builder.export_index(
+                        GlobalId::User(index_id),
+                        GlobalId::User(on_id),
+                        key.clone(),
+                    );
+                    registrations.indexes.push((
+                        index_id,
+                        IndexEntry {
+                            on_id,
+                            key,
+                            on_type,
+                        },
+                    ));
+                }
+                ExportSpec::MaterializedView {
+                    sink_id,
+                    on_id,
+                    shard,
+                    schema,
+                } => {
+                    let desc = self.resolve_schema(&schema)?;
+                    self.check_sink_schema(&builder, on_id, &desc)?;
+                    let shard = self.shard_id(&shard);
+                    let location = self.loc.clone();
+                    builder.export_materialized_view(
+                        GlobalId::User(sink_id),
+                        GlobalId::User(on_id),
+                        desc.clone(),
+                        PersistSink {
+                            shard,
+                            location: location.clone(),
+                        },
+                    );
+                    // Record the target shard so a later `peek` of the sink id reads it
+                    // via a persist peek (the `SELECT * FROM mv` path), with no separate
+                    // read-back command.
+                    registrations.mv_outputs.push((
+                        sink_id,
+                        CollectionMetadata {
+                            persist_location: location,
+                            data_shard: shard,
+                            relation_desc: desc,
+                            txns_shard: None,
+                        },
+                    ));
+                }
+                ExportSpec::Subscribe {
+                    sink_id,
+                    on_id,
+                    schema,
+                    up_to,
+                } => {
+                    let desc = self.resolve_schema(&schema)?;
+                    self.check_sink_schema(&builder, on_id, &desc)?;
+                    builder.export_subscribe(
+                        GlobalId::User(sink_id),
+                        GlobalId::User(on_id),
+                        desc,
+                        up_to_antichain(up_to),
+                    );
+                    registrations.subscribes.push(sink_id);
+                }
+            }
+        }
+        builder.as_of(Timestamp::from(as_of));
+        Ok((builder, registrations))
     }
 
     /// Execute a single command, returning its golden output text.
@@ -854,180 +1091,78 @@ impl ScriptState {
                 as_of,
                 optimize,
             } => {
-                let mut builder = DataflowBuilder::new(
-                    name.unwrap_or_else(|| "headless-create-dataflow".to_string()),
-                );
-                if optimize {
-                    builder.optimize();
+                // Record the spec under its name so `explain ref=<name>` can render
+                // this dataflow's plan later without repeating the body.
+                if let Some(name) = &name {
+                    self.dataflows.insert(
+                        name.clone(),
+                        DataflowSpec {
+                            imports: imports.clone(),
+                            builds: builds.clone(),
+                            exports: exports.clone(),
+                            as_of,
+                            optimize,
+                        },
+                    );
                 }
-                // The parser's catalog resolves `Get u<n>` leaves by name; it
-                // assigns its own global ids, so we keep a name->our-id map and
-                // remap the parsed `Get`s back to the script's ids afterwards.
-                let mut catalog = TestCatalog::default();
-                let mut name_to_id: BTreeMap<String, GlobalId> = BTreeMap::new();
-                for import in imports {
-                    match import {
-                        ImportSpec::Source {
-                            id,
-                            shard,
-                            schema,
-                            upper,
-                        } => {
-                            let desc = self.resolve_schema(&schema)?;
-                            let id = GlobalId::User(id);
-                            register_catalog_object(
-                                &mut catalog,
-                                &mut name_to_id,
-                                id,
-                                desc.typ().clone(),
-                            )?;
-                            let shard = self.shard_id(&shard);
-                            builder.import_persist(
-                                id,
-                                PersistSource {
-                                    shard,
-                                    location: self.loc.clone(),
-                                    desc,
-                                    upper: Timestamp::from(upper),
-                                },
-                            );
-                        }
-                        ImportSpec::Index { index_id } => {
-                            let entry = self.indexes.get(&index_id).ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "unknown index {index_id}; define it before importing it"
-                                )
-                            })?;
-                            let on_id = GlobalId::User(entry.on_id);
-                            let key = entry.key.clone();
-                            let on_type = entry.on_type.clone();
-                            register_catalog_object(
-                                &mut catalog,
-                                &mut name_to_id,
-                                on_id,
-                                SqlRelationType::from_repr(&on_type),
-                            )?;
-                            builder.import_index(
-                                GlobalId::User(index_id),
-                                on_id,
-                                key,
-                                on_type,
-                                false,
-                            );
-                        }
-                    }
-                }
-                for build in builds {
-                    // Parse the pretty MIR spec against the catalog, then remap
-                    // its catalog-assigned `Get` ids to the script's ids.
-                    let mut expr = try_parse_mir(&catalog, &build.expr)
-                        .map_err(|e| anyhow::anyhow!("parsing MIR for object {}: {e}", build.id))?;
-                    remap_gets(&mut expr, &catalog, &name_to_id)?;
-                    let id = GlobalId::User(build.id);
-                    // Register the built object so later builds can `get` it.
-                    register_catalog_object(
-                        &mut catalog,
-                        &mut name_to_id,
-                        id,
-                        SqlRelationType::from_repr(&expr.typ()),
-                    )?;
-                    builder.build(id, expr);
-                }
-                // Wire each export onto the builder. Index exports are captured for
-                // later import / count assertions; sink exports route their output
-                // either to a target shard (materialized view) or back as responses
-                // (subscribe). Sink output schemas must match the exported object's
-                // type, validated here so a mismatch fails before submission.
-                let mut new_indexes = Vec::new();
-                let mut new_subscribes = Vec::new();
-                let mut new_mv_outputs = Vec::new();
-                for export in exports {
-                    match export {
-                        ExportSpec::Index {
-                            index_id,
-                            on_id,
-                            key,
-                        } => {
-                            let on_type = builder.get(GlobalId::User(on_id))?.typ();
-                            builder.export_index(
-                                GlobalId::User(index_id),
-                                GlobalId::User(on_id),
-                                key.clone(),
-                            );
-                            new_indexes.push((index_id, on_id, key, on_type));
-                        }
-                        ExportSpec::MaterializedView {
-                            sink_id,
-                            on_id,
-                            shard,
-                            schema,
-                        } => {
-                            let desc = self.resolve_schema(&schema)?;
-                            self.check_sink_schema(&builder, on_id, &desc)?;
-                            let shard = self.shard_id(&shard);
-                            let location = self.loc.clone();
-                            builder.export_materialized_view(
-                                GlobalId::User(sink_id),
-                                GlobalId::User(on_id),
-                                desc.clone(),
-                                PersistSink {
-                                    shard,
-                                    location: location.clone(),
-                                },
-                            );
-                            // Record the target shard so a later `peek` of the sink
-                            // id reads it via a persist peek (the `SELECT * FROM mv`
-                            // path), with no separate read-back command.
-                            new_mv_outputs.push((
-                                sink_id,
-                                CollectionMetadata {
-                                    persist_location: location,
-                                    data_shard: shard,
-                                    relation_desc: desc,
-                                    txns_shard: None,
-                                },
-                            ));
-                        }
-                        ExportSpec::Subscribe {
-                            sink_id,
-                            on_id,
-                            schema,
-                            up_to,
-                        } => {
-                            let desc = self.resolve_schema(&schema)?;
-                            self.check_sink_schema(&builder, on_id, &desc)?;
-                            builder.export_subscribe(
-                                GlobalId::User(sink_id),
-                                GlobalId::User(on_id),
-                                desc,
-                                up_to_antichain(up_to),
-                            );
-                            new_subscribes.push(sink_id);
-                        }
-                    }
-                }
-                builder.as_of(Timestamp::from(as_of));
+                let (builder, registrations) =
+                    self.configure_dataflow(name, imports, builds, exports, as_of, optimize)?;
                 let df = builder.finish()?;
                 self.driver.submit_dataflow(df)?;
                 // Register only after a successful submit, so a rejected dataflow
                 // leaves no dangling index entry or subscribe buffer.
-                for (index_id, on_id, key, on_type) in new_indexes {
-                    self.indexes.insert(
-                        index_id,
-                        IndexEntry {
-                            on_id,
-                            key,
-                            on_type,
-                        },
-                    );
+                for (index_id, entry) in registrations.indexes {
+                    self.indexes.insert(index_id, entry);
                 }
-                for sink_id in new_subscribes {
+                for sink_id in registrations.subscribes {
                     self.driver.register_subscribe(GlobalId::User(sink_id));
                 }
-                for (sink_id, metadata) in new_mv_outputs {
+                for (sink_id, metadata) in registrations.mv_outputs {
                     self.mv_outputs.insert(sink_id, metadata);
                 }
                 Ok("ok".to_string())
+            }
+            Command::Explain { target } => {
+                // Resolve the target to a dataflow body: either given inline, or the
+                // spec a prior `create-dataflow name=<name>` recorded.
+                let (name, imports, builds, exports, as_of, optimize) = match target {
+                    ExplainTarget::Inline {
+                        name,
+                        imports,
+                        builds,
+                        exports,
+                        as_of,
+                        optimize,
+                    } => (name, imports, builds, exports, as_of, optimize),
+                    ExplainTarget::Reference { name } => {
+                        let spec = self.dataflows.get(&name).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "unknown dataflow {name:?}; declare it with \
+                                 create-dataflow name={name} first"
+                            )
+                        })?;
+                        (
+                            Some(name.clone()),
+                            spec.imports.clone(),
+                            spec.builds.clone(),
+                            spec.exports.clone(),
+                            spec.as_of,
+                            spec.optimize,
+                        )
+                    }
+                };
+                // Build the same dataflow as `create-dataflow`, but render its lowered
+                // LIR plan instead of submitting it. The registrations are discarded:
+                // explain has no side effects, so it neither installs a dataflow nor
+                // records an index / subscribe / materialized-view output.
+                let (builder, _registrations) =
+                    self.configure_dataflow(name, imports, builds, exports, as_of, optimize)?;
+                // The LIR render separates objects with blank lines; the `----` block
+                // preserves them via the doubled-separator form (see `crate::text`).
+                // Trim the trailing newline so the golden matches like every other
+                // command's (none emit a trailing newline).
+                let plan = builder.explain()?;
+                Ok(plan.trim_end().to_string())
             }
             Command::Peek { id, schema, ts } => {
                 let desc = self.resolve_schema(&schema)?;
