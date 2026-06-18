@@ -834,11 +834,13 @@ fn binary_op_operand_reparenthesized_after_nested_stripped() {
         }
     }
 
-    // A binary operator must parenthesize an operand that binds looser than it
-    // once the parser's protective `Expr::Nested` is stripped — otherwise the
-    // operand re-associates on reparse. `(a + b) * c` -> `Op(*, Op(+), c)` must
-    // still print `(a + b) * c`, not `a + b * c`; likewise a low-precedence left
-    // operand of `+`.
+    // A binary operator must parenthesize an operand that re-associates on
+    // reparse once the parser's protective `Expr::Nested` is stripped. The left
+    // operand is decided by its *right* edge (the operator reaches into its right
+    // spine), the right operand by its *left* edge — and an operand's top operator
+    // is not enough, because a left-/right-nested chain can bury a looser operator
+    // down the spine. `(a + b) * c` -> `Op(*, Op(+), c)` must still print
+    // `(a + b) * c`, not `a + b * c`.
     for sql in [
         "SELECT (a + b) * c",
         "SELECT (a OR b) AND c",
@@ -851,6 +853,11 @@ fn binary_op_operand_reparenthesized_after_nested_stripped() {
         // A prefix op is right-transparent: the quantified `= ANY` would bind into
         // the `NOT` unless the whole left is parenthesized.
         "SELECT (- NOT a IN (b)) = ANY (SELECT c FROM t)",
+        // The right operand's *top* operator (`IN`, binds tighter than `<>`) hides
+        // a looser `= ANY` (`Cmp`, equal to `<>`) on its left spine; without
+        // parens the `<>` would re-associate into that `= ANY`'s left, so the
+        // right operand must be parenthesized by its left edge, not its top.
+        "SELECT a <> (b = ANY (ARRAY[c]) IN (SELECT d FROM t))",
     ] {
         let mut ast = mz_sql_parser::parser::parse_statements(sql)
             .unwrap()
