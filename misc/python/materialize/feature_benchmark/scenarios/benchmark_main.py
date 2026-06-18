@@ -1084,6 +1084,84 @@ ALTER SYSTEM SET column_paged_batcher_budget_fraction = 0.01;
 """)
 
 
+class ArrangementColumnCompression(Dataflow):
+    """Non-leaf parent for the per-column arrangement-compression benchmark family
+    (`enable_arrangement_column_compression_alpha`).
+
+    Each iteration drops and re-creates a materialized view over a self-join of `v1`,
+    so it rebuilds (hydrates) a row-spine arrangement that carries a low-cardinality
+    string column — exactly the shape the per-column codec compresses. Leaf variants
+    set the flag off (baseline) / on. Compare `MEMORY_CLUSTERD` between them for the
+    arrangement-memory reduction, and `WALLCLOCK` for the decode/compare CPU cost; track
+    the on-variant across builds as the compare/decode optimizations land.
+
+    Has subclasses, so the runner treats it as non-leaf and never executes it directly —
+    pick a leaf via `--root-scenario`.
+    """
+
+    SCALE = 6
+
+    @classmethod
+    def can_run(cls, version: MzVersion) -> bool:
+        # `enable_arrangement_column_compression_alpha` was introduced in 26.30.
+        return version > MzVersion.create(26, 30, 0)
+
+    def init(self) -> list[Action]:
+        return [
+            self.view_ten(),
+            TdAction(f"""
+> CREATE MATERIALIZED VIEW v1
+  AS SELECT {self.unique_values()} AS f1, ({self.unique_values()} % 16)::text AS s1 FROM {self.join()}
+> SELECT COUNT(*) FROM v1
+{self.n()}
+"""),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        # `GROUP BY a1.s1` keeps the low-cardinality `s1` in `v1`'s join arrangement
+        # (rather than letting it be projected away), so the arrangement actually
+        # carries a compressible column.
+        return Td(f"""
+> DROP MATERIALIZED VIEW IF EXISTS v2
+
+> SELECT 1
+  /* A */
+1
+
+> CREATE MATERIALIZED VIEW v2
+  AS SELECT a1.s1, COUNT(*) FROM v1 AS a1 JOIN v1 AS a2 USING (f1) GROUP BY a1.s1
+
+> SELECT COUNT(*) FROM v2
+  /* B */
+16
+""")
+
+
+class ArrangementColumnCompressionBaseline(ArrangementColumnCompression):
+    """Baseline: per-column arrangement compression disabled (current default path)."""
+
+    def shared(self) -> Action:
+        return TdAction("""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_arrangement_column_compression_alpha = false;
+""")
+
+
+class ArrangementColumnCompressionAlpha(ArrangementColumnCompression):
+    """Per-column arrangement compression enabled. Compare `MEMORY_CLUSTERD` against the
+    baseline for the arrangement-memory reduction, and `WALLCLOCK` for the decode/compare
+    CPU cost that the compare/decode optimizations aim to shrink over time.
+    """
+
+    def shared(self) -> Action:
+        return TdAction("""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_arrangement_column_compression_alpha = true;
+""")
+
+
 class FullOuterJoin(Dataflow):
     def benchmark(self) -> BenchmarkingSequence:
         columns_select = ", ".join(
