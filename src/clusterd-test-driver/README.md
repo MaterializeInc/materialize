@@ -10,28 +10,8 @@ exercising the real worker process and protocol.
 See the [design doc](../../doc/developer/design/20260612_headless_clusterd_test_driver.md)
 for the full architecture and command vocabulary.
 
-## Tests
-
-Tests are text scripts in
-[`test/clusterd-test-driver/scripts`](../../test/clusterd-test-driver/scripts).
-Each command is followed by a `----` block holding its expected output; that
-block *is* the assertion. A failing command renders as `error: <message>`, so
-an expected failure is just another golden block.
-
-Run the scenarios against a real `clusterd` under Docker:
-
-```shell
-bin/mzcompose --find clusterd-test-driver run default
-```
-
-or run the same scripts on the host, without Docker images:
-
-```shell
-bin/pyactivate test/clusterd-test-driver/run-local.py
-```
-
-Regenerate the expected `----` blocks in place by setting `REWRITE=1`. Inspect
-the diff carefully before committing.
+The script-based scenario tests and how to run them live in
+[`test/clusterd-test-driver`](../../test/clusterd-test-driver).
 
 ## Layout
 
