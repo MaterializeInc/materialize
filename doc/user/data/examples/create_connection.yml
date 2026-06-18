@@ -658,7 +658,9 @@
 
 - name: "syntax-gcp"
   code: |
-    CREATE SECRET <secret_name> AS decode('<service_account_key_json_base64>', 'base64');
+    -- Base64-encode the entire JSON service account key.
+    -- e.g. base64 < sa_key.json
+    CREATE SECRET <secret_name> AS decode('<sa_key_json_base64>', 'base64');
 
     CREATE CONNECTION <connection_name> TO GCP (
         SERVICE ACCOUNT KEY = SECRET <secret_name>
@@ -668,17 +670,11 @@
     - name: "`<connection_name>`"
       description: |
         A name for the connection.
-    - name: "`<service_account_key_json_base64>`"
+    - name: "`SECRET <secret_name>`"
       description: |
-        *Value:* base64-encoded JSON. Required.
-
-        Create a [GCP service account](https://docs.cloud.google.com/iam/docs/service-account-overview)
-        for Materialize to use.
-
-        Create a [service account key](https://docs.cloud.google.com/iam/docs/keys-create-delete) (JSON).
-
-        Base64-encode the entire JSON service account key and paste it into the `CREATE SECRET` statement.
-        (e.g. `base64 < sa_key.json`)
+        Secret containing the [GCP service account key](https://docs.cloud.google.com/iam/docs/keys-create-delete) (JSON).
+        Base64-encode it first and decode it in the `CREATE SECRET` statement to avoid
+        escaping quotes and newlines in the SQL string literal.
     - name: "`WITH (<with_options>)`"
       description: |
         The following `<with_options>` are supported:
@@ -745,7 +741,7 @@
 
 - name: "example-iceberg-catalog-connection"
   description: |
-    The following example creates an AWS connection and an Iceberg catalog connection for AWS S3 Tables:
+    The following example creates an [AWS connection](/sql/create-connection/#aws) and an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for AWS S3 Tables:
   code: |
     -- First, create an AWS connection for authentication
     CREATE CONNECTION aws_connection
@@ -762,11 +758,9 @@
 
 - name: "example-iceberg-catalog-gcp-connection"
   description: |
-    The following example creates a GCP connection and an Iceberg catalog connection for Google Cloud BigLake:
+    The following example creates a [GCP connection](/sql/create-connection/#gcp) and an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for Google Cloud BigLake:
   code: |
-    -- Base64-encode the entire JSON payload of the GCP service account key.
-    -- e.g. `base64 < sa_key.json`
-    -- Paste the resulting base64-encoded string into a CREATE SECRET statement.
+    -- Using the base64-encoded service account key (e.g. base64 < sa_key.json)
     CREATE SECRET gcp_service_account_key
       AS decode('<base64-encoded service account key JSON>', 'base64');
 
