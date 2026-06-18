@@ -40,7 +40,6 @@ For instance, to create a new Materialize project called `order-monitoring`:
 
 ```bash
 mz-deploy new order-monitoring
-cd order-monitoring
 ```
 
 This scaffolds the following directory structure:
