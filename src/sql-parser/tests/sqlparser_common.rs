@@ -940,3 +940,53 @@ fn is_distinct_from_rhs_reparenthesized_after_nested_stripped() {
         );
     }
 }
+
+#[mz_ore::test]
+fn like_pattern_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // A `[I]LIKE` pattern parses at `Like` precedence. When an `ESCAPE` follows,
+    // the pattern is immediately left of the `ESCAPE` keyword, so a `[I]LIKE`
+    // exposed on the pattern's *right* spine steals the `ESCAPE` as its own:
+    // `x LIKE NOT (a LIKE b) ESCAPE c`, printed bare as
+    // `x LIKE NOT a LIKE b ESCAPE c`, binds the escape to the inner `a LIKE b`.
+    // The drift is structural and produces colliding stable strings, so it is
+    // checked structurally.
+    for sql in [
+        "SELECT x LIKE (NOT (a LIKE b)) ESCAPE c",
+        "SELECT x LIKE (a LIKE b) ESCAPE c",
+        "SELECT x ILIKE (a ILIKE b) ESCAPE c",
+        // Left-spine cases (covered with or without escape).
+        "SELECT x LIKE (a IN (SELECT b FROM t))",
+        // No escape: a right-spine LIKE is harmless, so this stays bare.
+        "SELECT x LIKE NOT (a LIKE b)",
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "LIKE pattern display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
+        );
+    }
+}

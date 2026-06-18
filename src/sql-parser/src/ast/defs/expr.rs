@@ -302,12 +302,18 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     f.write_str("I");
                 }
                 f.write_str("LIKE ");
-                // The pattern and escape parse at `Like` precedence and sit to
-                // the right of the keyword, so an operand exposing a precedence at
-                // or below `Like` on its left spine (e.g. an `IN`/`LIKE`/`BETWEEN`
-                // at equal precedence) re-associates unless parenthesized —
-                // `a LIKE b IN (q)` parses as `(a LIKE b) IN (q)`.
-                write_binary_operand(f, pattern, left_edge(pattern) <= prec::LIKE);
+                // The pattern and escape parse at `Like` precedence and sit to the
+                // right of the keyword, so an operand exposing a precedence at or
+                // below `Like` on its left spine (e.g. an `IN`/`LIKE`/`BETWEEN` at
+                // equal precedence) re-associates unless parenthesized —
+                // `a LIKE b IN (q)` parses as `(a LIKE b) IN (q)`. When an `ESCAPE`
+                // follows, the pattern is *also* immediately left of `ESCAPE`: a
+                // `[I]LIKE` exposed on the pattern's right spine would steal the
+                // `ESCAPE` as its own (`a LIKE NOT b LIKE c ESCAPE d` parses the
+                // escape onto the inner `b LIKE c`), so guard the right edge too.
+                let pattern_parens = left_edge(pattern) <= prec::LIKE
+                    || (escape.is_some() && right_edge(pattern) <= prec::LIKE);
+                write_binary_operand(f, pattern, pattern_parens);
                 if let Some(escape) = escape {
                     f.write_str(" ESCAPE ");
                     write_binary_operand(f, escape, left_edge(escape) <= prec::LIKE);
