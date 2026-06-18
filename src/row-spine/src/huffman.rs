@@ -22,6 +22,8 @@
 //! one at a time with O(1) state, so a comparison can decode its operands
 //! without materializing them into a buffer.
 
+use std::sync::OnceLock;
+
 use mz_ore::cast::CastFrom;
 
 /// Maximum code length we will emit. Optimal Huffman codes over 256 symbols can
@@ -31,8 +33,16 @@ use mz_ore::cast::CastFrom;
 /// leaves the data uncompressed); real column data stays far below it.
 const MAX_BITS: usize = 24;
 
+/// Index width of the single-level decode table: it maps the next `DECODE_TABLE_BITS` bits to
+/// `(length << 8) | symbol` for codes that fit in that many bits. Longer codes are left absent
+/// and fall back to the canonical decode. 8 keeps the table at a cache-friendly 256 entries
+/// (512 B): a Huffman code's *frequent* symbols have short codes that land in it, and only the
+/// rare, long-coded symbols fall back. (Measured a touch faster than a 12-bit table on real
+/// text, and 16x smaller, since the peek is already cheap with the buffered reader.)
+const DECODE_TABLE_BITS: u8 = 8;
+
 /// A canonical Huffman code over the 256 byte values.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct HuffmanCode {
     /// Code length in bits per byte; `0` means the byte does not appear in the
     /// model and must never be encoded with this code.
@@ -45,6 +55,23 @@ pub struct HuffmanCode {
     /// Symbols ordered by `(length, value)` — the canonical decode order.
     sorted: Vec<u8>,
     max_len: u8,
+    /// Lazily-built decode-acceleration table (see [`DECODE_TABLE_BITS`]). Derived from
+    /// `lengths`/`codes` on first decode and excluded from the code's size estimate, so
+    /// building it does not penalize codec selection; reset (rebuilt lazily) on clone.
+    decode_table: OnceLock<Box<[u16]>>,
+}
+
+impl Clone for HuffmanCode {
+    fn clone(&self) -> Self {
+        HuffmanCode {
+            lengths: self.lengths,
+            codes: self.codes,
+            count: self.count,
+            sorted: self.sorted.clone(),
+            max_len: self.max_len,
+            decode_table: OnceLock::new(),
+        }
+    }
 }
 
 impl HuffmanCode {
@@ -102,6 +129,7 @@ impl HuffmanCode {
             count,
             sorted,
             max_len,
+            decode_table: OnceLock::new(),
         }
     }
 
@@ -114,6 +142,10 @@ impl HuffmanCode {
     /// inline and are not reported).
     pub fn heap_size(&self, callback: &mut impl FnMut(usize, usize)) {
         callback(self.sorted.len(), self.sorted.capacity());
+        if let Some(table) = self.decode_table.get() {
+            let bytes = std::mem::size_of_val(&table[..]);
+            callback(bytes, bytes);
+        }
     }
 
     /// Encode `bytes`, appending the bits to `out`. Every byte must be present
@@ -135,11 +167,27 @@ impl HuffmanCode {
         }
     }
 
-    /// Decode a single symbol from `reader`. Standard canonical decode: read
-    /// bits MSB-first until the accumulated code falls within the range of codes
-    /// of the current length.
+    /// Decode a single symbol from `reader`.
+    ///
+    /// Fast path: peek `DECODE_TABLE_BITS` bits and look the symbol up directly — short
+    /// (frequent) codes resolve in O(1). Codes too long for the table fall back to the
+    /// canonical decode.
     #[inline]
     pub fn decode_one(&self, reader: &mut BitReader<'_>) -> u8 {
+        let table = self.decode_table.get_or_init(|| self.build_decode_table());
+        let entry = table[usize::cast_from(reader.peek(DECODE_TABLE_BITS))];
+        let len = u8::try_from(entry >> 8).expect("length byte");
+        if len > 0 {
+            reader.advance(len);
+            u8::try_from(entry & 0xFF).expect("symbol byte")
+        } else {
+            self.decode_one_canonical(reader)
+        }
+    }
+
+    /// Canonical decode: read bits MSB-first until the accumulated code falls within the range
+    /// of codes of the current length. Used for codes too long for the decode table.
+    fn decode_one_canonical(&self, reader: &mut BitReader<'_>) -> u8 {
         let mut code = 0u32;
         let mut first = 0u32;
         let mut index = 0u32;
@@ -156,6 +204,29 @@ impl HuffmanCode {
         // `max_len` bits; reaching here means the input was not produced by this
         // code.
         panic!("invalid Huffman bitstream")
+    }
+
+    /// Build the single-level decode table: for every symbol whose code fits in
+    /// `DECODE_TABLE_BITS`, fill all index entries whose top bits are that code with
+    /// `(length << 8) | symbol`. Entries for longer codes stay `0` (length 0 = "fall back").
+    fn build_decode_table(&self) -> Box<[u16]> {
+        let mut table = vec![0u16; 1usize << DECODE_TABLE_BITS];
+        for &b in &self.sorted {
+            let len = self.lengths[usize::from(b)];
+            if len == 0 || len > DECODE_TABLE_BITS {
+                continue;
+            }
+            // The code occupies the top `len` bits of the index; every index with those top
+            // bits decodes to this symbol.
+            let shift = DECODE_TABLE_BITS - len;
+            let start = usize::cast_from(self.codes[usize::from(b)]) << shift;
+            let end = start + (1usize << shift);
+            let entry = (u16::from(len) << 8) | u16::from(b);
+            for slot in &mut table[start..end] {
+                *slot = entry;
+            }
+        }
+        table.into_boxed_slice()
     }
 }
 
@@ -293,10 +364,17 @@ impl BitWriter {
 /// bits, which never happens for a well-formed stream decoded for its known
 /// length.
 #[derive(Debug)]
+/// Reads a byte buffer as an MSB-first bit stream, buffering bits in a 64-bit accumulator
+/// so a read/peek is register arithmetic rather than a per-bit slice access.
 pub struct BitReader<'a> {
     data: &'a [u8],
+    /// Next byte to load into `acc`.
     byte: usize,
-    bit: u32,
+    /// Bit accumulator, left-aligned: the next bit to read is bit 63, and the `valid` bits
+    /// below it. Bits below `valid` are always 0, so reads past the end return 0 padding.
+    acc: u64,
+    /// Number of valid bits currently in `acc` (counted from bit 63 downward).
+    valid: u32,
 }
 
 impl<'a> BitReader<'a> {
@@ -304,28 +382,62 @@ impl<'a> BitReader<'a> {
         BitReader {
             data,
             byte: 0,
-            bit: 0,
+            acc: 0,
+            valid: 0,
+        }
+    }
+
+    /// Load whole bytes into the top of `acc` until it holds more than 56 bits (so up to 8
+    /// more can't overflow) or the input is exhausted.
+    #[inline]
+    fn refill(&mut self) {
+        while self.valid <= 56 {
+            let Some(&b) = self.data.get(self.byte) else {
+                break;
+            };
+            self.acc |= u64::from(b) << (56 - self.valid);
+            self.valid += 8;
+            self.byte += 1;
         }
     }
 
     #[inline]
     pub fn read_bit(&mut self) -> u32 {
-        let value = match self.data.get(self.byte) {
-            Some(&b) => u32::from((b >> (7 - self.bit)) & 1),
-            None => 0,
-        };
-        self.bit += 1;
-        if self.bit == 8 {
-            self.bit = 0;
-            self.byte += 1;
+        if self.valid == 0 {
+            self.refill();
+            if self.valid == 0 {
+                return 0; // past the end: padding bit
+            }
         }
-        value
+        let bit = u32::try_from(self.acc >> 63).expect("single bit");
+        self.acc <<= 1;
+        self.valid -= 1;
+        bit
+    }
+
+    /// Peek the next `n` bits (`1 <= n <= 32`) MSB-first as an integer, without consuming.
+    /// Bits past the end of the input read as 0.
+    #[inline]
+    pub fn peek(&mut self, n: u8) -> u32 {
+        if self.valid < u32::from(n) {
+            self.refill();
+        }
+        u32::try_from(self.acc >> (64 - u32::from(n))).expect("n <= 32 bits")
+    }
+
+    /// Advance the read position by `n` bits (call after a `peek(n)`, or to skip end padding).
+    #[inline]
+    pub fn advance(&mut self, n: u8) {
+        self.acc <<= n;
+        self.valid = self.valid.saturating_sub(u32::from(n));
     }
 
     /// Number of whole bytes consumed so far, rounding up a partially-read byte.
     /// Used to advance past a byte-aligned bitstream embedded in a larger buffer.
     pub fn bytes_consumed(&self) -> usize {
-        self.byte + usize::from(self.bit > 0)
+        // Bits loaded into `acc` (`byte * 8`) minus those still buffered (`valid`).
+        let consumed_bits = self.byte * 8 - usize::cast_from(self.valid);
+        consumed_bits.div_ceil(8)
     }
 }
 
@@ -428,5 +540,27 @@ mod tests {
             HuffmanCode::from_frequencies(&freq).is_none(),
             "a code exceeding MAX_BITS must decline"
         );
+    }
+
+    #[mz_ore::test]
+    fn decode_table_matches_canonical() {
+        // The table fast path (with its short-code entries + long-code fallback) must decode
+        // identically to the canonical decoder. Use a skewed-but-long-tailed distribution so
+        // some codes exceed DECODE_TABLE_BITS and exercise the fallback.
+        let mut freq = [0u64; 256];
+        for (b, slot) in freq.iter_mut().enumerate() {
+            let rank = 256 - u64::cast_from(b);
+            *slot = 1 + rank * rank;
+        }
+        let code = HuffmanCode::from_frequencies(&freq).expect("code");
+        let data: Vec<u8> = (0..5000u32)
+            .map(|i| u8::try_from(i.wrapping_mul(2_654_435_761) >> 24).unwrap())
+            .collect();
+        let mut w = BitWriter::new();
+        code.encode(&data, &mut w);
+        let bits = w.finish();
+        let mut out = Vec::new();
+        code.decode_into(&mut BitReader::new(&bits), data.len(), &mut out);
+        assert_eq!(out, data, "table decode must match the input");
     }
 }
