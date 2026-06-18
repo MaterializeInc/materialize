@@ -848,6 +848,9 @@ fn binary_op_operand_reparenthesized_after_nested_stripped() {
         // Prefix `~` binds looser than `+`/`*`, so it needs parens as their operand.
         "SELECT (~ a) + b",
         "SELECT (~ a) * b",
+        // A prefix op is right-transparent: the quantified `= ANY` would bind into
+        // the `NOT` unless the whole left is parenthesized.
+        "SELECT (- NOT a IN (b)) = ANY (SELECT c FROM t)",
     ] {
         let mut ast = mz_sql_parser::parser::parse_statements(sql)
             .unwrap()

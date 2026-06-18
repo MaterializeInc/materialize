@@ -586,8 +586,19 @@ fn write_dot_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: 
 /// Parenthesize those; let normal infix `Op` use its existing precedence
 /// to print without parens.
 fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
+    // Peel right-transparent prefix operators (`- X`, `~ X`): an operator to the
+    // right binds into `X`, so a low-precedence `X` re-associates even through
+    // them — `- NOT a IN (b) = ANY (...)` reparses with `= ANY` pulled inside the
+    // `NOT`. Check the operand the quantified comparison would actually attach to.
+    let mut inner = expr;
+    while let Expr::Op {
+        expr1, expr2: None, ..
+    } = inner
+    {
+        inner = expr1.as_ref();
+    }
     let needs_parens = matches!(
-        expr,
+        inner,
         Expr::Like { .. }
             | Expr::Between { .. }
             | Expr::IsExpr { .. }
