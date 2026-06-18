@@ -15,15 +15,19 @@
 
 //! Concrete [`PagingPolicy`] implementations.
 //!
-//! Today: [`TieredPolicy`], a single process-wide byte budget for resident
+//! [`TieredPolicy`] is a single process-wide byte budget for resident
 //! columns. Resident columns can move between Timely workers, so the
 //! accounting cannot be thread-local; budget is held in a single
 //! [`AtomicUsize`] and credited back from whichever thread happens to drop
 //! the column.
+//!
+//! [`PoolPolicy`] routes every column into an [`mz_ore::pool::Pool`], which
+//! enforces its own resident-bytes budget by evicting cold chunks.
 
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use mz_ore::pager::Backend;
+use mz_ore::pool::Pool;
 
 use crate::column_pager::{Codec, PageDecision, PageEvent, PageHint, PagingPolicy};
 
@@ -174,6 +178,39 @@ impl PagingPolicy for TieredPolicy {
     }
 }
 
+/// Routes every non-empty column into a buffer [`Pool`].
+///
+/// The pool owns the budget: it evicts cold chunks into swap-backed extents
+/// when its resident bytes exceed its configured bound, so the policy never
+/// gates a decision on size. [`PagingPolicy::decide`] answers
+/// [`PageDecision::Pool`] for every non-empty hint and keeps empty columns
+/// resident; [`PagingPolicy::record`] is a no-op, since the column pager's
+/// metrics observers already count page traffic and the pool tracks its own
+/// residency in [`mz_ore::pool::PoolStats`].
+#[derive(Debug, Clone)]
+pub struct PoolPolicy {
+    pool: Pool,
+}
+
+impl PoolPolicy {
+    /// Constructs a policy backed by `pool`.
+    pub fn new(pool: Pool) -> Self {
+        Self { pool }
+    }
+}
+
+impl PagingPolicy for PoolPolicy {
+    fn decide(&self, hint: PageHint) -> PageDecision {
+        if hint.len_bytes == 0 {
+            PageDecision::Skip
+        } else {
+            PageDecision::Pool(self.pool.clone())
+        }
+    }
+
+    fn record(&self, _event: PageEvent) {}
+}
+
 /// Atomically subtracts `want` from `atomic` if at least `want` is available.
 /// Returns `true` on success.
 fn try_consume(atomic: &AtomicUsize, want: usize) -> bool {
@@ -182,16 +219,14 @@ fn try_consume(atomic: &AtomicUsize, want: usize) -> bool {
         if cur < want {
             return false;
         }
-        match atomic.compare_exchange_weak(cur, cur - want, Ordering::AcqRel, Ordering::Relaxed) {
+        // Relaxed: the budget is a pure counter; no memory is published or
+        // acquired through it.
+        match atomic.compare_exchange_weak(cur, cur - want, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => return true,
             Err(actual) => cur = actual,
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

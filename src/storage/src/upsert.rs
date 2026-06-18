@@ -298,35 +298,42 @@ upsert_source_time_unit!(GtidPartition, Lsn);
 
 /// Pager for the upsert-v2 source stash.
 ///
-/// This draws from the same process-wide [`TieredPolicy`] budget pool as the
-/// compute column-paged batcher — there is one budget and one underlying
-/// `mz_ore::pager` — but whether the stash *uses* it is gated by storage's own
+/// This draws from the process-wide shared spill mechanism — the buffer pool
+/// when compute's config installed pool mode, else the [`TieredPolicy`]
+/// budget — but whether the stash *uses* it is gated by storage's own
 /// `enable_upsert_paged_spill` flag, independently of compute's
-/// `enable_column_paged_batcher_spill`. The shared pool's budget / backend /
-/// codec are configured by compute's `apply_tiered_config` (storage and compute
-/// run in the same `clusterd` process).
+/// `enable_column_paged_batcher_spill`. The shared mechanism's budget,
+/// backend, and codec are configured by compute's config handler (storage
+/// and compute run in the same `clusterd` process); each `pager` call
+/// resolves against whichever mechanism the last config apply installed.
 ///
 /// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
 pub mod upsert_stash_pager {
-    use std::sync::{LazyLock, RwLock};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use mz_timely_util::column_pager::{ColumnPager, shared_pager};
 
-    /// Active pager handed to upsert source-stash batchers. Defaults to
-    /// disabled (every chunk resident) until [`set_enabled`] turns it on.
-    static PAGER: LazyLock<RwLock<ColumnPager>> =
-        LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
+    /// Whether the stash participates in the shared spill mechanism, applied
+    /// from storage configuration.
+    static ENABLED: AtomicBool = AtomicBool::new(false);
 
-    /// Enable or disable the stash's use of the shared column pager. When
-    /// enabled, the stash spills through the shared budget pool; when disabled
-    /// it keeps every chunk resident.
+    /// Enable or disable the stash's use of the shared spill mechanism. When
+    /// enabled, the stash spills through the shared budget; when disabled it
+    /// keeps every chunk resident. Takes effect for dataflows rendered after
+    /// the change; running dataflows keep the pager they captured.
     pub fn set_enabled(enabled: bool) {
-        *PAGER.write().expect("upsert stash pager poisoned") = shared_pager(enabled);
+        ENABLED.store(enabled, Ordering::Relaxed);
     }
 
-    /// The current upsert-stash pager. Cheap: clones the inner `Arc`.
+    /// The upsert-stash pager, resolved against the enable flag and the
+    /// process-wide shared mechanism (buffer pool vs tiered) at the moment of
+    /// the call. Callers capture the result at dataflow render and keep it
+    /// for the dataflow's lifetime, so resolution happens as late as
+    /// possible: a source rendered (or restarted) after a mechanism change
+    /// picks up the new mechanism, rather than the one in effect when
+    /// storage configuration last arrived.
     pub fn pager() -> ColumnPager {
-        PAGER.read().expect("upsert stash pager poisoned").clone()
+        shared_pager(ENABLED.load(Ordering::Relaxed))
     }
 }
 
