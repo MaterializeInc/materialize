@@ -1557,10 +1557,14 @@ mod dictionary {
         #[inline]
         pub fn to_row(&self) -> Row {
             if let Some(codec) = self.column_codec {
-                // `iter.data` is RowCodec-encoded; decode to raw row bytes.
-                let mut buf = Vec::new();
-                codec.decode_into(self.iter.data, &mut buf);
-                return unsafe { Row::from_bytes_unchecked(&buf) };
+                // `iter.data` is RowCodec-encoded; decode to raw row bytes in a reused
+                // per-thread scratch (the owned `Row` copies out of it), so the scan path
+                // doesn't allocate a throwaway decode buffer per row.
+                return DECODE_SCRATCH.with_borrow_mut(|buf| {
+                    buf.clear();
+                    codec.decode_into(self.iter.data, buf);
+                    unsafe { Row::from_bytes_unchecked(buf) }
+                });
             }
             // Fast path: unencoded data is already row-formatted bytes.
             if self.iter.index.is_none() {
@@ -1605,6 +1609,10 @@ mod dictionary {
         // negligible and not worth a shrink policy.
         static CMP_SCRATCH_A: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
         static CMP_SCRATCH_B: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        // Reused decode buffer for the read paths (`to_row` / `extend_datums`), so a
+        // column-codec scan doesn't allocate a fresh buffer per row. Distinct from the
+        // compare scratches above; decode and compare never hold it at the same time.
+        static DECODE_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     }
 
     impl<'a> Copy for DatumSeq<'a> {}
@@ -1753,9 +1761,14 @@ mod dictionary {
             // Column-codec-encoded: decode the record into the arena (as raw row
             // bytes), then read datums from there so they borrow the arena.
             if let Some(codec) = self.column_codec {
-                let mut buf = Vec::new();
-                codec.decode_into(self.iter.data, &mut buf);
-                let mut data: &'a [u8] = arena.push_bytes(buf);
+                // Decode into a reused per-thread scratch, then copy once into the arena (the
+                // datums must borrow stable arena storage). Avoids the per-row decode-buffer
+                // allocation the scan path previously paid.
+                let mut data: &'a [u8] = DECODE_SCRATCH.with_borrow_mut(|buf| {
+                    buf.clear();
+                    codec.decode_into(self.iter.data, buf);
+                    arena.push_bytes(buf.as_slice())
+                });
                 match max {
                     Some(max) => {
                         let mut n = 0;
