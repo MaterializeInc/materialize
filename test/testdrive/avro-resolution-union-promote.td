@@ -67,7 +67,7 @@ $ kafka-ingest format=avro topic=resolution-union-promote schema=${reader-union-
 
 #
 # The full numeric-promotion matrix for nullable (union) columns. A single
-# schema evolution widens one nullable column per `can_promote` pair, so one
+# schema evolution widens one nullable column per promotable pair, so one
 # source exercises every promotion (int->long/float/double, long->float/double,
 # float->double) through the Kafka + CSR source decode path. Records written
 # with the old (narrow) schema must promote to the new (wide) reader schema.

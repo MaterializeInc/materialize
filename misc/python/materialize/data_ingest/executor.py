@@ -150,16 +150,14 @@ def delivery_report(err: "KafkaError | None", msg: Any) -> None:
 
 # Avro base types that a narrower writer can be promoted *into* on read. An
 # `int` writer promotes to any of these, so it is a universal narrower writer
-# for a schema-evolution preamble. Kept in sync with `can_promote` in
-# `src/avro/src/schema.rs`.
+# for a schema-evolution preamble.
 _PROMOTABLE_TO_WIDER = {"long", "float", "double"}
 
 
 def _avro_value_type(field: Field) -> Any:
     # A nullable column is encoded as a `["null", T]` union rather than the bare
-    # type `T`. Decoding then goes through union schema resolution (numeric
-    # promotion, default substitution, ...), which exact-type-only matching used
-    # to get wrong (e.g. SS-277).
+    # type `T`, so decoding goes through union schema resolution (numeric
+    # promotion, default substitution, ...).
     base = str(field.data_type.name(Backend.AVRO)).lower()
     return ["null", base] if field.nullable else base
 
@@ -318,9 +316,9 @@ class KafkaExecutor(Executor):
         the source is created, so the source -- which fixes its reader schema to
         the latest (wider) registered version and reads the topic from the
         beginning -- must promote the writer's `int` union variant into the
-        wider reader variant. That is the union-resolution path SS-277 got
-        wrong; with writer and reader schemas otherwise identical it is never
-        exercised.
+        wider reader variant. This exercises union schema resolution with
+        numeric promotion, which a run with identical writer and reader schemas
+        never reaches.
         """
         value_fields = [f for f in self.fields if not f.is_key]
         key_fields = [f for f in self.fields if f.is_key]

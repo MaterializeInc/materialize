@@ -524,8 +524,8 @@ class KafkaSource(DBObject):
         ]
         # Sometimes evolve the schema before creating the source: write records
         # under a narrower (promotable) writer schema first, so the source must
-        # promote them through union schema resolution (regression cover for
-        # SS-277). See KafkaExecutor._write_promotion_preamble.
+        # promote them through union schema resolution. See
+        # KafkaExecutor._write_promotion_preamble.
         self.executor = KafkaExecutor(
             self.source_id,
             ports,

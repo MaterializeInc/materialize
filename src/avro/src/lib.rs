@@ -522,19 +522,14 @@ mod tests {
         assert_none!(reader.next());
     }
 
-    // Regression coverage for SS-277 (PR #37087): Avro numeric promotion across
-    // every `can_promote` pair and every union-resolution arm. Promotion
-    // previously worked only for concrete (non-nullable) columns; the union
-    // (nullable) arms ignored it and failed at decode time with "Failed to
-    // match writer union variant ... against any variant in the reader".
-    //
-    // For each promotable `(writer, reader)` pair we render the field both bare
-    // (`"int"`) and nullable (`["null", "int"]`) on each side. The four
-    // combinations exercise all three matchers added in `schema.rs`:
-    //   * bare     -> nullable : `match_ref_promote_writer` (concrete -> union)
-    //   * nullable -> bare     : `match_ref_promote_reader` (union -> concrete)
-    //   * nullable -> nullable : `match_promote_writer`     (union -> union)
-    //   * bare     -> bare     : the pre-existing concrete promotion path
+    // Avro numeric promotion across every promotable pair, with the field
+    // rendered both bare (`"int"`) and nullable (`["null", "int"]`) on each
+    // side. Promoting a nullable column means promoting inside the `["null",
+    // T]` union; that previously failed at decode time with "Failed to match
+    // writer union variant ... against any variant in the reader" because union
+    // variant matching ignored promotion. The four bare/nullable combinations
+    // cover concrete -> union, union -> concrete, union -> union, and the plain
+    // concrete -> concrete path.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_numeric_promotion_matrix() {
@@ -572,7 +567,7 @@ mod tests {
             }
         }
 
-        // Every pair `can_promote` (schema.rs) accepts. Kept in sync with it.
+        // Every promotable numeric pair (int/long/float/double widening).
         let pairs = [
             ("int", "long"),
             ("int", "float"),
@@ -610,6 +605,73 @@ mod tests {
                     assert_none!(reader.next());
                 }
             }
+        }
+    }
+
+    // Promotion-aware union matching must still *reject* changes that are not
+    // valid promotions; a too-permissive matcher would match a variant and then
+    // mis-decode or silently corrupt the value. Each case is a numeric
+    // narrowing (`double` -> `int`) or an incompatible change (`string` ->
+    // `int`), across the same bare/nullable combinations as the positive
+    // matrix, and must fail rather than produce a value.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
+    fn test_non_promotable_changes_are_rejected() {
+        fn record_with_field(ty: &str) -> Schema {
+            Schema::from_str(&format!(
+                r#"{{"type":"record","name":"test","fields":[{{"name":"f1","type":{ty}}}]}}"#
+            ))
+            .unwrap()
+        }
+        // (writer field type, writer value, reader field type).
+        let cases = [
+            // Numeric narrowing, exercising each union matcher's reject path.
+            (
+                r#"["null", "double"]"#,
+                Value::Double(1.0),
+                r#"["null", "int"]"#,
+            ), // union -> union
+            (r#""double""#, Value::Double(1.0), r#"["null", "int"]"#), // bare  -> union
+            (r#"["null", "double"]"#, Value::Double(1.0), r#""int""#), // union -> bare
+            (r#""double""#, Value::Double(1.0), r#""int""#),           // bare  -> bare
+            // Incompatible (non-numeric) change.
+            (
+                r#"["null", "string"]"#,
+                Value::String("x".to_string()),
+                r#"["null", "int"]"#,
+            ),
+            (r#""string""#, Value::String("x".to_string()), r#""int""#),
+        ];
+        for (writer_ty, writer_value, reader_ty) in cases {
+            let writer_schema = record_with_field(writer_ty);
+            let reader_schema = record_with_field(reader_ty);
+            let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+            let mut record = Record::new(writer_schema.top_node()).unwrap();
+            let field_value = if writer_ty.starts_with('[') {
+                Value::Union {
+                    index: 1,
+                    inner: Box::new(writer_value),
+                    n_variants: 2,
+                    null_variant: Some(0),
+                }
+            } else {
+                writer_value
+            };
+            record.put("f1", field_value);
+            writer.append(record).unwrap();
+            writer.flush().unwrap();
+            let input = writer.into_inner();
+
+            // Resolution may reject the pair up front, or decoding may error;
+            // either is acceptable, but it must never silently yield a value.
+            let produced_value = match Reader::with_schema(&reader_schema, &input[..]) {
+                Err(_) => false,
+                Ok(mut reader) => matches!(reader.next(), Some(Ok(_))),
+            };
+            assert!(
+                !produced_value,
+                "non-promotable change {writer_ty} -> {reader_ty} was not rejected",
+            );
         }
     }
 
