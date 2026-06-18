@@ -494,7 +494,7 @@ metrics:
   source: src/compute/src/memory_limiter.rs
   visibility: internal
 - name: mz_memory_limiter_memory_limit_bytes
-  help: The configured memory limit.
+  help: The configured memory limit. Zero if no limit is configured.
   source: src/compute/src/memory_limiter.rs
   visibility: internal
 - name: mz_memory_limiter_memory_usage_bytes
