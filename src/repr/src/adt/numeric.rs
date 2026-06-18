@@ -399,7 +399,12 @@ pub fn twos_complement_be_to_numeric(
 pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
     input: &mut [u8],
 ) -> Result<Decimal<N>, anyhow::Error> {
-    let is_neg = if (input[0] & 0x80) != 0 {
+    // An empty big-endian two's-complement run encodes the value 0 (Avro
+    // permits a zero-length `bytes`/`fixed` for a `decimal`, and such data
+    // arrives from external schema registries). Treat it as non-negative; the
+    // logic below then naturally yields 0 (`head == 0`, no chunks). Without this
+    // guard the `input[0]` sign check panics with an out-of-bounds index.
+    let is_neg = if !input.is_empty() && (input[0] & 0x80) != 0 {
         // byte-level negate all negative values, guaranteeing all bytes are
         // readable as unsigned.
         negate_twos_complement_le(input.iter_mut().rev());
@@ -467,6 +472,32 @@ fn test_twos_complement_roundtrip() {
     inner("-999999999999999999999999999999999999999");
     inner("-7.2e35");
     inner("-7.2e-35");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+fn test_twos_complement_empty_is_zero() {
+    // A zero-length two's-complement run encodes 0. This arrives from external
+    // Avro producers (an empty `bytes`/`fixed` decimal), so it must not panic on
+    // the `input[0]` sign check. Regression for the avro_decode_fuzzed_schema
+    // finding (numeric.rs out-of-bounds index on empty decimal input).
+    for scale in [0u8, 5, 38] {
+        let n = twos_complement_be_to_numeric(&mut [], scale)
+            .expect("empty two's-complement run decodes");
+        assert!(
+            n.is_zero(),
+            "empty run at scale {scale} should be zero, got {n}"
+        );
+    }
+    // Same through the generic inner at both widths used by the wrapper.
+    let zero_datum =
+        twos_complement_be_to_numeric_inner::<Numeric, NUMERIC_DATUM_WIDTH_USIZE>(&mut [])
+            .expect("empty run decodes at datum width");
+    assert!(zero_datum.is_zero());
+    let zero_agg =
+        twos_complement_be_to_numeric_inner::<NumericAgg, NUMERIC_AGG_WIDTH_USIZE>(&mut [])
+            .expect("empty run decodes at agg width");
+    assert!(zero_agg.is_zero());
 }
 
 #[mz_ore::test]
