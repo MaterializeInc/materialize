@@ -49,8 +49,8 @@ pub(super) fn validate_index_references(
             let index_sql = format!("{};", index);
             errors.push(ValidationError::with_file_sql_and_offset(
                 ValidationErrorKind::IndexReferenceMismatch {
-                    referenced: on.object,
-                    expected: main_ident.object.clone(),
+                    referenced: on.object.to_string(),
+                    expected: main_ident.object.to_string(),
                 },
                 fqn.path.clone(),
                 index_sql,
@@ -128,8 +128,8 @@ pub(super) fn validate_grant_references(
                                 if !grant_target.matches(main_ident) {
                                     errors.push(ValidationError::with_file_sql_and_offset(
                                         ValidationErrorKind::GrantReferenceMismatch {
-                                            referenced: grant_target.object,
-                                            expected: main_ident.object.clone(),
+                                            referenced: grant_target.object.to_string(),
+                                            expected: main_ident.object.to_string(),
                                         },
                                         fqn.path.clone(),
                                         grant_sql.clone(),
@@ -245,8 +245,8 @@ fn validate_comment_target(
     if !comment_target.matches(main_ident) {
         errors.push(ValidationError::with_file_sql_and_offset(
             ValidationErrorKind::CommentReferenceMismatch {
-                referenced: comment_target.object,
-                expected: main_ident.object.clone(),
+                referenced: comment_target.object.to_string(),
+                expected: main_ident.object.to_string(),
             },
             fqn.path.clone(),
             comment_sql.to_string(),
@@ -331,8 +331,8 @@ pub(super) fn validate_comment_references(
             if !column_parent.matches(main_ident) {
                 errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::ColumnCommentReferenceMismatch {
-                        referenced: column_parent.object,
-                        expected: main_ident.object.clone(),
+                        referenced: column_parent.object.to_string(),
+                        expected: main_ident.object.to_string(),
                     },
                     fqn.path.clone(),
                     comment_sql,

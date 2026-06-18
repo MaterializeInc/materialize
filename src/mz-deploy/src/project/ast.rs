@@ -29,9 +29,9 @@ use mz_sql_parser::ast::*;
 /// SQL statements where references may have different levels of qualification.
 #[derive(Debug)]
 pub struct DatabaseIdent {
-    pub database: Option<String>,
-    pub schema: Option<String>,
-    pub object: String,
+    pub database: Option<Ident>,
+    pub schema: Option<Ident>,
+    pub object: Ident,
 }
 
 impl From<UnresolvedItemName> for DatabaseIdent {
@@ -40,17 +40,17 @@ impl From<UnresolvedItemName> for DatabaseIdent {
             [object] => Self {
                 database: None,
                 schema: None,
-                object: object.to_string(),
+                object: object.clone(),
             },
             [schema, object] => Self {
                 database: None,
-                schema: Some(schema.to_string()),
-                object: object.to_string(),
+                schema: Some(schema.clone()),
+                object: object.clone(),
             },
             [database, schema, object] => Self {
-                database: Some(database.to_string()),
-                schema: Some(schema.to_string()),
-                object: object.to_string(),
+                database: Some(database.clone()),
+                schema: Some(schema.clone()),
+                object: object.clone(),
             },
             _ => unreachable!(),
         }
@@ -295,13 +295,13 @@ mod tests {
         let ident1 = DatabaseIdent {
             database: None,
             schema: None,
-            object: "table".to_string(),
+            object: Ident::new_unchecked("table"),
         };
 
         let ident2 = DatabaseIdent {
-            database: Some("db".to_string()),
-            schema: Some("public".to_string()),
-            object: "table".to_string(),
+            database: Some(Ident::new_unchecked("db")),
+            schema: Some(Ident::new_unchecked("public")),
+            object: Ident::new_unchecked("table"),
         };
 
         assert!(ident1.matches(&ident2));
@@ -309,8 +309,8 @@ mod tests {
         // Schema qualified
         let ident3 = DatabaseIdent {
             database: None,
-            schema: Some("public".to_string()),
-            object: "table".to_string(),
+            schema: Some(Ident::new_unchecked("public")),
+            object: Ident::new_unchecked("table"),
         };
 
         assert!(ident3.matches(&ident2));
@@ -318,8 +318,8 @@ mod tests {
         // Schema mismatch
         let ident4 = DatabaseIdent {
             database: None,
-            schema: Some("private".to_string()),
-            object: "table".to_string(),
+            schema: Some(Ident::new_unchecked("private")),
+            object: Ident::new_unchecked("table"),
         };
 
         assert!(!ident4.matches(&ident2));

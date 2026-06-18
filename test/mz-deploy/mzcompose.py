@@ -1289,6 +1289,58 @@ def workflow_system_deps(c: Composition, parser: WorkflowArgumentParser) -> None
         project_toml.write_text(original_toml)
 
 
+def workflow_reserved_words(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Reserved-word object names must work end to end.
+
+    Regression for the bug where an object whose name is a SQL reserved word
+    (e.g. `table`) was unusable:
+
+    - **Path matching** rejected `CREATE TABLE "table"` in `table.sql` with
+      `ObjectNameMismatch` (the statement's re-quoted `"table"` never matched
+      the unquoted file stem).
+    - A **declared external dependency** `db.schema."table"` never resolved,
+      because the quoted form didn't line up with the catalog's unquoted name.
+
+    Exercises both via `apply` (compiles the project — running path-matching on
+    `table.sql` — and creates the reserved-word table) and `lock` (resolves the
+    reserved-word external dependency against the catalog).
+    """
+    setup_base(c)
+
+    project_dir = PROJECTS_DIR / "reserved-words" / "v1"
+    types_lock = project_dir / "types.lock"
+    if types_lock.exists():
+        types_lock.unlink()
+
+    c.sql(
+        'CREATE TABLE materialize.public."select" (id int)',
+        user="mz_system",
+        port=6877,
+    )
+
+    with c.test_case("reserved-word-external-dependency-lock"):
+        result = run_mz_deploy(c, "reserved-words/v1", "lock")
+        assert result.returncode == 0, f"lock failed: {result.stderr}"
+        assert types_lock.exists(), f"expected {types_lock} to be created"
+        contents = types_lock.read_text()
+        assert (
+            "select" in contents
+        ), f"expected reserved-word dependency in types.lock; got:\n{contents}"
+
+    with c.test_case("reserved-word-object-apply"):
+        result = run_mz_deploy(c, "reserved-words/v1", "apply")
+        assert result.returncode == 0, f"apply failed: {result.stderr}"
+
+        rows = c.sql_query(
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "JOIN mz_databases db ON sc.database_id = db.id "
+            "WHERE t.name = 'table' AND sc.name = 'public' AND db.name = 'app'",
+            database="app",
+        )
+        assert len(rows) == 1, f"expected reserved-word table 'table', got {rows}"
+
+
 def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Exercise `apply` re-runs for CONNECTION objects.
 

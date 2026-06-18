@@ -139,7 +139,7 @@ impl From<compiled::Project> for Project {
                     let object_id = ObjectId::new(
                         typed_db.name.clone(),
                         typed_schema.name.clone(),
-                        typed_obj.stmt.ident().object.clone(),
+                        typed_obj.stmt.ident().object.as_str().to_string(),
                     );
                     defined_objects.insert(object_id);
                 }
@@ -178,7 +178,7 @@ impl From<compiled::Project> for Project {
                 let object_id = ObjectId::new(
                     task.db_name.clone(),
                     task.schema_name.clone(),
-                    task.typed_obj.stmt.ident().object.clone(),
+                    task.typed_obj.stmt.ident().object.as_str().to_string(),
                 );
 
                 let (dependencies, clusters) =

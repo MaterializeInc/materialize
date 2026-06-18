@@ -651,7 +651,7 @@ fn validate_replacement_schemas(
                         ValidationErrorKind::ReplacementSchemaNonMvObject {
                             database: db.name.clone(),
                             schema: schema.name.clone(),
-                            object_name: obj.stmt.ident().object.clone(),
+                            object_name: obj.stmt.ident().object.to_string(),
                             object_type: obj.stmt.kind(),
                         },
                         PathBuf::from(format!("{}/{}.sql", db.name, schema.name)),

@@ -244,10 +244,10 @@ pub(super) fn validate_ident(
     let ident = stmt.ident();
 
     // The object name in the statement must match the file name
-    if ident.object != fqn.object() {
+    if ident.object.as_str() != fqn.object() {
         errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::ObjectNameMismatch {
-                declared: ident.object.clone(),
+                declared: ident.object.to_string(),
                 expected: fqn.object().to_string(),
             },
             fqn.path.clone(),
@@ -257,11 +257,11 @@ pub(super) fn validate_ident(
 
     // If the statement includes a schema qualifier, validate it matches the path-derived schema
     if let Some(ref stmt_schema) = ident.schema
-        && stmt_schema != fqn.schema()
+        && stmt_schema.as_str() != fqn.schema()
     {
         errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::SchemaMismatch {
-                declared: stmt_schema.clone(),
+                declared: stmt_schema.to_string(),
                 expected: fqn.schema().to_string(),
             },
             fqn.path.clone(),
@@ -271,11 +271,11 @@ pub(super) fn validate_ident(
 
     // If the statement includes a database qualifier, validate it matches the path-derived database
     if let Some(ref stmt_database) = ident.database
-        && stmt_database != fqn.database()
+        && stmt_database.as_str() != fqn.database()
     {
         errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::DatabaseMismatch {
-                declared: stmt_database.clone(),
+                declared: stmt_database.to_string(),
                 expected: fqn.database().to_string(),
             },
             fqn.path.clone(),
