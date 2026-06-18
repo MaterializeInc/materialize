@@ -318,14 +318,17 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
             + 'static,
     {
         let mut datums = DatumVec::new();
+        // Reused across invocations: cleared per row rather than reallocated, so the arena's
+        // allocation spine persists. Declared before the borrow so it outlives any datums that
+        // decode into it.
+        let mut temp_storage = RowArena::new();
         let logic = move |k: DatumSeq,
                           v: DatumSeq,
                           t,
                           d,
                           ok_session: &mut Session<T, DCB>,
                           err_session: &mut Session<T, ECB<T>>| {
-            // Declared before the borrow so it outlives any datums that decode into it.
-            let temp_storage = RowArena::new();
+            temp_storage.clear();
             let mut datums_borrow = datums.borrow();
             k.extend_datums(&temp_storage, &mut datums_borrow, Some(max_demand));
             let max_demand = max_demand.saturating_sub(datums_borrow.len());
@@ -379,9 +382,12 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
             + 'static,
     {
         let mut datums = DatumVec::new();
+        // Reused across invocations: cleared per row rather than reallocated, so the arena's
+        // allocation spine persists. Declared before the borrow so it outlives any datums that
+        // decode into it.
+        let mut temp_storage = RowArena::new();
         let logic = move |k: DatumSeq, v: DatumSeq, t, d, ok_session: &mut Session<T, DCB>| {
-            // Declared before the borrow so it outlives any datums that decode into it.
-            let temp_storage = RowArena::new();
+            temp_storage.clear();
             let mut datums_borrow = datums.borrow();
             k.extend_datums(&temp_storage, &mut datums_borrow, Some(max_demand));
             let max_demand = max_demand.saturating_sub(datums_borrow.len());
