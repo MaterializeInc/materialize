@@ -220,24 +220,26 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
             Expr::Not { expr } => {
                 f.write_str("NOT ");
-                f.write_node(expr);
+                // `NOT` binds tighter than `AND`/`OR`, so a looser operand
+                // (`NOT (a OR b)`) must keep its parens once `Nested` is stripped.
+                write_binary_operand(f, expr, expr_precedence(expr) < prec::NOT);
             }
             Expr::And { left, right } => {
-                f.write_node(left);
+                write_binary_operand(f, left, expr_precedence(left) < prec::AND);
                 f.write_str(" AND ");
-                f.write_node(right);
+                write_binary_operand(f, right, expr_precedence(right) <= prec::AND);
             }
             Expr::Or { left, right } => {
-                f.write_node(left);
+                write_binary_operand(f, left, expr_precedence(left) < prec::OR);
                 f.write_str(" OR ");
-                f.write_node(right);
+                write_binary_operand(f, right, expr_precedence(right) <= prec::OR);
             }
             Expr::IsExpr {
                 expr,
                 negated,
                 construct,
             } => {
-                f.write_node(&expr);
+                write_binary_operand(f, expr, expr_precedence(expr) < prec::IS);
                 f.write_str(" IS ");
                 if *negated {
                     f.write_str("NOT ");
@@ -249,7 +251,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 list,
                 negated,
             } => {
-                f.write_node(&expr);
+                write_binary_operand(f, expr, expr_precedence(expr) < prec::LIKE);
                 f.write_str(" ");
                 if *negated {
                     f.write_str("NOT ");
@@ -263,7 +265,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 subquery,
                 negated,
             } => {
-                f.write_node(&expr);
+                write_binary_operand(f, expr, expr_precedence(expr) < prec::LIKE);
                 f.write_str(" ");
                 if *negated {
                     f.write_str("NOT ");
@@ -279,7 +281,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 case_insensitive,
                 negated,
             } => {
-                f.write_node(&expr);
+                write_binary_operand(f, expr, expr_precedence(expr) < prec::LIKE);
                 f.write_str(" ");
                 if *negated {
                     f.write_str("NOT ");
@@ -288,10 +290,15 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     f.write_str("I");
                 }
                 f.write_str("LIKE ");
-                f.write_node(&pattern);
+                // The pattern and escape parse at `Like` precedence and sit to
+                // the right of the keyword, so an operand binding at or below
+                // `Like` (e.g. an `IN`/`LIKE`/`BETWEEN` at equal precedence)
+                // re-associates unless parenthesized — `a LIKE b IN (q)` parses
+                // as `(a LIKE b) IN (q)`.
+                write_binary_operand(f, pattern, expr_precedence(pattern) <= prec::LIKE);
                 if let Some(escape) = escape {
                     f.write_str(" ESCAPE ");
-                    f.write_node(escape);
+                    write_binary_operand(f, escape, expr_precedence(escape) <= prec::LIKE);
                 }
             }
             Expr::Between {
@@ -311,11 +318,20 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
             }
             Expr::Op { op, expr1, expr2 } => {
                 if let Some(expr2) = expr2 {
-                    f.write_node(&expr1);
+                    // Binary operators are left-associative, so an operand that
+                    // binds *looser* than this operator re-associates on reparse
+                    // unless parenthesized: the left operand needs parens when it
+                    // binds strictly looser, the right operand also at equal
+                    // precedence (`a - (b - c)` must keep its parens). The parser
+                    // wraps such operands in `Expr::Nested` (which ranks `ATOM`,
+                    // so it never re-parenthesizes), so parser-produced ASTs are
+                    // unchanged; this re-adds parens for ASTs that lost them.
+                    let p = binary_op_precedence(op);
+                    write_binary_operand(f, expr1, expr_precedence(expr1) < p);
                     f.write_str(" ");
                     f.write_str(op);
                     f.write_str(" ");
-                    f.write_node(&expr2);
+                    write_binary_operand(f, expr2, expr_precedence(expr2) <= p);
                 } else {
                     f.write_str(op);
                     f.write_str(" ");
@@ -633,6 +649,99 @@ fn write_between_bound<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, bound
         f.write_str(")");
     } else {
         f.write_node(bound);
+    }
+}
+
+/// Output-precedence ranks, ordered like `Parser::get_next_precedence` /
+/// `Parser::Precedence` (higher binds tighter). They classify the *top* operator
+/// an expr prints with, so the binary-operator printer can parenthesize an
+/// operand that would otherwise re-associate on reparse. Keep in sync with the
+/// parser. `ATOM` covers the self-delimiting primaries — they never need parens.
+mod prec {
+    pub const OR: u8 = 1;
+    pub const AND: u8 = 2;
+    pub const NOT: u8 = 3;
+    pub const IS: u8 = 4;
+    pub const CMP: u8 = 5;
+    pub const LIKE: u8 = 6;
+    pub const OTHER: u8 = 7;
+    pub const PLUS_MINUS: u8 = 8;
+    pub const MULTIPLY_DIVIDE: u8 = 9;
+    pub const COLLATE: u8 = 10;
+    pub const PREFIX: u8 = 11;
+    pub const POSTFIX: u8 = 12;
+    pub const ATOM: u8 = 13;
+}
+
+/// The precedence of a binary operator, mirroring `Parser::get_next_precedence`.
+/// A namespaced `OPERATOR(...)` binds at `OTHER`, like the parser.
+fn binary_op_precedence(op: &Op) -> u8 {
+    if op.namespace.is_some() {
+        return prec::OTHER;
+    }
+    match op.op.as_str() {
+        "=" | "<" | "<=" | "<>" | "!=" | ">" | ">=" => prec::CMP,
+        "+" | "-" => prec::PLUS_MINUS,
+        "*" | "/" | "%" => prec::MULTIPLY_DIVIDE,
+        _ => prec::OTHER,
+    }
+}
+
+/// The precedence at which `expr`, printed bare, would re-parse — i.e. the
+/// precedence of its top-level operator. Used to decide whether a binary
+/// operator must parenthesize an operand. Self-delimiting primaries (and any
+/// variant not listed) are `ATOM` (highest), so they are never parenthesized.
+fn expr_precedence<T: AstInfo>(expr: &Expr<T>) -> u8 {
+    match expr {
+        Expr::Or { .. } => prec::OR,
+        Expr::And { .. } => prec::AND,
+        Expr::Not { .. } => prec::NOT,
+        Expr::IsExpr { .. } => prec::IS,
+        Expr::AnyExpr { .. }
+        | Expr::AllExpr { .. }
+        | Expr::AnySubquery { .. }
+        | Expr::AllSubquery { .. } => prec::CMP,
+        Expr::Like { .. }
+        | Expr::Between { .. }
+        | Expr::InList { .. }
+        | Expr::InSubquery { .. } => prec::LIKE,
+        Expr::Op {
+            op, expr2: Some(_), ..
+        } => binary_op_precedence(op),
+        // Prefix `-`/`+` bind tightly (`PrefixPlusMinus`, looser only than the
+        // `::`/`[…]` postfixes). Prefix `~` instead parses its operand at
+        // `Other`, so it binds *looser* than `+`/`-`/`*` and must be
+        // parenthesized as their operand (`(~ a) + b`, not `~ a + b`).
+        Expr::Op {
+            op, expr2: None, ..
+        } => {
+            if op.namespace.is_none() && (op.op == "-" || op.op == "+") {
+                prec::PREFIX
+            } else {
+                prec::OTHER
+            }
+        }
+        Expr::Collate { .. } => prec::COLLATE,
+        Expr::Cast { .. }
+        | Expr::Subscript { .. }
+        | Expr::FieldAccess { .. }
+        | Expr::WildcardAccess(_) => prec::POSTFIX,
+        _ => prec::ATOM,
+    }
+}
+
+/// Write `operand` for a binary operator, parenthesizing it iff `needs_parens`.
+fn write_binary_operand<W: fmt::Write, T: AstInfo>(
+    f: &mut AstFormatter<W>,
+    operand: &Expr<T>,
+    needs_parens: bool,
+) {
+    if needs_parens {
+        f.write_str("(");
+        f.write_node(operand);
+        f.write_str(")");
+    } else {
+        f.write_node(operand);
     }
 }
 
