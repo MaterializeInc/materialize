@@ -964,6 +964,10 @@ async fn purify_create_source(
             // point-in-time-recovery that will put the source into an error state.
             let timeline_id = mz_postgres_util::get_timeline_id(&client).await?;
 
+            // Record whether the upstream server is a physical replica, which changes how we can determine
+            // the latest LSN.
+            let is_physical_replica = Some(mz_postgres_util::get_is_in_recovery(&client).await?);
+
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
             let details = PostgresSourcePublicationDetails {
@@ -973,6 +977,7 @@ async fn purify_create_source(
                 ),
                 timeline_id: Some(timeline_id),
                 database: connection.database,
+                is_physical_replica,
             };
             options.push(PgConfigOption {
                 name: PgConfigOptionName::Details,
