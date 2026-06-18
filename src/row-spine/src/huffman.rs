@@ -50,8 +50,10 @@ pub struct HuffmanCode {
 impl HuffmanCode {
     /// Build a code from per-byte frequencies.
     ///
-    /// Returns `None` when fewer than two distinct bytes appear (nothing to
-    /// compress) or when the optimal code would exceed [`MAX_BITS`].
+    /// Returns `None` only when no byte appears (empty input) or when the optimal code would
+    /// exceed [`MAX_BITS`]. A single distinct byte still yields a code (1 bit per byte), so the
+    /// stream has positive length per symbol; callers that find that unprofitable compare its
+    /// estimated cost against the alternatives rather than relying on `None` here.
     pub fn from_frequencies(freq: &[u64; 256]) -> Option<HuffmanCode> {
         let lengths = code_lengths(freq)?;
         Some(Self::from_lengths(lengths))
@@ -406,5 +408,25 @@ mod tests {
             })
             .collect();
         round_trip(&data);
+    }
+
+    #[mz_ore::test]
+    fn declines_when_optimal_code_exceeds_max_bits() {
+        // Fibonacci frequencies force a maximally unbalanced ("caterpillar") tree whose
+        // longest codeword length grows with the symbol count. With enough symbols it
+        // exceeds MAX_BITS, and `from_frequencies` must decline rather than build a code
+        // longer than the decoder supports.
+        let mut freq = [0u64; 256];
+        let (mut a, mut b) = (1u64, 1u64);
+        for slot in freq.iter_mut().take(MAX_BITS + 6) {
+            *slot = a;
+            let next = a + b;
+            a = b;
+            b = next;
+        }
+        assert!(
+            HuffmanCode::from_frequencies(&freq).is_none(),
+            "a code exceeding MAX_BITS must decline"
+        );
     }
 }

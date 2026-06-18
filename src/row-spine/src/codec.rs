@@ -296,6 +296,10 @@ impl ColumnStats {
                 if distinct.len() >= DICT_MAX_CARDINALITY {
                     self.distinct = None;
                 } else {
+                    // Codes are assigned in first-seen (insertion) order, NOT sorted order.
+                    // Decode is a table lookup so order is irrelevant to correctness, but it
+                    // means dictionary codes are not order-preserving — a comparison fast path
+                    // could not compare codes directly without sorting the table first.
                     let code = u32::try_from(distinct.len()).expect("cardinality bounded");
                     distinct.insert(bytes.into(), code);
                 }
@@ -385,6 +389,9 @@ impl ColumnStats {
             }
         }
 
+        // Every arm updates `best_bytes` for symmetry, so the last candidate's update (the
+        // Dictionary arm above) is never read. Acknowledge it rather than special-casing the
+        // final arm, which would break if another candidate is appended later.
         let _ = best_bytes;
         best
     }
@@ -400,6 +407,12 @@ fn byte_width(max: u64) -> u8 {
 #[derive(Clone, Debug, Default)]
 pub struct RowStats {
     columns: Vec<ColumnStats>,
+    /// Arity of the first observed row. A [`RowCodec`] models a fixed number of
+    /// columns and `decode_into` walks all of them, so rows of differing arity
+    /// cannot share one codec.
+    arity: Option<usize>,
+    /// Set once any observed row's arity differs from [`RowStats::arity`].
+    mixed_arity: bool,
 }
 
 impl RowStats {
@@ -408,19 +421,32 @@ impl RowStats {
     where
         I: IntoIterator<Item = &'a [u8]>,
     {
+        let mut count = 0;
         for (index, bytes) in columns.into_iter().enumerate() {
             if self.columns.len() <= index {
                 self.columns.push(ColumnStats::default());
             }
             self.columns[index].observe(bytes);
+            count = index + 1;
+        }
+        // Track arity consistency. An empty (arity-0) row is a real arity signal here,
+        // not something to skip: a codec built from non-empty rows would walk its columns
+        // off the end of an empty record at decode time.
+        match self.arity {
+            None => self.arity = Some(count),
+            Some(arity) if arity != count => self.mixed_arity = true,
+            Some(_) => {}
         }
     }
 
-    /// Build a per-column codec, or `None` if no columns were observed or the
-    /// best choice for every column is `Raw` (nothing to gain — store rows raw
-    /// and skip the codec entirely).
+    /// Build a per-column codec, or `None` if no columns were observed, the
+    /// observed rows have differing arity, or the best choice for every column
+    /// is `Raw` (nothing to gain — store rows raw and skip the codec entirely).
     pub fn build(&self) -> Option<RowCodec> {
-        if self.columns.is_empty() {
+        // Decline on mixed arity: `decode_into` walks every modeled column, so a row whose
+        // arity differs from the codec's would read past its record — a panic or silent
+        // corruption in release. A uniform-arity container (the common case) is unaffected.
+        if self.columns.is_empty() || self.mixed_arity {
             return None;
         }
         let columns: Vec<ColumnCodec> = self.columns.iter().map(ColumnStats::choose).collect();
@@ -587,6 +613,98 @@ mod tests {
         assert!(
             stats.build().is_none(),
             "expected no codec for tiny raw column"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn mixed_arity_returns_none() {
+        // Rows of differing arity can't share a codec (decode walks a fixed column
+        // count), so the builder must decline rather than risk reading off the end.
+        let wide = Row::pack_slice(&[Datum::Int64(1), Datum::String("x")]);
+        let narrow = Row::pack_slice(&[Datum::Int64(2)]);
+        let mut stats = RowStats::default();
+        stats.observe(wide.iter_bytes());
+        stats.observe(narrow.iter_bytes());
+        assert!(stats.build().is_none(), "mixed arity must decline");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn empty_row_is_an_arity_signal() {
+        // An empty (arity-0) row among otherwise-compressible rows is a mixed-arity
+        // signal, not something to skip: a codec built without it would later walk an
+        // empty record's columns off the end.
+        let full: Vec<Row> = (0..500i64)
+            .map(|i| Row::pack_slice(&[Datum::Int64(i % 7), Datum::String("constant")]))
+            .collect();
+        let empty = Row::default();
+        let mut stats = RowStats::default();
+        for row in &full {
+            stats.observe(row.iter_bytes());
+        }
+        stats.observe(empty.iter_bytes());
+        assert!(
+            stats.build().is_none(),
+            "empty row among non-empty rows must decline"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn huffman_selected_for_skewed_high_cardinality() {
+        // Long, heavily-skewed, all-distinct values, more than DICT_MAX_CARDINALITY of
+        // them: Dictionary is disqualified by cardinality, FoR by variable length, and
+        // Huffman's per-byte savings beat Raw -- so the selector lands on Huffman. This
+        // is the only test that drives the Huffman arm through `RowCodec` end to end.
+        let prefix = "a".repeat(40);
+        let values: Vec<String> = (0..DICT_MAX_CARDINALITY + 2000)
+            .map(|i| format!("{prefix}{i}"))
+            .collect();
+        let rows: Vec<Row> = values
+            .iter()
+            .map(|s| Row::pack_slice(&[Datum::String(s)]))
+            .collect();
+        let mut stats = RowStats::default();
+        for row in &rows {
+            stats.observe(row.iter_bytes());
+        }
+        let codec = stats.build().expect("a codec is chosen");
+        assert!(
+            matches!(codec.columns[0], ColumnCodec::Huffman(_)),
+            "expected Huffman, got {:?}",
+            codec.columns[0]
+        );
+        // Spot-check the Huffman round-trip on a sample (a full sweep is needlessly slow).
+        for row in rows.iter().step_by(4096) {
+            let mut buf = Vec::new();
+            codec.encode(row.iter_bytes(), &mut buf);
+            let mut out = Vec::new();
+            codec.decode_into(&buf, &mut out);
+            let expected: Vec<u8> = row.iter_bytes().flatten().copied().collect();
+            assert_eq!(out, expected, "Huffman row did not round-trip");
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn dictionary_cardinality_boundary() {
+        // The distinct-value table is retained at exactly DICT_MAX_CARDINALITY entries
+        // (codes still fit two bytes) and dropped the instant a further distinct value
+        // arrives, disqualifying Dictionary.
+        let mut at_cap = ColumnStats::default();
+        for i in 0..u64::try_from(DICT_MAX_CARDINALITY).unwrap() {
+            at_cap.observe(&i.to_be_bytes());
+        }
+        let distinct = at_cap.distinct.as_ref().expect("retained at the cap");
+        assert_eq!(distinct.len(), DICT_MAX_CARDINALITY);
+        assert_eq!(byte_width(u64::try_from(distinct.len() - 1).unwrap()), 2);
+
+        let mut over_cap = at_cap.clone();
+        over_cap.observe(&u64::MAX.to_be_bytes());
+        assert!(
+            over_cap.distinct.is_none(),
+            "one past the cap disqualifies Dictionary"
         );
     }
 }

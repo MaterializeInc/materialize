@@ -229,6 +229,51 @@ mod tests {
         }
     }
 
+    /// Pushing column-codec-encoded items from one container into another (as a
+    /// merge does) must route through the `item.column_codec.is_some()` branch:
+    /// decode the encoded item, then re-encode it under the target's codec.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts unsupported under miri
+    fn column_codec_merge_reencode() {
+        let rows: Vec<Row> = (0..300i64)
+            .map(|i| {
+                Row::pack_slice(&[
+                    Datum::Int64(i % 17),
+                    Datum::String("a repeated string value"),
+                    Datum::Int32(i32::try_from(i % 5).unwrap()),
+                ])
+            })
+            .collect();
+
+        let build_codec = || {
+            let mut stats = RowStats::default();
+            for row in &rows {
+                stats.observe(DatumSeq::borrow_as(row).bytes_iter());
+            }
+            stats.build().expect("a codec is chosen")
+        };
+
+        // Source container, codec-encoded.
+        let mut source = DatumContainer::with_capacity(rows.len());
+        source.install_column_codec(build_codec());
+        for row in &rows {
+            source.push_into(row);
+        }
+
+        // Merge target, also codec-encoded: pushing the source's already-encoded items
+        // must decode-then-re-encode them (the merge path), not copy raw bytes.
+        let mut merged = DatumContainer::with_capacity(rows.len());
+        merged.install_column_codec(build_codec());
+        for i in 0..source.len() {
+            merged.push_into(source.index(i));
+        }
+
+        assert_eq!(merged.len(), rows.len());
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(&merged.index(i).to_row(), row, "merged row {i} round-trips");
+        }
+    }
+
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported
     fn test_round_trip() {
@@ -889,9 +934,10 @@ mod dictionary {
             }
             let mut stats = crate::codec::RowStats::default();
             for row in rows {
-                if !row.is_empty() {
-                    stats.observe(DatumSeq::borrow_as(row).bytes_iter());
-                }
+                // Observe every row, including empty ones: `RowStats` uses arity (an empty
+                // row is arity 0) to decline building a codec for a mixed-arity container,
+                // which would otherwise decode short records off the end.
+                stats.observe(DatumSeq::borrow_as(row).bytes_iter());
             }
             stats.build()
         }
@@ -1554,6 +1600,9 @@ mod dictionary {
     thread_local! {
         // Reusable per-thread decode buffers for comparing column-codec-encoded
         // items. Two, so a comparison can hold both operands decoded at once.
+        // These retain the capacity of the largest row the thread has compared and
+        // never shrink; the high-water mark is one row's decoded bytes, so this is
+        // negligible and not worth a shrink policy.
         static CMP_SCRATCH_A: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
         static CMP_SCRATCH_B: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     }
