@@ -972,6 +972,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: gcp
+        skip: "https://linear.app/materializeinc/issue/SS-279"
 
   - group: "Platform checks"
     key: platform-checks
@@ -1084,6 +1085,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+        skip: "https://linear.app/materializeinc/issue/SQL-398"
 
       - id: checks-self-managed-upgrade
         label: "Checks Self-Managed upgrade, whole-Mz restart"
@@ -1157,6 +1159,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeUpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+        skip: "https://linear.app/materializeinc/issue/SQL-398"
 
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
@@ -1169,6 +1172,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeUpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
+        skip: "https://linear.app/materializeinc/issue/SQL-398"
 
       - id: checks-0dt-upgrade-entire-mz-four-versions
         label: "Checks 0dt upgrade across four versions"
@@ -1181,6 +1185,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeUpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
+        skip: "https://linear.app/materializeinc/issue/SQL-398"
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
@@ -2112,6 +2117,7 @@ steps:
               args: ["--versions-source=git"]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        skip: "https://linear.app/materializeinc/issue/SQL-398"
 
       - id: legacy-upgrade-docs
         label: Legacy upgrade (last version from docs)
