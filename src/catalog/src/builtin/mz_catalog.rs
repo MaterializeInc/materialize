@@ -2361,7 +2361,7 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::ne
             ),
             (
                 "availability_zone",
-                "The availability zone in which the cluster is running.",
+                "The availability zones the replica is provisioned in, comma-separated. `NULL` if nothing constrains the replica's placement.",
             ),
             (
                 "owner_id",
@@ -2373,14 +2373,13 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::ne
         // `{"Managed": {...}}`. For replicas with an unmanaged location all
         // orchestrator-facing fields (size, availability_zone, disk) are NULL.
         //
-        // `availability_zone` reconstructs the historical column meaning from
-        // the durable `Managed` location, which stores an `availability_zones`
-        // list rather than a single zone. For a managed cluster that list is the
-        // provisioned AZ pool. For an unmanaged cluster it is the user's single
-        // `AVAILABILITY ZONE` pin as a 0- or 1-element list. The public column
-        // has only ever surfaced the latter, so we join the owning cluster to
-        // learn its managed-ness and take element 0 of the list only when the
-        // cluster is unmanaged, NULL otherwise.
+        // `availability_zone` surfaces the durable `Managed` location's
+        // `availability_zones` list as a comma-separated string in stored
+        // order. For a managed cluster that is the provisioned AVAILABILITY
+        // ZONES pool. For an unmanaged cluster it is the single AVAILABILITY
+        // ZONE pin. An empty list (nothing constrains placement) maps to NULL,
+        // matching the list-to-NULL normalization the `mz_clusters`
+        // `availability_zones` column uses.
         //
         // `disk` mirrors `cluster_replica_size_has_disk`, joining
         // `mz_cluster_replica_size_internal` for both `swap_enabled` and
@@ -2407,8 +2406,12 @@ SELECT
     mz_internal.parse_catalog_id(data->'value'->'cluster_id') AS cluster_id,
     data->'value'->'config'->'location'->'Managed'->>'size' AS size,
     CASE
-        WHEN NOT COALESCE(owning_cluster.managed, false) THEN
-            data->'value'->'config'->'location'->'Managed'->'availability_zones'->>0
+        WHEN jsonb_array_length(data->'value'->'config'->'location'->'Managed'->'availability_zones') > 0 THEN
+            (
+                SELECT pg_catalog.string_agg(az.value, ',' ORDER BY az.ord)
+                FROM jsonb_array_elements_text(data->'value'->'config'->'location'->'Managed'->'availability_zones')
+                     WITH ORDINALITY AS az(value, ord)
+            )
     END AS availability_zone,
     mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
     CASE
@@ -2420,14 +2423,7 @@ FROM (
     SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica'
 ) raw
 LEFT JOIN mz_internal.mz_cluster_replica_size_internal internal
-    ON internal.size = data->'value'->'config'->'location'->'Managed'->>'size'
-LEFT JOIN (
-    SELECT
-        data->'key'->'id' AS id,
-        jsonb_typeof(data->'value'->'config'->'variant') = 'object' AS managed
-    FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'Cluster'
-) owning_cluster
-    ON owning_cluster.id = data->'value'->'cluster_id'",
+    ON internal.size = data->'value'->'config'->'location'->'Managed'->>'size'",
         is_retained_metrics_object: true,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {

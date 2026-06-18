@@ -18,8 +18,8 @@
   WHERE c.name = 'c_unmanaged_az'
 r1 us-east-1b
 
-> SELECT r.name, r.availability_zone IS NULL
+> SELECT r.name, r.availability_zone
   FROM mz_cluster_replicas r
   JOIN mz_clusters c ON r.cluster_id = c.id
   WHERE c.name = 'c_managed_az'
-r1 true
+r1 us-east-1a,us-east-1c

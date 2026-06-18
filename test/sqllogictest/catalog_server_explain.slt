@@ -4013,26 +4013,83 @@ mz_catalog.mz_cluster_replicas:
       →Differential Join %1:mz_cluster_replica_size_internal[#0{size}] » %0:l0[(((((#0{data} -> "value") -> "config") -> "location") -> "Managed") ->> "size")]
         →Arranged l0
         →Arranged mz_internal.mz_cluster_replica_size_internal
+    cte l2 =
+      →Map/Filter/Project
+        Project: #0..=#3, #5..=#7
+        Map: parse_catalog_id(((#0{data} -> "key") -> "id")), (#0{data} -> "value"), (#4 ->> "name"), parse_catalog_id((#4 -> "cluster_id")), ((((#4 -> "config") -> "location") -> "Managed") ->> "size")
+          →Union
+            →Map/Filter/Project
+              Project: #0..=#2
+              Map: null, null
+                →Consolidating Union
+                  →Negate Diffs
+                    →Differential Join %1[#0] » %0:l0[(((((#0{data} -> "value") -> "config") -> "location") -> "Managed") ->> "size")]
+                      →Arranged l0
+                      →Distinct GroupAggregate
+                        →Fused with Child Map/Filter/Project
+                          Project: #1
+                            →Read l1
+                  →Read mz_internal.mz_catalog_raw
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2, #3
+                →Read l1
+    cte l3 =
+      →Fused with Child Map/Filter/Project
+        Filter: (jsonb_array_length((((((#0{data} -> "value") -> "config") -> "location") -> "Managed") -> "availability_zones")) > 0)
+          →Read l2
+    cte l4 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #0
+            →Read l3
+    cte l5 =
+      →Non-incremental GroupAggregate
+        Aggregation: string_agg[order_by=[#0 asc nulls_last]](row(row(#1{value}, ","), #2{ord}))
+        Key:
+          Project: #0
+        →Table Function jsonb_array_elements_text[with_ordinality]((((((#0{data} -> "value") -> "config") -> "location") -> "Managed") -> "availability_zones"))
+          →Arranged l4
+    cte l6 =
+      →Union
+        →Unarranged Raw Stream
+          →Arranged l5
+        →Map/Filter/Project
+          Project: #0, #1
+          Map: null
+            →Consolidating Union
+              →Negate Diffs
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Arranged l5
+                      Key: (#0)
+              →Unarranged Raw Stream
+                →Arranged l4
   →Return
     →Map/Filter/Project
-      Project: #3, #5, #6, #9..=#12
-      Map: parse_catalog_id(((#0{data} -> "key") -> "id")), (#0{data} -> "value"), (#4 ->> "name"), parse_catalog_id((#4 -> "cluster_id")), ((#4 -> "config") -> "location"), (#7 -> "Managed"), (#8 ->> "size"), (#8 ->> "availability_zone"), parse_catalog_id((#4 -> "owner_id")), case when (#7 ? "Managed") then (NOT(coalesce(#1{swap_enabled}, false)) AND (0 != coalesce(uint8_to_numeric(#2{disk_bytes}), 0))) else null end
+      Project: #3..=#7, #9, #10
+      Map: (#0{data} -> "value"), parse_catalog_id((#8 -> "owner_id")), case when (((#8 -> "config") -> "location") ? "Managed") then (NOT(coalesce(#1{swap_enabled}, false)) AND (0 != coalesce(uint8_to_numeric(#2{disk_bytes}), 0))) else null end
         →Union
-          →Map/Filter/Project
-            Project: #0..=#2
-            Map: null, null
-              →Consolidating Union
-                →Negate Diffs
-                  →Differential Join %1[#0] » %0:l0[(((((#0{data} -> "value") -> "config") -> "location") -> "Managed") ->> "size")]
-                    →Arranged l0
-                    →Distinct GroupAggregate
-                      →Fused with Child Map/Filter/Project
-                        Project: #1
-                          →Read l1
-                →Read mz_internal.mz_catalog_raw
+          →Differential Join %1[#0] » %0:l3[#0]
+            →Arrange (#0)
+              →Stream l3
+            →Arrange (#0)
+              →Union
+                →Stream l6
+                →Map/Filter/Project
+                  Project: #0, #1
+                  Map: null
+                    →Consolidating Union
+                      →Negate Diffs
+                        →Fused with Child Map/Filter/Project
+                          Project: #0
+                            →Read l6
+                      →Unarranged Raw Stream
+                        →Arranged l4
           →Fused with Child Map/Filter/Project
-            Project: #0, #2, #3
-              →Read l1
+            Project: #0..=#6, #8
+            Filter: ((#7) IS NULL OR (false = (#7 > 0)))
+            Map: jsonb_array_length((((((#0{data} -> "value") -> "config") -> "location") -> "Managed") -> "availability_zones")), null
+              →Read l2
 
 Source mz_internal.mz_catalog_raw
   filter=(("ClusterReplica" = (#0{data} ->> "kind")))

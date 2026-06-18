@@ -11,11 +11,10 @@
 #
 # That column is a BuiltinMaterializedView derived from the durable
 # ClusterReplica JSON. The durable Managed location stores an
-# `availability_zones` list, not a single zone. For an unmanaged cluster the
-# list is the user's single AVAILABILITY ZONE pin (a 0- or 1-element list). For
-# a managed cluster it is the provisioned AVAILABILITY ZONES pool. The public
-# column must surface only the former and stay NULL for the latter, so the view
-# joins the owning cluster to learn its managed-ness.
+# `availability_zones` list, and the column surfaces it as a comma-separated
+# string: the provisioned AVAILABILITY ZONES pool for a managed cluster, the
+# single AVAILABILITY ZONE pin for an unmanaged one. A wrong JSON key silently
+# NULLs the column for every replica.
 #
 # environmentd is booted with a configured AZ pool (--availability-zone), which
 # is what lets an AVAILABILITY ZONE pin be accepted at all.
@@ -38,16 +37,10 @@ r1 us-east-1b
     REPLICATION FACTOR = 1,
     AVAILABILITY ZONES = ('us-east-1a', 'us-east-1c')
 
-# The pool lives on the cluster, not the replica. A non-NULL pool proves the
-# managed replica was provisioned with a non-empty AZ list, so the NULL below is
-# the managed-ness branch at work, not an empty list.
-> SELECT availability_zones IS NOT NULL FROM mz_clusters WHERE name = 'c_managed_az'
-true
-
-# A managed cluster's replica is provisioned from the pool, but the public
-# replica column stays NULL.
-> SELECT r.name, r.availability_zone IS NULL
+# A managed cluster's replica surfaces the full provisioned pool,
+# comma-separated, in declaration order.
+> SELECT r.name, r.availability_zone
   FROM mz_cluster_replicas r
   JOIN mz_clusters c ON r.cluster_id = c.id
   WHERE c.name = 'c_managed_az'
-r1 true
+r1 us-east-1a,us-east-1c

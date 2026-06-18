@@ -1461,10 +1461,10 @@ def workflow_test_replica_availability_zone_catalog(c: Composition) -> None:
 
     That column is a BuiltinMaterializedView that reaches into the durable
     ClusterReplica JSON. The durable Managed location stores an
-    `availability_zones` list, so the view has to reconstruct the historical
-    single-zone column: an unmanaged cluster replica's AVAILABILITY ZONE pin,
-    NULL for a managed cluster (whose list is the provisioned pool). A wrong
-    JSON key or a missing managed-ness join silently NULLs the column.
+    `availability_zones` list, and the column surfaces it as a comma-separated
+    string: the provisioned AVAILABILITY ZONES pool for a managed cluster, the
+    single AVAILABILITY ZONE pin for an unmanaged one. A wrong JSON key silently
+    NULLs the column for every replica.
     test/sqllogictest/singlereplica_mz_cluster_replicas.slt cannot catch this:
     its environment has no availability zones configured, so any user-specified
     AVAILABILITY ZONE is rejected and the column never goes non-NULL there. Boot
