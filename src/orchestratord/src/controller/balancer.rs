@@ -193,7 +193,6 @@ impl Context {
             None
         };
         let mut pod_template_labels = balancer.default_labels();
-        pod_template_labels.extend(recommended_k8s_labels(balancer.app_name()));
         pod_template_labels.insert(
             "materialize.cloud/name".to_owned(),
             balancer.deployment_name(),
@@ -355,10 +354,13 @@ impl Context {
             ..Default::default()
         };
 
+        let match_labels = pod_template_labels.clone();
+        pod_template_labels.extend(recommended_k8s_labels(balancer.app_name()));
+
         let deployment_spec = DeploymentSpec {
             replicas: Some(balancer.replicas()),
             selector: LabelSelector {
-                match_labels: Some(pod_template_labels.clone()),
+                match_labels: Some(match_labels),
                 ..Default::default()
             },
             strategy: Some(DeploymentStrategy {

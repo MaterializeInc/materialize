@@ -200,6 +200,8 @@ pub fn recommended_k8s_labels(app_name: String) -> BTreeMap<String, String> {
         "materialize-operator".into(),
     );
     labels.insert("app.kubernetes.io/part-of".into(), "materialize".into());
-    labels.insert("app.kubernetes.io/name".into(), app_name);
+    labels.insert("app.kubernetes.io/name".into(), app_name.to_owned());
+    // legacy label
+    labels.insert("app".into(), app_name.to_owned());
     labels
 }
