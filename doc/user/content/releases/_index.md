@@ -32,6 +32,34 @@ SET TRANSACTION_ISOLATION TO 'bounded staleness 10s';
 
 For more information, see [Bounded Staleness](/reference/isolation-level/#bounded-staleness).
 
+### mz-deploy (v0.1) {#v26.29-mz-deploy}
+
+[mz-deploy](/manage/mz-deploy/) is a new CLI for declarative Materialize deployments. You can use mz-deploy to define sources, views, indexes, clusters, and other Materialize objects as code—and so can your coding agents. Projects compile locally with no running Materialize instance required: run unit tests, inspect query plans, and validate changes entirely inside a sandbox before touching a shared environment. Built in Rust, mz-deploy cold-compiles a project with 40,000+ models in under 500ms, with most incremental changes compiling in under 10ms. Deployments only redeploy changed objects, support blue-green deployments, and allow concurrent deployments with conflict detection at promote time.
+
+For instance, to create a new Materialize project called `order-monitoring`:
+
+```bash
+mz-deploy new order-monitoring
+cd order-monitoring
+```
+
+This scaffolds the following directory structure:
+
+```nofmt
+order-monitoring/
+├── models/
+│   └── materialize/
+│       └── public/        # SQL files → materialize.public.<filename>
+├── clusters/              # Cluster definitions
+├── roles/                 # Role definitions
+├── network-policies/      # Network policy definitions
+├── project.toml           # Project configuration
+├── README.md
+└── .gitignore
+```
+
+For more information, see [mz-deploy](/manage/mz-deploy/).
+
 ### Iceberg Sinks for Google Cloud Platform {#v26.29-google-cloud-support-for-iceberg-sinks}
 
 {{< private-preview />}}
