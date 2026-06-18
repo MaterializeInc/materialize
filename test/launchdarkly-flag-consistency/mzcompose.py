@@ -482,6 +482,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "cluster_topology_spread_min_domains",
     "column_paged_batcher_budget_fraction",
     "compute_logical_backpressure_inflight_slack",
+    "compute_prometheus_introspection_scrape_interval",
     "enable_lgalloc",
     "enable_timely_zero_copy_lgalloc",
     "enable_zero_downtime_cluster_reconfiguration",

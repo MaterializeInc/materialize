@@ -843,6 +843,7 @@ steps:
         coverage: skip
         sanitizer: skip
         ci_glue_exempt: true
+        skip: "https://linear.app/materializeinc/issue/CLO-102"
 
       - id: console-e2e-test-prod
         label: "Console E2E/prod"
@@ -863,6 +864,7 @@ steps:
         coverage: skip
         sanitizer: skip
         ci_glue_exempt: true
+        skip: "https://linear.app/materializeinc/issue/CLO-102"
 
       - id: console-vercel-preview
         label: ":vercel: Console Vercel preview"
