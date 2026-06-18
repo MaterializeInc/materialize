@@ -275,8 +275,10 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
                     }
                     // All existing sources are expected to not be physical replicas
                     (None, Some(is_physical_replica_other)) => !is_physical_replica_other,
-                    // New values must always have is_physical_replica
-                    (_, None) => false,
+                    // Accept mutating other unrelated fields without needing to resolve this to a value.
+                    (None, None) => true,
+                    // Setting a resolved field to None should not be possible or allowed.
+                    (Some(_), None) => false,
                 },
                 "is_physical_replica",
             ),
@@ -295,5 +297,29 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_alter_compatible_timeline_id_overwritten_physical_replica_none() {
+        let curr = PostgresSourcePublicationDetails {
+            slot: "slot".to_string(),
+            timeline_id: None,
+            database: "db".to_string(),
+            is_physical_replica: None,
+        };
+
+        let other = PostgresSourcePublicationDetails {
+            slot: "slot".to_string(),
+            timeline_id: Some(1),
+            database: "db".to_string(),
+            is_physical_replica: None,
+        };
+
+        assert!(curr.alter_compatible(GlobalId::User(1), &other).is_ok());
     }
 }
