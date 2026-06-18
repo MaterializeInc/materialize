@@ -279,11 +279,11 @@ mod tests {
     fn zero_width_array_total_len_bounded_across_blocks() {
         // A zero-width element type has no input-proportional per-block bound.
         // Keep a cumulative cap so repeated legal-size blocks cannot drive an
-        // unbounded decode. Seed the array access at the cap to test the edge
-        // without walking 16M null elements first.
+        // unbounded decode. Seed the shared node budget at the cap to test the
+        // edge without walking millions of null elements first.
         use std::str::FromStr;
 
-        use super::{AvroArrayAccess, MAX_BLOCK_ELEMENTS, SimpleArrayAccess};
+        use super::{AvroArrayAccess, DECODE_NODES, MAX_VALUE_NODES, SimpleArrayAccess};
         use crate::util::zig_i64;
         use crate::{Schema, TrivialDecoder};
 
@@ -293,15 +293,162 @@ mod tests {
 
         let mut reader: &[u8] = &body;
         let mut access = SimpleArrayAccess::new(&mut reader, schema.top_node());
-        access.total = MAX_BLOCK_ELEMENTS;
+        // Drive `SimpleArrayAccess` directly (no top-level decode entry to reset
+        // the budget), so pre-charge the shared counter to the cap by hand.
+        DECODE_NODES.with(|n| n.set(MAX_VALUE_NODES));
 
         let err = access
             .decode_next(TrivialDecoder)
-            .expect_err("a new block past the cumulative array limit must be rejected");
+            .expect_err("a new block past the cumulative node budget must be rejected");
+        DECODE_NODES.with(|n| n.set(0));
         assert!(
-            err.to_string().contains("Avro array total length"),
+            err.to_string().contains("exceeds cumulative limit"),
             "unexpected error: {err}"
         );
+    }
+
+    #[mz_ore::test]
+    fn zero_width_record_array_bounded() {
+        // Regression for an OOM found by the reader_decode fuzz target: an
+        // `array<record{null}>` element is zero-width on the wire (the byte-floor
+        // check below can't bound it) yet each element still allocates a
+        // `Value::Record`, so a multi-million-element block claimed from a
+        // handful of bytes amplified into gigabytes. The cumulative node cap must
+        // reject it rather than allocate.
+        use std::str::FromStr;
+
+        use super::{AvroDeserializer, GeneralDeserializer};
+        use crate::util::zig_i64;
+        use crate::{Schema, ValueDecoder};
+
+        let schema = Schema::from_str(
+            r#"{"type": "array", "items":
+                {"type": "record", "name": "R", "fields": [{"name": "g0", "type": "null"}]}}"#,
+        )
+        .unwrap();
+        // A single block claiming far more zero-width records than the node cap,
+        // followed by no element bytes at all.
+        let mut body = Vec::new();
+        zig_i64(100_000_000, &mut body);
+        let dsr = GeneralDeserializer {
+            schema: schema.top_node(),
+        };
+        let mut reader: &[u8] = &body;
+        let res = dsr.deserialize(&mut reader, ValueDecoder);
+        assert!(
+            res.is_err(),
+            "an array of zero-width records longer than the node cap must be rejected, not allocated"
+        );
+    }
+
+    #[mz_ore::test]
+    fn small_zero_width_record_array_decodes() {
+        // The node cap must not reject an ordinary, below-cap array of zero-width
+        // records: ten `record{null}`s encode (like `array<null>`) as just the
+        // block count followed by the terminating zero block.
+        use std::str::FromStr;
+
+        use super::{AvroDeserializer, GeneralDeserializer};
+        use crate::types::Value;
+        use crate::util::zig_i64;
+        use crate::{Schema, ValueDecoder};
+
+        let schema = Schema::from_str(
+            r#"{"type": "array", "items":
+                {"type": "record", "name": "R", "fields": [{"name": "g0", "type": "null"}]}}"#,
+        )
+        .unwrap();
+        let mut body = Vec::new();
+        zig_i64(10, &mut body);
+        body.push(0);
+        let dsr = GeneralDeserializer {
+            schema: schema.top_node(),
+        };
+        let mut reader: &[u8] = &body;
+        let decoded = dsr
+            .deserialize(&mut reader, ValueDecoder)
+            .expect("a below-cap array of zero-width records must decode, not be rejected");
+        let want = Value::Record(vec![("g0".to_string(), Value::Null)]);
+        assert_eq!(decoded, Value::Array(vec![want; 10]));
+    }
+
+    #[mz_ore::test]
+    fn nested_zero_width_collection_shares_node_budget() {
+        // Regression: the node budget must be shared across every collection in
+        // one datum, not reset per collection. With a per-collection budget each
+        // inner array of `array<record{array<record{null}>}>` would get a fresh
+        // `MAX_VALUE_NODES` ceiling, so a few wire bytes amplify into
+        // ~`MAX_VALUE_NODES` *per outer element* (the same blow-up the cap exists
+        // to stop, one nesting level deeper). Drive the decode so an inner
+        // array's block-header charge — reached only after the enclosing record
+        // starts decoding — trips the *shared* cumulative cap, proving the inner
+        // collection sees the outer element's spend rather than a fresh budget.
+        use std::str::FromStr;
+
+        use super::{AvroDeserializer, GeneralDeserializer, MAX_VALUE_NODES};
+        use crate::util::zig_i64;
+        use crate::{Schema, ValueDecoder};
+
+        let schema = Schema::from_str(
+            r#"{"type": "array", "items":
+                {"type": "record", "name": "Outer", "fields": [
+                    {"name": "inner", "type":
+                        {"type": "array", "items":
+                            {"type": "record", "name": "Inner",
+                             "fields": [{"name": "g0", "type": "null"}]}}}]}}"#,
+        )
+        .unwrap();
+        // One outer element (charges 2 nodes), whose inner array then claims
+        // `MAX_VALUE_NODES / 2` zero-width records — exactly `MAX_VALUE_NODES`
+        // weighted nodes, which clears the inner block's own per-block check but
+        // pushes the *shared* total (2 + MAX_VALUE_NODES) over the cap. No inner
+        // element bytes follow: a correct decode rejects at the header before
+        // allocating anything; the per-collection bug would instead materialize
+        // ~2M `Value::Record`s and only later hit EOF.
+        let mut body = Vec::new();
+        zig_i64(1, &mut body);
+        zig_i64((MAX_VALUE_NODES / 2) as i64, &mut body);
+        let dsr = GeneralDeserializer {
+            schema: schema.top_node(),
+        };
+        let mut reader: &[u8] = &body;
+        let err = dsr.deserialize(&mut reader, ValueDecoder).expect_err(
+            "a nested array claiming MAX_VALUE_NODES on top of the outer spend must be rejected",
+        );
+        assert!(
+            err.to_string().contains("exceeds cumulative limit"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn top_level_decode_resets_stale_node_budget() {
+        // A decode that errored partway can leave the thread-local node counter
+        // non-zero; the next top-level decode must reset it (depth 0 -> 1) or an
+        // unrelated datum on the same thread is wrongly rejected. Pin the counter
+        // at the cap to stand in for that leftover, then require a small array to
+        // still decode.
+        use std::str::FromStr;
+
+        use super::{AvroDeserializer, DECODE_NODES, GeneralDeserializer, MAX_VALUE_NODES};
+        use crate::types::Value;
+        use crate::util::zig_i64;
+        use crate::{Schema, ValueDecoder};
+
+        let schema = Schema::from_str(r#"{"type": "array", "items": "null"}"#).unwrap();
+        let mut body = Vec::new();
+        zig_i64(3, &mut body);
+        body.push(0);
+
+        DECODE_NODES.with(|n| n.set(MAX_VALUE_NODES));
+        let dsr = GeneralDeserializer {
+            schema: schema.top_node(),
+        };
+        let mut reader: &[u8] = &body;
+        let decoded = dsr
+            .deserialize(&mut reader, ValueDecoder)
+            .expect("the top-level entry must reset a stale node budget");
+        assert_eq!(decoded, Value::Array(vec![Value::Null; 3]));
     }
 }
 
@@ -638,6 +785,10 @@ pub struct SimpleMapAccess<'a, R: AvroRead> {
     r: &'a mut R,
     done: bool,
     remaining: usize,
+    /// Lower bound on the `Value` nodes a single entry materializes: the key
+    /// `String` plus the value's [`min_value_nodes`]. Charged against the shared
+    /// [`DECODE_NODES`] budget per block; see [`charge_value_nodes`].
+    entry_nodes: usize,
 }
 
 impl<'a, R: AvroRead> SimpleMapAccess<'a, R> {
@@ -647,6 +798,8 @@ impl<'a, R: AvroRead> SimpleMapAccess<'a, R> {
             r,
             done: false,
             remaining: 0,
+            // One node for the key `String`, plus the value's own nodes.
+            entry_nodes: 1usize.saturating_add(min_value_nodes(entry_schema)),
         }
     }
 }
@@ -668,14 +821,20 @@ impl<'a, R: AvroRead> AvroMapAccess for SimpleMapAccess<'a, R> {
                 }
                 _ => unreachable!(),
             };
-            // See `SimpleArrayAccess::decode_next` — same `MAX_BLOCK_ELEMENTS`
-            // bound applies; a wire-claimed block length above the cap
-            // would let the decode loop OOM / overflow allocation.
-            if len > MAX_BLOCK_ELEMENTS {
+            // See `SimpleArrayAccess::decode_next` — same `MAX_VALUE_NODES`
+            // memory bound applies, weighting the entry count by the per-entry
+            // node lower bound so a block whose values are wide-but-zero-width
+            // records can't amplify a few wire bytes into millions of `Value`s.
+            let block_nodes = len.saturating_mul(self.entry_nodes);
+            if block_nodes > MAX_VALUE_NODES {
                 return Err(AvroError::Decode(DecodeError::Custom(format!(
-                    "Avro map block length {len} exceeds limit {MAX_BLOCK_ELEMENTS}"
+                    "Avro map block length {len} exceeds limit {MAX_VALUE_NODES} decoded values"
                 ))));
             }
+            // Charge against the budget shared by every array/map in the datum,
+            // so nested collections can't each get a fresh cap (see
+            // `charge_value_nodes` / `MAX_VALUE_NODES`).
+            charge_value_nodes("map", block_nodes)?;
             // A block can't hold more entries than there are bytes left to
             // decode them from; reject a count that claims otherwise rather than
             // letting it drive an unbounded allocation (see `Skip::remaining_input`).
@@ -714,7 +873,10 @@ struct SimpleArrayAccess<'a, R: AvroRead> {
     r: &'a mut R,
     schema: SchemaNode<'a>,
     remaining: usize,
-    total: usize,
+    /// Lower bound on the `Value` nodes a single element materializes (see
+    /// [`min_value_nodes`]). Charged against the shared [`DECODE_NODES`] budget
+    /// per block; see [`charge_value_nodes`].
+    element_nodes: usize,
     done: bool,
 }
 
@@ -724,7 +886,7 @@ impl<'a, R: AvroRead> SimpleArrayAccess<'a, R> {
             r,
             schema,
             remaining: 0,
-            total: 0,
+            element_nodes: min_value_nodes(schema),
             done: false,
         }
     }
@@ -754,12 +916,40 @@ impl<'a> AvroArrayAccess for ValueArrayAccess<'a> {
     }
 }
 
-/// Sanity cap on the element count Avro arrays/maps can claim from the wire.
-/// Arrays apply this both per block and cumulatively; maps apply it per block.
-/// Without it, a malicious or corrupt file can claim up to `i64::MAX` items and
-/// the generic array/map decode loop will run until it eventually OOMs or hits
-/// `Vec` capacity-overflow.
-const MAX_BLOCK_ELEMENTS: usize = 1 << 24;
+/// Sanity cap on the number of `Value` nodes one top-level decode may
+/// materialize across *every* array and map in the datum. Arrays and maps apply
+/// it per block (a fast reject for an absurd single-block count) and against the
+/// shared cumulative budget threaded through the whole decode (see
+/// [`charge_value_nodes`] / [`DECODE_NODES`]).
+///
+/// This bounds *memory*, not element count: each element is weighted by
+/// [`min_value_nodes`], a lower bound on the `Value` nodes it decodes into. An
+/// element-count cap alone is not enough, because a zero-width element — `null`,
+/// or a record of only `null`/empty-record fields — occupies no input yet still
+/// allocates a `Value` (a `Vec` slot, plus a record's own `Vec` and field-name
+/// `String`s). The [`min_encoded_len`] byte-floor check below bounds a block by
+/// the remaining input only when each element occupies at least one wire byte,
+/// so a multi-million-element block of zero-width elements would otherwise
+/// amplify a handful of bytes into gigabytes. Weighting the count and capping
+/// the product bounds that amplification (as well as the analogous case of a
+/// huge block of wide, positive-floor records read from a large input).
+///
+/// The budget is shared across the whole datum rather than reset per collection
+/// so the bound *composes through nesting*: a per-collection budget would hand
+/// every `array`/`map` a fresh ceiling, letting a schema like
+/// `array<record{array<record{null}>}>` amplify a few wire bytes into roughly
+/// this cap raised to the nesting depth. Sharing one budget keeps the worst case
+/// flat regardless of nesting.
+///
+/// Without any cap, a malicious or corrupt file can claim up to `i64::MAX` items
+/// and the generic array/map decode loop runs until it OOMs or hits `Vec`
+/// capacity-overflow.
+///
+/// At `1 << 22` nodes the worst case (decoding zero-width records right up to the
+/// cap) peaks around 750 MiB — including the transient doubling of the element
+/// `Vec` mid-`push` — leaving comfortable headroom under the fuzzer's 2 GiB RSS
+/// limit, while still admitting any realistically-sized array/map.
+const MAX_VALUE_NODES: usize = 1 << 22;
 
 /// A *lower* bound on the number of bytes any value of `schema` encodes to on
 /// the wire.
@@ -776,7 +966,7 @@ const MAX_BLOCK_ELEMENTS: usize = 1 << 24;
 /// Materialize's own writer emits a ten-element `array<null>` as `[20, 0]`, so a
 /// blanket "count must not exceed remaining bytes" rule would reject valid
 /// input. For zero-width element types the caller falls back to the cumulative
-/// array `MAX_BLOCK_ELEMENTS` cap.
+/// [`MAX_VALUE_NODES`] cap (weighted by [`min_value_nodes`]).
 fn min_encoded_len(schema: SchemaNode) -> usize {
     let mut visited = BTreeSet::new();
     min_encoded_len_piece(schema.root, schema.inner, &mut visited)
@@ -858,6 +1048,77 @@ fn min_encoded_len_piece(
     }
 }
 
+/// A *lower* bound on the number of `Value` nodes a single value of `schema`
+/// materializes into when decoded.
+///
+/// Used to weight an array/map element so the cumulative [`MAX_VALUE_NODES`] cap
+/// bounds decoded *memory*, not just element count. The amplifying case the cap
+/// exists for — `null` and records of only zero-width fields — is counted
+/// *exactly* here (a record always materializes every field, and none of these
+/// types involve a union/array/map whose runtime size we couldn't predict), so
+/// the bound is tight where it matters most.
+///
+/// As with [`min_encoded_len`], only an under-estimate is ever safe (an
+/// over-estimate would reject valid data), so a nested array/map contributes
+/// `1` — its empty-collection floor — and its actual contents are charged
+/// against the shared [`MAX_VALUE_NODES`] budget as they are decoded (so the
+/// cap still composes through nesting); a union contributes `1` (its count is
+/// already bounded by the remaining input via its one-byte branch floor); and
+/// unprovable schema-resolution pieces contribute `1`. Every value is at least
+/// one node, so the weight is always `>= 1`.
+fn min_value_nodes(schema: SchemaNode) -> usize {
+    let mut visited = BTreeSet::new();
+    min_value_nodes_piece(schema.root, schema.inner, &mut visited)
+}
+
+/// Resolves a (possibly named) schema reference, guarding against named-type
+/// cycles, then defers to [`min_value_nodes_piece`].
+fn min_value_nodes_or_named(
+    root: &Schema,
+    node: SchemaPieceRefOrNamed,
+    visited: &mut BTreeSet<usize>,
+) -> usize {
+    match node {
+        SchemaPieceRefOrNamed::Piece(piece) => min_value_nodes_piece(root, piece, visited),
+        SchemaPieceRefOrNamed::Named(idx) => {
+            // A named-type cycle can only close through a record field; treat the
+            // back-edge as a single node so we never over-estimate (and never
+            // recurse forever).
+            if !visited.insert(idx) {
+                return 1;
+            }
+            let nodes = min_value_nodes_piece(root, &root.lookup(idx).piece, visited);
+            visited.remove(&idx);
+            nodes
+        }
+    }
+}
+
+fn min_value_nodes_piece(
+    root: &Schema,
+    piece: &SchemaPiece,
+    visited: &mut BTreeSet<usize>,
+) -> usize {
+    match piece {
+        // A record materializes itself plus every one of its fields. This is the
+        // only type that can be zero-width on the wire yet still allocate, so
+        // counting its fields exactly is what makes the cap effective.
+        SchemaPiece::Record { fields, .. } => fields.iter().fold(1, |acc, field| {
+            acc.saturating_add(min_value_nodes_or_named(
+                root,
+                field.schema.as_ref(),
+                visited,
+            ))
+        }),
+        // Every other type materializes a single node for the purposes of this
+        // lower bound: scalars and leaves trivially; an array/map at minimum an
+        // empty collection (its contents bounded by its own cumulative cap); a
+        // union its (input-bounded) branch index; and resolution pieces we don't
+        // try to prove.
+        _ => 1,
+    }
+}
+
 impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
     fn decode_next<D: AvroDecode>(&mut self, d: D) -> Result<Option<D::Out>, AvroError> {
         if self.done {
@@ -874,17 +1135,21 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
                 }
                 _ => unreachable!(),
             };
-            if len > MAX_BLOCK_ELEMENTS {
+            // Weight the count by the per-element node lower bound so the cap
+            // bounds decoded memory, not just element count: a block of
+            // zero-width-but-allocating elements (e.g. a record of `null`s)
+            // amplifies a few wire bytes into millions of `Value`s otherwise.
+            let block_nodes = len.saturating_mul(self.element_nodes);
+            if block_nodes > MAX_VALUE_NODES {
                 return Err(AvroError::Decode(DecodeError::Custom(format!(
-                    "Avro array block length {len} exceeds limit {MAX_BLOCK_ELEMENTS}"
+                    "Avro array block length {len} exceeds limit {MAX_VALUE_NODES} \
+                     decoded values"
                 ))));
             }
-            let total = self.total.saturating_add(len);
-            if total > MAX_BLOCK_ELEMENTS {
-                return Err(AvroError::Decode(DecodeError::Custom(format!(
-                    "Avro array total length {total} exceeds limit {MAX_BLOCK_ELEMENTS}"
-                ))));
-            }
+            // Charge against the budget shared by every array/map in the datum,
+            // so nested collections can't each get a fresh cap (see
+            // `charge_value_nodes` / `MAX_VALUE_NODES`).
+            charge_value_nodes("array", block_nodes)?;
             // A block of `len` items occupies at least `len * min_elem` bytes,
             // so a count needing more than the remaining input can't be honest;
             // reject it rather than let it drive an unbounded allocation (see
@@ -893,7 +1158,7 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
             // zero bytes (`null`, an empty record), so this bound only applies
             // when the element type has a proven positive byte floor. For
             // zero-width element types (`min_elem == 0`) we rely on the
-            // cumulative `MAX_BLOCK_ELEMENTS` cap; otherwise a valid datum such as a
+            // cumulative `MAX_VALUE_NODES` cap; otherwise a valid datum such as a
             // ten-element `array<null>` (encoded as `[20, 0]`) would be wrongly
             // rejected.
             if let Some(remaining) = self.r.remaining_input() {
@@ -904,7 +1169,6 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
                     ))));
                 }
             }
-            self.total = total;
             self.remaining = len;
         }
         assert!(self.remaining > 0);
@@ -1665,6 +1929,12 @@ const MAX_DECODE_DEPTH: usize = 128;
 
 thread_local! {
     static DECODE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Cumulative `Value` nodes decoded so far in the current top-level decode,
+    /// shared by every array and map in the datum and bounded by
+    /// [`MAX_VALUE_NODES`]. Reset to `0` at each top-level entry (see
+    /// [`DecodeDepthGuard::enter`]) so the budget composes across nesting
+    /// instead of resetting per collection. Charged via [`charge_value_nodes`].
+    static DECODE_NODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 struct DecodeDepthGuard;
@@ -1678,6 +1948,14 @@ impl DecodeDepthGuard {
                 ))));
             }
             d.set(new);
+            // The `Value`-node budget is shared across every array/map in one
+            // datum so nesting can't multiply the cap (see `MAX_VALUE_NODES`).
+            // This is the top-level entry (depth 0 -> 1), so reset it: each datum
+            // starts fresh even if a previous decode on this thread errored out
+            // partway and left the counter non-zero.
+            if new == 1 {
+                DECODE_NODES.with(|n| n.set(0));
+            }
             Ok(DecodeDepthGuard)
         })
     }
@@ -1686,6 +1964,27 @@ impl Drop for DecodeDepthGuard {
     fn drop(&mut self) {
         DECODE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
     }
+}
+
+/// Charges `nodes` against the per-datum [`DECODE_NODES`] budget shared by every
+/// array and map in a single top-level decode, rejecting once the cumulative
+/// total exceeds [`MAX_VALUE_NODES`]. `kind` (`"array"` / `"map"`) only labels
+/// the error.
+///
+/// The budget is shared — rather than tracked per collection instance — so the
+/// cap composes across nesting; see [`MAX_VALUE_NODES`] for why a per-collection
+/// budget would let nested zero-width collections amplify past it.
+fn charge_value_nodes(kind: &str, nodes: usize) -> Result<(), AvroError> {
+    DECODE_NODES.with(|n| {
+        let total = n.get().saturating_add(nodes);
+        if total > MAX_VALUE_NODES {
+            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                "Avro {kind} decode exceeds cumulative limit {MAX_VALUE_NODES} decoded values"
+            ))));
+        }
+        n.set(total);
+        Ok(())
+    })
 }
 
 impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
