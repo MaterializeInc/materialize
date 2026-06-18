@@ -9,7 +9,7 @@ Name                                        | Default value             |  Descr
 `cluster_replica`                           |                           | The target cluster replica for `SELECT` queries.                      | Yes
 `database`                                  | `materialize`             | The current database.                                                 | Yes
 `search_path`                               | `public`                  | The schema search order for names that are not schema-qualified.      | Yes
-`transaction_isolation`                     | `strict serializable`     | The transaction isolation level. For more information, see [Isolation level](/reference/isolation-level/). <br/><br/> Accepts values: `serializable`, `strict serializable`. | Yes
+`transaction_isolation`                     | `strict serializable`     | The transaction isolation level. For more information, see [Isolation level](/reference/isolation-level/). <br/><br/> Accepts values: `serializable`, `strict serializable`{{< if-released "v26.29" >}}, `bounded staleness <duration>` (for example, `bounded staleness 5s`){{< /if-released >}}. | Yes
 
 ### Other configuration parameters
 
