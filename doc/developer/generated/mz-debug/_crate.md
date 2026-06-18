@@ -1,6 +1,6 @@
 ---
 source: src/mz-debug/src/main.rs
-revision: 47ab3e6b82
+revision: 19b7f2055a
 ---
 
 # mz-debug

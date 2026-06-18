@@ -1,11 +1,13 @@
 ---
 source: src/sql/src/session/vars/definitions.rs
-revision: 7744a946e2
+revision: a8f4526d28
 ---
 
 # mz-sql::session::vars::definitions
 
-Defines `VarDefinition` (the static metadata for a variable: name, description, default value, constraints, feature-flag association) and declares all session and system variable definitions as `static` values.
+Defines `VarDefinition` (the static metadata for a variable: name, description, default value, constraints, feature-flag association, and `ParameterScope`) and declares all session and system variable definitions as `static` values.
+`VarDefinition` carries a `scope: ParameterScope` field (from `mz_dyncfg`) indicating the scope at which the variable's value may be overridden by the LaunchDarkly sync loop. The `scoped(scope)` const builder method sets this field; the default is `ParameterScope::DEFAULT`. `VarDefinition` implements `Var::scope()` by returning this field.
+The `feature_flags!` macro accepts an optional `scope: <expr>,` field per flag entry; when omitted the flag defaults to `ParameterScope::DEFAULT`. Cluster-coherent optimizer feature flags declare `scope: ParameterScope::Cluster`: these include `enable_new_outer_join_lowering`, `enable_eager_delta_joins`, `enable_left_joins_lowering`, `enable_variadic_left_join_lowering`, `enable_join_prioritize_arranged`, and `enable_projection_pushdown_after_relation_cse`.
 The `lazy_value!` and `value!` macros (from `polyfill`) are used extensively to express default values that cannot be computed at compile time.
 This file is the authoritative source of truth for which variables exist and their defaults.
 `RESTRICT_TO_USER_OBJECTS` is a read-only `bool` session variable (default `false`) that restricts queries from accessing system catalog objects; it is designed to be set only via `ALTER ROLE ... SET` by superusers.

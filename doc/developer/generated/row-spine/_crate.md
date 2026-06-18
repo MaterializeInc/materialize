@@ -1,6 +1,6 @@
 ---
 source: src/row-spine/src/lib.rs
-revision: 62a7647e7a
+revision: 31e0aab020
 ---
 
 # mz-row-spine
