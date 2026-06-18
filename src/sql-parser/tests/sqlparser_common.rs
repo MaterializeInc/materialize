@@ -779,3 +779,41 @@ fn cast_operand_reparenthesized_after_nested_stripped() {
         "Cast display did not round-trip after Nested was stripped; displayed = {displayed:?}"
     );
 }
+
+#[mz_ore::test]
+fn between_bound_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // `false BETWEEN x AND (0 = a)` parses with the comparison high bound wrapped
+    // in `Expr::Nested` (the bound parses at `Like`, above the comparison's
+    // `Cmp`). Once the `Nested` is stripped, the printer must re-add the parens —
+    // otherwise it prints `... AND 0 = a`, which reparses as
+    // `(false BETWEEN x AND 0) = a`.
+    let mut ast = mz_sql_parser::parser::parse_statements("SELECT false BETWEEN x AND (0 = a)")
+        .unwrap()
+        .remove(0)
+        .ast;
+    StripNested.visit_statement_mut(&mut ast);
+    let displayed = ast.to_ast_string_simple();
+    let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+        .unwrap()
+        .remove(0)
+        .ast;
+    StripNested.visit_statement_mut(&mut reparsed);
+    assert_eq!(
+        ast, reparsed,
+        "BETWEEN bound display did not round-trip after Nested was stripped; displayed = {displayed:?}"
+    );
+}

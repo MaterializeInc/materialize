@@ -305,9 +305,9 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     f.write_str(" NOT");
                 }
                 f.write_str(" BETWEEN ");
-                f.write_node(&low);
+                write_between_bound(f, low);
                 f.write_str(" AND ");
-                f.write_node(&high);
+                write_between_bound(f, high);
             }
             Expr::Op { op, expr1, expr2 } => {
                 if let Some(expr2) = expr2 {
@@ -591,6 +591,48 @@ fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, exp
         f.write_str(")");
     } else {
         f.write_node(expr);
+    }
+}
+
+/// Write `bound` as a `BETWEEN … AND …` bound. The parser parses both bounds at
+/// `Precedence::Like`, so a bound whose top operator binds at or below `Like`
+/// would re-associate out of the `BETWEEN` on reparse (`x BETWEEN a AND b = c`
+/// parses as `(x BETWEEN a AND b) = c`); such a bound must be parenthesized. The
+/// parser wraps these bounds in `Expr::Nested`, so parser-produced ASTs already
+/// carry the parens (and `Nested` is not in the set below, so they don't double
+/// up); this re-adds them for ASTs where the wrapper is absent.
+fn write_between_bound<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, bound: &Expr<T>) {
+    // Expr kinds whose top operator binds at or below `Like` (see
+    // `Parser::get_next_precedence`): `OR`/`AND`/`NOT`/`IS`, the quantified and
+    // binary comparisons (`Cmp`), and `LIKE`/`IN`/`BETWEEN` (`Like`). Arithmetic
+    // and other infix ops bind tighter and are safe bare.
+    let needs_parens = match bound {
+        Expr::Or { .. }
+        | Expr::And { .. }
+        | Expr::Not { .. }
+        | Expr::IsExpr { .. }
+        | Expr::Like { .. }
+        | Expr::Between { .. }
+        | Expr::InList { .. }
+        | Expr::InSubquery { .. }
+        | Expr::AnyExpr { .. }
+        | Expr::AllExpr { .. }
+        | Expr::AnySubquery { .. }
+        | Expr::AllSubquery { .. } => true,
+        Expr::Op {
+            op, expr2: Some(_), ..
+        } => {
+            op.namespace.is_none()
+                && matches!(op.op.as_str(), "=" | "<" | "<=" | "<>" | "!=" | ">" | ">=")
+        }
+        _ => false,
+    };
+    if needs_parens {
+        f.write_str("(");
+        f.write_node(bound);
+        f.write_str(")");
+    } else {
+        f.write_node(bound);
     }
 }
 
