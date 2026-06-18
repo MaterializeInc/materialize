@@ -26,12 +26,13 @@ use mz_ore::{soft_assert_eq_no_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
+use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::{Regex as ReprRegex, RegexCompilationError};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    ColumnName, Datum, Diff, ReprColumnType, ReprRelationType, Row, RowArena, RowPacker, SharedRow,
-    SqlColumnType, SqlRelationType, SqlScalarType, datum_size,
+    ColumnName, Datum, Diff, InputDatumType, ReprColumnType, ReprRelationType, Row, RowArena,
+    RowPacker, SharedRow, SqlColumnType, SqlRelationType, SqlScalarType, datum_size, strconv,
 };
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
@@ -48,7 +49,9 @@ use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::{
     ColumnOrder, WindowFrame, WindowFrameBound, WindowFrameUnits, compare_columns,
 };
-use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
+use crate::scalar::func::{
+    add_timestamp_months, jsonb_list_index_position, jsonb_path_step, jsonb_stringify,
+};
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
@@ -3392,6 +3395,25 @@ pub enum TableFunc {
     JsonbObjectKeys,
     JsonbArrayElements,
     JsonbArrayElementsStringify,
+    /// Extracts multiple fields from a single jsonb value in one pass, with
+    /// one output column per requested field, emitting **exactly one** output
+    /// row per input row (never zero, never more, never an error).
+    ///
+    /// Takes one argument, the jsonb value to unpack. Each output column
+    /// equals exactly what the corresponding scalar accessor (`->`, `->>`,
+    /// `#>`, `#>>`; see `jsonb_get_*` in `crate::scalar::func`) would have
+    /// returned when applied to that value — including on non-object inputs
+    /// and on SQL NULL input (where every output is NULL; note that
+    /// `empty_on_null_input` is false). The point over the scalar accessors
+    /// is performance: `k` scalar accessors scan the value `k` times, while
+    /// this function resolves all fields in a single pass (jsonb object keys
+    /// are stored sorted, enabling a sorted-merge lookup).
+    ///
+    /// Internal only: introduced by the `JsonbUnpack` transform in
+    /// `mz-transform`; not reachable from SQL and has no catalog entry.
+    JsonbUnpack {
+        fields: Vec<JsonbUnpackField>,
+    },
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
     GenerateSeriesInt32,
@@ -3487,6 +3509,218 @@ struct WithOrdinality {
     inner: Box<TableFunc>,
 }
 
+/// A single field extracted by [`TableFunc::JsonbUnpack`].
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct JsonbUnpackField {
+    /// How to locate the value inside the unpacked jsonb value.
+    pub kind: JsonbUnpackFieldKind,
+    /// If true, emit the result as text, as `->>`/`#>>` would (see
+    /// `jsonb_stringify`); otherwise emit it as jsonb, as `->`/`#>` would.
+    pub stringify: bool,
+}
+
+/// How a [`JsonbUnpackField`] locates its value.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub enum JsonbUnpackFieldKind {
+    /// Object key lookup: `-> 'key'`.
+    Key(String),
+    /// Array index lookup: `-> 2`. Negative indices count from the back.
+    Index(i64),
+    /// Path walk: `#> '{a,b}'`. The constructing transform only builds
+    /// non-empty paths without null elements, but eval is total anyway: an
+    /// empty path returns the input itself, mirroring `#> '{}'`.
+    Path(Vec<String>),
+}
+
+/// Implements [`TableFunc::JsonbUnpack`]; see there for the contract.
+///
+/// Resolves all `fields` against `input` and returns the single output row.
+/// `input` is SQL-typed `jsonb` or SQL NULL; the per-shape behavior below
+/// mirrors the scalar jsonb accessors *exactly*, which is enforced by a
+/// proptest comparing the two (see `jsonb_unpack_matches_scalar_accessors`).
+fn jsonb_unpack<'a>(
+    fields: &[JsonbUnpackField],
+    input: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> (Row, Diff) {
+    use JsonbUnpackFieldKind::*;
+
+    // The raw (pre-stringify) result per field; `None` is SQL NULL.
+    let mut resolved: Vec<Option<Datum<'a>>> = vec![None; fields.len()];
+
+    match input {
+        // On SQL NULL input every accessor returns NULL, but the output row
+        // must still be emitted (`empty_on_null_input` is false).
+        Datum::Null => {}
+        Datum::Map(map) => {
+            // Lookups to resolve against the object: `Key` fields and the
+            // heads of non-empty `Path` fields. `Index` fields are NULL on
+            // objects, as in `jsonb_get_int64`.
+            let mut wanted: Vec<(&str, usize)> = Vec::with_capacity(fields.len());
+            for (idx, field) in fields.iter().enumerate() {
+                match &field.kind {
+                    Key(k) => wanted.push((k.as_str(), idx)),
+                    Index(_) => {}
+                    Path(p) => match p.first() {
+                        Some(head) => wanted.push((head.as_str(), idx)),
+                        // `#> '{}'` returns the input itself: the walk in
+                        // `jsonb_get_path` never runs.
+                        None => resolved[idx] = Some(input),
+                    },
+                }
+            }
+            // The Row format guarantees that map keys are unique and stored
+            // in ascending `str` order (see `mz_repr::row`), so after sorting
+            // the requested keys a single merge pass resolves all lookups.
+            wanted.sort_unstable_by_key(|(k, _)| *k);
+            let mut wanted = wanted.into_iter().peekable();
+            for (k, v) in map.iter() {
+                // Consume all requests for keys <= `k`; requests for keys
+                // absent from the object stay NULL.
+                while let Some((wk, idx)) = wanted.peek().copied() {
+                    if wk > k {
+                        break;
+                    }
+                    wanted.next();
+                    if wk < k {
+                        continue;
+                    }
+                    // `v` should be valid jsonb, but as in the scalar
+                    // accessors, don't panic on corrupt data: leave NULL.
+                    let Ok(v) = JsonbRef::try_from_result(Ok::<_, ()>(v)) else {
+                        continue;
+                    };
+                    resolved[idx] = match &fields[idx].kind {
+                        Key(_) => Some(v.into_datum()),
+                        // Walk the remainder of the path from the matched
+                        // head, exactly as `jsonb_get_path` would.
+                        Path(p) => p[1..]
+                            .iter()
+                            .try_fold(v, |json, key| jsonb_path_step(json, key))
+                            .map(JsonbRef::into_datum),
+                        Index(_) => unreachable!("no Index lookups on objects"),
+                    };
+                }
+                // Stop the object scan early once no requests remain.
+                if wanted.peek().is_none() {
+                    break;
+                }
+            }
+        }
+        Datum::List(list) => {
+            // Lookups to resolve against the array: `Index` fields and the
+            // int-parsed heads of non-empty `Path` fields (parse failure is
+            // NULL, as in `jsonb_get_path`). `Key` fields are NULL on arrays,
+            // as in `jsonb_get_string`. The array length is computed at most
+            // once, and only if some index is negative.
+            let mut cached_len: Option<usize> = None;
+            let mut wanted: Vec<(usize, usize)> = Vec::with_capacity(fields.len());
+            for (idx, field) in fields.iter().enumerate() {
+                let i = match &field.kind {
+                    Key(_) => None,
+                    Index(i) => Some(*i),
+                    Path(p) => match p.first() {
+                        Some(head) => strconv::parse_int64(head).ok(),
+                        // `#> '{}'` returns the input itself.
+                        None => {
+                            resolved[idx] = Some(input);
+                            None
+                        }
+                    },
+                };
+                if let Some(i) = i {
+                    let target = jsonb_list_index_position(i, || {
+                        *cached_len.get_or_insert_with(|| list.iter().count())
+                    });
+                    wanted.push((target, idx));
+                }
+            }
+            // A single pass over the array resolves all lookups; targets at
+            // or beyond the array length stay NULL (`.nth()` would have
+            // returned None).
+            wanted.sort_unstable_by_key(|(target, _)| *target);
+            let mut wanted = wanted.into_iter().peekable();
+            for (pos, v) in list.iter().enumerate() {
+                while let Some((target, idx)) = wanted.peek().copied() {
+                    if target > pos {
+                        break;
+                    }
+                    wanted.next();
+                    // `target < pos` cannot occur: targets are sorted and all
+                    // targets <= the current position have been consumed.
+                    debug_assert_eq!(target, pos);
+                    // As above: never panic on corrupt data.
+                    let Ok(v) = JsonbRef::try_from_result(Ok::<_, ()>(v)) else {
+                        continue;
+                    };
+                    resolved[idx] = match &fields[idx].kind {
+                        Index(_) => Some(v.into_datum()),
+                        Path(p) => p[1..]
+                            .iter()
+                            .try_fold(v, |json, key| jsonb_path_step(json, key))
+                            .map(JsonbRef::into_datum),
+                        Key(_) => unreachable!("no Key lookups on arrays"),
+                    };
+                }
+                // Stop the array scan early once no requests remain.
+                if wanted.peek().is_none() {
+                    break;
+                }
+            }
+        }
+        // A json scalar or json `null`.
+        other => {
+            for (idx, field) in fields.iter().enumerate() {
+                resolved[idx] = match &field.kind {
+                    Key(_) => None,
+                    // The PG quirk mirrored from `jsonb_get_int64`: indexing
+                    // a non-collection value with 0 or -1 returns the value.
+                    Index(i) => (*i == 0 || *i == -1).then_some(other),
+                    // `#> '{}'` returns the input itself; any non-empty path
+                    // on a non-collection value is NULL (note the asymmetry
+                    // with `Index`, mirrored from `jsonb_get_path`).
+                    Path(p) => p.is_empty().then_some(other),
+                };
+            }
+        }
+    }
+
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    for (field, value) in fields.iter().zip_eq(resolved) {
+        packer.push(match value {
+            Some(v) if field.stringify => jsonb_stringify(v, temp_storage)
+                .map(Datum::String)
+                .unwrap_or(Datum::Null),
+            Some(v) => v,
+            None => Datum::Null,
+        });
+    }
+    (row, Diff::ONE)
+}
+
 impl TableFunc {
     /// Adds `WITH ORDINALITY` to a table function if it's allowed on the given table function.
     pub fn with_ordinality(inner: TableFunc) -> Option<TableFunc> {
@@ -3522,6 +3756,9 @@ impl TableFunc {
             // is whether the table function itself can emit a negative diff.)
             TableFunc::RepeatRow // can produce negative diffs
             | TableFunc::WithOrdinality(_) => None, // no nesting of `WITH ORDINALITY` allowed
+            // Internal-only, introduced by the optimizer long after WITH
+            // ORDINALITY planning; no way (or reason) to reach this.
+            TableFunc::JsonbUnpack { .. } => None,
         }
     }
 }
@@ -3549,6 +3786,11 @@ impl TableFunc {
                 datums[0],
                 temp_storage,
             ))),
+            TableFunc::JsonbUnpack { fields } => Ok(Box::new(std::iter::once(jsonb_unpack(
+                fields,
+                datums[0],
+                temp_storage,
+            )))),
             TableFunc::RegexpExtract(a) => Ok(Box::new(regexp_extract(datums[0], a).into_iter())),
             TableFunc::CsvExtract(n_cols) => Ok(Box::new(csv_extract(datums[0], *n_cols))),
             TableFunc::GenerateSeriesInt32 => {
@@ -3683,6 +3925,20 @@ impl TableFunc {
                 let keys = vec![];
                 (column_types, keys)
             }
+            TableFunc::JsonbUnpack { fields } => {
+                let column_types = fields
+                    .iter()
+                    .map(|field| {
+                        if field.stringify {
+                            SqlScalarType::String.nullable(true)
+                        } else {
+                            SqlScalarType::Jsonb.nullable(true)
+                        }
+                    })
+                    .collect();
+                let keys = vec![];
+                (column_types, keys)
+            }
             TableFunc::RegexpExtract(a) => {
                 let column_types = a
                     .capture_groups_iter()
@@ -3803,6 +4059,7 @@ impl TableFunc {
             TableFunc::JsonbObjectKeys => 1,
             TableFunc::JsonbArrayElements => 1,
             TableFunc::JsonbArrayElementsStringify => 1,
+            TableFunc::JsonbUnpack { fields } => fields.len(),
             TableFunc::RegexpExtract(a) => a.capture_groups_len(),
             TableFunc::CsvExtract(n_cols) => *n_cols,
             TableFunc::GenerateSeriesInt32 => 1,
@@ -3848,6 +4105,10 @@ impl TableFunc {
             TableFunc::GuardSubquerySize { .. } => false,
             TableFunc::Wrap { .. } => false,
             TableFunc::TabletizedScalar { .. } => false,
+            // Critical for correctness: on SQL NULL input the row must NOT be
+            // dropped; every output field is NULL instead, mirroring the
+            // scalar accessors.
+            TableFunc::JsonbUnpack { .. } => false,
             TableFunc::WithOrdinality(WithOrdinality { inner }) => inner.empty_on_null_input(),
         }
     }
@@ -3880,7 +4141,69 @@ impl TableFunc {
             TableFunc::TabletizedScalar { .. } => true,
             TableFunc::RegexpMatches => true,
             TableFunc::GuardSubquerySize { .. } => false,
+            // Exactly one output row with `Diff::ONE` per input row.
+            TableFunc::JsonbUnpack { .. } => true,
             TableFunc::WithOrdinality(WithOrdinality { inner }) => inner.preserves_monotonicity(),
+        }
+    }
+
+    /// True iff the table function emits at most one output row per input row.
+    ///
+    /// This counts multiplicities: a function that emits a single `(row, diff)`
+    /// pair with `diff > 1` (e.g., `repeat_row`) emits more than one row.
+    /// Erroring on some input is fine: the ok stream then receives nothing for
+    /// that input row.
+    ///
+    /// Such a table function never duplicates input rows, so a `FlatMap` with
+    /// it preserves the unique keys of its input: it may drop rows, but that
+    /// cannot break uniqueness (same argument as for `Filter`). This is used
+    /// by `MirRelationExpr::keys_with_input_keys`.
+    ///
+    /// Compare the `FlatMapElimination` transform in `mz-transform`, which
+    /// discovers the same property dynamically, per instance, for FlatMaps
+    /// with all-literal arguments (of any table function), and removes the
+    /// FlatMap entirely.
+    ///
+    /// All variants are enumerated to ensure that added variants make a
+    /// conscious decision.
+    pub fn at_most_one_row_per_input(&self) -> bool {
+        match self {
+            // One row per element/entry of a collection-valued input.
+            TableFunc::AclExplode
+            | TableFunc::MzAclExplode
+            | TableFunc::JsonbEach
+            | TableFunc::JsonbEachStringify
+            | TableFunc::JsonbObjectKeys
+            | TableFunc::JsonbArrayElements
+            | TableFunc::JsonbArrayElementsStringify
+            | TableFunc::UnnestArray { .. }
+            | TableFunc::UnnestList { .. }
+            | TableFunc::UnnestMap { .. }
+            | TableFunc::GenerateSubscriptsArray => false,
+            // One row per series element / extracted record / match.
+            TableFunc::GenerateSeriesInt32
+            | TableFunc::GenerateSeriesInt64
+            | TableFunc::GenerateSeriesTimestamp
+            | TableFunc::GenerateSeriesTimestampTz
+            | TableFunc::CsvExtract(_)
+            | TableFunc::RegexpMatches => false,
+            // 0 or 1 rows: `regexp_extract` returns an `Option<(Row, Diff)>`,
+            // always with `Diff::ONE` (and emits nothing on NULL input).
+            TableFunc::RegexpExtract(_) => true,
+            // Emits the row `n` times, possibly with `n > 1` (or even `n < 0`).
+            TableFunc::RepeatRow | TableFunc::RepeatRowNonNegative => false,
+            // `n / width` rows.
+            TableFunc::Wrap { .. } => false,
+            // Emits no rows, or errors.
+            TableFunc::GuardSubquerySize { .. } => true,
+            // Emits exactly one row packing its scalar inputs.
+            TableFunc::TabletizedScalar { .. } => true,
+            // Emits exactly one row with the unpacked fields.
+            TableFunc::JsonbUnpack { .. } => true,
+            // Appends an ordinality column without changing the row count.
+            TableFunc::WithOrdinality(WithOrdinality { inner }) => {
+                inner.at_most_one_row_per_input()
+            }
         }
     }
 }
@@ -3895,6 +4218,23 @@ impl fmt::Display for TableFunc {
             TableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
             TableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
             TableFunc::JsonbArrayElementsStringify => f.write_str("jsonb_array_elements_text"),
+            TableFunc::JsonbUnpack { fields } => {
+                f.write_str("jsonb_unpack[")?;
+                for (i, field) in fields.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    match (&field.kind, field.stringify) {
+                        (JsonbUnpackFieldKind::Key(k), false) => write!(f, "->{:?}", k)?,
+                        (JsonbUnpackFieldKind::Key(k), true) => write!(f, "->>{:?}", k)?,
+                        (JsonbUnpackFieldKind::Index(i), false) => write!(f, "->{}", i)?,
+                        (JsonbUnpackFieldKind::Index(i), true) => write!(f, "->>{}", i)?,
+                        (JsonbUnpackFieldKind::Path(p), false) => write!(f, "#>{:?}", p)?,
+                        (JsonbUnpackFieldKind::Path(p), true) => write!(f, "#>>{:?}", p)?,
+                    }
+                }
+                f.write_str("]")
+            }
             TableFunc::RegexpExtract(a) => write!(f, "regexp_extract({:?}, _)", a.0),
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
@@ -3971,3 +4311,238 @@ impl WithOrdinality {
 }
 
 pub const REPEAT_ROW_NAME: &str = "repeat_row";
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::ReprScalarType;
+    use mz_repr::adt::jsonb::Jsonb;
+    use proptest::arbitrary::any;
+    use proptest::prelude::*;
+    use proptest::strategy::Union;
+
+    use super::*;
+    use crate::MirScalarExpr;
+    use crate::scalar::eval::Eval;
+    use crate::scalar::func::{
+        JsonbGetInt64, JsonbGetInt64Stringify, JsonbGetPath, JsonbGetPathStringify, JsonbGetString,
+        JsonbGetStringStringify,
+    };
+
+    /// The scalar accessor expression (over column 0) that a
+    /// [`JsonbUnpackField`] must behave identically to.
+    fn scalar_accessor_expr(field: &JsonbUnpackField) -> MirScalarExpr {
+        let input = MirScalarExpr::column(0);
+        match &field.kind {
+            JsonbUnpackFieldKind::Key(k) => {
+                let key = MirScalarExpr::literal_ok(Datum::String(k), ReprScalarType::String);
+                if field.stringify {
+                    input.call_binary(key, JsonbGetStringStringify)
+                } else {
+                    input.call_binary(key, JsonbGetString)
+                }
+            }
+            JsonbUnpackFieldKind::Index(i) => {
+                let index = MirScalarExpr::literal_ok(Datum::Int64(*i), ReprScalarType::Int64);
+                if field.stringify {
+                    input.call_binary(index, JsonbGetInt64Stringify)
+                } else {
+                    input.call_binary(index, JsonbGetInt64)
+                }
+            }
+            JsonbUnpackFieldKind::Path(p) => {
+                let mut row = Row::default();
+                let mut packer = row.packer();
+                if p.is_empty() {
+                    packer
+                        .try_push_array::<_, Datum>(&[], std::iter::empty())
+                        .unwrap();
+                } else {
+                    packer
+                        .try_push_array(
+                            &[ArrayDimension {
+                                lower_bound: 1,
+                                length: p.len(),
+                            }],
+                            p.iter().map(|s| Datum::String(s)),
+                        )
+                        .unwrap();
+                }
+                let path = MirScalarExpr::literal_ok(
+                    row.unpack_first(),
+                    ReprScalarType::Array(Box::new(ReprScalarType::String)),
+                );
+                if field.stringify {
+                    input.call_binary(path, JsonbGetPathStringify)
+                } else {
+                    input.call_binary(path, JsonbGetPath)
+                }
+            }
+        }
+    }
+
+    /// Evaluates `TableFunc::JsonbUnpack` with the given fields on the given
+    /// input, asserting the exactly-one-row contract, and returns the output
+    /// row.
+    fn unpack(fields: Vec<JsonbUnpackField>, input: Datum, arena: &RowArena) -> Row {
+        let func = TableFunc::JsonbUnpack { fields };
+        let datums = [input];
+        let mut rows = func.eval(&datums, arena).unwrap();
+        let (row, diff) = rows.next().unwrap();
+        assert_eq!(diff, Diff::ONE);
+        assert!(rows.next().is_none());
+        row
+    }
+
+    /// Json values over a tiny key alphabet, so that lookups hit often.
+    fn arb_json() -> impl Strategy<Value = serde_json::Value> {
+        use serde_json::Value;
+        let leaf = Union::new(vec![
+            Just(Value::Null).boxed(),
+            any::<bool>().prop_map(Value::Bool).boxed(),
+            (-100i64..100).prop_map(Value::from).boxed(),
+            "[a-c]{0,2}".prop_map(Value::String).boxed(),
+        ]);
+        leaf.prop_recursive(3, 24, 5, |inner| {
+            Union::new(vec![
+                prop::collection::vec(inner.clone(), 0..5)
+                    .prop_map(Value::Array)
+                    .boxed(),
+                prop::collection::btree_map("[a-c]{0,2}", inner, 0..5)
+                    .prop_map(|m| Value::Object(m.into_iter().collect()))
+                    .boxed(),
+            ])
+        })
+    }
+
+    fn arb_field() -> impl Strategy<Value = JsonbUnpackField> {
+        // Keys/path elements from the same alphabet as `arb_json`, path
+        // elements also from small ints (to index into arrays); indices small
+        // (to hit), including 0/-1 (the scalar quirk) and the i64 extremes
+        // (`wrapping_sub` behavior).
+        let index = Union::new(vec![
+            (-6i64..6).boxed(),
+            Just(i64::MIN).boxed(),
+            Just(i64::MAX).boxed(),
+        ]);
+        let path_element = Union::new(vec!["[a-c]{0,2}".boxed(), "-?[0-5]".boxed()]);
+        let kind = Union::new(vec![
+            "[a-c]{0,2}".prop_map(JsonbUnpackFieldKind::Key).boxed(),
+            index.prop_map(JsonbUnpackFieldKind::Index).boxed(),
+            prop::collection::vec(path_element, 0..4)
+                .prop_map(JsonbUnpackFieldKind::Path)
+                .boxed(),
+        ]);
+        (kind, any::<bool>()).prop_map(|(kind, stringify)| JsonbUnpackField { kind, stringify })
+    }
+
+    /// The oracle that keeps the batched eval in `jsonb_unpack` from drifting
+    /// from the scalar accessors: for every field, `TableFunc::JsonbUnpack`
+    /// must return exactly what the corresponding scalar accessor returns.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn jsonb_unpack_matches_scalar_accessors() {
+        proptest!(|(
+            json in proptest::option::of(arb_json()),
+            fields in prop::collection::vec(arb_field(), 1..8),
+        )| {
+            // `None` is SQL NULL (as opposed to json null).
+            let jsonb = json.map(|j| Jsonb::from_serde_json(j).unwrap());
+            let input = match &jsonb {
+                None => Datum::Null,
+                Some(jsonb) => jsonb.as_ref().into_datum(),
+            };
+
+            let arena = RowArena::new();
+            let row = unpack(fields.clone(), input, &arena);
+
+            let scalar_arena = RowArena::new();
+            for (got, field) in row.iter().zip_eq(fields.iter()) {
+                let expr = scalar_accessor_expr(field);
+                let expected = expr.eval(&[input], &scalar_arena).unwrap();
+                prop_assert_eq!(got, expected, "field {:?} on {}", field, input);
+            }
+        });
+    }
+
+    /// Readable spot-checks of the per-shape contract (the proptest above is
+    /// the authority).
+    #[mz_ore::test]
+    fn jsonb_unpack_examples() {
+        use JsonbUnpackFieldKind::*;
+        let raw = |kind| JsonbUnpackField {
+            kind,
+            stringify: false,
+        };
+        let text = |kind| JsonbUnpackField {
+            kind,
+            stringify: true,
+        };
+        let arena = RowArena::new();
+
+        // An object input.
+        let jsonb = Jsonb::from_serde_json(serde_json::json!({
+            "a": 1,
+            "b": {"c": [10, 20]},
+            "n": null,
+        }))
+        .unwrap();
+        let row = unpack(
+            vec![
+                raw(Key("x".into())),                                  // missing key
+                text(Path(vec!["b".into(), "c".into(), "-1".into()])), // nested walk
+                raw(Index(0)),                                         // index on object
+                raw(Key("n".into())),                                  // json null, raw
+                text(Key("n".into())),                                 // json null, text
+            ],
+            jsonb.as_ref().into_datum(),
+            &arena,
+        );
+        assert_eq!(
+            row.iter().collect::<Vec<_>>(),
+            vec![
+                Datum::Null,
+                Datum::String("20"),
+                Datum::Null,
+                Datum::JsonNull,
+                Datum::Null,
+            ]
+        );
+
+        // A json scalar input: the index 0/-1 quirk, and the empty path.
+        let jsonb = Jsonb::from_serde_json(serde_json::json!("v")).unwrap();
+        let row = unpack(
+            vec![
+                text(Index(0)),
+                text(Index(-1)),
+                text(Index(1)),
+                text(Key("a".into())),
+                text(Path(vec![])),
+                text(Path(vec!["0".into()])),
+            ],
+            jsonb.as_ref().into_datum(),
+            &arena,
+        );
+        assert_eq!(
+            row.iter().collect::<Vec<_>>(),
+            vec![
+                Datum::String("v"),
+                Datum::String("v"),
+                Datum::Null,
+                Datum::Null,
+                Datum::String("v"),
+                Datum::Null,
+            ]
+        );
+
+        // SQL NULL input: one row, all fields NULL.
+        let row = unpack(
+            vec![raw(Key("a".into())), text(Index(0)), raw(Path(vec![]))],
+            Datum::Null,
+            &arena,
+        );
+        assert_eq!(
+            row.iter().collect::<Vec<_>>(),
+            vec![Datum::Null, Datum::Null, Datum::Null]
+        );
+    }
+}

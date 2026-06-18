@@ -1,0 +1,412 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the JsonbUnpack optimizer transform, which replaces multiple
+# jsonb accessors on a common value with a single multi-field unpacking
+# table function.
+#
+# TODO: Some of the EXPLAIN tests here should become `.spec` tests
+# (src/transform/tests/test_transforms) once the spec framework supports
+# complex scalar expressions.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_jsonb_unpack_transform TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (data jsonb, c text, n int)
+
+# ----------------------------------------------------------------------
+# Basic firing: two stringified accessors on the same column.
+# ----------------------------------------------------------------------
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->>'k1', data->>'k2' FROM t
+----
+Explained Query:
+  Project (#3, #4)
+    FlatMap jsonb_unpack[->>"k1", ->>"k2"](#0{data})
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Mixed raw and stringified accessors on the same key are two distinct
+# fields.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->'k1', data->>'k1' FROM t
+----
+Explained Query:
+  Project (#3, #4)
+    FlatMap jsonb_unpack[->"k1", ->>"k1"](#0{data})
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# All three accessor kinds (key, integer index, path) share one unpack.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->>'k1', data->2, data#>>'{k2,k3}' FROM t
+----
+Explained Query:
+  Project (#3..=#5)
+    FlatMap jsonb_unpack[->>"k1", ->2, #>>["k2", "k3"]](#0{data})
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# ----------------------------------------------------------------------
+# Threshold: a single accessor stays a plain scalar call.
+# ----------------------------------------------------------------------
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->>'k1', n + 1 FROM t
+----
+Explained Query:
+  Project (#3, #4)
+    Map ((#0{data} ->> "k1"), (#2{n} + 1))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# ----------------------------------------------------------------------
+# Casts and other scalar work on the unpacked fields stay above the
+# unpack.
+# ----------------------------------------------------------------------
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT (data->>'k1')::int + 1, (data->>'k2')::numeric FROM t
+----
+Explained Query:
+  Project (#5, #6)
+    Map ((text_to_integer(#3) + 1), text_to_numeric(#4))
+      FlatMap jsonb_unpack[->>"k1", ->>"k2"](#0{data})
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# ----------------------------------------------------------------------
+# Predicates: accessors needed by a WHERE clause are pinned below the
+# unpack in their original scalar form; the selected fields are unpacked
+# above the filter.
+# ----------------------------------------------------------------------
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->>'k1', data->>'k2' FROM t WHERE data->>'k0' = 'x'
+----
+Explained Query:
+  Project (#3, #4)
+    FlatMap jsonb_unpack[->>"k1", ->>"k2"](#0{data})
+      Filter ("x" = (#0{data} ->> "k0"))
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(("x" = (#0{data} ->> "k0")))
+
+Target cluster: quickstart
+
+EOF
+
+# Accessors used *only* by predicates do not fire.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT n FROM t WHERE data->>'k1' = 'x' AND data->>'k2' = 'y'
+----
+Explained Query:
+  Project (#2{n})
+    Filter ("x" = (#0{data} ->> "k1")) AND ("y" = (#0{data} ->> "k2"))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(("x" = (#0{data} ->> "k1")) AND ("y" = (#0{data} ->> "k2")))
+
+Target cluster: quickstart
+
+EOF
+
+# An accessor used by both a predicate and the SELECT list is pinned and
+# does not count toward the threshold: only one unpinned field ('k2')
+# remains, so nothing fires.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->>'k1', data->>'k2' FROM t WHERE data->>'k1' = 'x'
+----
+Explained Query:
+  Project (#4, #3)
+    Filter ("x" = (#0{data} ->> "k1"))
+      Map ((#0{data} ->> "k2"), "x")
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(("x" = (#0{data} ->> "k1")))
+
+Target cluster: quickstart
+
+EOF
+
+# ----------------------------------------------------------------------
+# Computed bases: the unpacked value may itself be computed (here a
+# text-to-jsonb cast); it is materialized below the unpack.
+# ----------------------------------------------------------------------
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT c::jsonb->>'k1', c::jsonb->>'k2' FROM t
+----
+Explained Query:
+  Project (#4, #5)
+    FlatMap jsonb_unpack[->>"k1", ->>"k2"](#3)
+      Map (text_to_jsonb(#1{c}))
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# ----------------------------------------------------------------------
+# Stacked unpacks: a raw field of one firing group is the base of
+# another.
+# ----------------------------------------------------------------------
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->'obj'->>'x', data->'obj'->>'y', data->>'k1' FROM t
+----
+Explained Query:
+  Project (#5, #6, #4)
+    FlatMap jsonb_unpack[->>"x", ->>"y"](#3)
+      FlatMap jsonb_unpack[->"obj", ->>"k1"](#0{data})
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# A chain whose intermediate links are only used once: the links are
+# inlined into the FlatMap argument.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->'a'->'b'->>'x', data->'a'->'b'->>'y' FROM t
+----
+Explained Query:
+  Project (#3, #4)
+    FlatMap jsonb_unpack[->>"x", ->>"y"](((#0{data} -> "a") -> "b"))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# ----------------------------------------------------------------------
+# Out of scope: accessors under CASE, non-literal keys.
+# ----------------------------------------------------------------------
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT CASE WHEN n > 0 THEN data->>'k1' ELSE data->>'k2' END FROM t
+----
+Explained Query:
+  Project (#3)
+    Map ((#0{data} ->> case when (#2{n} > 0) then "k1" else "k2" end))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->>c, data->>'k1' FROM t
+----
+Explained Query:
+  Project (#3, #4)
+    Map ((#0{data} ->> #1{c}), (#0{data} ->> "k1"))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# ----------------------------------------------------------------------
+# Reduce sites: accessors in GROUP BY and aggregate arguments are
+# unpacked below the Reduce.
+# ----------------------------------------------------------------------
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->>'k1', sum((data->>'v')::numeric) FROM t GROUP BY data->>'k1'
+----
+Explained Query:
+  Reduce group_by=[#1] aggregates=[sum(text_to_numeric(#2))]
+    FlatMap jsonb_unpack[->>"k1", ->>"v"](#0{data})
+      Project (#0{data})
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# ----------------------------------------------------------------------
+# Flag off: the plan keeps the plain scalar accessors.
+# ----------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_jsonb_unpack_transform TO false;
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT data->>'k1', data->>'k2' FROM t
+----
+Explained Query:
+  Project (#3, #4)
+    Map ((#0{data} ->> "k1"), (#0{data} ->> "k2"))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_jsonb_unpack_transform TO true;
+----
+COMPLETE 0
+
+# ----------------------------------------------------------------------
+# Result correctness through the rendered FlatMap, including the edge
+# cases of the per-shape semantics contract.
+# ----------------------------------------------------------------------
+
+statement ok
+INSERT INTO t VALUES
+    ('{"k1": "a", "k2": 2, "obj": {"x": 10, "y": [1, 2]}}', NULL, 1),
+    ('{"k1": null}', NULL, 2),
+    ('[10, 20, 30]', NULL, 3),
+    ('"str"', NULL, 4),
+    ('5', NULL, 5),
+    (NULL, NULL, 6),
+    ('{}', NULL, 7)
+
+# Missing keys are NULL; json null is distinguishable from SQL NULL with
+# ->, both NULL with ->>; SQL NULL input yields a row of NULLs (the row
+# is not dropped).
+query ITTTT
+SELECT n, data->'k1', data->>'k1', data->>'k2', data->>'nosuch' FROM t ORDER BY n
+----
+1  "a"   a     2     NULL
+2  null  NULL  NULL  NULL
+3  NULL  NULL  NULL  NULL
+4  NULL  NULL  NULL  NULL
+5  NULL  NULL  NULL  NULL
+6  NULL  NULL  NULL  NULL
+7  NULL  NULL  NULL  NULL
+
+# Integer indexes: arrays index from the front and (negatively) from the
+# back; on non-collections index 0 and -1 return the value itself; on
+# objects integer indexes are NULL.
+query ITTTT
+SELECT n, data->>0, data->>-1, data->>1, data->>3 FROM t ORDER BY n
+----
+1  NULL  NULL  NULL  NULL
+2  NULL  NULL  NULL  NULL
+3  10    30    20    NULL
+4  str   str   NULL  NULL
+5  5     5     NULL  NULL
+6  NULL  NULL  NULL  NULL
+7  NULL  NULL  NULL  NULL
+
+# Paths: walking objects and arrays, including a numeric path element
+# indexing into an array; non-empty paths on scalars are NULL (unlike
+# index 0).
+query ITTT
+SELECT n, data#>>'{obj,x}', data#>>'{obj,y,-1}', data#>>'{0}' FROM t ORDER BY n
+----
+1  10    2     NULL
+2  NULL  NULL  NULL
+3  NULL  NULL  10
+4  NULL  NULL  NULL
+5  NULL  NULL  NULL
+6  NULL  NULL  NULL
+7  NULL  NULL  NULL
+
+# A filter pins its accessor below the unpack; results are unaffected.
+query TT
+SELECT data->>'k2', data#>>'{obj,x}' FROM t WHERE data->>'k1' = 'a'
+----
+2  10
+
+# Reduce-site results.
+query TT
+SELECT data->>'k1', count(*) FROM t GROUP BY data->>'k1' ORDER BY 1
+----
+a     1
+NULL  6
+
+# Computed-base results: a fallible cast as the base only sees rows that
+# survive the filter.
+statement ok
+CREATE TABLE s (c text, n int)
+
+statement ok
+INSERT INTO s VALUES ('{"k1": 1, "k2": 2}', 1), ('not json', 2)
+
+query TT
+SELECT c::jsonb->>'k1', c::jsonb->>'k2' FROM s WHERE n = 1
+----
+1  2
+
+query error invalid input syntax for type jsonb
+SELECT c::jsonb->>'k1', c::jsonb->>'k2' FROM s

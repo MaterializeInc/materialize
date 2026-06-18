@@ -78,6 +78,7 @@ pub mod equivalence_propagation;
 pub mod fold_constants;
 pub mod fusion;
 pub mod join_implementation;
+pub mod jsonb_unpack;
 pub mod literal_constraints;
 pub mod literal_lifting;
 pub mod monotonic;
@@ -891,6 +892,16 @@ impl Optimizer {
             // into a CaseLiteral lookup for O(log n) evaluation.
             Box::new(case_literal::CaseLiteralTransform);
                 if ctx.features.enable_case_literal_transform,
+            // Replace multiple jsonb accessors on a common value with a single
+            // multi-field unpacking table function. Placed late in the
+            // pipeline because it introduces FlatMaps, which many transforms
+            // handle poorly, and because it is a physical optimization: it
+            // changes how the data is accessed, not what is computed. Nothing
+            // after this point re-canonicalizes MFPs or rearranges what it
+            // builds; the final `fold_constants_fixpoint` below only needs a
+            // correct `TableFunc::eval`.
+            Box::new(jsonb_unpack::JsonbUnpack);
+                if ctx.features.enable_jsonb_unpack_transform,
             // Do a last run of constant folding. Importantly, this also runs `NormalizeLets`!
             // We need `NormalizeLets` at the end of the MIR pipeline for various reasons:
             // - The rendering expects some invariants about Let/LetRecs.

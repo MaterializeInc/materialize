@@ -85,6 +85,7 @@ def get_minimal_system_parameters(
         "enable_envelope_debezium_in_subscribe": "true",
         "enable_expressions_in_limit_syntax": "true",
         "enable_introspection_subscribes": "true",
+        "enable_jsonb_unpack_transform": "true",
         "enable_kafka_sink_partition_by": "true",
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
@@ -195,6 +196,11 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_case_literal_transform",
+            "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_jsonb_unpack_transform",
             "false",
             ["true", "false"],
         ),

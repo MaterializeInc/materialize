@@ -2269,6 +2269,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_jsonb_unpack_transform,
+        desc: "Allow the optimizer to replace multiple jsonb accessors on a common value with a single multi-field unpacking table function.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_simplify_quantified_comparisons,
         desc: "Allow the optimizer to simplify quantified comparisons in JOIN ON clauses into semi/anti-join EXISTS form during HIR-to-MIR lowering.",
         default: true,
@@ -2315,6 +2321,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
             enable_cast_elimination: vars.enable_cast_elimination(),
             enable_case_literal_transform: vars.enable_case_literal_transform(),
+            enable_jsonb_unpack_transform: vars.enable_jsonb_unpack_transform(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
             enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
@@ -2357,6 +2364,7 @@ mod tests {
             enable_fast_path_plan_insights,
             enable_cast_elimination,
             enable_case_literal_transform,
+            enable_jsonb_unpack_transform,
             enable_simplify_quantified_comparisons,
             enable_coalesce_case_transform,
             enable_will_distinct_propagation,
@@ -2387,6 +2395,7 @@ mod tests {
         set_var!(enable_fast_path_plan_insights);
         set_var!(enable_cast_elimination);
         set_var!(enable_case_literal_transform);
+        set_var!(enable_jsonb_unpack_transform);
         set_var!(enable_simplify_quantified_comparisons);
         set_var!(enable_coalesce_case_transform);
         set_var!(enable_will_distinct_propagation);

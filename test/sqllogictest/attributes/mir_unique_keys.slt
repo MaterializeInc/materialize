@@ -164,8 +164,8 @@ Explained Query:
     cte l1 =
       Union // { keys: "()" }
         Get l0 // { keys: "()" }
-        Project (#1) // { keys: "()" }
-          FlatMap guard_subquery_size(#0{count}) // { keys: "()" }
+        Project (#1) // { keys: "([])" }
+          FlatMap guard_subquery_size(#0{count}) // { keys: "([])" }
             Reduce aggregates=[count(*)] // { keys: "([])" }
               Project () // { keys: "()" }
                 Get l0 // { keys: "()" }
@@ -182,6 +182,25 @@ Explained Query:
                     Get l1 // { keys: "()" }
               Constant // { keys: "([])" }
                 - ()
+
+Target cluster: quickstart
+
+EOF
+
+# A FlatMap with a table function that emits at most one row per input row
+# (e.g. regexp_extract) preserves the keys of its input.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(keys, humanized expressions) AS VERBOSE TEXT FOR
+SELECT * FROM (SELECT DISTINCT a FROM t) dt, LATERAL regexp_extract('(\d+)', dt.a::text)
+----
+Explained Query:
+  FlatMap regexp_extract(Regex { case_insensitive: false, dot_matches_new_line: true, regex: Regex("(\\d+)") }, _)(integer_to_text(#0{a})) // { keys: "([0])" }
+    Distinct project=[#0{a}] // { keys: "([0])" }
+      Project (#0{a}) // { keys: "()" }
+        ReadStorage materialize.public.t // { keys: "()" }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
