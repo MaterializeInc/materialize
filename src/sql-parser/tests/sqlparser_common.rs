@@ -891,3 +891,52 @@ fn binary_op_operand_reparenthesized_after_nested_stripped() {
         );
     }
 }
+
+#[mz_ore::test]
+fn is_distinct_from_rhs_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // `IS DISTINCT FROM` parses its right-hand side at the `IS` precedence (see
+    // `Parser::parse_is`), so a RHS whose left spine binds at or below `IS`
+    // (`OR`/`AND`/`IS`) is wrapped in `Expr::Nested`. Once stripped, the printer
+    // must re-add the parens — otherwise `a IS DISTINCT FROM b OR c` reparses as
+    // `(a IS DISTINCT FROM b) OR c`. This drift is invisible to a stable-string
+    // round trip (both ASTs print to the same string), so it is checked
+    // structurally here.
+    for sql in [
+        "SELECT a IS DISTINCT FROM (b OR c)",
+        "SELECT a IS DISTINCT FROM (b AND c)",
+        "SELECT a IS DISTINCT FROM (b IS DISTINCT FROM c)",
+        "SELECT a IS DISTINCT FROM (b IS NULL)",
+        // A comparison RHS binds tighter than `IS`, so it stays bare.
+        "SELECT a IS DISTINCT FROM b = c",
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "IS DISTINCT FROM RHS display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
+        );
+    }
+}

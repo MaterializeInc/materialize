@@ -246,7 +246,17 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 if *negated {
                     f.write_str("NOT ");
                 }
-                f.write_node(construct);
+                // `IS DISTINCT FROM <rhs>` parses the RHS at the `IS` precedence
+                // (see `Parser::parse_is`), so a RHS whose left spine binds at or
+                // below `IS` re-associates out of the `IS` unless parenthesized
+                // (`a IS DISTINCT FROM b OR c` is `(a IS DISTINCT FROM b) OR c`).
+                // The other constructs (`NULL`/`TRUE`/…) are bare keywords.
+                if let IsExprConstruct::DistinctFrom(rhs) = construct {
+                    f.write_str("DISTINCT FROM ");
+                    write_binary_operand(f, rhs, left_edge(rhs) <= prec::IS);
+                } else {
+                    f.write_node(construct);
+                }
             }
             Expr::InList {
                 expr,
