@@ -48,6 +48,7 @@
 //!
 //! [RFC 9728]: https://datatracker.ietf.org/doc/html/rfc9728
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Extension;
@@ -225,16 +226,32 @@ impl McpOAuthDiscovery {
     }
 }
 
-/// Per-listener config for the discovery handler. Carried as an axum
-/// `Extension` because one environmentd process can serve listeners with
-/// different authenticators and `http_host_name`s.
+/// Per-listener config shared by the OAuth discovery handler and the auth
+/// middleware's `WWW-Authenticate` builder. Carried as an axum `Extension`
+/// because one environmentd process can serve listeners with different
+/// authenticators and `http_host_name`s.
+///
+/// Wrapping both consumers in one struct keeps them in lockstep: the 401
+/// challenge and the discovery document are computed from the same
+/// `discovery` value and the same `http_host_name`, so a client that
+/// follows the `resource_metadata` URL from a 401 reaches a document with
+/// matching host and matching authorization server.
 #[derive(Debug, Clone)]
-pub(crate) struct DiscoveryConfig {
+pub(crate) struct McpOAuthConfig {
     /// Operator-configured external host (without scheme). Beats the
     /// `Host` header when set.
     pub http_host_name: Option<String>,
     /// How (or whether) this listener advertises OAuth.
-    pub discovery: McpOAuthDiscovery,
+    pub discovery: Arc<McpOAuthDiscovery>,
+}
+
+impl McpOAuthConfig {
+    /// OAuth scope advertised in the `Bearer` challenge's `scope=`
+    /// parameter on 401 responses. Constant today; method-form keeps the
+    /// auth middleware free of [`MCP_SCOPE`] knowledge.
+    pub(crate) fn scope(&self) -> &'static str {
+        MCP_SCOPE
+    }
 }
 
 /// HTTP handler for [`PROTECTED_RESOURCE_METADATA_PATH`].
@@ -250,7 +267,7 @@ pub(crate) struct DiscoveryConfig {
 /// the JSON document otherwise.
 pub(crate) async fn handle_protected_resource_metadata(
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
-    Extension(config): Extension<DiscoveryConfig>,
+    Extension(config): Extension<McpOAuthConfig>,
     Extension(metrics): Extension<OauthMetadataMetrics>,
     req: Request,
 ) -> Response {
@@ -272,7 +289,7 @@ pub(crate) async fn handle_protected_resource_metadata(
     };
     let resource = format!("{PUBLISHED_SCHEME}://{host}/api/mcp");
 
-    let issuer = match &config.discovery {
+    let issuer = match &*config.discovery {
         McpOAuthDiscovery::Disabled => unreachable!("handled above"),
         McpOAuthDiscovery::Frontegg { issuer } => {
             // Validated once at startup in `for_authenticator`; trusted here.
