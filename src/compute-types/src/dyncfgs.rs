@@ -401,12 +401,15 @@ pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA: Config<bool> = Config
 
 /// Whether to enable per-column arrangement compression (the `RowCodec`
 /// framework). Independent of, and not combined with, dictionary compression.
-/// Like dictionary compression, captured at replica creation and held fixed.
+///
+/// Replica-scoped: the per-replica-resolved value is applied to the process-global
+/// `mz_row_spine::COLUMN_COMPRESSION` flag in the compute replica's `apply_worker_config`.
 pub const ENABLE_ARRANGEMENT_COLUMN_COMPRESSION_ALPHA: Config<bool> = Config::new(
     "enable_arrangement_column_compression_alpha",
     false,
     "Enable per-column arrangement compression (alpha; not yet production-ready).",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Whether to enable the peek response stash, for sending back large peek
 /// responses. The response stash will only be used for results that exceed

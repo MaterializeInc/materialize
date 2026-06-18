@@ -44,8 +44,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    COMPUTE_REPLICA_EXPIRATION_OFFSET, ENABLE_ARRANGEMENT_COLUMN_COMPRESSION_ALPHA,
-    ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA,
+    COMPUTE_REPLICA_EXPIRATION_OFFSET, ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA,
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
@@ -721,9 +720,6 @@ impl ComputeController {
         // why a later flip of the flag only affects replicas created afterwards.
         let arrangement_dictionary_compression =
             ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA.get(&self.dyncfg);
-        // Likewise captured once at replica creation, independent of dictionary compression.
-        let arrangement_column_compression =
-            ENABLE_ARRANGEMENT_COLUMN_COMPRESSION_ALPHA.get(&self.dyncfg);
 
         let replica_config = ReplicaConfig {
             location,
@@ -736,7 +732,6 @@ impl ComputeController {
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
             arrangement_dictionary_compression,
-            arrangement_column_compression,
         };
 
         let instance = self.instance_mut(instance_id).expect("validated");

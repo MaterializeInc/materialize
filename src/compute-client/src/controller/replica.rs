@@ -51,8 +51,6 @@ pub(super) struct ReplicaConfig {
     pub expiration_offset: Option<Duration>,
     /// Whether arrangements on this replica use dictionary compression, captured at creation.
     pub arrangement_dictionary_compression: bool,
-    /// Whether arrangements on this replica use per-column compression, captured at creation.
-    pub arrangement_column_compression: bool,
 }
 
 /// A client for a replica task.
@@ -280,7 +278,6 @@ impl ReplicaTask {
                 }
                 config.arrangement_dictionary_compression =
                     self.config.arrangement_dictionary_compression;
-                config.arrangement_column_compression = self.config.arrangement_column_compression;
             }
             _ => {}
         }
