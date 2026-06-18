@@ -469,13 +469,19 @@ impl CsvDecoderState {
                             // that bytes are silently merged across a field
                             // boundary. A field whose bytes are not valid UTF-8 on
                             // their own is a decode error.
-                            let mut fields: Vec<&str> = Vec::with_capacity(self.n_cols);
+                            // Pack each field straight into `row_buf` as it is
+                            // validated rather than collecting into a temporary
+                            // `Vec`. A UTF-8 error mid-record leaves a partial row
+                            // behind, but that is harmless: the error path never
+                            // reads `row_buf`, and the next record's `.packer()`
+                            // clears it before packing.
+                            let mut row_packer = self.row_buf.packer();
                             let mut utf8_error = None;
                             for i in 0..self.n_cols {
                                 match std::str::from_utf8(
                                     &self.output[self.ends[i]..self.ends[i + 1]],
                                 ) {
-                                    Ok(field) => fields.push(field),
+                                    Ok(field) => row_packer.push(Datum::String(field)),
                                     Err(e) => {
                                         utf8_error = Some(e);
                                         break;
@@ -485,8 +491,6 @@ impl CsvDecoderState {
                             match utf8_error {
                                 None => {
                                     self.events_success += 1;
-                                    let mut row_packer = self.row_buf.packer();
-                                    row_packer.extend(fields.iter().map(|f| Datum::String(f)));
                                     Ok(Some(self.row_buf.clone()))
                                 }
                                 Some(e) => {
