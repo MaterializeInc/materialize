@@ -7,6 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! In-memory `Tag`-based encoding of a tuple of `Datum`s.
+//!
+//! See `doc/developer/row-encoding.md` for the size limits this encoding and
+//! its datum types impose.
+
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
