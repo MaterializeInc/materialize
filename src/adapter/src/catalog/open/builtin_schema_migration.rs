@@ -197,6 +197,16 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_role_parameters",
         ),
+        // Required because we added `mz_cluster_replica_size_internal_ind` builtin
+        // index without bumping mz_indexes. make_mz_indexes inlines the builtin-index
+        // set as VALUES, so any add/remove changes its SQL fingerprint and requires
+        // an explicit replacement step.
+        MigrationStep::replacement(
+            "26.30.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
         MigrationStep::replacement(
             "26.30.0-dev.0",
             CatalogItemType::MaterializedView,
