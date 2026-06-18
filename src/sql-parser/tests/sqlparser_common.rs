@@ -796,26 +796,41 @@ fn between_bound_reparenthesized_after_nested_stripped() {
         }
     }
 
-    // `false BETWEEN x AND (0 = a)` parses with the comparison high bound wrapped
-    // in `Expr::Nested` (the bound parses at `Like`, above the comparison's
-    // `Cmp`). Once the `Nested` is stripped, the printer must re-add the parens —
-    // otherwise it prints `... AND 0 = a`, which reparses as
-    // `(false BETWEEN x AND 0) = a`.
-    let mut ast = mz_sql_parser::parser::parse_statements("SELECT false BETWEEN x AND (0 = a)")
-        .unwrap()
-        .remove(0)
-        .ast;
-    StripNested.visit_statement_mut(&mut ast);
-    let displayed = ast.to_ast_string_simple();
-    let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
-        .unwrap()
-        .remove(0)
-        .ast;
-    StripNested.visit_statement_mut(&mut reparsed);
-    assert_eq!(
-        ast, reparsed,
-        "BETWEEN bound display did not round-trip after Nested was stripped; displayed = {displayed:?}"
-    );
+    // A `BETWEEN` bound parses with `parse_subexpr(Precedence::Like)`, so a bound
+    // whose left spine binds at or below `Like` is wrapped in `Expr::Nested` by
+    // the parser. Once the `Nested` is stripped, the printer must re-add the
+    // parens, or the bound's leading operator re-associates out of the `BETWEEN`
+    // (`... AND 0 = a` reparses as `(... BETWEEN ... AND 0) = a`, and
+    // `... 1 IS NULL AND ...` makes the parser expect `AND` but find `IS`). The
+    // right-closing forms (`IS NULL`, `= ANY (…)`, `IN (…)`) are the interesting
+    // cases: their looseness is on the *left* spine, so the decision must use the
+    // left edge, not the right edge (which closes at `ATOM`).
+    for sql in [
+        "SELECT false BETWEEN x AND (0 = a)",
+        "SELECT y BETWEEN (1 IS NULL) AND z",
+        "SELECT y BETWEEN x AND (1 IS NULL)",
+        "SELECT y BETWEEN (a = ANY (ARRAY[b])) AND z",
+        "SELECT y BETWEEN (a IN (SELECT c FROM t)) AND z",
+        "SELECT y BETWEEN (a OR b) AND z",
+        // The left-spine operator is buried under a tighter top (`IN`, `Like`).
+        "SELECT y BETWEEN (a = ANY (ARRAY[b]) IN (SELECT c FROM t)) AND z",
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "BETWEEN bound display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
+        );
+    }
 }
 
 #[mz_ore::test]

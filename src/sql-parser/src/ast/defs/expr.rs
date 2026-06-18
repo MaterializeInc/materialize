@@ -607,16 +607,19 @@ fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, exp
     }
 }
 
-/// Write `bound` as a `BETWEEN … AND …` bound. The parser parses both bounds at
-/// `Precedence::Like`, so a bound exposing a spine at or below `Like` on its
-/// right would re-associate out of the `BETWEEN` on reparse (`x BETWEEN a AND b =
-/// c` parses as `(x BETWEEN a AND b) = c`); such a bound must be parenthesized.
-/// Use [`right_edge`] so the decision follows right-transparent prefixes and
-/// nested infixes, not just the top operator. The parser wraps these bounds in
+/// Write `bound` as a `BETWEEN … AND …` bound. The parser parses both bounds with
+/// `parse_subexpr(Precedence::Like)` (see `Parser::parse_between`), starting fresh
+/// with nothing to the bound's left, so it walks the bound's *left spine* and
+/// stops at the first operator binding at or below `Like` — leaving that operator
+/// outside the bound (`x BETWEEN 1 IS NULL AND y` parses `1` as the bound, then
+/// expects `AND` but finds `IS`). A bound is therefore safe bare only when its
+/// left edge binds strictly above `Like`; use [`left_edge`] (not [`right_edge`],
+/// which closes at `ATOM` for the right-closing `IS NULL`/`= ANY (…)`/`IN (…)`
+/// forms whose looseness is on the left). The parser wraps these bounds in
 /// `Expr::Nested` (which is `ATOM`, so it prints bare); this re-adds the parens
 /// for ASTs where that wrapper is absent.
 fn write_between_bound<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, bound: &Expr<T>) {
-    let needs_parens = right_edge(bound) <= prec::LIKE;
+    let needs_parens = left_edge(bound) <= prec::LIKE;
     if needs_parens {
         f.write_str("(");
         f.write_node(bound);
