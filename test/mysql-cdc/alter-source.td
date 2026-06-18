@@ -127,7 +127,7 @@ materialize.public.table_a "CREATE TABLE materialize.public.table_a (pk pg_catal
 materialize.public.table_a "CREATE TABLE\n    materialize.public.table_a\n        (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT \"PRIMARY\" PRIMARY KEY (pk))\nFROM SOURCE materialize.public.mz_source (REFERENCE = public.table_a)\nWITH (\n    <DETAILS>\n);"
 
 >[version>=2603000] SHOW CREATE TABLE table_a;
-materialize.public.table_a "CREATE TABLE\n    materialize.public.table_a\n        (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT \"PRIMARY\" PRIMARY KEY (pk))\nFROM SOURCE materialize.public.mz_source (REFERENCE = public.table_a);"
+materialize.public.table_a "CREATE TABLE materialize.public.table_a\nFROM SOURCE materialize.public.mz_source (REFERENCE = public.table_a);"
 
 #
 # Error checking
