@@ -17,7 +17,7 @@ use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
-    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_COMMENTS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
     MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES,
@@ -52,7 +52,7 @@ use mz_repr::{
 use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
-use mz_sql::names::{CommentObjectId, SchemaSpecifier};
+use mz_sql::names::SchemaSpecifier;
 use mz_sql::plan::{ConnectionDetails, SshKey};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
@@ -1574,58 +1574,6 @@ impl CatalogState {
             )
             .expect("privileges is 1 dimensional, and its length is used for the array length");
         row
-    }
-
-    pub fn pack_comment_update(
-        &self,
-        object_id: CommentObjectId,
-        column_pos: Option<usize>,
-        comment: &str,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        // Use the audit log representation so it's easier to join against.
-        let object_type = mz_sql::catalog::ObjectType::from(object_id);
-        let audit_type = super::object_type_to_audit_object_type(object_type);
-        let object_type_str = audit_type.to_string();
-
-        let object_id_str = match object_id {
-            CommentObjectId::Table(global_id)
-            | CommentObjectId::View(global_id)
-            | CommentObjectId::MaterializedView(global_id)
-            | CommentObjectId::Source(global_id)
-            | CommentObjectId::Sink(global_id)
-            | CommentObjectId::Index(global_id)
-            | CommentObjectId::Func(global_id)
-            | CommentObjectId::Connection(global_id)
-            | CommentObjectId::Secret(global_id)
-            | CommentObjectId::Type(global_id) => global_id.to_string(),
-            CommentObjectId::Role(role_id) => role_id.to_string(),
-            CommentObjectId::Database(database_id) => database_id.to_string(),
-            CommentObjectId::Schema((_, schema_id)) => schema_id.to_string(),
-            CommentObjectId::Cluster(cluster_id) => cluster_id.to_string(),
-            CommentObjectId::ClusterReplica((_, replica_id)) => replica_id.to_string(),
-            CommentObjectId::NetworkPolicy(network_policy_id) => network_policy_id.to_string(),
-        };
-        let column_pos_datum = match column_pos {
-            Some(pos) => {
-                // TODO(parkmycar): https://github.com/MaterializeInc/database-issues/issues/6711.
-                let pos =
-                    i32::try_from(pos).expect("we constrain this value in the planning layer");
-                Datum::Int32(pos)
-            }
-            None => Datum::Null,
-        };
-
-        BuiltinTableUpdate::row(
-            &*MZ_COMMENTS,
-            Row::pack_slice(&[
-                Datum::String(&object_id_str),
-                Datum::String(&object_type_str),
-                column_pos_datum,
-                Datum::String(comment),
-            ]),
-            diff,
-        )
     }
 
     pub fn pack_webhook_source_update(

@@ -4400,7 +4400,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (23 rows)
+        →Constant (24 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -4727,6 +4727,21 @@ Source mz_internal.mz_catalog_raw
   project=(#1, #2)
   filter=(("Cluster" = (#0{data} ->> "kind")))
   map=(parse_catalog_id(((#0{data} -> "key") -> "id")), case when (json_null != (((#0{data} -> "value") -> "config") -> "workload_class")) then (((#0{data} -> "value") -> "config") ->> "workload_class") else null end)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_comments";
+----
+mz_internal.mz_comments:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#5..=#7, #3)
+  filter=(("Comment" = (#0{data} ->> "kind")))
+  map=((#0{data} -> "key"), (#1 -> "object"), ((#0{data} -> "value") ->> "comment"), (#2{obj} ? "Table"), case when #4 then parse_catalog_id((#2 -> "Table")) else case when (#2 ? "View") then parse_catalog_id((#2 -> "View")) else case when (#2 ? "MaterializedView") then parse_catalog_id((#2 -> "MaterializedView")) else case when (#2 ? "Source") then parse_catalog_id((#2 -> "Source")) else case when (#2 ? "Sink") then parse_catalog_id((#2 -> "Sink")) else case when (#2 ? "Index") then parse_catalog_id((#2 -> "Index")) else case when (#2 ? "Func") then parse_catalog_id((#2 -> "Func")) else case when (#2 ? "Connection") then parse_catalog_id((#2 -> "Connection")) else case when (#2 ? "Type") then parse_catalog_id((#2 -> "Type")) else case when (#2 ? "Secret") then parse_catalog_id((#2 -> "Secret")) else case when (#2 ? "Role") then parse_catalog_id((#2 -> "Role")) else case when (#2 ? "Database") then parse_catalog_id((#2 -> "Database")) else case when (#2 ? "Schema") then parse_catalog_id((((#2 -> "Schema") -> "schema") -> "Id")) else case when (#2 ? "Cluster") then parse_catalog_id((#2 -> "Cluster")) else case when (#2 ? "ClusterReplica") then parse_catalog_id(((#2 -> "ClusterReplica") -> "replica_id")) else case when (#2 ? "NetworkPolicy") then parse_catalog_id((#2 -> "NetworkPolicy")) else null end end end end end end end end end end end end end end end end, case when #4 then "table" else case when (#2 ? "View") then "view" else case when (#2 ? "MaterializedView") then "materialized-view" else case when (#2 ? "Source") then "source" else case when (#2 ? "Sink") then "sink" else case when (#2 ? "Index") then "index" else case when (#2 ? "Func") then "func" else case when (#2 ? "Connection") then "connection" else case when (#2 ? "Type") then "type" else case when (#2 ? "Secret") then "secret" else case when (#2 ? "Role") then "role" else case when (#2 ? "Database") then "database" else case when (#2 ? "Schema") then "schema" else case when (#2 ? "Cluster") then "cluster" else case when (#2 ? "ClusterReplica") then "cluster-replica" else case when (#2 ? "NetworkPolicy") then "network-policy" else null end end end end end end end end end end end end end end end end, jsonb_to_integer(((#1 -> "sub_component") -> "ColumnPos")))
 
 Target cluster: mz_catalog_server
 
@@ -7040,7 +7055,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (23 rows)
+  →Constant (24 rows)
 
 Target cluster: mz_catalog_server
 
