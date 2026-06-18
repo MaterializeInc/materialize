@@ -466,7 +466,7 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
 /// Set to zero to disable scraping and retract any existing data.
 pub const COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL: Config<Duration> = Config::new(
     "compute_prometheus_introspection_scrape_interval",
-    Duration::from_secs(1),
+    Duration::from_secs(10),
     "The collection interval for the Prometheus metrics introspection source. Set to zero to disable.",
 );
 
