@@ -195,7 +195,7 @@
   content: |
     Schema evolution of an Iceberg table is not supported. If the `SINK FROM` object's schema changes, you must drop and recreate the sink.
 
-- name: "restrictions-limitations-gcp-maintenance"
+- name: "restrictions-limitations-gcp-maintenance-lakehouse"
   content: |
     [Iceberg tables managed by the Lakehouse runtime catalog (BigLake API)](https://docs.cloud.google.com/lakehouse/docs/key-concepts#metastore-iceberg)
     do not receive automated maintenance like expiring old snapshots and compacting manifests and data files.
@@ -203,8 +203,10 @@
     Without table maintenance, table metadata grows over time and will eventually exceed BigLake's allowed limit.
     This will prevent Materialize Iceberg sinks from committing new data.
 
-    _[Iceberg tables managed by BigQuery](https://docs.cloud.google.com/lakehouse/docs/key-concepts#iceberg-managed-tables)_
-    _do receive automated maintenance, but only BigQuery can write to them._
+- name: "restrictions-limitations-gcp-maintenance-bigquery"
+  content: |
+    [Iceberg tables managed by BigQuery](https://docs.cloud.google.com/lakehouse/docs/key-concepts#iceberg-managed-tables)
+    do receive automated maintenance, but only BigQuery can write to them.
 
 - name: "exactly-once-delivery"
   content: |

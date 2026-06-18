@@ -11,7 +11,12 @@ menu:
 {{< private-preview />}}
 
 {{< warning >}}
-{{< include-from-yaml data="examples/create_sink_iceberg" name="restrictions-limitations-gcp-maintenance" >}}
+
+{{% include-from-yaml data="examples/create_sink_iceberg"
+name="restrictions-limitations-gcp-maintenance-lakehouse" %}}
+
+{{% include-from-yaml data="examples/create_sink_iceberg"
+name="restrictions-limitations-gcp-maintenance-bigquery" %}}
 {{< /warning >}}
 
 This guide walks you through the steps required to set up Iceberg sinks in
@@ -41,8 +46,12 @@ authenticate to BigLake.
 3. Grant the service account this role on your **Iceberg warehouse bucket**:
     - `storage.objectUser` (Storage Object User)
 4. [Create a service account key in JSON format.](https://docs.cloud.google.com/iam/docs/keys-create-delete#iam-service-account-keys-create-gcloud)
-5. Base64-encode the entire JSON key (e.g. `base64 < sa_key.json`). You will paste the
-   resulting string into the `CREATE SECRET` statement in the next step.
+
+5. Base64-encode the entire JSON key (e.g. `base64 < sa_key.json`). In the [next
+   step](#step-2-create-a-gcp-connection-and-iceberg-catalog-connection-in-materialize),
+   you will decode the resulting string in the `CREATE SECRET` statement.
+   Encoding the key first and decoding it in the `CREATE SECRET` statement
+   avoids escaping quotes and newlines in the SQL string literal.
 
 ### Step 2. Create a GCP connection and Iceberg catalog connection in Materialize
 
@@ -78,7 +87,11 @@ name="exactly-once-delivery" >}}
 
 ### Limitations
 
-- {{< include-from-yaml data="examples/create_sink_iceberg" name="restrictions-limitations-gcp-maintenance" >}}
+- {{< include-from-yaml data="examples/create_sink_iceberg"
+name="restrictions-limitations-gcp-maintenance-lakehouse" >}}
+
+- {{< include-from-yaml data="examples/create_sink_iceberg"
+name="restrictions-limitations-gcp-maintenance-bigquery" >}}
 
 {{% include-headless "/headless/iceberg-sinks/limitations-list" %}}
 

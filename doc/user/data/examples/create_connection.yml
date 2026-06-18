@@ -658,8 +658,9 @@
 
 - name: "syntax-gcp"
   code: |
-    -- Base64-encode the entire JSON service account key.
-    -- e.g. base64 < sa_key.json
+    -- Create the secret with the service account key.
+    -- Base64-encode the entire JSON service account key (e.g., base64 < sa_key.json)
+    -- And decode it in the CREATE SECRET statement.
     CREATE SECRET <secret_name> AS decode('<sa_key_json_base64>', 'base64');
 
     CREATE CONNECTION <connection_name> TO GCP (
@@ -673,8 +674,11 @@
     - name: "`SECRET <secret_name>`"
       description: |
         Secret containing the [GCP service account key](https://docs.cloud.google.com/iam/docs/keys-create-delete) (JSON).
-        Base64-encode it first and decode it in the `CREATE SECRET` statement to avoid
-        escaping quotes and newlines in the SQL string literal.
+
+        To create the secret, first base64-encode the entire JSON service
+        account key and then decode it in the `CREATE SECRET` statement. This
+        avoids escaping quotes and newlines in the SQL string literal.
+
     - name: "`WITH (<with_options>)`"
       description: |
         The following `<with_options>` are supported:

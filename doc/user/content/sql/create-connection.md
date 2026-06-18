@@ -183,13 +183,19 @@ If you are exporting to Google Cloud Storage using [Iceberg sinks](/sql/create-s
 ### GCP
 {{< private-preview />}}
 
-The GCP connection uses a [GCP service account key (JSON)](https://docs.cloud.google.com/iam/docs/keys-create-delete) to connect.
-You can use a GCP connection to export data to [Lakehouse/BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) via [Iceberg sinks](/sql/create-sink/iceberg).
+You can use a GCP connection to export data to
+[Lakehouse/BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog)
+via [Iceberg sinks](/sql/create-sink/iceberg).
 
-Create a [GCP service account](https://docs.cloud.google.com/iam/docs/service-account-overview)
-for Materialize to use and a [service account key](https://docs.cloud.google.com/iam/docs/keys-create-delete) (JSON).
-Base64-encode the entire JSON key (e.g. `base64 < sa_key.json`) and decode it in the
-`CREATE SECRET` statement, as shown below.
+The GCP connection uses a [GCP service account key
+(JSON)](https://docs.cloud.google.com/iam/docs/keys-create-delete) to
+authenticate. Create a [GCP service
+account](https://docs.cloud.google.com/iam/docs/service-account-overview) for
+Materialize to use and generate a [service account
+key](https://docs.cloud.google.com/iam/docs/keys-create-delete) in JSON format.
+Base64-encode the entire JSON key (e.g., `base64 < sa_key.json`) and decode it
+in the `CREATE SECRET` statement, as shown below. This avoids escaping quotes
+and newlines in the SQL string literal.
 
 #### Syntax {#gcp-syntax}
 
