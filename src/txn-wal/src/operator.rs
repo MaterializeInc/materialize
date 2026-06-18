@@ -12,6 +12,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 use std::future::Future;
+use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
@@ -29,10 +30,8 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::txn::TxnsCodec;
 use mz_persist_types::{Codec, Codec64, StepForward};
-use mz_timely_util::builder_async::{
-    OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton, button,
-};
-use timely::container::CapacityContainerBuilder;
+use mz_timely_util::activator::ArcActivator;
+use mz_timely_util::builder_async::{PressOnDropButton, button};
 use timely::dataflow::channels::pact::Pipeline;
 #[cfg(test)]
 use timely::dataflow::operators::Input;
@@ -142,6 +141,17 @@ where
     (passthrough, vec![source_button, frontiers_button])
 }
 
+/// Event sent from the subscribe Tokio task to the sync `txns_progress_source`
+/// operator. The task owns the persist resources and the `data_subscribe`
+/// receiver. The operator owns the output capability and drives the frontier.
+enum SourceEvent<T> {
+    /// A `DataRemapEntry` read from the data shard subscription.
+    Remap(DataRemapEntry<T>),
+    /// The subscription closed cleanly. The operator drops its capability and
+    /// treats a later channel disconnect as expected rather than a task panic.
+    Finished,
+}
+
 /// TODO: I'd much prefer the communication protocol between the two operators
 /// to be exactly remap as defined in the [reclocking design doc]. However, we
 /// can't quite recover exactly the information necessary to construct that at
@@ -159,7 +169,7 @@ fn txns_progress_source_global<'scope, K, V, T, D, P, C>(
     scope: Scope<'scope, T>,
     name: &str,
     ctx: TxnsContext,
-    client: impl Future<Output = PersistClient> + 'static,
+    client: impl Future<Output = PersistClient> + Send + 'static,
     txns_id: ShardId,
     data_id: ShardId,
     as_of: T,
@@ -178,55 +188,148 @@ where
     let worker_idx = scope.index();
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
     let name = format!("txns_progress_source({})", name);
-    let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
+    let mut builder = OperatorBuilderRc::new(name.clone(), scope.clone());
+    let info = builder.operator_info();
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (remap_output, remap_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (remap_output, remap_stream) = builder.new_output::<Vec<DataRemapEntry<T>>>();
+    let mut remap_output = OutputBuilder::from(remap_output);
 
-    let shutdown_button = builder.build(move |capabilities| async move {
-        if worker_idx != chosen_worker {
-            return;
-        }
+    let (mut shutdown_handle, shutdown_button) = button(scope.clone(), Rc::clone(&info.address));
 
-        let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
-        let client = client.await;
-        let txns_read = ctx.get_or_init::<T, C>(&client, txns_id).await;
+    builder.build_reschedule(move |capabilities| {
+        // The output capability's time tracks the `logical_upper` we've advanced
+        // to. `None` indicates that we've dropped the capability to shut down.
+        let [cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+        let mut capability = Some(cap);
 
-        let _ = txns_read.update_gt(as_of.clone()).await;
-        let data_write = client
-            .open_writer::<K, V, T, D>(
-                data_id,
-                Arc::clone(&data_key_schema),
-                Arc::clone(&data_val_schema),
-                Diagnostics::from_purpose("data read physical upper"),
-            )
-            .await
-            .expect("schema shouldn't change");
-        let mut rx = txns_read
-            .data_subscribe(data_id, as_of.clone(), data_write)
-            .await;
-        debug!("{} starting as_of={:?}", name, as_of);
-
+        // The most recently observed physical upper. We emit a `DataRemapEntry`
+        // only when the physical upper changes.
         let mut physical_upper = T::minimum();
 
-        while let Some(remap) = rx.recv().await {
-            assert!(physical_upper <= remap.physical_upper);
-            assert!(physical_upper < remap.logical_upper);
+        // Per-worker state. Only the chosen worker subscribes to the data shard
+        // (via a Tokio task that owns the blocking persist I/O) and produces
+        // output. Non-chosen workers drop their capability immediately and only
+        // participate in the shutdown handshake below. `Some` holds the receiver
+        // of `SourceEvent`s, the activation ack, and the task handle, kept alive
+        // so the task is aborted when the operator is dropped.
+        let mut chosen_state = if worker_idx == chosen_worker {
+            let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<SourceEvent<T>>();
+            let (activator, activation_ack) = ArcActivator::new(scope, &info);
 
-            let logical_upper = remap.logical_upper.clone();
-            // As mentioned in the docs on this function, we only
-            // emit updates when the physical upper changes (which
-            // happens to makes the protocol a tiny bit more
-            // remap-like).
-            if remap.physical_upper != physical_upper {
-                physical_upper = remap.physical_upper.clone();
-                debug!("{} emitting {:?}", name, remap);
-                remap_output.give(&cap, remap);
-            } else {
-                debug!("{} not emitting {:?}", name, remap);
+            let task_name = name.clone();
+            let task = mz_ore::task::spawn(|| name.clone(), async move {
+                let client = client.await;
+                let txns_read = ctx.get_or_init::<T, C>(&client, txns_id).await;
+
+                let _ = txns_read.update_gt(as_of.clone()).await;
+                let data_write = client
+                    .open_writer::<K, V, T, D>(
+                        data_id,
+                        Arc::clone(&data_key_schema),
+                        Arc::clone(&data_val_schema),
+                        Diagnostics::from_purpose("data read physical upper"),
+                    )
+                    .await
+                    .expect("schema shouldn't change");
+                let mut rx = txns_read
+                    .data_subscribe(data_id, as_of.clone(), data_write)
+                    .await;
+                debug!("{} starting as_of={:?}", task_name, as_of);
+
+                while let Some(remap) = rx.recv().await {
+                    if event_tx.send(SourceEvent::Remap(remap)).is_err() {
+                        // The operator is gone. Stop.
+                        return;
+                    }
+                    activator.activate();
+                }
+                // The subscription closed. Signal the operator so it drops its
+                // output capability.
+                let _ = event_tx.send(SourceEvent::Finished);
+                activator.activate();
+            })
+            .abort_on_drop();
+
+            Some((event_rx, activation_ack, task))
+        } else {
+            // Non-chosen workers contribute nothing to the output frontier.
+            capability = None;
+            None
+        };
+
+        // Whether we've observed `SourceEvent::Finished`, so a subsequent
+        // channel disconnect is expected rather than a task panic.
+        let mut finished = false;
+
+        move |_frontiers| {
+            // On a local shutdown press, hold the capability and stay scheduled
+            // until all workers have pressed, then release. Dropping the
+            // capability on the local press alone would let the downstream
+            // frontier advance during cross-worker teardown skew, past times
+            // whose input this worker has already discarded.
+            if shutdown_handle.local_pressed() {
+                return if shutdown_handle.all_pressed() {
+                    capability = None;
+                    // Drop the receiver, ack, and task handle, aborting the task.
+                    chosen_state = None;
+                    false
+                } else {
+                    true
+                };
             }
-            cap.downgrade(&logical_upper);
+
+            let Some((event_rx, activation_ack, _task)) = chosen_state.as_mut() else {
+                // Non-chosen worker: nothing to do. Stay alive (the button
+                // channel reschedules us) for the shutdown handshake above.
+                return false;
+            };
+            // Acknowledge the activation so the Tokio task can activate us again.
+            activation_ack.ack();
+
+            let mut output = remap_output.activate();
+            loop {
+                match event_rx.try_recv() {
+                    Ok(SourceEvent::Remap(remap)) => {
+                        let Some(cap) = capability.as_mut() else {
+                            // Already shut down, so drop any straggling events.
+                            continue;
+                        };
+                        assert!(physical_upper <= remap.physical_upper);
+                        assert!(physical_upper < remap.logical_upper);
+
+                        let logical_upper = remap.logical_upper.clone();
+                        // Emit at the pre-downgrade capability, then downgrade.
+                        if remap.physical_upper != physical_upper {
+                            physical_upper = remap.physical_upper.clone();
+                            debug!("{} emitting {:?}", name, remap);
+                            output.session(&*cap).give(remap);
+                        } else {
+                            debug!("{} not emitting {:?}", name, remap);
+                        }
+                        cap.downgrade(&logical_upper);
+                    }
+                    Ok(SourceEvent::Finished) => {
+                        // Subscription closed cleanly. Drop the capability.
+                        finished = true;
+                        capability = None;
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        // A task panic aborts the process via the enhanced panic
+                        // handler, so this assert is only a safety net for
+                        // environments that do not abort. On the panic path the
+                        // task never calls `activate()`, so it fires only if the
+                        // operator is rescheduled for another reason.
+                        assert!(finished, "txns_progress_source task unexpectedly gone");
+                        break;
+                    }
+                }
+            }
+
+            false
         }
     });
+
     (remap_stream, shutdown_button.press_on_drop())
 }
 
