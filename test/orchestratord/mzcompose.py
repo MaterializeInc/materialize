@@ -101,7 +101,7 @@ def get_version(tag: str | None = None) -> MzVersion:
 
 
 def get_image(image: str, tag: str | None) -> str:
-    return f'{image.rsplit(":", 1)[0]}:{get_tag(tag)}'
+    return f"{image.rsplit(':', 1)[0]}:{get_tag(tag)}"
 
 
 def get_upgrade_target(
@@ -276,7 +276,7 @@ def render_kind_cluster_config() -> None:
         out_file.write(
             text.replace(
                 "$DOCKER_CONFIG",
-                os.getenv("DOCKER_CONFIG", f'{os.environ["HOME"]}/.docker'),
+                os.getenv("DOCKER_CONFIG", f"{os.environ['HOME']}/.docker"),
             )
         )
 
@@ -3432,7 +3432,7 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
                         stderr=subprocess.DEVNULL,
                     )
                     if (
-                        f"ERROR k8s_controller::controller: Materialize reconciliation error. err=reconciler for object Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment failed"
+                        f"ERROR reconciling object{{object.ref=Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment"
                         in logs
                     ):
                         break

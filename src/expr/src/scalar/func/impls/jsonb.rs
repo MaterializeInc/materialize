@@ -248,6 +248,26 @@ fn jsonb_datum_to_u64<'a>(d: Datum<'a>) -> Result<u64, String> {
         .map_err(|_| format!("number out of u64 range: {n}"))
 }
 
+/// Decodes a JSONB object of shape `{"bitflags": <u64>}` into an `AclMode`.
+///
+/// Shared decoder for `parse_catalog_privileges` (which embeds the object as
+/// the `acl_mode` field of each privilege) and `parse_catalog_acl_mode` (which
+/// receives the object at the top level).
+fn jsonb_datum_to_acl_mode(d: Datum) -> Result<AclMode, String> {
+    let Datum::Map(dict) = d else {
+        return Err(format!("unexpected acl_mode: {d}"));
+    };
+    let mut bits = None;
+    for (key, val) in dict.iter() {
+        match key {
+            "bitflags" => bits = Some(jsonb_datum_to_u64(val)?),
+            other => return Err(format!("unexpected acl_mode field: {other}")),
+        }
+    }
+    let bits = bits.ok_or_else(|| "missing acl_mode bitflags".to_string())?;
+    AclMode::from_bits(bits).ok_or_else(|| format!("invalid acl_mode bitflags: {bits}"))
+}
+
 /// Converts a JSONB `Datum` into a `RoleId`.
 fn jsonb_datum_to_role_id(d: Datum) -> Result<RoleId, String> {
     match d {
@@ -318,18 +338,7 @@ fn parse_catalog_privileges<'a>(a: JsonbRef<'a>) -> Result<ArrayRustType<MzAclIt
                         grantor = Some(id);
                     }
                     "acl_mode" => {
-                        let Datum::Map(mode_dict) = val else {
-                            return Err(format!("unexpected acl_mode: {val}"));
-                        };
-                        let (key, val) = mode_dict.iter().next().ok_or("empty acl_mode")?;
-                        if key != "bitflags" {
-                            return Err(format!("unexpected acl_mode field: {key}"));
-                        }
-                        let bits = jsonb_datum_to_u64(val)?;
-                        let Some(mode) = AclMode::from_bits(bits) else {
-                            return Err(format!("invalid acl_mode bitflags: {bits}"));
-                        };
-                        acl_mode = Some(mode);
+                        acl_mode = Some(jsonb_datum_to_acl_mode(val)?);
                     }
                     other => return Err(format!("unexpected privilege field: {other}")),
                 }
@@ -356,6 +365,15 @@ fn parse_catalog_privileges<'a>(a: JsonbRef<'a>) -> Result<ArrayRustType<MzAclIt
 
     parse()
         .map(ArrayRustType)
+        .map_err(|e| EvalError::InvalidCatalogJson(e.into()))
+}
+
+/// Converts a catalog JSON-serialized `AclMode` bitflags object into a
+/// PostgreSQL ACL char-code string (e.g. `{"bitflags": 514}` → `"ar"`).
+#[sqlfunc]
+fn parse_catalog_acl_mode<'a>(a: JsonbRef<'a>) -> Result<String, EvalError> {
+    jsonb_datum_to_acl_mode(a.into_datum())
+        .map(|mode| mode.to_string())
         .map_err(|e| EvalError::InvalidCatalogJson(e.into()))
 }
 

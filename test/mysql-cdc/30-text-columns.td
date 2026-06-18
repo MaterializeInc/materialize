@@ -70,8 +70,11 @@ $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 >[version<2600700] SHOW CREATE TABLE t1;
 materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.text, f2 pg_catalog.text, f3 pg_catalog.text) FROM SOURCE materialize.public.da (REFERENCE = public.t1) WITH (TEXT COLUMNS = (f1, f2, f3), <DETAILS>);"
 
->[version>=2600700] SHOW CREATE TABLE t1;
+>[2600700<=version<2603000] SHOW CREATE TABLE t1;
 materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.text, f2 pg_catalog.text, f3 pg_catalog.text)\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (\n    TEXT COLUMNS = (f1, f2, f3),\n    <DETAILS>\n);"
+
+>[version>=2603000] SHOW CREATE TABLE t1;
+materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.text, f2 pg_catalog.text, f3 pg_catalog.text)\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (TEXT COLUMNS = (f1, f2, f3));"
 
 > DROP SOURCE da CASCADE;
 
