@@ -221,11 +221,20 @@ for (const region of REGIONS) {
       `[aria-label='${apiKeyName}'] [aria-label='Delete app password']`,
     );
     await page.fill("[aria-modal] input", apiKeyName);
+    // Deleting an app password round-trips to Frontegg before the modal closes,
+    // which can take longer than the default 5s timeout (observed under WebKit
+    // in CI), so give the network call room to complete.
     await Promise.all([
-      page.waitForSelector("[aria-modal]", { state: "detached" }),
+      page.waitForSelector("[aria-modal]", {
+        state: "detached",
+        timeout: 30_000,
+      }),
       page.click("[aria-modal] button:text('Delete')"),
     ]);
-    await page.waitForSelector(`text=${apiKeyName}`, { state: "detached" });
+    await page.waitForSelector(`text=${apiKeyName}`, {
+      state: "detached",
+      timeout: 30_000,
+    });
   });
 }
 
