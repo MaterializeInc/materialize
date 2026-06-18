@@ -2866,6 +2866,116 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     }),
 });
 
+pub static MZ_CLUSTER_SYSTEM_PARAMETERS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_cluster_system_parameters",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_SYSTEM_PARAMETERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("value", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "cluster_id",
+                "The ID of the cluster. Corresponds to `mz_clusters.id`.",
+            ),
+            ("name", "The name of the cluster-coherent system parameter."),
+            ("value", "The cluster-scoped value of the system parameter."),
+        ]),
+        // Projects the durable `cluster_system_configurations` collection out of
+        // `mz_catalog_raw` (the durable catalog as JSON): the key is
+        // `{cluster_id, name}` and the value is `{value}`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL value
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'cluster_id') AS cluster_id,
+    data->'key'->>'name' AS name,
+    data->'value'->>'value' AS value
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'ClusterSystemConfiguration'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "cluster_system_parameter",
+            description: "Cluster-coherent system parameter overrides",
+            links: &const {
+                [OntologyLink {
+                    name: "scoped_to_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk_typed(
+                        "cluster_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::ClusterId,
+                    ),
+                }]
+            },
+            column_semantic_types: &[("cluster_id", SemanticType::ClusterId)],
+        }),
+    });
+
+pub static MZ_REPLICA_SYSTEM_PARAMETERS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_replica_system_parameters",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_REPLICA_SYSTEM_PARAMETERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("value", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "replica_id",
+                "The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.",
+            ),
+            ("name", "The name of the replica-local system parameter."),
+            ("value", "The replica-scoped value of the system parameter."),
+        ]),
+        // Projects the durable `replica_system_configurations` collection out of
+        // `mz_catalog_raw` (the durable catalog as JSON): the key is
+        // `{replica_id, name}` and the value is `{value}`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL replica_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL value
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'replica_id') AS replica_id,
+    data->'key'->>'name' AS name,
+    data->'value'->>'value' AS value
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'ReplicaSystemConfiguration'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "replica_system_parameter",
+            description: "Replica-local system parameter overrides",
+            links: &const {
+                [OntologyLink {
+                    name: "scoped_to_replica",
+                    target: "replica",
+                    properties: LinkProperties::fk_typed(
+                        "replica_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::ReplicaId,
+                    ),
+                }]
+            },
+            column_semantic_types: &[("replica_id", SemanticType::ReplicaId)],
+        }),
+    });
+
 pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_comments",
     schema: MZ_INTERNAL_SCHEMA,

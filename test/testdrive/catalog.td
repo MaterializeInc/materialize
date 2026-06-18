@@ -722,11 +722,13 @@ pg_authid_core                           ""
 name                   cluster             comment
 ----------------------------------------------------
 mz_cluster_schedules           mz_catalog_server   ""
+mz_cluster_system_parameters   mz_catalog_server   ""
 mz_cluster_workload_classes    mz_catalog_server   ""
 mz_internal_cluster_replicas   mz_catalog_server   ""
 mz_network_policies            mz_catalog_server   ""
 mz_network_policy_rules        mz_catalog_server   ""
 mz_pending_cluster_replicas    mz_catalog_server   ""
+mz_replica_system_parameters   mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_introspection.
 
