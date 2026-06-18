@@ -79,16 +79,21 @@ For a map with `n > 0` entries the payload (the bytes counted by the existing
 `u64` length) becomes:
 
 ```text
-[ entries.. ][ offset_1: u32 ] .. [ offset_{n-1}: u32 ][ count: u32 ]
+[ entries.. ][ offset_1: W ] .. [ offset_{n-1}: W ][ count_word: u32 ]
 ```
 
 * Entries are unchanged: `(key, value)` datum pairs sorted ascending by key.
 * `offset_i` is the start of entry `i` relative to the first entry. Entry 0 is
   always at offset 0 and is omitted.
-* `count` is `n`.
+* `count_word` packs `n` in its low 30 bits and the offset-width class in its
+  top two bits.
 
-The index is a **suffix** of exactly `n` little-endian `u32`s, so the entries
-occupy the first `len - 4 * n` bytes. Empty maps keep an **empty** payload (no
+Offsets are stored at width `W` ∈ {1, 2, 4} bytes, the smallest that holds any
+offset, selected from the entries' total byte length (`≤256 → u8`, `≤65536 →
+u16`, else `u32`). `W` is a deterministic function of the entries' bytes, so
+equal maps select the same width and stay byte-identical. The index is a
+**suffix** of `W * (n - 1) + 4` bytes, so the entries occupy the first
+`len - 4 - W * (n - 1)` bytes. Empty maps keep an **empty** payload (no
 suffix), so they stay byte-identical to `DatumMap::empty()` and the encoding of
 every value remains canonical.
 
@@ -116,6 +121,20 @@ index is never rebuilt or duplicated.
 equality, hashing, and ordering — all iter-based — are unaffected), and the new
 `DatumMap::get()` binary searches the header.
 
+### Limits
+
+The index encoding caps a single map at:
+
+* **2³⁰ − 1 (~1.07 billion) entries**, since the count occupies 30 bits of the
+  count word (the other two are the width class).
+* **4 GiB of entry bytes**, since offsets are at most `u32`.
+
+Exceeding either panics during packing. Both are far above any practical `jsonb`
+value, and other limits (message size, memory, persist batch size) bind long
+before. Before this change the `Tag` encoding's `u64` dict-length prefix allowed
+(impractically) larger maps; the index makes these bounds explicit. These are
+in-memory-`Row` limits only and are not persisted.
+
 ### Why not a new `Tag` or a runtime feature flag?
 
 A second tag (`DictIndexed` alongside `Dict`) would let indexed and legacy maps
@@ -139,9 +158,11 @@ awkward. Reverting is a redeploy.
 
 * Single access: `O(n)` → `O(log n)`.
 * "JSON to columns" (`k` fields): `O(n * k)` → `O(k * log n)` per row.
-* Cost: a `4 * n`-byte suffix per non-empty map (memory only — appended, no
-  memmove). On the hot decode/JSON-pack paths the index is built without a
-  re-walk and without a heap allocation for typical objects.
+* Cost: a `W * (n - 1) + 4`-byte suffix per non-empty map (memory only;
+  appended, no memmove), where `W` is 1, 2, or 4 bytes. A small object's index
+  is `n - 1 + 4` bytes; a 50-key object near 1 KB uses `u16` offsets (~100 bytes
+  vs ~200 with fixed `u32`). On the hot decode/JSON-pack paths the index is built
+  without a re-walk and without a heap allocation for typical objects.
 
 The `JsonbToColumns` Feature Benchmark scenario
 (`misc/python/materialize/feature_benchmark/scenarios/benchmark_main.py`) reads
