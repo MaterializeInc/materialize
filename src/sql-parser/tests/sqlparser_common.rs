@@ -740,3 +740,42 @@ fn test_set_operation_leading_show_display_roundtrip() {
     // parse_pretty_roundtrip `(SHOW … EXCEPT SELECT …)` finding.
     assert_display_roundtrips("(SHOW foo EXCEPT SELECT 1)");
 }
+
+#[mz_ore::test]
+fn cast_operand_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    // Strips `Expr::Nested`, mimicking an AST transform (or the fuzz oracle's
+    // `normalize`) that drops the parser's protective parentheses.
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // `CAST(-0 AS int4)` parses to `Cast(Nested(- 0))`; the unary minus is not
+    // self-delimiting, so the printer must re-add parens once the `Nested` is
+    // gone — otherwise it prints `- 0::int4`, which reparses as `- (0::int4)`
+    // (a structurally different, semantically different expression).
+    let mut ast = mz_sql_parser::parser::parse_statements("SELECT CAST(-0 AS int4) + a")
+        .unwrap()
+        .remove(0)
+        .ast;
+    StripNested.visit_statement_mut(&mut ast);
+    let displayed = ast.to_ast_string_simple();
+    let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+        .unwrap()
+        .remove(0)
+        .ast;
+    StripNested.visit_statement_mut(&mut reparsed);
+    assert_eq!(
+        ast, reparsed,
+        "Cast display did not round-trip after Nested was stripped; displayed = {displayed:?}"
+    );
+}

@@ -334,7 +334,20 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 }
             }
             Expr::Cast { expr, data_type } => {
-                f.write_node(&expr);
+                // `::` binds very tightly, so a non-self-delimiting operand must
+                // be parenthesized or the cast re-associates into its spine —
+                // `CAST(-0 AS int4)` (i.e. `Cast(- 0)`) would otherwise print as
+                // `- 0::int4` and reparse as `- (0::int4)`. The parser wraps such
+                // operands in `Expr::Nested`, but `normalize` strips those, so the
+                // printer must re-add them (mirrors the `Collate` arm; `Nested` is
+                // itself self-delimiting, so parser-produced ASTs don't double up).
+                if prints_self_delimiting(expr) {
+                    f.write_node(&expr);
+                } else {
+                    f.write_str("(");
+                    f.write_node(&expr);
+                    f.write_str(")");
+                }
                 f.write_str("::");
                 f.write_node(data_type);
             }
