@@ -406,6 +406,21 @@ def workflow_basic(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         assert int(rows[0][0]) == 3, f"Expected 3 tables, got {rows[0][0]}"
 
+        rows = c.sql_query(
+            "SELECT grantee.name, priv.privilege_type FROM ("
+            "  SELECT mz_internal.mz_aclexplode(t.privileges).* "
+            "  FROM mz_tables t "
+            "  JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "  WHERE t.name = 'products' AND sc.name = 'ingest'"
+            ") priv "
+            "JOIN mz_roles grantee ON priv.grantee = grantee.id "
+            "WHERE grantee.name = 'materialize' AND priv.privilege_type = 'SELECT'",
+            database="app",
+        )
+        assert (
+            len(rows) == 1
+        ), f"Expected SELECT grant on products TO materialize, got {rows}"
+
     with c.test_case("apply-alter-connection"):
         # ── 4. Modify connection ──────────────────────────────────
         # Dry-run
