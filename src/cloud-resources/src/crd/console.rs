@@ -16,7 +16,7 @@ use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id, recommended_k8s_labels};
+use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id};
 use mz_server_core::listeners::AuthenticatorKind;
 
 pub mod v1alpha1 {
@@ -156,7 +156,7 @@ pub mod v1alpha1 {
 
     impl ManagedResource for Console {
         fn default_labels(&self) -> BTreeMap<String, String> {
-            let mut labels = BTreeMap::from_iter([
+            BTreeMap::from_iter([
                 (
                     "materialize.cloud/organization-name".to_owned(),
                     self.name_unchecked(),
@@ -170,9 +170,7 @@ pub mod v1alpha1 {
                     self.resource_id().to_owned(),
                 ),
                 ("materialize.cloud/app".to_owned(), "console".to_owned()),
-            ]);
-            labels.extend(recommended_k8s_labels(Some("console")));
-            labels
+            ])
         }
 
         fn app_name(&self) -> Option<&str> {

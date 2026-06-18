@@ -70,7 +70,7 @@ pub struct MaterializeCertSpec {
 
 pub trait ManagedResource: Resource<DynamicType = ()> + Sized {
     fn default_labels(&self) -> BTreeMap<String, String> {
-        recommended_k8s_labels(self.app_name())
+        BTreeMap::new()
     }
 
     fn app_name(&self) -> Option<&str> {
@@ -78,7 +78,8 @@ pub trait ManagedResource: Resource<DynamicType = ()> + Sized {
     }
 
     fn managed_resource_meta(&self, name: String) -> ObjectMeta {
-        let labels = self.default_labels();
+        let mut labels = self.default_labels();
+        labels.extend(recommended_k8s_labels(self.app_name()));
         ObjectMeta {
             namespace: Some(self.meta().namespace.clone().unwrap()),
             name: Some(name),
