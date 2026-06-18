@@ -222,6 +222,40 @@ documented at the [pgtest crate][pgtest-docs].
 
 [pgtest-docs]: https://dev.materialize.com/api/rust/mz_pgtest/index.html
 
+### clusterd test driver
+
+The frameworks above all drive Materialize as a whole, through the SQL layer.
+That makes them awkward for targeted compute experiments: as noted under [What
+kind of tests should I write?](#what-kind-of-tests-should-i-write), unit testing
+functions in the middle of the [compute](/src/compute) stack is "an exercise in
+frustration", but going through SQL means going through the catalog, the
+optimizer, and the controller's timestamp and read-hold machinery.
+
+The clusterd test driver
+([`src/clusterd-test-driver`](/src/clusterd-test-driver)) fills that gap. It is a
+headless frontend that speaks the cluster protocol to a real `clusterd`
+directly, with no `environmentd`, so a test controls the exact persist state,
+the exact commands the replica receives, and the exact timestamps. Tests are
+text scripts where each command is followed by a `----` block holding its
+expected output; that block is the assertion, and `REWRITE=1` regenerates it in
+place (like datadriven). The scripts live in
+[`test/clusterd-test-driver/scripts`](/test/clusterd-test-driver/scripts).
+
+Run the scenarios against a real `clusterd` under Docker:
+
+```shell
+$ bin/mzcompose --find clusterd-test-driver run default
+```
+
+or run the same scripts on the host, without Docker images:
+
+```shell
+$ bin/pyactivate test/clusterd-test-driver/run-local.py
+```
+
+See the [design doc](design/20260612_headless_clusterd_test_driver.md) for the
+full command vocabulary and architecture.
+
 ## Long-running tests
 
 These are still a work in progress. The beginning of the orchestration has
