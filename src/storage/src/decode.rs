@@ -26,7 +26,9 @@ use mz_ore::future::InTask;
 use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
-use mz_storage_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
+use mz_storage_types::sources::encoding::{
+    AvroEncoding, CsvDecoderState, DataEncoding, RegexEncoding,
+};
 use mz_storage_types::wire_format::WireFormat;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -42,14 +44,12 @@ use timely::scheduling::SyncActivator;
 use tracing::error;
 
 use crate::decode::avro::AvroDecoderState;
-use crate::decode::csv::CsvDecoderState;
 use crate::decode::protobuf::ProtobufDecoderState;
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::decode::DecodeMetricDefs;
 use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
-mod csv;
 mod protobuf;
 
 /// Decode delimited CDCv2 messages.
