@@ -15,12 +15,12 @@ repository.
     - `models/materialize/public/` — SQL files for views, MVs, etc.
     - `clusters/` — Cluster definitions
     - `roles/` — Role definitions
+    - `network-policies/` — Network policy definitions
 3. Writes boilerplate files:
     - `project.toml` — Project configuration
-    - `.gitignore` — Ignores `target/` build artifact directory
+    - `.gitignore` — Ignores `target/` and the per-developer `.mzprofile`
     - `README.md` — Getting-started documentation
-    - `.agents/skills/mz-deploy/SKILL.md` — LLM agent skill file
-    - `.claude/skills/mz-deploy/` — Symlink (auto-loaded by Claude Code)
+    - `.vscode/extensions.json` — Recommended editor extensions
 4. Initializes a git repository (unless `--no-git`).
 
 ## Flags
