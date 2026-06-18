@@ -146,6 +146,9 @@ class PgCdcBase:
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
+                # Test for alter source upgrade compatibility for SS-187
+                > ALTER SOURCE postgres_source1{self.suffix} SET (TIMESTAMP INTERVAL = '2s');
+                > ALTER SOURCE postgres_source1{self.suffix} RESET (TIMESTAMP INTERVAL);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'H', i, REPEAT('X', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
