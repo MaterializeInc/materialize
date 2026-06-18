@@ -144,6 +144,7 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn simple_view_single_root_symbol() {
         let (root, cache) = build_test_cache("CREATE VIEW foo AS SELECT 1 AS id;");
@@ -156,6 +157,7 @@ mod tests {
         assert!(symbols[0].children.is_none());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn view_with_index_and_comment() {
         let (root, cache) = build_test_cache(
@@ -177,6 +179,7 @@ mod tests {
         assert_eq!(children[1].kind, SymbolKind::STRING);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn unknown_file_returns_empty() {
         let (root, cache) = build_test_cache("CREATE VIEW foo AS SELECT 1 AS id;");

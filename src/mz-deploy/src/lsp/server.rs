@@ -822,6 +822,7 @@ mod tests {
         std::fs::write(root.join("project.toml"), "[project]\nname = \"test\"\n").unwrap();
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn try_open_project_cache_returns_none_for_missing_db() {
         let result = try_open_project_cache(
@@ -844,6 +845,7 @@ mod tests {
     ///
     /// The multi-thread runtime with 2 workers is required so the two spawned
     /// tasks can actually make progress concurrently.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
     async fn concurrent_publish_diagnostics_do_not_deadlock() {
         let (client, _service) = capture_client_with_root(std::env::temp_dir());
@@ -936,6 +938,7 @@ mod tests {
         assert_eq!(edits[0].new_text, "customer_name");
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
     async fn did_close_rebuilds_immediately_against_disk_state() {
         let root = tempfile::tempdir().unwrap();

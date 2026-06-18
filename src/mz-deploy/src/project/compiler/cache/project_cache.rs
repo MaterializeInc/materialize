@@ -681,6 +681,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_open_returns_none_when_no_db() {
         let dir = tempfile::tempdir().unwrap();
@@ -689,6 +690,7 @@ mod tests {
         assert!(result.unwrap().is_none());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_columns_found() {
         let dir = tempfile::tempdir().unwrap();
@@ -736,6 +738,7 @@ mod tests {
         assert_eq!(name_col.position, 2);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_columns_not_found() {
         let dir = tempfile::tempdir().unwrap();
@@ -756,6 +759,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_kind_found() {
         let dir = tempfile::tempdir().unwrap();
@@ -781,6 +785,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_kind_not_found() {
         let dir = tempfile::tempdir().unwrap();
@@ -801,6 +806,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_column_names_batch() {
         let dir = tempfile::tempdir().unwrap();
@@ -996,6 +1002,7 @@ mod tests {
         .unwrap();
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_object_full_metadata() {
         let dir = tempfile::tempdir().unwrap();
@@ -1040,6 +1047,7 @@ mod tests {
         assert_eq!(infra.properties[0].key, "PUBLICATION");
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_object_not_found() {
         let dir = tempfile::tempdir().unwrap();
@@ -1056,6 +1064,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_object_by_path() {
         let dir = tempfile::tempdir().unwrap();
@@ -1069,6 +1078,7 @@ mod tests {
         assert_eq!(obj.fqn, "mydb.public.orders");
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_list_objects() {
         let dir = tempfile::tempdir().unwrap();
@@ -1086,6 +1096,7 @@ mod tests {
         assert!(fqns.contains(&"mydb.public.users"));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_list_databases() {
         let dir = tempfile::tempdir().unwrap();
@@ -1112,6 +1123,7 @@ mod tests {
         assert!(fqns.contains(&"mydb.public.users"));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_dependencies_and_dependents() {
         let dir = tempfile::tempdir().unwrap();
@@ -1134,6 +1146,7 @@ mod tests {
         assert!(cache.get_dependencies(&users).is_empty());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_list_external_dependencies() {
         let dir = tempfile::tempdir().unwrap();
@@ -1150,6 +1163,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_tests() {
         let dir = tempfile::tempdir().unwrap();
@@ -1169,6 +1183,7 @@ mod tests {
         assert!(cache.get_tests(&users).is_empty());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_get_mod_statements() {
         let dir = tempfile::tempdir().unwrap();

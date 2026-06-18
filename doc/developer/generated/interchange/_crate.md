@@ -1,6 +1,6 @@
 ---
 source: src/interchange/src/lib.rs
-revision: 29bb86afb3
+revision: f7441414ff
 ---
 
 # interchange
@@ -13,6 +13,7 @@ Provides format translation between Materialize's internal row representation an
 * `confluent` — Confluent wire-format header parsing for Avro and Protobuf
 * `encode` — `Encode` trait and `TypedDatum`/`column_names_and_types` shared utilities
 * `envelopes` — `combine_at_timestamp` operator and Debezium envelope helpers
+* `glue` — AWS Glue Schema Registry interchange and wire-format header codec
 * `json` — `JsonEncoder`, `build_row_schema_json`, and `ToJson` trait
 * `protobuf` — Protobuf decoding via `prost-reflect`
 * `text_binary` — PostgreSQL text and binary encoders

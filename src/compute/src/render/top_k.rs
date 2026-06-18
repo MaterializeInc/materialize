@@ -32,6 +32,7 @@ use mz_expr::func::CastUint64ToInt64;
 use mz_expr::{BinaryFunc, Columns, Eval, EvalError, MirScalarExpr, UnaryFunc, func};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
+use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
@@ -628,7 +629,7 @@ where
     let reduced = arranged
         .clone()
         .mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
-            move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
+            move |hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
                 // Unpack the limit, either into an integer literal or an expression to evaluate.
                 let limit = match &limit {
                     Some(Ok(lit)) => Some(*lit),
@@ -636,11 +637,11 @@ where
                         // Unpack `key` after skipping the hash and determine the limit.
                         // If the limit errors, use a zero limit; errors are surfaced elsewhere.
                         let temp_storage = mz_repr::RowArena::new();
-                        let _hash = hash_key.next();
                         let mut key_datums = datum_vec.borrow();
-                        key_datums.extend(hash_key);
+                        hash_key.extend_datums(&temp_storage, &mut key_datums, None);
+                        // `key_datums[0]` is the hash; the key columns follow it.
                         let datum_limit = expr
-                            .eval(&key_datums, &temp_storage)
+                            .eval(&key_datums[1..], &temp_storage)
                             .unwrap_or(Datum::Int64(0));
                         Some(match datum_limit {
                             Datum::Null => Diff::MAX,
@@ -684,9 +685,10 @@ where
                 let mut indexes = (0..source.len()).collect::<Vec<_>>();
                 // We decode the datums once, into a common buffer for efficiency.
                 // Each row should contain `arity` columns; we should check that.
+                let temp_storage = mz_repr::RowArena::new();
                 let mut buffer = datum_vec.borrow();
                 for (index, (datums, _)) in source.iter().enumerate() {
-                    buffer.extend(*datums);
+                    datums.extend_datums(&temp_storage, &mut buffer, None);
                     assert_eq!(buffer.len(), arity * (index + 1));
                 }
                 let width = buffer.len() / source.len();

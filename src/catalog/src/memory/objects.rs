@@ -3508,6 +3508,15 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         }
     }
 
+    fn replication_factor(&self) -> Option<u32> {
+        match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                replication_factor, ..
+            }) => Some(*replication_factor),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
     fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
         self.try_to_plan()
     }
@@ -3718,9 +3727,11 @@ pub enum StateUpdateKind {
     SystemPrivilege(MzAclItem),
     SystemConfiguration(durable::objects::SystemConfiguration),
     Cluster(durable::objects::Cluster),
+    ClusterSystemConfiguration(durable::objects::ClusterSystemConfiguration),
     NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
+    ReplicaSystemConfiguration(durable::objects::ReplicaSystemConfiguration),
     SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
     // Temporary items are not actually updated via the durable catalog, but
@@ -3814,9 +3825,11 @@ pub enum BootstrapStateUpdateKind {
     SystemPrivilege(MzAclItem),
     SystemConfiguration(durable::objects::SystemConfiguration),
     Cluster(durable::objects::Cluster),
+    ClusterSystemConfiguration(durable::objects::ClusterSystemConfiguration),
     NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
+    ReplicaSystemConfiguration(durable::objects::ReplicaSystemConfiguration),
     SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
     Item(durable::objects::Item),
@@ -3842,6 +3855,12 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
             }
             BootstrapStateUpdateKind::SystemConfiguration(kind) => {
                 StateUpdateKind::SystemConfiguration(kind)
+            }
+            BootstrapStateUpdateKind::ClusterSystemConfiguration(kind) => {
+                StateUpdateKind::ClusterSystemConfiguration(kind)
+            }
+            BootstrapStateUpdateKind::ReplicaSystemConfiguration(kind) => {
+                StateUpdateKind::ReplicaSystemConfiguration(kind)
             }
             BootstrapStateUpdateKind::SourceReferences(kind) => {
                 StateUpdateKind::SourceReferences(kind)
@@ -3885,6 +3904,12 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
             }
             StateUpdateKind::SystemConfiguration(kind) => {
                 Ok(BootstrapStateUpdateKind::SystemConfiguration(kind))
+            }
+            StateUpdateKind::ClusterSystemConfiguration(kind) => {
+                Ok(BootstrapStateUpdateKind::ClusterSystemConfiguration(kind))
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(kind) => {
+                Ok(BootstrapStateUpdateKind::ReplicaSystemConfiguration(kind))
             }
             StateUpdateKind::Cluster(kind) => Ok(BootstrapStateUpdateKind::Cluster(kind)),
             StateUpdateKind::NetworkPolicy(kind) => {

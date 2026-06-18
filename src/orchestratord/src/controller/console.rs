@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use k8s_controller::TraceMetadata;
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec},
@@ -582,6 +583,7 @@ impl k8s_controller::Context for Context {
         &self,
         client: Client,
         console: &Self::Resource,
+        _metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         if console.status.is_none() {
             let console_api: Api<Console> =

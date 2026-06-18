@@ -284,7 +284,13 @@ impl ImpliedValue for StringOrSecret {
 impl TryFromValue<Value> for Duration {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         let interval = Interval::try_from_value(v)?;
-        Ok(interval.duration()?)
+        let duration = interval.duration()?;
+        // `try_into_value` (used during unplanning) requires that the `Duration`
+        // is convertible back to an `Interval`, which has a smaller range than
+        // `Duration`. Enforce that here so we return a graceful error instead of
+        // panicking later. See database-issues SQL-361.
+        Interval::from_duration(&duration).map_err(|_| sql_err!("interval out of range"))?;
+        Ok(duration)
     }
 
     fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Value> {

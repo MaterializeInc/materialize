@@ -3423,82 +3423,101 @@ mz_internal.pg_description_all_databases_ind:
 mz_internal.pg_description_all_databases:
   →With
     cte l0 =
-      →Arranged mz_internal.pg_class_all_databases
-    cte l1 =
-      →Differential Join %1[#0] » %0:l0[#1{relname}]
-        →Arranged l0
+      →Differential Join %1[#0] » %0:pg_namespace_all_databases[#1{nspname}]
+        →Arranged mz_internal.pg_namespace_all_databases
         →Arrange (#0)
           →Constant (1 row)
+    cte l1 =
+      →Differential Join %0:pg_class_all_databases[#2{relnamespace}] » %1[#0]
+        →Arrange (#2{relnamespace})
+          →Fused with Child Map/Filter/Project
+            Project: #1, #0, #2, #23
+              →Arranged mz_internal.pg_class_all_databases
+                Key: (#1{relname})
+        →Arrange (#0)
+          →Union
+            →Stream l0
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l0
     cte l2 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+        Filter: (#1{relname} = "pg_class")
+          →Read l1
+    cte l3 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
         →Fused with Child Map/Filter/Project
           Project: ()
-            →Read l1
-    cte l3 =
-      →Union
-        →Fused with Child Map/Filter/Project
-          Project: #0
-            →Read l1
-        →Table Function guard_subquery_size(#0)
-          →Arranged l2
+            →Read l2
     cte l4 =
       →Union
         →Fused with Child Map/Filter/Project
-          Project: #1
-            →Read l1
+          Project: #0
+            →Read l2
         →Table Function guard_subquery_size(#0)
-          →Arranged l2
+          →Arranged l3
     cte l5 =
-      →Differential Join %1[#0] » %0:l0[#1{relname}]
-        →Arranged l0
-        →Arrange (#0)
-          →Constant (1 row)
+      →Union
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Read l2
+        →Table Function guard_subquery_size(#0)
+          →Arranged l3
     cte l6 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+        Filter: (#1{relname} = "pg_type")
+          →Read l1
+    cte l7 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
         →Fused with Child Map/Filter/Project
           Project: ()
-            →Read l5
-    cte l7 =
-      →Union
-        →Fused with Child Map/Filter/Project
-          Project: #0
-            →Read l5
-        →Table Function guard_subquery_size(#0)
-          →Arranged l6
+            →Read l6
     cte l8 =
       →Union
         →Fused with Child Map/Filter/Project
-          Project: #1
-            →Read l5
+          Project: #0
+            →Read l6
         →Table Function guard_subquery_size(#0)
-          →Arranged l6
+          →Arranged l7
     cte l9 =
-      →Differential Join %1[#0] » %0:l0[#1{relname}]
-        →Arranged l0
-        →Arrange (#0)
-          →Constant (1 row)
+      →Union
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Read l6
+        →Table Function guard_subquery_size(#0)
+          →Arranged l7
     cte l10 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+        Filter: (#1{relname} = "pg_namespace")
+          →Read l1
+    cte l11 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
         →Fused with Child Map/Filter/Project
           Project: ()
-            →Read l9
-    cte l11 =
-      →Union
-        →Fused with Child Map/Filter/Project
-          Project: #0
-            →Read l9
-        →Table Function guard_subquery_size(#0)
-          →Arranged l10
+            →Read l10
     cte l12 =
       →Union
         →Fused with Child Map/Filter/Project
-          Project: #1
-            →Read l9
+          Project: #0
+            →Read l10
         →Table Function guard_subquery_size(#0)
-          →Arranged l10
+          →Arranged l11
+    cte l13 =
+      →Union
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Read l10
+        →Table Function guard_subquery_size(#0)
+          →Arranged l11
   →Return
     →Delta Join [%0[#0{oid}] » %1[#1{oid}] » %2:mz_comments[#0{id}, lower(#1{object_type})]] [%1[#0{id}, lower(#2{type})] » %2:mz_comments[#0{id}, lower(#1{object_type})] » %0[#0{oid}]] [%2:mz_comments[#0{id}, lower(#1{object_type})] » %1[#0{id}, lower(#2{type})] » %0[#0{oid}]]
       path %0:
@@ -3519,20 +3538,6 @@ mz_internal.pg_description_all_databases:
                     Key: (#1{relname})
             →Arrange (empty key)
               →Union
-                →Stream l3
-                →Map/Filter/Project
-                  Project: #0
-                  Map: null
-                    →Consolidating Union
-                      →Negate Diffs
-                        →Unarranged Raw Stream
-                          →Distinct GroupAggregate
-                            →Fused with Child Map/Filter/Project
-                              Project: ()
-                                →Read l3
-                      →Constant (1 row)
-            →Arrange (empty key)
-              →Union
                 →Stream l4
                 →Map/Filter/Project
                   Project: #0
@@ -3545,15 +3550,9 @@ mz_internal.pg_description_all_databases:
                               Project: ()
                                 →Read l4
                       →Constant (1 row)
-          →Delta Cross Join [%0:pg_type_all_databases[×] » %1[×] » %2[×]] [%1[×] » %0:pg_type_all_databases[×] » %2[×]] [%2[×] » %0:pg_type_all_databases[×] » %1[×]]
-            →Arrange (empty key)
-              →Fused with Child Map/Filter/Project
-                Project: #0, #18
-                  →Arranged mz_internal.pg_type_all_databases
-                    Key: (#0{oid})
             →Arrange (empty key)
               →Union
-                →Stream l7
+                →Stream l5
                 →Map/Filter/Project
                   Project: #0
                   Map: null
@@ -3563,8 +3562,14 @@ mz_internal.pg_description_all_databases:
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
                               Project: ()
-                                →Read l7
+                                →Read l5
                       →Constant (1 row)
+          →Delta Cross Join [%0:pg_type_all_databases[×] » %1[×] » %2[×]] [%1[×] » %0:pg_type_all_databases[×] » %2[×]] [%2[×] » %0:pg_type_all_databases[×] » %1[×]]
+            →Arrange (empty key)
+              →Fused with Child Map/Filter/Project
+                Project: #0, #18
+                  →Arranged mz_internal.pg_type_all_databases
+                    Key: (#0{oid})
             →Arrange (empty key)
               →Union
                 →Stream l8
@@ -3579,15 +3584,9 @@ mz_internal.pg_description_all_databases:
                               Project: ()
                                 →Read l8
                       →Constant (1 row)
-          →Delta Cross Join [%0:pg_namespace_all_databases[×] » %1[×] » %2[×]] [%1[×] » %0:pg_namespace_all_databases[×] » %2[×]] [%2[×] » %0:pg_namespace_all_databases[×] » %1[×]]
-            →Arrange (empty key)
-              →Fused with Child Map/Filter/Project
-                Project: #1, #4
-                  →Arranged mz_internal.pg_namespace_all_databases
-                    Key: (#1{nspname})
             →Arrange (empty key)
               →Union
-                →Stream l11
+                →Stream l9
                 →Map/Filter/Project
                   Project: #0
                   Map: null
@@ -3597,8 +3596,14 @@ mz_internal.pg_description_all_databases:
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
                               Project: ()
-                                →Read l11
+                                →Read l9
                       →Constant (1 row)
+          →Delta Cross Join [%0:pg_namespace_all_databases[×] » %1[×] » %2[×]] [%1[×] » %0:pg_namespace_all_databases[×] » %2[×]] [%2[×] » %0:pg_namespace_all_databases[×] » %1[×]]
+            →Arrange (empty key)
+              →Fused with Child Map/Filter/Project
+                Project: #1, #4
+                  →Arranged mz_internal.pg_namespace_all_databases
+                    Key: (#1{nspname})
             →Arrange (empty key)
               →Union
                 →Stream l12
@@ -3612,6 +3617,20 @@ mz_internal.pg_description_all_databases:
                             →Fused with Child Map/Filter/Project
                               Project: ()
                                 →Read l12
+                      →Constant (1 row)
+            →Arrange (empty key)
+              →Union
+                →Stream l13
+                →Map/Filter/Project
+                  Project: #0
+                  Map: null
+                    →Consolidating Union
+                      →Negate Diffs
+                        →Unarranged Raw Stream
+                          →Distinct GroupAggregate
+                            →Fused with Child Map/Filter/Project
+                              Project: ()
+                                →Read l13
                       →Constant (1 row)
       →Arrange (#0{id}, lower(#2{type})) (#1{oid})
         →Union
@@ -3628,8 +3647,8 @@ mz_internal.pg_description_all_databases:
         →Arranged mz_internal.mz_comments
 
 Used Indexes:
-  - mz_internal.pg_namespace_all_databases_ind (*** full scan ***)
-  - mz_internal.pg_class_all_databases_ind (*** full scan ***, lookup)
+  - mz_internal.pg_namespace_all_databases_ind (*** full scan ***, lookup)
+  - mz_internal.pg_class_all_databases_ind (*** full scan ***)
   - mz_internal.pg_type_all_databases_ind (*** full scan ***)
   - mz_internal.mz_comments_ind (*** full scan ***)
   - mz_catalog.mz_schemas_ind (*** full scan ***)
@@ -4158,6 +4177,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_default_privileges";
+----
+mz_catalog.mz_default_privileges:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2..=#7)
+  filter=(("DefaultPrivileges" = (#0{data} ->> "kind")))
+  map=((#0{data} -> "key"), parse_catalog_id((#1 -> "role_id")), case when (json_null != (#1 -> "database_id")) then parse_catalog_id(((#0{data} -> "key") -> "database_id")) else null end, case when (json_null != (#1 -> "schema_id")) then parse_catalog_id(((#0{data} -> "key") -> "schema_id")) else null end, case when ("1" = (#1 ->> "object_type")) then "table" else case when ("2" = ((#0{data} -> "key") ->> "object_type")) then "view" else case when ("3" = ((#0{data} -> "key") ->> "object_type")) then "materialized view" else case when ("4" = ((#0{data} -> "key") ->> "object_type")) then "source" else case when ("5" = ((#0{data} -> "key") ->> "object_type")) then "sink" else case when ("6" = ((#0{data} -> "key") ->> "object_type")) then "index" else case when ("7" = ((#0{data} -> "key") ->> "object_type")) then "type" else case when ("8" = ((#0{data} -> "key") ->> "object_type")) then "role" else case when ("9" = ((#0{data} -> "key") ->> "object_type")) then "cluster" else case when ("10" = ((#0{data} -> "key") ->> "object_type")) then "cluster replica" else case when ("11" = ((#0{data} -> "key") ->> "object_type")) then "secret" else case when ("12" = ((#0{data} -> "key") ->> "object_type")) then "connection" else case when ("13" = ((#0{data} -> "key") ->> "object_type")) then "database" else case when ("14" = ((#0{data} -> "key") ->> "object_type")) then "schema" else case when ("15" = ((#0{data} -> "key") ->> "object_type")) then "function" else case when ("17" = ((#0{data} -> "key") ->> "object_type")) then "network policy" else null end end end end end end end end end end end end end end end end, parse_catalog_id((#1 -> "grantee")), parse_catalog_acl_mode(((#0{data} -> "value") -> "privileges")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_indexes";
 ----
 mz_catalog.mz_indexes:
@@ -4303,7 +4337,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (18 rows)
+        →Constant (22 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -4577,6 +4611,20 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_system_privileges";
+----
+mz_catalog.mz_system_privileges:
+  →Table Function unnest_array(parse_catalog_privileges(jsonb_build_array(jsonbable_to_jsonb(jsonb_build_object("grantee", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantee")), "grantor", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantor")), "acl_mode", jsonbable_to_jsonb(((#0{data} -> "value") -> "acl_mode")))))))
+    →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  filter=(("SystemPrivileges" = (#0{data} ->> "kind")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_cluster_schedules";
 ----
 mz_internal.mz_cluster_schedules:
@@ -4586,6 +4634,21 @@ Source mz_internal.mz_catalog_raw
   project=(#2, #4, #5)
   filter=(("Cluster" = (#0{data} ->> "kind")) AND ("object" = jsonb_typeof(#1)))
   map=((((#0{data} -> "value") -> "config") -> "variant"), parse_catalog_id(((#0{data} -> "key") -> "id")), ((#1 -> "Managed") -> "schedule"), case when (#3 = "Manual") then "manual" else case when ((((((#0{data} -> "value") -> "config") -> "variant") -> "Managed") -> "schedule") ? "Refresh") then "on-refresh" else null end end, case when (#3 ? "Refresh") then text_to_interval((((((((((((#0{data} -> "value") -> "config") -> "variant") -> "Managed") -> "schedule") -> "Refresh") -> "rehydration_time_estimate") ->> "secs") || " seconds ") || bigint_to_text((text_to_bigint(((((((((#0{data} -> "value") -> "config") -> "variant") -> "Managed") -> "schedule") -> "Refresh") -> "rehydration_time_estimate") ->> "nanos")) / 1000))) || " microseconds")) else null end)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_cluster_system_parameters";
+----
+mz_internal.mz_cluster_system_parameters:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2..=#4)
+  filter=(("ClusterSystemConfiguration" = (#0{data} ->> "kind")))
+  map=((#0{data} -> "key"), parse_catalog_id((#1 -> "cluster_id")), (#1 ->> "name"), ((#0{data} -> "value") ->> "value"))
 
 Target cluster: mz_catalog_server
 
@@ -4663,6 +4726,21 @@ Source mz_internal.mz_catalog_raw
   project=(#1)
   filter=((true = text_to_boolean((((((#0{data} -> "value") -> "config") -> "location") -> "Managed") ->> "pending"))) AND ("ClusterReplica" = (#0{data} ->> "kind")))
   map=(parse_catalog_id(((#0{data} -> "key") -> "id")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_replica_system_parameters";
+----
+mz_internal.mz_replica_system_parameters:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2..=#4)
+  filter=(("ReplicaSystemConfiguration" = (#0{data} ->> "kind")))
+  map=((#0{data} -> "key"), parse_catalog_id((#1 -> "replica_id")), (#1 ->> "name"), ((#0{data} -> "value") ->> "value"))
 
 Target cluster: mz_catalog_server
 
@@ -6884,7 +6962,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (18 rows)
+  →Constant (22 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8748,7 +8826,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_ontology_entity_types";
 ----
 Explained Query (fast path):
-  →Constant (129 rows)
+  →Constant (131 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8758,7 +8836,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_ontology_link_types";
 ----
 Explained Query (fast path):
-  →Constant (169 rows)
+  →Constant (171 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8772,7 +8850,7 @@ Explained Query:
     cte l0 =
       →Differential Join %1:mz_schemas[#0{id}] » %2:mz_objects[#2{schema_id}] » %0[#0{schema_name}, #1{table_name}] » %3:mz_columns[#0{id}]
         →Arrange (#0{schema_name}, #1{table_name})
-          →Constant (129 rows)
+          →Constant (131 rows)
         →Arrange (#0{id})
           →Fused with Child Map/Filter/Project
             Project: #1, #3
@@ -8825,7 +8903,7 @@ Explained Query:
       →Differential Join %0:l4[#0{entity_name}, #1{name}] » %1[#0{entity_name}, #1{column_name}]
         →Arranged l4
         →Arrange (#0{entity_name}, #1{column_name})
-          →Constant (268 rows)
+          →Constant (270 rows)
   →Return
     →Union
       →Map/Filter/Project

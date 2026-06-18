@@ -234,7 +234,10 @@ impl<N: Sync> FdbTimestampOracle<N> {
             .transact_boxed(
                 &(),
                 |trx, ()| self.max_rs_trx(trx).boxed(),
-                TransactOption::default(),
+                // This transaction is a pure read, so it is safe to retry on a
+                // `commit_unknown_result` ("transaction may or may not have
+                // committed") error.
+                TransactOption::idempotent(),
             )
             .await?;
         Ok(max_ts)
@@ -482,7 +485,12 @@ where
                     .transact_boxed(
                         &proposed_next_ts,
                         |trx, proposed_next_ts| self.write_ts_trx(trx, **proposed_next_ts).boxed(),
-                        TransactOption::default(),
+                        // Safe to retry on a `commit_unknown_result` error: the
+                        // transaction re-reads `write_ts` and hands out
+                        // `max(write_ts + 1, proposed_next_ts)`, so a retry only
+                        // ever advances the timestamp further, preserving
+                        // monotonicity (it may skip a timestamp, which is fine).
+                        TransactOption::idempotent(),
                     )
                     .await
                     .map_err(anyhow::Error::from)
@@ -515,7 +523,8 @@ where
                     .transact_boxed(
                         &(),
                         |trx, ()| self.peek_write_ts_trx(trx).boxed(),
-                        TransactOption::default(),
+                        // Pure read, safe to retry on `commit_unknown_result`.
+                        TransactOption::idempotent(),
                     )
                     .await
                     .map_err(anyhow::Error::from)?
@@ -544,7 +553,8 @@ where
                     .transact_boxed(
                         &(),
                         |trx, ()| self.read_ts_trx(trx).boxed(),
-                        TransactOption::default(),
+                        // Pure read, safe to retry on `commit_unknown_result`.
+                        TransactOption::idempotent(),
                     )
                     .await
                     .map_err(anyhow::Error::from)?
@@ -576,7 +586,12 @@ where
                     .transact_boxed(
                         &write_ts,
                         |trx, write_ts| self.apply_write_trx(trx, **write_ts).boxed(),
-                        TransactOption::default(),
+                        // `apply_write_trx` only bumps `read_ts`/`write_ts` to
+                        // `GREATEST(current, write_ts)`, so it is idempotent and
+                        // safe to retry on a `commit_unknown_result` ("transaction
+                        // may or may not have committed") error rather than
+                        // panicking. This is the failure observed in PER-25.
+                        TransactOption::idempotent(),
                     )
                     .await
                     .map_err(anyhow::Error::from)

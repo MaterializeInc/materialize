@@ -19,7 +19,7 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::Keyword;
+use mz_sql_lexer::keywords::{ALL, ANY, AS, DISTINCT, INTO, Keyword, LIST, PREPARE, SOME, WHEN};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -284,19 +284,79 @@ impl Ident {
         self.0.push_str(&suffix);
     }
 
-    /// An identifier can be printed in bare mode if
-    ///  * it matches the regex `[a-z_][a-z0-9_]*` and
-    ///  * it is not a "reserved keyword."
-    pub fn can_be_printed_bare(&self) -> bool {
+    /// Reports whether the identifier matches the regex `[a-z_][a-z0-9_]*`,
+    /// i.e. it is composed only of characters that never require quoting.
+    ///
+    /// This is the character-level half of [`Ident::can_be_printed_bare`]. It
+    /// deliberately does *not* consider keywords: whether a keyword-named
+    /// identifier needs quoting depends on the surrounding grammar (a
+    /// reparsing concern), not on its characters. Contexts that only need
+    /// legible, unambiguous output — rather than a SQL round-trip — should use
+    /// this instead (see `HumanizedExplain::humanize_ident`).
+    pub fn has_only_bare_chars(&self) -> bool {
         let mut chars = self.0.chars();
         chars
             .next()
             .map(|ch| matches!(ch, 'a'..='z' | '_'))
             .unwrap_or(false)
             && chars.all(|ch| matches!(ch, 'a'..='z' | '0'..='9' | '_'))
+    }
+
+    /// An identifier can be printed in bare mode if
+    ///  * it matches the regex `[a-z_][a-z0-9_]*` and
+    ///  * it is not a "reserved keyword."
+    pub fn can_be_printed_bare(&self) -> bool {
+        self.has_only_bare_chars()
             && !self
                 .as_keyword()
-                .map(Keyword::is_sometimes_reserved)
+                .map(|kw| {
+                    kw.is_sometimes_reserved()
+                        || kw.begins_query_body()
+                        // `AS` at the start of a SELECT item is consumed as the
+                        // `AS OF` timestamp keyword (an empty projection), so a
+                        // bare `as` identifier/function name fails to reparse.
+                        || kw == AS
+                        // `ANY`/`ALL`/`SOME` after a comparison operator start a
+                        // quantified-comparison (`x op ANY (...)`), so a bare such
+                        // identifier — e.g. `0 # some` — reparses as the start of a
+                        // quantifier rather than an identifier.
+                        || matches!(kw, ANY | ALL | SOME)
+                        // `ALL`/`DISTINCT` right after `SELECT` are consumed as the
+                        // projection quantifier, so a bare `"all"` / `"distinct"`
+                        // column reference reparses to a quantifier with an empty
+                        // projection instead of an identifier. (`ALL` is already
+                        // covered above; quoting these keeps display-only — unlike
+                        // marking them always-reserved, which also rejects `WHERE
+                        // distinct = 1` at parse time.)
+                        || kw == DISTINCT
+                        // `LIST` followed by `[` re-lexes as a `LIST[...]` literal
+                        // (`list[1]` is a valid one-element list), so a bare `list`
+                        // identifier that gets subscripted — `"list"[1]` — would
+                        // reparse as a list literal instead of a subscript. (`ARRAY`
+                        // is reserved-in-scalar-expression and so already quoted;
+                        // `MAP[...]` requires `=>`, so `map[1]` is unambiguously a
+                        // subscript.)
+                        || kw == LIST
+                        // `DEALLOCATE [PREPARE] <name>` accepts an optional
+                        // `PREPARE` keyword before the name, so a bare `prepare`
+                        // name is consumed as that keyword on reparse, leaving no
+                        // name (`DEALLOCATE prepare` -> `DEALLOCATE` + the optional
+                        // keyword + a missing name).
+                        || kw == PREPARE
+                        // `CASE` treats a leading `WHEN` as the start of the
+                        // first arm (a searched `CASE` with no operand), so a
+                        // bare `when` identifier used as the `CASE` operand —
+                        // `CASE when.a WHEN ...` — reparses as `CASE WHEN .a ...`
+                        // ("expected an expression, found dot"). Quoting it keeps
+                        // the operand an identifier.
+                        || kw == WHEN
+                        // `COPY [INTO] <table> FROM …` accepts an optional `INTO`
+                        // keyword before the relation name, so a bare `into`
+                        // relation is consumed as that keyword on reparse
+                        // (`COPY into FROM x` -> `COPY INTO <name=from> …`, which
+                        // then fails expecting the FROM/TO direction).
+                        || kw == INTO
+                })
                 .unwrap_or(false)
     }
 

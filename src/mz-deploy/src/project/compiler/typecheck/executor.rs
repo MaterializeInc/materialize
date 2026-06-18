@@ -275,6 +275,7 @@ mod tests {
         assert!(outcomes.is_empty());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn independent_leaves_run_to_completion() {
         let nodes = vec![id("a"), id("b"), id("c"), id("d")];
@@ -296,6 +297,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn linear_chain_threads_results() {
         let (nodes, direct_deps, dependents) = dag(&[("a", "b"), ("b", "c")]);
@@ -316,6 +318,7 @@ mod tests {
         assert_eq!(unwrap_ok(&id("c")), 3);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn diamond_dispatches_b_and_c_in_parallel() {
         use std::sync::Barrier;
@@ -346,6 +349,7 @@ mod tests {
         ObjectTypeCheckError::internal(id.clone(), std::path::PathBuf::from("test"), msg.into())
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn failure_propagates_to_dependents_and_isolates_other_branches() {
         // Failing branch:  a (FAIL) -> b -> c

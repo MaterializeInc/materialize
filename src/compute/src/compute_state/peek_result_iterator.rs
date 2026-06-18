@@ -12,7 +12,7 @@ use std::ops::Range;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_ore::result::ResultExt;
-use mz_repr::fixed_length::ToDatumIter;
+use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
 
@@ -100,9 +100,9 @@ impl<Tr: TraceReader<KeyContainer: BatchContainer<Owned: Ord>>> Literals<Tr> {
 impl<Tr> PeekResultIterator<Tr>
 where
     for<'a> Tr: TraceReader<
-            Key<'a>: ToDatumIter + Eq,
+            Key<'a>: ExtendDatums + Eq,
             KeyContainer: BatchContainer<Owned = Row>,
-            Val<'a>: ToDatumIter,
+            Val<'a>: ExtendDatums,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
             DiffGat<'a> = &'a Diff,
         >,
@@ -138,9 +138,9 @@ where
 
 impl<Tr> FusedIterator for PeekResultIterator<Tr> where
     for<'a> Tr: TraceReader<
-            Key<'a>: ToDatumIter + Eq,
+            Key<'a>: ExtendDatums + Eq,
             KeyContainer: BatchContainer<Owned = Row>,
-            Val<'a>: ToDatumIter,
+            Val<'a>: ExtendDatums,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
             DiffGat<'a> = &'a Diff,
         >
@@ -150,9 +150,9 @@ impl<Tr> FusedIterator for PeekResultIterator<Tr> where
 impl<Tr> Iterator for PeekResultIterator<Tr>
 where
     for<'a> Tr: TraceReader<
-            Key<'a>: ToDatumIter + Eq,
+            Key<'a>: ExtendDatums + Eq,
             KeyContainer: BatchContainer<Owned = Row>,
-            Val<'a>: ToDatumIter,
+            Val<'a>: ExtendDatums,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
             DiffGat<'a> = &'a Diff,
         >,
@@ -195,9 +195,9 @@ where
 impl<Tr> PeekResultIterator<Tr>
 where
     for<'a> Tr: TraceReader<
-            Key<'a>: ToDatumIter + Eq,
+            Key<'a>: ExtendDatums + Eq,
             KeyContainer: BatchContainer<Owned = Row>,
-            Val<'a>: ToDatumIter,
+            Val<'a>: ExtendDatums,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
             DiffGat<'a> = &'a Diff,
         >,
@@ -220,8 +220,8 @@ where
         // before the borrow to ensure correct drop order.
         let maybe_literal;
         let mut borrow = self.datum_vec.borrow();
-        key_item.extend_datums(&mut borrow, None);
-        row_item.extend_datums(&mut borrow, None);
+        key_item.extend_datums(&arena, &mut borrow, None);
+        row_item.extend_datums(&arena, &mut borrow, None);
 
         if let Some(literals) = &mut self.literals
             && let Some(literal) = literals.peek()
@@ -229,7 +229,7 @@ where
             // The peek was created from an IndexedFilter join. We have to add those columns
             // here that the join would add in a dataflow.
             maybe_literal = literal;
-            maybe_literal.extend_datums(&mut borrow, None);
+            maybe_literal.extend_datums(&arena, &mut borrow, None);
         }
         if let Some(result) = self
             .map_filter_project

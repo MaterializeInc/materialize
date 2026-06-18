@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/debug.rs
-assertion_line: 235
 expression: test_trace
 ---
 Trace {
@@ -1587,6 +1586,12 @@ Trace {
         values: [],
     },
     system_configurations: CollectionTrace {
+        values: [],
+    },
+    cluster_system_configurations: CollectionTrace {
+        values: [],
+    },
+    replica_system_configurations: CollectionTrace {
         values: [],
     },
     system_privileges: CollectionTrace {

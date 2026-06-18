@@ -73,6 +73,7 @@ macro_rules! metric {
         $(, const_labels: { $($cl_key:expr => $cl_value:expr ),* })?
         $(, var_labels: [ $($vl_name:expr),* ])?
         $(, buckets: $bk_name:expr)?
+        $(, visibility: $visibility:expr)?
         $(,)?
     ) => {{
         let const_labels = (&[
@@ -94,6 +95,11 @@ macro_rules! metric {
         };
         // Set buckets if passed
         $(mk_opts.buckets = Some($bk_name);)*
+        // `visibility` is documentation metadata for the metrics catalog
+        // (`bin/gen-metrics-catalog`).
+        // It has no runtime effect; we only type-check it here so a bad value is
+        // a compile error rather than silently ignored.
+        $(let _: $crate::metrics::MetricVisibility = $visibility;)?
         mk_opts
     }}
 }
@@ -106,6 +112,23 @@ pub struct MakeCollectorOpts {
     /// Buckets to be used with Histogram and HistogramVec. Must be set to create Histogram types
     /// and must not be set for other types.
     pub buckets: Option<Vec<f64>>,
+}
+
+/// This is documentation metadata: it is set via the optional `visibility:`
+/// field of [`metric!`] and consumed by the metrics catalog
+/// (`bin/gen-metrics-catalog`), which reads it from the source tree to produce
+/// the user-facing metrics reference. It has no effect on the metric at
+/// runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricVisibility {
+    /// A metric we use for internal development.
+    #[default]
+    Internal,
+    /// A metric we want customers to build dashboards and
+    /// alerts on. We do not guarantee stability for this group
+    /// of metrics.
+    Public,
 }
 
 /// The materialize metrics registry.
@@ -909,6 +932,24 @@ pub fn register_runtime_metrics(
             "The mean duration of task polls in seconds."
         );
     }
+}
+
+/// Returns the `(name, help, source)` of every Tokio runtime metric registered
+/// by [`register_runtime_metrics`].
+#[cfg(feature = "async")]
+pub fn describe_runtime_metrics() -> Vec<(String, String, &'static str)> {
+    // A current-thread runtime is enough to enumerate the metrics; we only read
+    // their names and help text, never their values.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("building a current-thread runtime");
+    let registry = MetricsRegistry::new();
+    register_runtime_metrics("describe", runtime.handle().metrics(), &registry);
+    registry
+        .gather()
+        .into_iter()
+        .map(|mf| (mf.name().to_owned(), mf.help().to_owned(), file!()))
+        .collect()
 }
 
 #[cfg(test)]

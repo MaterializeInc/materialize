@@ -72,6 +72,7 @@ mod tests {
     use crate::project::compiler::cache::ProjectCache;
     use std::path::Path;
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn empty_query_returns_all_objects() {
         let (root, cache) = build_test_project_cache();
@@ -79,6 +80,7 @@ mod tests {
         assert_eq!(symbols.len(), 2); // foo and bar
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn query_matches_by_substring() {
         let (root, cache) = build_test_project_cache();
@@ -87,6 +89,7 @@ mod tests {
         assert_eq!(symbols[0].name, "foo");
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn query_case_insensitive() {
         let (root, cache) = build_test_project_cache();
@@ -95,6 +98,7 @@ mod tests {
         assert_eq!(symbols[0].name, "foo");
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn query_matches_schema_in_fqn() {
         let (root, cache) = build_test_project_cache();
@@ -103,6 +107,7 @@ mod tests {
         assert_eq!(symbols.len(), 2);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn no_matches_returns_empty() {
         let (root, cache) = build_test_project_cache();
@@ -110,6 +115,7 @@ mod tests {
         assert!(symbols.is_empty());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn symbols_have_container_name() {
         let (root, cache) = build_test_project_cache();

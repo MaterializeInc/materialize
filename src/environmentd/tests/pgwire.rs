@@ -819,6 +819,14 @@ fn test_pgtest_mz_notice() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_numeric_binary_overflow() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/numeric-binary-overflow.pt"),
+        true,
+    );
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_parse_started() {
     pg_test_inner(Path::new("../../test/pgtest-mz/parse-started.pt"), true);
 }

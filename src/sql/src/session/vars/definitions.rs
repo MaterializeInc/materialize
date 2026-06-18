@@ -20,6 +20,7 @@ use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
 };
+use mz_dyncfg::ParameterScope;
 use mz_ore::cast::{self, CastFrom};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -69,6 +70,9 @@ pub struct VarDefinition {
     /// When set, prevents getting or setting the variable unless the specified
     /// feature flag is enabled.
     pub require_feature_flag: Option<&'static FeatureFlag>,
+    /// The scope at which this variable's value may be overridden by the
+    /// LaunchDarkly sync loop.
+    pub scope: ParameterScope,
 
     /// Method to parse [`VarInput`] into a type that implements [`Value`].
     ///
@@ -110,6 +114,7 @@ impl VarDefinition {
             type_name: V::type_name,
             constraint: None,
             require_feature_flag: None,
+            scope: ParameterScope::DEFAULT,
         }
     }
 
@@ -129,6 +134,7 @@ impl VarDefinition {
             type_name: V::type_name,
             constraint: None,
             require_feature_flag: None,
+            scope: ParameterScope::DEFAULT,
         }
     }
 
@@ -148,6 +154,7 @@ impl VarDefinition {
             type_name: V::type_name,
             constraint: None,
             require_feature_flag: None,
+            scope: ParameterScope::DEFAULT,
         }
     }
 
@@ -176,6 +183,14 @@ impl VarDefinition {
         self
     }
 
+    /// Declares the [`ParameterScope`] of this variable, overriding the
+    /// [default](ParameterScope::DEFAULT). See [`ParameterScope`] for the
+    /// semantics of each scope class.
+    pub const fn scoped(mut self, scope: ParameterScope) -> Self {
+        self.scope = scope;
+        self
+    }
+
     pub fn parse(&self, input: VarInput) -> Result<Box<dyn Value>, VarError> {
         (self.parse)(input).map_err(|err| err.into_var_error(self))
     }
@@ -200,6 +215,10 @@ impl Var for VarDefinition {
 
     fn type_name(&self) -> Cow<'static, str> {
         (self.type_name)()
+    }
+
+    fn scope(&self) -> ParameterScope {
+        self.scope
     }
 
     fn visible(&self, user: &User, system_vars: &super::SystemVars) -> Result<(), VarError> {
@@ -1624,7 +1643,8 @@ pub mod cluster_scheduling {
         "How often policies are invoked to automatically start/stop clusters, e.g., \
             for REFRESH EVERY materialized views.",
         false,
-    );
+    )
+    .with_constraint(&NON_ZERO_DURATION);
 
     pub static CLUSTER_SECURITY_CONTEXT_ENABLED: VarDefinition = VarDefinition::new(
         "cluster_security_context_enabled",
@@ -1681,6 +1701,14 @@ pub mod cluster_scheduling {
 /// Ensuring that all syntax-related feature flags *enable* behavior means that setting all such
 /// feature flags to `on` during catalog boot has the desired effect.
 macro_rules! feature_flags {
+    // Resolve an optional `scope:` field to a `ParameterScope`, using the
+    // default scope when the field is omitted.
+    (@scope_or_default) => {
+        ParameterScope::DEFAULT
+    };
+    (@scope_or_default $scope:expr) => {
+        $scope
+    };
     // Match `$name, $feature_desc, $value`.
     (@inner
         // The feature flag name.
@@ -1689,6 +1717,8 @@ macro_rules! feature_flags {
         desc: $desc:literal,
         // The feature flag default value.
         default: $value:expr,
+        // The scope class of the feature flag.
+        scope: $scope:expr,
     ) => {
         paste::paste!{
             // Note that the ServerVar is not directly exported; we expect these to be
@@ -1698,7 +1728,8 @@ macro_rules! feature_flags {
                 value!(bool; $value),
                 concat!("Whether ", $desc, " is allowed (Materialize)."),
                 false,
-            );
+            )
+            .scoped($scope);
 
             pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
                 flag: &[<$name:upper _VAR>],
@@ -1716,11 +1747,15 @@ macro_rules! feature_flags {
         // Should the feature be turned on during catalog rehydration when
         // parsing a catalog item.
         enable_for_item_parsing: $enable_for_item_parsing:expr,
+        // The optional scope class. Uses `ParameterScope::DEFAULT` when omitted.
+        // Cluster-coherent optimizer flags declare `scope: ParameterScope::Cluster`.
+        $(scope: $scope:expr,)?
     },)+) => {
         $(feature_flags! { @inner
             name: $name,
             desc: $desc,
             default: $value,
+            scope: feature_flags!(@scope_or_default $($scope)?),
         })+
 
         paste::paste!{
@@ -2000,6 +2035,7 @@ feature_flags!(
         desc: "new outer join lowering",
         default: true,
         enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_time_at_time_zone,
@@ -2049,6 +2085,7 @@ feature_flags!(
             "eager delta joins",
         default: false,
         enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_off_thread_optimization,
@@ -2097,6 +2134,7 @@ feature_flags!(
         desc: "Enable joint HIR ⇒ MIR lowering of stacks of left joins",
         default: true,
         enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_redacted_test_option,
@@ -2109,6 +2147,7 @@ feature_flags!(
         desc: "Enable Lattice-based fixpoint iteration on LetRec nodes in the Analysis framework",
         default: true, // This is just a failsafe switch for the deployment of materialize#25591.
         enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_kafka_sink_headers,
@@ -2157,12 +2196,14 @@ feature_flags!(
         desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
         default: false,
         enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_projection_pushdown_after_relation_cse,
         desc: "Run ProjectionPushdown one more time after the last RelationCSE.",
         default: true,
         enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_less_reduce_in_eqprop,

@@ -748,6 +748,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     // Configure connections.
     let tls = args.tls.into_config()?;
+    let frontegg_oauth_issuer_url = args.frontegg.oauth_issuer_url().map(str::to_string);
     let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
     let listeners_config: ListenersConfig = {
         let f = File::open(args.listeners_config_path)?;
@@ -1090,6 +1091,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
                 external_login_password_mz_system: args.external_login_password_mz_system,
                 frontegg,
+                frontegg_oauth_issuer_url,
                 cors_allowed_origin,
                 cors_allowed_origin_list,
                 egress_addresses: args.announce_egress_address,

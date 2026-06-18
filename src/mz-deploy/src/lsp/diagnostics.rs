@@ -373,6 +373,7 @@ fn utf16_len(text: &str) -> usize {
 mod tests {
     use super::*;
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn valid_sql_produces_no_diagnostics() {
         let text = "CREATE VIEW foo AS SELECT 1;";
@@ -380,6 +381,7 @@ mod tests {
         assert!(diagnose(text, &rope, &BTreeMap::new(), None).is_empty());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn syntax_error_produces_diagnostic_at_correct_position() {
         let text = "CREATE VIEW foo AS SELECTT 1;";
@@ -391,6 +393,7 @@ mod tests {
         assert_eq!(diags[0].range.start.line, 0);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn multiline_error_position() {
         let text = "CREATE VIEW foo AS\nSELECT 1;\nCREATE VIEW bar AS SELECTT 2;";
@@ -444,6 +447,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn resolved_variable_no_diagnostics() {
         let text = "CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart AS SELECT 1";
@@ -452,6 +456,7 @@ mod tests {
         assert!(diags.is_empty());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn resolved_variable_produces_clean_parse() {
         let v = vars(&[("cluster", "quickstart")]);
@@ -490,6 +495,7 @@ mod tests {
         assert_eq!(var_diags[0].severity, Some(DiagnosticSeverity::WARNING));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn parse_error_maps_back_to_original_position() {
         // After resolving :x → "ab", the parse error in resolved text
@@ -509,6 +515,7 @@ mod tests {
         assert_eq!(parse_diags[0].range.start.line, 0);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn no_variables_unchanged_behavior() {
         let text = "CREATE VIEW foo AS SELECT 1;";

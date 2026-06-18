@@ -2653,109 +2653,177 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS_IND: LazyLock<BuiltinIndex> =
         is_retained_metrics_object: false,
     });
 
-pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_default_privileges",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_DEFAULT_PRIVILEGES_OID,
-    desc: RelationDesc::builder()
-        .with_column("role_id", SqlScalarType::String.nullable(false))
-        .with_column("database_id", SqlScalarType::String.nullable(true))
-        .with_column("schema_id", SqlScalarType::String.nullable(true))
-        .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_column("grantee", SqlScalarType::String.nullable(false))
-        .with_column("privileges", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "role_id",
-            "Privileges described in this row will be granted on objects created by `role_id`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.",
-        ),
-        (
-            "database_id",
-            "Privileges described in this row will be granted only on objects in the database identified by `database_id` if non-null.",
-        ),
-        (
-            "schema_id",
-            "Privileges described in this row will be granted only on objects in the schema identified by `schema_id` if non-null.",
-        ),
-        (
-            "object_type",
-            "Privileges described in this row will be granted only on objects of type `object_type`.",
-        ),
-        (
-            "grantee",
-            "Privileges described in this row will be granted to `grantee`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.",
-        ),
-        ("privileges", "The set of privileges that will be granted."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "default_privilege",
-        description: "A default privilege rule applied to newly created objects",
-        links: &const {
-            [
-                OntologyLink {
-                    name: "default_priv_for_role",
-                    target: "role",
-                    properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
-                },
-                OntologyLink {
-                    name: "default_priv_in_database",
-                    target: "database",
-                    properties: LinkProperties::fk_nullable(
-                        "database_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                    ),
-                },
-                OntologyLink {
-                    name: "default_priv_in_schema",
-                    target: "schema",
-                    properties: LinkProperties::fk_nullable(
-                        "schema_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                    ),
-                },
-                OntologyLink {
-                    name: "default_priv_granted_to",
-                    target: "role",
-                    properties: LinkProperties::fk("grantee", "id", Cardinality::ManyToOne),
-                },
-            ]
-        },
-        column_semantic_types: &const {
-            [
-                ("role_id", SemanticType::RoleId),
-                ("database_id", SemanticType::DatabaseId),
-                ("schema_id", SemanticType::SchemaId),
-                ("object_type", SemanticType::ObjectType),
-                ("grantee", SemanticType::RoleId),
-            ]
-        },
-    }),
+pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_default_privileges",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_DEFAULT_PRIVILEGES_OID,
+        desc: RelationDesc::builder()
+            .with_column("role_id", SqlScalarType::String.nullable(false))
+            .with_column("database_id", SqlScalarType::String.nullable(true))
+            .with_column("schema_id", SqlScalarType::String.nullable(true))
+            .with_column("object_type", SqlScalarType::String.nullable(false))
+            .with_column("grantee", SqlScalarType::String.nullable(false))
+            .with_column("privileges", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "role_id",
+                "Privileges described in this row will be granted on objects created by `role_id`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.",
+            ),
+            (
+                "database_id",
+                "Privileges described in this row will be granted only on objects in the database identified by `database_id` if non-null.",
+            ),
+            (
+                "schema_id",
+                "Privileges described in this row will be granted only on objects in the schema identified by `schema_id` if non-null.",
+            ),
+            (
+                "object_type",
+                "Privileges described in this row will be granted only on objects of type `object_type`.",
+            ),
+            (
+                "grantee",
+                "Privileges described in this row will be granted to `grantee`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.",
+            ),
+            ("privileges", "The set of privileges that will be granted."),
+        ]),
+        // `object_type` in `mz_catalog_raw` is the numeric `Serialize_repr` form
+        // of `mz_catalog_protos::ObjectType`. The CASE mirrors
+        // `mz_sql::catalog::ObjectType`'s `Display` impl, lowercased, matching
+        // the prior `pack_default_privileges_update` populator. Variant `16` is
+        // reserved/unused; any new proto variant must add a branch here. The
+        // `object_type_case_matches_proto_display` test in this crate checks
+        // the mapping.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL role_id,
+    ASSERT NOT NULL object_type,
+    ASSERT NOT NULL grantee,
+    ASSERT NOT NULL privileges
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'role_id') AS role_id,
+    CASE WHEN data->'key'->'database_id' != 'null'::jsonb
+         THEN mz_internal.parse_catalog_id(data->'key'->'database_id') END AS database_id,
+    CASE WHEN data->'key'->'schema_id' != 'null'::jsonb
+         THEN mz_internal.parse_catalog_id(data->'key'->'schema_id') END AS schema_id,
+    CASE data->'key'->>'object_type'
+        WHEN '1'  THEN 'table'
+        WHEN '2'  THEN 'view'
+        WHEN '3'  THEN 'materialized view'
+        WHEN '4'  THEN 'source'
+        WHEN '5'  THEN 'sink'
+        WHEN '6'  THEN 'index'
+        WHEN '7'  THEN 'type'
+        WHEN '8'  THEN 'role'
+        WHEN '9'  THEN 'cluster'
+        WHEN '10' THEN 'cluster replica'
+        WHEN '11' THEN 'secret'
+        WHEN '12' THEN 'connection'
+        WHEN '13' THEN 'database'
+        WHEN '14' THEN 'schema'
+        WHEN '15' THEN 'function'
+        -- variant 16 reserved/unused in mz_catalog_protos::ObjectType.
+        WHEN '17' THEN 'network policy'
+    END AS object_type,
+    mz_internal.parse_catalog_id(data->'key'->'grantee') AS grantee,
+    mz_internal.parse_catalog_acl_mode(data->'value'->'privileges') AS privileges
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'DefaultPrivileges'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "default_privilege",
+            description: "A default privilege rule applied to newly created objects",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "default_priv_for_role",
+                        target: "role",
+                        properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "default_priv_in_database",
+                        target: "database",
+                        properties: LinkProperties::fk_nullable(
+                            "database_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                    OntologyLink {
+                        name: "default_priv_in_schema",
+                        target: "schema",
+                        properties: LinkProperties::fk_nullable(
+                            "schema_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                    OntologyLink {
+                        name: "default_priv_granted_to",
+                        target: "role",
+                        properties: LinkProperties::fk("grantee", "id", Cardinality::ManyToOne),
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("role_id", SemanticType::RoleId),
+                    ("database_id", SemanticType::DatabaseId),
+                    ("schema_id", SemanticType::SchemaId),
+                    ("object_type", SemanticType::ObjectType),
+                    ("grantee", SemanticType::RoleId),
+                ]
+            },
+        }),
+    }
 });
 
-pub static MZ_SYSTEM_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_system_privileges",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_SYSTEM_PRIVILEGES_OID,
-    desc: RelationDesc::builder()
-        .with_column("privileges", SqlScalarType::MzAclItem.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([(
-        "privileges",
-        "The privileges belonging to the system.",
-    )]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "system_privilege",
-        description: "A system-level privilege grant",
-        links: &const { [] },
-        column_semantic_types: &[],
-    }),
+pub static MZ_SYSTEM_PRIVILEGES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_system_privileges",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_SYSTEM_PRIVILEGES_OID,
+        desc: RelationDesc::builder()
+            .with_column("privileges", SqlScalarType::MzAclItem.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([(
+            "privileges",
+            "The privileges belonging to the system.",
+        )]),
+        // The durable row holds `(grantee, grantor, acl_mode)`; we rebuild the
+        // single-element JSON shape that `parse_catalog_privileges` expects and
+        // unnest it to recover the `mz_aclitem`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL privileges
+) AS
+SELECT
+    unnest(mz_internal.parse_catalog_privileges(
+        jsonb_build_array(
+            jsonb_build_object(
+                'grantee',  data->'key'->'grantee',
+                'grantor',  data->'key'->'grantor',
+                'acl_mode', data->'value'->'acl_mode'
+            )
+        )
+    )) AS privileges
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'SystemPrivileges'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "system_privilege",
+            description: "A system-level privilege grant",
+            links: &const { [] },
+            column_semantic_types: &[],
+        }),
+    }
 });
 
 pub static MZ_STORAGE_USAGE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -3276,3 +3344,102 @@ pub const MZ_KAFKA_SOURCES_IND: BuiltinIndex = BuiltinIndex {
 ON mz_catalog.mz_kafka_sources (id)",
     is_retained_metrics_object: true,
 };
+
+#[cfg(test)]
+mod tests {
+    use mz_catalog_protos::objects::ObjectType as ProtoObjectType;
+    use mz_sql::catalog::ObjectType as SqlObjectType;
+
+    use crate::builtin::mz_catalog::MZ_DEFAULT_PRIVILEGES;
+
+    /// Checks the `object_type` CASE in `MZ_DEFAULT_PRIVILEGES` against the
+    /// proto enum and the SQL Display impl it's meant to mirror.
+    ///
+    /// The CASE maps `mz_catalog_protos::ObjectType`'s numeric `Serialize_repr`
+    /// to `mz_sql::catalog::ObjectType`'s `Display`, lowercased. The match in
+    /// `expected_for` is exhaustive, so a new proto variant won't compile until
+    /// it's handled. A wrong string in the CASE fails the substring assertion.
+    #[mz_ore::test]
+    fn object_type_case_matches_proto_display() {
+        // Returns `None` for proto variants that never appear in stored
+        // `DefaultPrivilege` keys (currently just `Unknown`, the zero-value
+        // sentinel). Match is exhaustive: a new variant forces an update.
+        fn expected_for(proto: ProtoObjectType) -> Option<SqlObjectType> {
+            match proto {
+                ProtoObjectType::Unknown => None,
+                ProtoObjectType::Table => Some(SqlObjectType::Table),
+                ProtoObjectType::View => Some(SqlObjectType::View),
+                ProtoObjectType::MaterializedView => Some(SqlObjectType::MaterializedView),
+                ProtoObjectType::Source => Some(SqlObjectType::Source),
+                ProtoObjectType::Sink => Some(SqlObjectType::Sink),
+                ProtoObjectType::Index => Some(SqlObjectType::Index),
+                ProtoObjectType::Type => Some(SqlObjectType::Type),
+                ProtoObjectType::Role => Some(SqlObjectType::Role),
+                ProtoObjectType::Cluster => Some(SqlObjectType::Cluster),
+                ProtoObjectType::ClusterReplica => Some(SqlObjectType::ClusterReplica),
+                ProtoObjectType::Secret => Some(SqlObjectType::Secret),
+                ProtoObjectType::Connection => Some(SqlObjectType::Connection),
+                ProtoObjectType::Database => Some(SqlObjectType::Database),
+                ProtoObjectType::Schema => Some(SqlObjectType::Schema),
+                ProtoObjectType::Func => Some(SqlObjectType::Func),
+                ProtoObjectType::NetworkPolicy => Some(SqlObjectType::NetworkPolicy),
+            }
+        }
+
+        // The proto enum has no `IntoEnumIterator`, so list every variant by
+        // hand. A missed entry here just goes unchecked, but the exhaustive
+        // match in `expected_for` won't compile when a new proto variant lands,
+        // which is the actual drift defense.
+        let variants: &[ProtoObjectType] = &[
+            ProtoObjectType::Unknown,
+            ProtoObjectType::Table,
+            ProtoObjectType::View,
+            ProtoObjectType::MaterializedView,
+            ProtoObjectType::Source,
+            ProtoObjectType::Sink,
+            ProtoObjectType::Index,
+            ProtoObjectType::Type,
+            ProtoObjectType::Role,
+            ProtoObjectType::Cluster,
+            ProtoObjectType::ClusterReplica,
+            ProtoObjectType::Secret,
+            ProtoObjectType::Connection,
+            ProtoObjectType::Database,
+            ProtoObjectType::Schema,
+            ProtoObjectType::Func,
+            ProtoObjectType::NetworkPolicy,
+        ];
+
+        let sql = MZ_DEFAULT_PRIVILEGES.sql;
+        for &proto in variants {
+            // `ObjectType` is `#[repr(u8)]`; the discriminant matches the
+            // `Serialize_repr` JSON value the SQL CASE arms compare against.
+            #[allow(clippy::as_conversions)]
+            let repr = proto as u8;
+            match expected_for(proto) {
+                Some(sql_ty) => {
+                    let display = sql_ty.to_string().to_lowercase();
+                    // The arms use variable whitespace between `WHEN '..'` and
+                    // `THEN` to align columns; verify the WHEN and THEN strings
+                    // appear together with at most one or two spaces between.
+                    let one_space = format!("WHEN '{repr}' THEN '{display}'");
+                    let two_spaces = format!("WHEN '{repr}'  THEN '{display}'");
+                    assert!(
+                        sql.contains(&one_space) || sql.contains(&two_spaces),
+                        "missing CASE arm for `{proto:?}`: expected \
+                         `WHEN '{repr}' THEN '{display}'` (or with double space) \
+                         in MZ_DEFAULT_PRIVILEGES.sql",
+                    );
+                }
+                None => {
+                    let pattern = format!("WHEN '{repr}'");
+                    assert!(
+                        !sql.contains(&pattern),
+                        "unexpected CASE arm for sentinel `{proto:?}`: \
+                         found `{pattern}` in MZ_DEFAULT_PRIVILEGES.sql",
+                    );
+                }
+            }
+        }
+    }
+}

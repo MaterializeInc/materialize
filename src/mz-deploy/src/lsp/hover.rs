@@ -258,6 +258,7 @@ mod tests {
         assert!(resolve_variable_hover(sql, 5, &BTreeMap::new()).is_none());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn hover_with_cached_columns() {
         let (root, cache, types_lock) = build_test_project_with_types_lock();
@@ -278,6 +279,7 @@ mod tests {
         assert!(text.contains("| name | text |"));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn hover_without_cache_shows_kind_and_path() {
         let (root, cache) = build_test_project_cache();
@@ -300,6 +302,7 @@ mod tests {
         assert!(!text.contains("| Column |"));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn hover_unknown_identifier_returns_none() {
         let (root, cache) = build_test_project_cache();
@@ -316,6 +319,7 @@ mod tests {
         assert!(result.is_none());
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn hover_cross_schema_reference() {
         let (root, cache, types_lock) = build_test_project_cross_schema_with_types_lock();
@@ -335,6 +339,7 @@ mod tests {
         assert!(text.contains("| id | integer |"));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn hover_with_description_and_column_comments() {
         let (root, cache, types_lock) = build_test_project_with_comments_and_types_lock(
@@ -362,6 +367,7 @@ mod tests {
         assert!(text.contains("| name | text |  |"));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn hover_with_description_only() {
         let (root, cache, types_lock) = build_test_project_with_comments_and_types_lock(
@@ -386,6 +392,7 @@ mod tests {
         assert!(text.contains("| Column | Type |"));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn hover_no_comments_unchanged() {
         let (root, cache, types_lock) = build_test_project_with_types_lock();
@@ -410,6 +417,7 @@ mod tests {
         assert!(!text.contains("Description"));
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn hover_types_lock_comments_on_external_dep() {
         let (root, cache) = build_test_project_cache();

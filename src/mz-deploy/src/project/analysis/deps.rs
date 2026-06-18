@@ -651,6 +651,7 @@ mod dependency_validation_tests {
         assert_eq!(result.unused.len(), 1);
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_simple_cte_shadowing_records_catalog_dependency() {
         // QA Finding 1: a simple CTE that shadows a catalog object and references

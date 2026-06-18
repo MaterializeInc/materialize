@@ -138,7 +138,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_default_privileges
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_egress_ips
@@ -246,7 +246,7 @@ VIEW
 materialize
 mz_catalog
 mz_system_privileges
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_tables
@@ -342,6 +342,10 @@ VIEW
 materialize
 mz_internal
 mz_cluster_schedules
+MATERIALIZED VIEW
+materialize
+mz_internal
+mz_cluster_system_parameters
 MATERIALIZED VIEW
 materialize
 mz_internal
@@ -551,6 +555,10 @@ materialize
 mz_internal
 mz_replacements
 BASE TABLE
+materialize
+mz_internal
+mz_replica_system_parameters
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_session_history

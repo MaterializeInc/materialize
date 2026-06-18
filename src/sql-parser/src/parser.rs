@@ -46,6 +46,17 @@ use crate::ident;
 // a healthy factor to be conservative.
 const RECURSION_LIMIT: usize = 128;
 
+// An iteratively-parsed expression chain (`a + b + c …`, `(a).f.g…`) adds one
+// level of AST depth per link, but — unlike parenthesized nesting — flat chains
+// are how wide predicates and sums are legitimately written (500-term chains
+// appear in test/limits and production workloads), so they get a much larger
+// budget than `RECURSION_LIMIT`. The limit matches the planner's recursion
+// guard (`RecursionGuard::with_limit(1024)` in mz-sql), which is what bounds
+// such chains during planning; a depth-1024 AST is also still shallow enough
+// for the plain-recursive display/drop/visit paths that unbounded chains
+// overflowed (the parse_expr_roundtrip fuzz finding).
+const EXPR_CHAIN_LIMIT: usize = 1024;
+
 /// Maximum allowed size for a batch of statements in bytes: 1MB.
 pub const MAX_STATEMENT_BATCH_SIZE: usize = 1_000_000;
 
@@ -314,7 +325,20 @@ struct Parser<'a> {
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
     recursion_guard: RecursionGuard,
+    /// Number of `maybe_parse` calls that have failed (i.e. cost the parser
+    /// a speculative descent that produced nothing). Bounded by
+    /// [`SPECULATIVE_FAILURES_PER_TOKEN`] × `tokens.len()` to prevent
+    /// exponential backtracking on pathological input while leaving room
+    /// for deeply nested valid SQL.
+    speculative_failures: usize,
 }
+
+/// Per-token cap on [`Parser::maybe_parse`] failures. Bounded by token
+/// count so deeply nested but valid SQL (e.g. parallel-workload generated
+/// queries with thousands of nested casts) has room to speculate, while
+/// still cutting off exponential backtracking on pathological input
+/// (the DoS case is 2^N failures on ~200 tokens; this cap is linear).
+const SPECULATIVE_FAILURES_PER_TOKEN: usize = 100;
 
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
 /// precedence classes are ordered from weakest binding at the top to tightest binding at the
@@ -351,6 +375,7 @@ impl<'a> Parser<'a> {
             tokens,
             index: 0,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+            speculative_failures: 0,
         }
     }
 
@@ -490,8 +515,26 @@ impl<'a> Parser<'a> {
                 .map_no_statement_parser_err(),
                 Token::LParen => {
                     self.prev_token();
+                    let query = self.parse_query().map_parser_err(StatementKind::Select)?;
+                    // `(SHOW TABLES)` parses as a `Query` whose `body` is a
+                    // `Show` node, but the same SQL without parens parses as
+                    // a top-level `Statement::Show`. Unwrap the degenerate
+                    // wrapper so the AST is independent of redundant parens
+                    // and the parse + display + reparse round trip is stable.
+                    if let Query {
+                        ctes: CteBlock::Simple(ctes),
+                        body: SetExpr::Show(show),
+                        order_by,
+                        limit: None,
+                        offset: None,
+                    } = &query
+                    {
+                        if ctes.is_empty() && order_by.is_empty() {
+                            return Ok(Statement::Show(show.clone()));
+                        }
+                    }
                     Ok(Statement::Select(SelectStatement {
-                        query: self.parse_query().map_parser_err(StatementKind::Select)?,
+                        query,
                         as_of: None, // Only the outermost SELECT may have an AS OF clause.
                     }))
                 }
@@ -526,10 +569,32 @@ impl<'a> Parser<'a> {
         mut expr: Expr<Raw>,
     ) -> Result<Expr<Raw>, ParserError> {
         self.checked_recur_mut(|parser| {
+            // Each iteration wraps `expr` in one more node (a binary op, field
+            // access `a.b`, `IS`, etc.), so a long *flat* operator/field-access
+            // chain (`a.f.f.f…`, `a+a+a…`) builds AST depth iteratively — the
+            // per-call recursion guard above only counts as one level for the
+            // whole loop. Bound the chain length (at `EXPR_CHAIN_LIMIT`, not
+            // the much smaller `RECURSION_LIMIT` — flat chains are legitimate
+            // at widths deep nesting never reaches) so the resulting AST can't
+            // grow deep enough to overflow the stack when it is later
+            // displayed, dropped, cloned, or visited recursively. Regression
+            // for the parse_expr_roundtrip field-access-chain stack overflow
+            // (`a.ff.cX.*.G…`).
+            let mut chain = 0usize;
             loop {
                 let next_precedence = parser.get_next_precedence();
                 if precedence >= next_precedence {
                     break;
+                }
+                chain += 1;
+                if chain > EXPR_CHAIN_LIMIT {
+                    return Err(ParserError::new(
+                        parser.peek_pos(),
+                        format!(
+                            "statement exceeds nested expression limit of {}",
+                            EXPR_CHAIN_LIMIT
+                        ),
+                    ));
                 }
 
                 expr = parser.parse_infix(expr, next_precedence)?;
@@ -905,6 +970,29 @@ impl<'a> Parser<'a> {
 
     /// Parse a SQL CAST function e.g. `CAST(expr AS FLOAT)`
     fn parse_cast_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+        // Whether `expr` is safe to print directly to the left of a Postgres-style
+        // `::<type>` cast without wrapping it in parentheses. `Expr::Cast` /
+        // `Expr::Collate` print as the postfix forms `<inner>::<type>` /
+        // `<inner> COLLATE <c>`, so they are only safe when their *own* operand is
+        // — otherwise an inner low-precedence spine (e.g. the quantified comparison
+        // in `CAST(a = ANY (...) AS t)`, parsed as `Cast(AnySubquery)`) would
+        // re-associate against a surrounding operator on reparse. Everything else
+        // in the list is atomic or self-delimiting and so always safe.
+        fn safe_before_pg_cast(expr: &Expr<Raw>) -> bool {
+            match expr {
+                Expr::Nested(_)
+                | Expr::Value(_)
+                | Expr::Function { .. }
+                | Expr::Identifier { .. }
+                | Expr::HomogenizingFunction { .. }
+                | Expr::NullIf { .. }
+                | Expr::Subquery { .. }
+                | Expr::Parameter(..) => true,
+                Expr::Cast { expr, .. } | Expr::Collate { expr, .. } => safe_before_pg_cast(expr),
+                _ => false,
+            }
+        }
+
         self.expect_token(&Token::LParen)?;
         let expr = self.parse_expr()?;
         self.expect_keyword(AS)?;
@@ -921,26 +1009,14 @@ impl<'a> Parser<'a> {
         //    (<expr> OP <expr>)::<type>
         // unless the inner expression is of a kind that we know is
         // safe to follow with a `::` without wrapping.
-        if !matches!(
-            expr,
-            Expr::Nested(_)
-                | Expr::Value(_)
-                | Expr::Cast { .. }
-                | Expr::Function { .. }
-                | Expr::Identifier { .. }
-                | Expr::Collate { .. }
-                | Expr::HomogenizingFunction { .. }
-                | Expr::NullIf { .. }
-                | Expr::Subquery { .. }
-                | Expr::Parameter(..)
-        ) {
+        if safe_before_pg_cast(&expr) {
             Ok(Expr::Cast {
-                expr: Box::new(Expr::Nested(Box::new(expr))),
+                expr: Box::new(expr),
                 data_type,
             })
         } else {
             Ok(Expr::Cast {
-                expr: Box::new(expr),
+                expr: Box::new(Expr::Nested(Box::new(expr))),
                 data_type,
             })
         }
@@ -1231,21 +1307,31 @@ impl<'a> Parser<'a> {
                     if let Some(construct) =
                         self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN, DISTINCT])
                     {
+                        let construct = match construct {
+                            NULL => IsExprConstruct::Null,
+                            TRUE => IsExprConstruct::True,
+                            FALSE => IsExprConstruct::False,
+                            UNKNOWN => IsExprConstruct::Unknown,
+                            DISTINCT => {
+                                self.expect_keyword(FROM)?;
+                                // Parse the right-hand side at the precedence of
+                                // the `IS` operator we are in the middle of, not
+                                // at `Precedence::Zero`. Otherwise we greedily
+                                // pull a trailing `AND`/`OR` into the RHS and
+                                // parse `a IS DISTINCT FROM b AND c` as `a IS
+                                // DISTINCT FROM (b AND c)`. `IS DISTINCT FROM`
+                                // binds tighter than `AND`/`OR` (and looser than
+                                // comparison and arithmetic), matching
+                                // PostgreSQL.
+                                let expr = self.parse_subexpr(precedence)?;
+                                IsExprConstruct::DistinctFrom(Box::new(expr))
+                            }
+                            _ => unreachable!(),
+                        };
                         Ok(Expr::IsExpr {
                             expr: Box::new(expr),
                             negated,
-                            construct: match construct {
-                                NULL => IsExprConstruct::Null,
-                                TRUE => IsExprConstruct::True,
-                                FALSE => IsExprConstruct::False,
-                                UNKNOWN => IsExprConstruct::Unknown,
-                                DISTINCT => {
-                                    self.expect_keyword(FROM)?;
-                                    let expr = self.parse_expr()?;
-                                    IsExprConstruct::DistinctFrom(Box::new(expr))
-                                }
-                                _ => unreachable!(),
-                            },
+                            construct,
                         })
                     } else {
                         self.expected(
@@ -1931,11 +2017,15 @@ impl<'a> Parser<'a> {
     where
         F: FnMut(&mut Self) -> Result<T, ParserError>,
     {
+        if self.speculative_failures >= SPECULATIVE_FAILURES_PER_TOKEN * self.tokens.len() {
+            return None;
+        }
         let index = self.index;
         if let Ok(t) = f(self) {
             Some(t)
         } else {
             self.index = index;
+            self.speculative_failures += 1;
             None
         }
     }
@@ -2798,7 +2888,6 @@ impl<'a> Parser<'a> {
                 PROGRESS,
                 REGION,
                 REGISTRY,
-                ROLE,
                 SASL,
                 SCOPE,
                 SECRET,
@@ -4232,11 +4321,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_raw_ident_str(&mut self) -> Result<String, ParserError> {
-        match self.next_token() {
-            Some(Token::Ident(id)) => Ok(id.into_inner()),
-            Some(Token::Number(n)) => Ok(n),
-            _ => parser_err!(self, self.peek_prev_pos(), "expected id"),
+        let id = match self.next_token() {
+            Some(Token::Ident(id)) => id.into_inner(),
+            Some(Token::Number(n)) => n,
+            _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
+        };
+        // A resolved name renders as `[id]`; an empty id (e.g. `[""]`) would
+        // display as `[]` and fail to reparse. Reject it.
+        if id.is_empty() {
+            return parser_err!(self, self.peek_prev_pos(), "expected id");
         }
+        Ok(id)
     }
 
     fn parse_optional_in_cluster(&mut self) -> Result<Option<RawClusterName>, ParserError> {
@@ -8248,6 +8343,16 @@ impl<'a> Parser<'a> {
 
     /// A table name or a parenthesized subquery, followed by optional `[AS] alias`
     fn parse_table_factor(&mut self) -> Result<TableFactor<Raw>, ParserError> {
+        // Guard the nested table-factor recursion. `FROM ((((…` descends
+        // parse_table_factor -> parse_table_and_joins -> parse_table_factor,
+        // and the inner `parse_query` recursion guard doesn't stop it because
+        // the derived-table `maybe_parse` below swallows its
+        // `RecursionLimitError`. Without this, deeply nested parens overflow
+        // the stack (and the try-both backtracking balloons memory).
+        self.checked_recur_mut(|parser| parser.parse_table_factor_inner())
+    }
+
+    fn parse_table_factor_inner(&mut self) -> Result<TableFactor<Raw>, ParserError> {
         if self.parse_keyword(LATERAL) {
             // LATERAL must always be followed by a subquery or table function.
             if self.consume_token(&Token::LParen) {

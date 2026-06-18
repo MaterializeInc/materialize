@@ -349,7 +349,7 @@ query TT
 SHOW CREATE VIEW d.qualified_columns;
 ----
 materialize.d.qualified_columns
-CREATE VIEW⏎    materialize.d.qualified_columns⏎    AS SELECT materialize.d.values.x, materialize.d.values.y, z FROM materialize.d.values;
+CREATE VIEW⏎    materialize.d.qualified_columns⏎    AS SELECT materialize.d."values".x, materialize.d."values".y, z FROM materialize.d."values";
 
 mode cockroach
 
@@ -369,7 +369,7 @@ query TT
 SHOW CREATE VIEW d_renamed.qualified_columns;
 ----
 materialize.d_renamed.qualified_columns
-CREATE VIEW⏎    materialize.d_renamed.qualified_columns⏎    AS⏎        SELECT materialize.d_renamed.values.x, materialize.d_renamed.values.y, z⏎        FROM materialize.d_renamed.values;
+CREATE VIEW⏎    materialize.d_renamed.qualified_columns⏎    AS⏎        SELECT materialize.d_renamed."values".x, materialize.d_renamed."values".y, z⏎        FROM materialize.d_renamed."values";
 
 query ITI
 SELECT * FROM d_renamed.qualified_columns LIMIT 1;

@@ -73,7 +73,7 @@ impl FromStr for CatalogItemId {
             return Err(anyhow!("couldn't parse id {}", s));
         }
         let tag = s.chars().next().unwrap();
-        s = &s[1..];
+        s = &s[tag.len_utf8()..];
         let variant = match tag {
             's' => {
                 if Some('i') == s.chars().next() {
@@ -145,5 +145,17 @@ mod tests {
         proptest!(|(id in any::<CatalogItemId>())| {
             testcase(id);
         })
+    }
+
+    #[mz_ore::test]
+    fn test_catalog_item_id_from_str_non_ascii() {
+        // Regression test for a panic on multi-byte leading characters, where
+        // slicing off a single byte landed inside a UTF-8 char boundary (SQL-195).
+        for invalid in ["ü1", "ü", "é42", "🦀7", ""] {
+            assert!(
+                invalid.parse::<CatalogItemId>().is_err(),
+                "expected {invalid:?} to fail to parse"
+            );
+        }
     }
 }

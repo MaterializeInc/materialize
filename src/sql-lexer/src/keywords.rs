@@ -74,6 +74,19 @@ impl Keyword {
         )
     }
 
+    /// Reports whether this keyword begins a query body (`SELECT`, `VALUES`,
+    /// `TABLE …`, etc.).
+    ///
+    /// When `AstDisplay` parenthesizes an expression (e.g. to disambiguate a
+    /// field access like `(expr).f`) and that expression's leading token is a
+    /// bare identifier with one of these names, the re-parser treats the
+    /// parentheses as a subquery and the identifier as its leading clause
+    /// (e.g. `(table & x)` parses as a `TABLE`-query). Such identifiers must be
+    /// quoted to round-trip. `SELECT`/`WITH` are already `is_always_reserved`.
+    pub fn begins_query_body(self) -> bool {
+        matches!(self, WITH | SELECT | VALUES | SHOW | TABLE)
+    }
+
     /// Reports whether this keyword requires quoting when used in scalar expressions.
     ///
     /// These are the keywords `Parser::parse_prefix` won't parse as an identifier.
@@ -139,6 +152,33 @@ impl Keyword {
             || self.is_reserved_in_table_alias()
             || self.is_reserved_in_column_alias()
             || self.is_reserved_in_scalar_expression()
+    }
+
+    /// Reports whether a keyword has a special parser-dispatch form (e.g.
+    /// `POSITION(expr IN expr)`, `MAP[K => V]`) such that an unquoted
+    /// occurrence in expression position triggers the special grammar
+    /// rather than parsing as a plain identifier. The parser itself
+    /// disambiguates by looking at the next token, but `AstDisplay` has no
+    /// such context — so when emitting an `Ident` whose name matches one
+    /// of these, we force quoting to keep the round trip stable.
+    pub fn is_context_sensitive_keyword(self) -> bool {
+        matches!(
+            self,
+            ALL | ANY
+                | COALESCE
+                | EXISTS
+                | EXTRACT
+                | GREATEST
+                | LEAST
+                | MAP
+                | NORMALIZE
+                | NULLIF
+                | POSITION
+                | ROW
+                | SOME
+                | SUBSTRING
+                | TRIM
+        )
     }
 }
 

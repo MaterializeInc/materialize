@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/apply.rs
-revision: 5b42d5e422
+revision: 4ec14fa5c7
 ---
 
 # adapter::catalog::apply
@@ -12,4 +12,5 @@ The `ApplyState` state machine batches consecutive updates of the same type when
 After processing retractions that are not replaced by a corresponding addition (i.e., truly dropped items), `apply_updates` calls `drop_optimizer_notices` to clean up any optimizer notices associated with the dropped items and emits the corresponding `mz_notices` retractions.
 `CatalogState` methods defined in this module (`set_optimized_plan`, `set_physical_plan`, `set_dataflow_metainfo`, `drop_optimizer_notices`) mutate the plan and notice fields stored directly on `Index` and `MaterializedView` catalog items.
 `StateUpdateKind::Role` updates do not produce builtin table updates; `mz_roles` and `mz_role_parameters` are materialized views backed by `mz_internal.mz_catalog_raw` rather than builtin tables.
+`concretize_replica_location` accepts an `allow_disabled` boolean that, when `true`, permits replica sizes that are marked disabled in the size map; this is used during catalog apply so that existing replicas with disabled sizes can remain registered in memory (and return sensible SQL results via the `mz_cluster_replicas` MV) without panicking. A `soft_panic_or_log!` is emitted when a managed cluster or replica references an unknown size that is absent from the in-memory map.
 This is the central reconciliation path used both during initial catalog open and when reacting to concurrent remote catalog mutations.

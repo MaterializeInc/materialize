@@ -10,7 +10,9 @@
 //! Metrics for kafka sinks.
 
 use mz_ore::metric;
-use mz_ore::metrics::{DeleteOnDropGauge, IntGaugeVec, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{
+    DeleteOnDropGauge, IntGaugeVec, MetricVisibility, MetricsRegistry, UIntGaugeVec,
+};
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, AtomicU64};
 
@@ -99,6 +101,7 @@ impl KafkaSinkMetricDefs {
                 name: "mz_sink_rdkafka_outbuf_msg_cnt",
                 help: "The number of messages awaiting transmission across all brokers.",
                 var_labels: ["sink_id"],
+                visibility: MetricVisibility::Public,
             )),
             rdkafka_waitresp_cnt: registry.register(metric!(
                 name: "mz_sink_rdkafka_waitresp_cnt",
@@ -116,6 +119,7 @@ impl KafkaSinkMetricDefs {
                 name: "mz_sink_rdkafka_txerrs",
                 help: "The total number of transmission errors across all brokers.",
                 var_labels: ["sink_id"],
+                visibility: MetricVisibility::Public,
             )),
             rdkafka_txretries: registry.register(metric!(
                 name: "mz_sink_rdkafka_txretries",
@@ -132,12 +136,14 @@ impl KafkaSinkMetricDefs {
                 help: "The number of connection attempts, including successful and failed \
                        attempts, and name resolution failures across all brokers.",
                 var_labels: ["sink_id"],
+                visibility: MetricVisibility::Public,
             )),
             rdkafka_disconnects: registry.register(metric!(
                 name: "mz_sink_rdkafka_disconnects",
                 help: "The number of disconnections, whether triggered by the broker, the \
                       network, the load balancer, or something else across all brokers.",
                 var_labels: ["sink_id"],
+                visibility: MetricVisibility::Public,
             )),
             outstanding_progress_records: registry.register(metric!(
                 name: "mz_sink_oustanding_progress_records",

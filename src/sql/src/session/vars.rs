@@ -77,7 +77,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use imbl::OrdMap;
 use mz_build_info::BuildInfo;
-use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
+use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal, ParameterScope};
 use mz_persist_client::cfg::{
     CRDB_CONNECT_TIMEOUT, CRDB_KEEPALIVES_IDLE, CRDB_KEEPALIVES_INTERVAL, CRDB_KEEPALIVES_RETRIES,
     CRDB_TCP_USER_TIMEOUT,
@@ -203,6 +203,13 @@ pub trait Var: Debug {
     /// Reports whether the variable is only visible in unsafe mode.
     fn is_unsafe(&self) -> bool {
         self.name().starts_with("unsafe_")
+    }
+
+    /// Returns the [`ParameterScope`] at which this variable's value may be
+    /// overridden by the LaunchDarkly sync loop. Defaults to
+    /// [`ParameterScope::Environment`].
+    fn scope(&self) -> ParameterScope {
+        ParameterScope::Environment
     }
 
     /// Upcast `self` to a `dyn Var`, useful when working with multiple different implementors of
@@ -1123,6 +1130,10 @@ impl Var for SystemVar {
         self.definition.type_name()
     }
 
+    fn scope(&self) -> ParameterScope {
+        self.definition.scope()
+    }
+
     fn visible(&self, user: &User, system_vars: &SystemVars) -> Result<(), VarError> {
         self.definition.visible(user, system_vars)
     }
@@ -1295,34 +1306,39 @@ impl SystemVars {
         let dyncfgs = mz_dyncfgs::all_dyncfgs();
         let dyncfg_vars: Vec<_> = dyncfgs
             .entries()
-            .map(|cfg| match cfg.default() {
-                ConfigVal::Bool(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
-                }
-                ConfigVal::U32(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
-                }
-                ConfigVal::Usize(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
-                }
-                ConfigVal::OptUsize(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
-                }
-                ConfigVal::F64(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
-                }
-                ConfigVal::String(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
-                }
-                ConfigVal::OptString(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
-                }
-                ConfigVal::Duration(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
-                }
-                ConfigVal::Json(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
-                }
+            .map(|cfg| {
+                let var = match cfg.default() {
+                    ConfigVal::Bool(default) => {
+                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                    }
+                    ConfigVal::U32(default) => {
+                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                    }
+                    ConfigVal::Usize(default) => {
+                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                    }
+                    ConfigVal::OptUsize(default) => {
+                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                    }
+                    ConfigVal::F64(default) => {
+                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                    }
+                    ConfigVal::String(default) => {
+                        VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                    }
+                    ConfigVal::OptString(default) => {
+                        VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                    }
+                    ConfigVal::Duration(default) => {
+                        VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                    }
+                    ConfigVal::Json(default) => {
+                        VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                    }
+                };
+                // Carry the dyncfg's declared scope through to the system var,
+                // so scoped resolution and introspection see it.
+                var.scoped(cfg.scope())
             })
             .collect();
 

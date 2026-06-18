@@ -17,7 +17,7 @@
 use mz_ore::metric;
 use mz_ore::metrics::{
     DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec, IntGaugeVec,
-    MetricsRegistry, UIntGaugeVec,
+    MetricVisibility, MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -77,6 +77,7 @@ impl GeneralSourceMetricDefs {
                 name: "mz_source_offset_commit_failures",
                 help: "A counter representing how many times we have failed to commit offsets for a source",
                 var_labels: ["source_id"],
+                visibility: MetricVisibility::Public,
             )),
             progress: registry.register(metric!(
                 name: "mz_source_progress",

@@ -29,7 +29,9 @@ use mz_catalog::memory::objects::{
 };
 use mz_controller::clusters::ReplicaLocation;
 use mz_ore::metric;
-use mz_ore::metrics::{DeleteOnDropGauge, Histogram, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{
+    DeleteOnDropGauge, Histogram, MetricVisibility, MetricsRegistry, UIntGaugeVec,
+};
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -84,28 +86,33 @@ impl CatalogInfoMetrics {
                 help: "Maps catalog object IDs to the object's name, schema, database, and \
                        type. Constant 1.",
                 var_labels: ["object_id", "global_id", "name", "schema_name", "database_name", "type"],
+                visibility: MetricVisibility::Public
             )),
             cluster_info: registry.register(metric!(
                 name: "mz_cluster_info",
                 help: "Maps cluster IDs to the cluster's name and size. Constant 1.",
                 var_labels: ["cluster_id", "name", "size"],
+                visibility: MetricVisibility::Public
             )),
             replica_info: registry.register(metric!(
                 name: "mz_replica_info",
                 help: "Maps cluster replica IDs to the replica's name and size. Constant 1.",
                 var_labels: ["replica_id", "cluster_id", "name", "size"],
+                visibility: MetricVisibility::Public
             )),
             source_info: registry.register(metric!(
                 name: "mz_source_info",
                 help: "Maps user source IDs to the source's type, envelope type, and \
                        cluster. Constant 1.",
                 var_labels: ["source_id", "type", "envelope_type", "cluster_id"],
+                visibility: MetricVisibility::Public
             )),
             sink_info: registry.register(metric!(
                 name: "mz_sink_info",
                 help: "Maps user sink IDs to the sink's type, envelope type, and \
                        cluster. Constant 1.",
                 var_labels: ["sink_id", "type", "envelope_type", "cluster_id"],
+                visibility: MetricVisibility::Public
             )),
             series: Vec::new(),
             last_revision: None,

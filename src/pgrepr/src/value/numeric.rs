@@ -205,20 +205,39 @@ impl<'a> FromSql<'a> for Numeric {
             _ => return Err("bad sign in numeric".into()),
         }
 
-        let mut scale = (units - weight - 1) * 4;
+        // `units`, `weight`, and `in_scale` are read verbatim off the wire, so
+        // for a binary `Bind` parameter they are entirely user-controlled.
+        // Validate them and compute the scale in `i32`: done in `i16` (as this
+        // once was), a `weight` of `i16::MIN` makes `units - weight - 1` exceed
+        // `i16::MAX` and overflow, panicking the connection task.
+        if in_scale < 0 {
+            return Err(format!("invalid numeric binary value: negative dscale {in_scale}").into());
+        }
+        let base_pow = i32::try_from(TO_FROM_SQL_BASE_POW).expect("TO_FROM_SQL_BASE_POW fits i32");
+        let mut scale = (i32::from(units) - i32::from(weight) - 1) * base_pow;
+
+        // Reject headers whose implied scale is out of range rather than letting
+        // the decimal arithmetic below silently collapse the value to zero (or
+        // trip a downstream context-status error). A valid `numeric` decodes
+        // within the aggregation context's precision, so anything beyond that
+        // (e.g. the `weight = i16::MIN` value above, whose scale is ~131072) is
+        // not representable.
+        if scale.unsigned_abs() > u32::from(numeric::NUMERIC_AGG_MAX_PRECISION) {
+            return Err(format!("invalid numeric binary value: scale {scale} out of range").into());
+        }
 
         // Adjust scales
         if scale < 0 {
             // Multiply by 10^scale
-            cx.scaleb(&mut d, &AdtNumeric::from(-i32::from(scale)));
+            cx.scaleb(&mut d, &AdtNumeric::from(-scale));
             scale = 0;
-        } else if scale > in_scale {
+        } else if scale > i32::from(in_scale) {
             // Divide by 10^(difference in scale and in_scale)
-            cx.scaleb(&mut d, &AdtNumeric::from(-i32::from(scale - in_scale)));
-            scale = in_scale;
+            cx.scaleb(&mut d, &AdtNumeric::from(-(scale - i32::from(in_scale))));
+            scale = i32::from(in_scale);
         }
 
-        cx.scaleb(&mut d, &AdtNumeric::from(-i32::from(scale)));
+        cx.scaleb(&mut d, &AdtNumeric::from(-scale));
         cx.reduce(&mut d);
 
         let mut cx = cx_datum();

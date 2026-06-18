@@ -153,8 +153,11 @@ materialize.public.mz_source "CREATE SOURCE materialize.public.mz_source\nIN CLU
 >[version<2600700] SHOW CREATE TABLE table_a;
 materialize.public.table_a "CREATE TABLE materialize.public.table_a (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT table_a_pkey PRIMARY KEY (pk)) FROM SOURCE materialize.public.mz_source (REFERENCE = postgres.public.table_a) WITH (<DETAILS>);"
 
->[version>=2600700] SHOW CREATE TABLE table_a;
+>[2600700<=version<2603000] SHOW CREATE TABLE table_a;
 materialize.public.table_a "CREATE TABLE\n    materialize.public.table_a\n        (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT table_a_pkey PRIMARY KEY (pk))\nFROM SOURCE materialize.public.mz_source (REFERENCE = postgres.public.table_a)\nWITH (\n    <DETAILS>\n);"
+
+>[version>=2603000] SHOW CREATE TABLE table_a;
+materialize.public.table_a "CREATE TABLE materialize.public.table_a\nFROM SOURCE materialize.public.mz_source (REFERENCE = postgres.public.table_a);"
 
 #
 # State checking

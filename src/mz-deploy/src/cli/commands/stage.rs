@@ -1358,6 +1358,7 @@ mod tests {
         Project::from(typed_project)
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_full_deploy_view_not_indexed_mixed_types() {
         let view_obj = make_typed_object(&["CREATE VIEW my_view AS SELECT 1"]);
@@ -1428,6 +1429,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_full_deploy_view_indexed_different_cluster() {
         let view_obj = make_typed_object(&[
@@ -1498,6 +1500,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_incremental_deploy_view_updated_not_indexed() {
         // Build planned project with all object types
@@ -1582,6 +1585,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_incremental_deploy_view_updated_indexed_different_cluster() {
         // Build planned project with indexed view and other object types
@@ -1854,6 +1858,7 @@ mod tests {
         Project::from(typed_project)
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_build_snapshot_replacement_schema_kind() {
         let mv_obj =
@@ -1892,6 +1897,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_build_snapshot_no_replacement_schemas_all_objects() {
         let mv_obj =
@@ -1920,6 +1926,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn test_record_stage_metadata_transition_override() {
         // During an Objects→Replacement transition, MVs go through the regular

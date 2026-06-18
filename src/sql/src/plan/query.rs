@@ -2382,14 +2382,24 @@ fn plan_select_from_where(
             let (group_expr, expr) = plan_group_by_expr(ecx, group_expr, &projection)?;
             let new_column = group_key.len();
 
-            if let Some(group_expr) = group_expr {
-                // Multiple AST expressions can map to the same HIR expression.
-                // If we already have a ScopeItem for this HIR, we can add this
-                // next AST expression to its set
-                if let Some(existing_scope_item) = group_exprs.get_mut(&expr) {
+            // Multiple AST expressions can map to the same HIR expression, e.g.
+            // `GROUP BY 1, 1` or `GROUP BY a, 1` where the positional reference
+            // `1` resolves to the same column as `a`. When we already have a
+            // ScopeItem for this HIR expression we must deduplicate: skip adding
+            // a second group key for it. We must not gate this on `group_expr`
+            // being `Some`, because a positional reference to an input column
+            // (e.g. `GROUP BY 1`) has no AST expression to record yet still
+            // needs to dedup against the existing key; gating on `Some` here is
+            // what made `GROUP BY 1, 1` panic on the `group_hir_exprs.len() ==
+            // group_exprs.len()` assertion below.
+            if let Some(existing_scope_item) = group_exprs.get_mut(&expr) {
+                // If this AST expression is a named expression (not a bare
+                // positional reference), record it on the existing ScopeItem so
+                // name resolution can find it.
+                if let Some(group_expr) = group_expr {
                     existing_scope_item.exprs.insert(group_expr.clone());
-                    continue;
                 }
+                continue;
             }
 
             let mut scope_item = if let HirScalarExpr::Column(
@@ -4578,7 +4588,7 @@ fn plan_subscript_jsonb(
             // Integers are converted to a string here and then re-parsed as an
             // integer by `JsonbGetPath`. Weird, but this is how PostgreSQL says to
             // do it.
-            typeconv::to_string(ecx, subscript)
+            typeconv::to_string(ecx, subscript)?
         } else {
             sql_bail!("jsonb subscript type must be coercible to integer or text");
         };
