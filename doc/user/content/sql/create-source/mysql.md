@@ -299,10 +299,7 @@ CREATE SOURCE mz_source
 
 If you're replicating tables that use [data types unsupported](#supported-types)
 by Materialize, use the `TEXT COLUMNS` option to decode data as `text` for the
-affected columns. `TEXT COLUMNS` should also be used for columns that contain
-MySQL zero-value `DATE`, `DATETIME`, or `TIMESTAMP` data.
-
-This option expects the upstream fully-qualified names of the
+affected columns. This option expects the upstream fully-qualified names of the
 replicated table and column (i.e. as defined in your MySQL database).
 
 ```mzsql
