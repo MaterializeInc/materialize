@@ -141,8 +141,9 @@ mz-deploy test --junit-xml results.xml
 ## Explain query plans
 
 {{< note >}}
-Requires Docker and a database connection. The command stages objects in a
-temporary schema on your live Materialize instance.
+Requires Docker; no live Materialize connection is needed. The command stages
+the target's dependencies in a temporary schema inside an ephemeral local
+Materialize container.
 {{< /note >}}
 
 ```bash
