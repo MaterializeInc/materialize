@@ -52,11 +52,11 @@ license_key         = "<Materialize license key JWT with ory entitlement>"
 
 k8s_apiserver_authorized_networks = ["0.0.0.0/0"]   # tighten for production
 
-ory_hydra_hostname             = "hydra.example.com"
-ory_ui_hostname                = "auth.example.com"
-ory_kratos_hostname            = "kratos.example.com"
-materialize_console_hostname   = "console.example.com"
-materialize_balancerd_hostname = "balancerd.example.com"
+ory_hydra_fqdn             = "hydra.example.com"
+ory_ui_fqdn                = "auth.example.com"
+ory_kratos_fqdn            = "kratos.example.com"
+materialize_console_fqdn   = "console.example.com"
+materialize_balancerd_fqdn = "balancerd.example.com"
 
 tags = {
   environment = "demo"
@@ -67,7 +67,7 @@ To enable Polis (SAML + SCIM):
 
 ```hcl
 enable_polis                 = true
-ory_polis_hostname           = "polis.example.com"
+ory_polis_fqdn           = "polis.example.com"
 ory_polis_oci_chart_key_file = "/path/to/ory-artifacts-sa-key.json"
 
 # Pin Polis to amd64 nodes (skip if your default node pool is amd64)
@@ -175,7 +175,7 @@ Typically 1-3 minutes per cert via Let's Encrypt DNS-01.
 Smoke-test each component:
 
 ```bash
-# Hydra OIDC discovery (should return JSON with issuer matching ory_hydra_hostname)
+# Hydra OIDC discovery (should return JSON with issuer matching ory_hydra_fqdn)
 curl -fsSL https://hydra.example.com/.well-known/openid-configuration | jq .issuer
 
 # Kratos health
