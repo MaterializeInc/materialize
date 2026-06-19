@@ -218,6 +218,11 @@ async fn handle_commands(
                 }
                 all_responses.push((ids, tx));
             }
+            PersistTableWriteCmd::ApplyLe { apply_ts: _, tx } => {
+                // Read-only mode has no txn-wal writes to apply; the
+                // ApplyLe is a synchronous no-op that signals completion.
+                let _ = tx.send(());
+            }
             PersistTableWriteCmd::Shutdown => shutdown = true,
         }
     }

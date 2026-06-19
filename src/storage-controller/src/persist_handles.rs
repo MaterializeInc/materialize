@@ -80,6 +80,14 @@ enum PersistTableWriteCmd {
         updates: Vec<(GlobalId, Vec<TableData>)>,
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     },
+    /// Force the txn-wal to roll outstanding writes up to and including
+    /// `apply_ts` into each registered data shard. Used by branch creation
+    /// to ensure data shard uppers cross `branch_ts` before fork_shard
+    /// snapshots them.
+    ApplyLe {
+        apply_ts: Timestamp,
+        tx: tokio::sync::oneshot::Sender<()>,
+    },
     Shutdown,
 }
 
@@ -90,6 +98,7 @@ impl PersistTableWriteCmd {
             PersistTableWriteCmd::Update { .. } => "PersistTableWriteCmd::Update",
             PersistTableWriteCmd::DropHandles { .. } => "PersistTableWriteCmd::DropHandle",
             PersistTableWriteCmd::Append { .. } => "PersistTableWriteCmd::Append",
+            PersistTableWriteCmd::ApplyLe { .. } => "PersistTableWriteCmd::ApplyLe",
             PersistTableWriteCmd::Shutdown => "PersistTableWriteCmd::Shutdown",
         }
     }
@@ -258,6 +267,24 @@ impl PersistTableWriteWorker {
         rx
     }
 
+    /// Force the txn-wal to apply all outstanding writes up to and including
+    /// `apply_ts` into each registered table's data shard. Returns a receiver
+    /// that resolves once the apply has been issued.
+    ///
+    /// Used by CREATE BRANCH: branch_ts is picked from the controller's
+    /// txn-wal-aware write_frontier, but `fork_shard` operates on the data
+    /// shard whose upper lags behind by however long the worker takes to
+    /// apply. Calling this method synchronously walks the lag to zero
+    /// before the fork.
+    pub fn apply_le(
+        &self,
+        apply_ts: Timestamp,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.send(PersistTableWriteCmd::ApplyLe { apply_ts, tx });
+        rx
+    }
+
     /// Drops the handles associated with `ids` from this worker.
     ///
     /// Note that this does not perform any other cleanup, such as finalizing
@@ -330,6 +357,15 @@ impl TxnsTableWorker {
                     self.append(write_ts, advance_to, updates, tx)
                         .instrument(span)
                         .await
+                }
+                PersistTableWriteCmd::ApplyLe { apply_ts, tx } => {
+                    async {
+                        let tidy = self.txns.apply_le(&apply_ts).await;
+                        self.tidy.merge(tidy);
+                    }
+                    .instrument(span)
+                    .await;
+                    let _ = tx.send(());
                 }
                 PersistTableWriteCmd::Shutdown => {
                     tracing::info!("PersistTableWriteWorker shutting down via command");

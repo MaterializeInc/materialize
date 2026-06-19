@@ -2110,6 +2110,13 @@ impl StorageController for Controller {
             .append(write_ts, advance_to, commands))
     }
 
+    fn apply_table_writes_le(
+        &self,
+        apply_ts: Timestamp,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        self.persist_table_worker.apply_le(apply_ts)
+    }
+
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
         self.collection_manager.monotonic_appender(id)
     }

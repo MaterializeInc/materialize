@@ -618,6 +618,18 @@ pub trait StorageController: Debug {
     /// append to the specified [`GlobalId`].
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError>;
 
+    /// Force the txn-wal to apply all outstanding writes at or below
+    /// `apply_ts` into each registered table's data shard. Returns a
+    /// receiver that resolves once the apply has been issued.
+    ///
+    /// `CREATE BRANCH` calls this against `branch_ts` so that
+    /// `fork_shard` sees a data shard whose upper has crossed `branch_ts`
+    /// (otherwise the fork rejects with `BranchTsNotYetAvailable`).
+    fn apply_table_writes_le(
+        &self,
+        apply_ts: Timestamp,
+    ) -> tokio::sync::oneshot::Receiver<()>;
+
     /// Returns a shared [`WebhookStatistics`] which can be used to report user-facing
     /// statistics for this given webhhook, specified by the [`GlobalId`].
     ///
