@@ -646,6 +646,7 @@ mod tests {
     /// source import, a single object building `Get(source) -> ArrangeBy(key)`,
     /// and a single index export over the source.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn index_dataflow_structure() {
         let desc = crate::data::sample_desc();
         let loc = PersistLocation {
@@ -719,6 +720,7 @@ mod tests {
     /// arrange must lower to two distinct objects, and the index export must
     /// reference the built object rather than the source.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn build_computed_object_lowers() {
         let desc = crate::data::sample_desc();
         let loc = PersistLocation {
@@ -766,6 +768,7 @@ mod tests {
     /// MIR optimizer first, which fills the implementation, so the same dataflow
     /// then lowers. This is exactly what the `optimize` flag buys.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn join_lowers_only_with_optimize() {
         let loc = PersistLocation {
             blob_uri: "mem://".parse().unwrap(),
@@ -817,6 +820,7 @@ mod tests {
     /// same built object (binding). Both exports reference that object; the index
     /// arranges it and the MV sink writes it to a target shard.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn index_and_mv_same_binding() {
         let desc = crate::data::sample_desc();
         let loc = PersistLocation {
@@ -881,6 +885,7 @@ mod tests {
     /// import and no source imports, is the proof the index information reached the
     /// optimizer.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn optimize_uses_imported_index() {
         let desc = crate::data::sample_desc();
         let on_type = ReprRelationType::from(desc.typ());
@@ -913,6 +918,7 @@ mod tests {
     /// A count-over-index dataflow imports the index (no storage source), builds
     /// the reduce and its arrange as two objects, and exports the count index.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn count_over_index_structure() {
         let desc = crate::data::sample_desc();
         let on_type = ReprRelationType::from(desc.typ());
