@@ -7683,6 +7683,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-persist-load-gen"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mz-dyncfg",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-client",
+ "mz-persist-types",
+ "timely",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "mz-persist-proc"
 version = "0.1.0"
 dependencies = [

@@ -38,6 +38,33 @@ use tracing::debug;
 use crate::error::PostgresError;
 use crate::metrics::PostgresClientMetrics;
 
+/// The session transaction isolation level applied (via `SET SESSION CHARACTERISTICS`) to every
+/// connection a [PostgresClient] opens. Defaults to [`TransactionIsolationLevel::Serializable`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionIsolationLevel {
+    /// `SERIALIZABLE` (the historical default for all consumers of this client).
+    Serializable,
+    /// `REPEATABLE READ`.
+    RepeatableRead,
+    /// `READ COMMITTED`.
+    ReadCommitted,
+}
+
+impl TransactionIsolationLevel {
+    /// The SQL spelling, for use in `SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL`.
+    pub fn as_sql(&self) -> &'static str {
+        match self {
+            TransactionIsolationLevel::Serializable => "SERIALIZABLE",
+            TransactionIsolationLevel::RepeatableRead => "REPEATABLE READ",
+            TransactionIsolationLevel::ReadCommitted => "READ COMMITTED",
+        }
+    }
+}
+
+/// Resolves the isolation level for a connection. Evaluated once per connection creation, so a
+/// dynamic source (e.g. a dyncfg) takes effect as the pool recycles connections.
+pub type IsolationLevelFn = Arc<dyn Fn() -> TransactionIsolationLevel + Send + Sync>;
+
 /// Configuration knobs for [PostgresClient].
 pub trait PostgresClientKnobs: std::fmt::Debug + Send + Sync {
     /// Maximum number of connections allowed in a pool.
@@ -63,15 +90,28 @@ pub trait PostgresClientKnobs: std::fmt::Debug + Send + Sync {
 }
 
 /// Configuration for creating a [PostgresClient].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PostgresClientConfig {
     url: SensitiveUrl,
     knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
+    /// Resolves the session isolation level for each new connection. Defaults to SERIALIZABLE.
+    isolation: IsolationLevelFn,
+}
+
+impl std::fmt::Debug for PostgresClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresClientConfig")
+            .field("url", &self.url)
+            .field("knobs", &self.knobs)
+            .field("isolation", &(self.isolation)())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PostgresClientConfig {
-    /// Returns a new [PostgresClientConfig] for use in production.
+    /// Returns a new [PostgresClientConfig] for use in production. Connections default to
+    /// SERIALIZABLE isolation; override with [PostgresClientConfig::with_isolation_level].
     pub fn new(
         url: SensitiveUrl,
         knobs: Arc<dyn PostgresClientKnobs>,
@@ -81,7 +121,15 @@ impl PostgresClientConfig {
             url,
             knobs,
             metrics,
+            isolation: Arc::new(|| TransactionIsolationLevel::Serializable),
         }
+    }
+
+    /// Override the session isolation level for connections in this pool. The resolver is evaluated
+    /// once per new connection (so a dyncfg-backed resolver takes effect as connections recycle).
+    pub fn with_isolation_level(mut self, isolation: IsolationLevelFn) -> Self {
+        self.isolation = isolation;
+        self
     }
 }
 
@@ -128,6 +176,7 @@ impl PostgresClient {
         let last_ttl_connection = AtomicU64::new(0);
         let connections_created = config.metrics.connpool_connections_created.clone();
         let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
+        let isolation = Arc::clone(&config.isolation);
         let builder = Pool::builder(manager);
         let builder = match config.knobs.connection_pool_max_wait() {
             None => builder,
@@ -137,15 +186,16 @@ impl PostgresClient {
             .max_size(config.knobs.connection_pool_max_size())
             .post_create(Hook::async_fn(move |client, _| {
                 connections_created.inc();
+                let set_isolation_stmt = format!(
+                    "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL {}",
+                    isolation().as_sql(),
+                );
                 Box::pin(async move {
                     debug!("opened new consensus postgres connection");
                     // This hook must return `tokio_postgres::Error`; using
                     // `mz_postgres_util` wrappers would change the error type.
                     #[allow(clippy::disallowed_methods)]
-                    client
-                        .batch_execute(
-                        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
-                    )
+                    client.batch_execute(&set_isolation_stmt)
                         .await
                         .map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
                 })
