@@ -1446,7 +1446,7 @@ fn test_transactional_explain_timestamps() {
 // but please at least keep _something_ that tests that custom compaction windows are working.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5600
-#[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8491 is fixed
+#[ignore] // TODO: Reenable when https://linear.app/materializeinc/issue/SQL-407 is fixed
 #[allow(clippy::disallowed_methods)]
 async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;

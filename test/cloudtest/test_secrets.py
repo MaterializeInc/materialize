@@ -58,7 +58,9 @@ def test_secrets(mz: MaterializeApplication) -> None:
 
 # Tests that secrets deleted from the catalog but not from k8s are cleaned up on
 # envd startup.
-@pytest.mark.skip(reason="Failpoints mess up the Mz intance database-issues#5263")
+@pytest.mark.skip(
+    reason="Failpoints mess up the Mz intance https://linear.app/materializeinc/issue/CLU-127"
+)
 def test_orphaned_secrets(mz: MaterializeApplication) -> None:
     # Use two separate failpoints. One that crashes after modifying the catalog
     # (drop_secrets), and one that fails during bootstrap (orphan_secrets) so
@@ -91,7 +93,7 @@ def test_orphaned_secrets(mz: MaterializeApplication) -> None:
     wait(condition="delete", resource=f"secret/{secret}")
 
 
-@pytest.mark.skip(reason="Flaky, see database-issues#8456")
+@pytest.mark.skip(reason="Flaky, see https://linear.app/materializeinc/issue/DB-136")
 def test_missing_secret(mz: MaterializeApplication) -> None:
     """Test that Mz does not panic if a secret goes missing from K8s"""
     mz.testdrive.run(input=dedent("""

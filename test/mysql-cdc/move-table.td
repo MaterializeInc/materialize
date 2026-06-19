@@ -9,7 +9,7 @@
 
 $ set-sql-timeout duration=1s
 
-# TODO: Reenable when database-issues#8127 is fixed
+# TODO: Reenable when https://linear.app/materializeinc/issue/SS-308 is fixed
 $ skip-if
 SELECT true
 

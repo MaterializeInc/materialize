@@ -27,7 +27,7 @@ def workflow_default(c: Composition) -> None:
     for name in c.workflows:
         if name in [
             "default",
-            # TODO: database-issues#7310 needs to be fixed
+            # TODO: https://linear.app/materializeinc/issue/DB-144 needs to be fixed
             "gh-24479",
         ]:
             continue

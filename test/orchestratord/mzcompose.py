@@ -673,7 +673,7 @@ class ConsoleEnabled(Modification):
             return
 
         def check() -> None:
-            pass  # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
+            pass  # TODO: https://linear.app/materializeinc/issue/DB-105
             # result = spawn.capture(
             #     [
             #         "kubectl",
@@ -1011,7 +1011,7 @@ class ConsoleReplicas(Modification):
         def check_replicas():
             console = get_console_data()
             len(console["items"])
-            # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
+            # TODO: https://linear.app/materializeinc/issue/DB-105
             # assert (
             #     num_pods == expected
             # ), f"Expected {expected} console pods, but found {num_pods}"
@@ -2486,7 +2486,7 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
     assert len(downtimes) == 2, f"Wrong number of downtimes: {downtimes}"
 
     test_failed = False
-    # TODO: Reduce to 15 s when https://github.com/MaterializeInc/database-issues/issues/9967 is fixed
+    # TODO: Reduce to 15 s when https://linear.app/materializeinc/issue/DB-106 is fixed
     max_downtime = 120
     upgrade_downtime = downtimes[-1]
     if upgrade_downtime > max_downtime:

@@ -940,7 +940,7 @@ class DropIndexAction(Action):
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
+        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
         temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         if (
             not temp
@@ -1869,7 +1869,7 @@ class FlipFlagsAction(Action):
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
 
-        # TODO: Remove when database-issues#8352 is fixed
+        # TODO: Remove when https://linear.app/materializeinc/issue/DB-138 is fixed
         if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
             "persist_use_critical_since_"
         ):
@@ -1914,7 +1914,7 @@ class CreateViewAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
+        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
         temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
@@ -3342,12 +3342,12 @@ ddl_action_list = ActionList(
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
         (CheckSinkAction, 1),
-        # TODO: Reenable when database-issues#8237 is fixed
+        # TODO: Reenable when https://linear.app/materializeinc/issue/SS-307 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 4),
-        # TODO: Reenable when database-issues#9620 is fixed
+        # TODO: Reenable when https://linear.app/materializeinc/issue/SS-290 is fixed
         # (CreateSqlServerSourceAction, 4),
         # (DropSqlServerSourceAction, 4),
         (GrantPrivilegesAction, 4),
@@ -3365,7 +3365,7 @@ ddl_action_list = ActionList(
         (SwapSchemaAction, 10),
         (ReplaceMaterializedViewAction, 20),
         (FlipFlagsAction, 2),
-        # TODO: Reenable when database-issues#8813 is fixed.
+        # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-405 is fixed.
         # (AlterTableAddColumnAction, 10),
         (AlterIcebergSinkFromAction, 8),
         (AlterKafkaSinkFromAction, 8),

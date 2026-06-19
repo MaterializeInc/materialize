@@ -47,7 +47,7 @@ $ mysql-execute name=mysql
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (9, 'nine');
 
-# TODO: Reenable when database-issues#8127 is fixed
+# TODO: Reenable when https://linear.app/materializeinc/issue/SS-308 is fixed
 $ skip-if
 SELECT true
 

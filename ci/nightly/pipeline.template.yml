@@ -658,7 +658,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: zippy
               args: [--scenario=SqlServerCdc, --actions=10000, --max-execution-time=20m, --azurite]
-        skip: "database-issues#9855"
+        skip: "https://linear.app/materializeinc/issue/DB-113"
 
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
@@ -1232,7 +1232,7 @@ steps:
         label: "K8s recovery: envd on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1260,7 +1260,7 @@ steps:
         label: "K8s recovery: storage on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1288,7 +1288,7 @@ steps:
         label: "K8s recovery: compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1316,7 +1316,7 @@ steps:
         label: "K8s recovery: replicated compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1789,7 +1789,7 @@ steps:
       - id: rqg-lateral-joins
         label: "RQG lateral-joins workload"
         depends_on: build-aarch64
-        skip: "flaky until database-issues#7713 is fixed"
+        skip: "flaky until https://linear.app/materializeinc/issue/DB-141 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1812,7 +1812,7 @@ steps:
       - id: rqg-window-functions
         label: "RQG window functions workload"
         depends_on: build-aarch64
-        skip: "flaky until database-issues#8366 is fixed"
+        skip: "flaky until https://linear.app/materializeinc/issue/DB-137 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1879,7 +1879,7 @@ steps:
   - id: retain-history
     label: "Check retain history"
     depends_on: build-aarch64
-    skip: "database-issues#7310"
+    skip: "https://linear.app/materializeinc/issue/DB-144"
     timeout_in_minutes: 30
     agents:
       queue: hetzner-aarch64-4cpu-8gb

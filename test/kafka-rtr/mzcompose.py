@@ -43,7 +43,7 @@ def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":
             return
-        # TODO: Reenable when database-issues#8657 is fixed
+        # TODO: Reenable when https://linear.app/materializeinc/issue/SS-303 is fixed
         if name == "multithreaded":
             return
         with c.test_case(name):

@@ -15,6 +15,7 @@
 
 //! Stack management utilities.
 
+#[cfg(feature = "tracing")]
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::error::Error;

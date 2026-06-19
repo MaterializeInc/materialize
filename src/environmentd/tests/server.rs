@@ -1880,7 +1880,7 @@ fn test_default_cluster_sizes() {
 }
 
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/6931 is fixed
+#[ignore] // TODO: Reenable when https://linear.app/materializeinc/issue/SQL-411 is fixed
 #[allow(clippy::disallowed_methods)]
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
