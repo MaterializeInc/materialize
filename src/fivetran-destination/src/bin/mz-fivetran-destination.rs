@@ -9,8 +9,8 @@
 
 //! Fivetran destination for Materialize.
 
-use mz_fivetran_destination::logging::FivetranLoggingFormat;
-use mz_fivetran_destination::{DestinationConnectorServer, MaterializeDestination};
+use fivetran_destination::logging::FivetranLoggingFormat;
+use fivetran_destination::{DestinationConnectorServer, MaterializeDestination};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use socket2::{Domain, Protocol, Socket, Type};

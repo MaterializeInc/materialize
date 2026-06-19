@@ -1,5 +1,5 @@
 [package]
-name = "mz-fivetran-destination"
+name = "fivetran_destination"
 description = "Fivetran destination for Materialize."
 version = "0.0.0"
 edition.workspace = true

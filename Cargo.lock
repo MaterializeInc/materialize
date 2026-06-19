@@ -3584,6 +3584,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "fivetran_destination"
+version = "0.0.0"
+dependencies = [
+ "async-compression",
+ "bytes",
+ "clap",
+ "csv-async",
+ "futures",
+ "insta",
+ "itertools 0.14.0",
+ "mz-build-tools",
+ "mz-ore",
+ "mz-pgrepr",
+ "mz-sql-parser",
+ "openssl",
+ "postgres-openssl",
+ "postgres-protocol",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2 0.6.4",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-postgres",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6973,45 +7012,6 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "mz-fivetran-destination"
-version = "0.0.0"
-dependencies = [
- "async-compression",
- "bytes",
- "clap",
- "csv-async",
- "futures",
- "insta",
- "itertools 0.14.0",
- "mz-build-tools",
- "mz-ore",
- "mz-pgrepr",
- "mz-sql-parser",
- "openssl",
- "postgres-openssl",
- "postgres-protocol",
- "prost",
- "prost-build",
- "prost-types",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "socket2 0.6.4",
- "thiserror 2.0.18",
- "tokio",
- "tokio-postgres",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
- "tracing",
- "tracing-core",
- "tracing-subscriber",
 ]
 
 [[package]]
