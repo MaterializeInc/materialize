@@ -25,6 +25,7 @@ pub mod objects_v84;
 pub mod objects_v85;
 pub mod objects_v86;
 pub mod objects_v87;
+pub mod objects_v88;
 pub mod serialization;
 
 /// The current version of the `Catalog`.
@@ -32,7 +33,7 @@ pub mod serialization;
 /// We will initialize new `Catalog`s with this version, and migrate existing `Catalog`s to this
 /// version. Whenever the `Catalog` changes, e.g. the types we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 87;
+pub const CATALOG_VERSION: u64 = 88;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
