@@ -21,6 +21,7 @@ pub mod azure;
 pub mod cfg;
 pub mod error;
 pub mod file;
+pub mod fork_blob_refs;
 #[cfg(feature = "foundationdb")]
 pub mod foundationdb;
 pub mod generated;
