@@ -4904,6 +4904,7 @@ pub fn unplan_create_cluster(
                 enable_eq_classes_withholding_errors: _,
                 enable_fast_path_plan_insights: _,
                 enable_cast_elimination: _,
+                enable_case_literal_transform: _,
                 enable_simplify_quantified_comparisons: _,
                 enable_coalesce_case_transform: _,
                 enable_will_distinct_propagation: _,
