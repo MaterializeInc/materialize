@@ -9,5 +9,6 @@
 
 //! This module is responsible for the in-memory state of the catalog contents.
 
+pub mod branch_item;
 pub mod error;
 pub mod objects;

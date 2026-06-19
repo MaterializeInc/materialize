@@ -38,7 +38,7 @@ use mz_catalog::durable::debug::{
     ReplicaSystemConfigurationCollection, RoleAuthCollection, RoleCollection, SchemaCollection,
     SettingCollection, SourceReferencesCollection, StorageCollectionMetadataCollection,
     SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
-    TxnWalShardCollection, UnfinalizedShardsCollection,
+    BranchDescriptorCollection, TxnWalShardCollection, UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     BootstrapArgs, OpenableDurableCatalogState, persist_backed_catalog_state,
@@ -328,6 +328,9 @@ macro_rules! for_collection {
                 $fn::<UnfinalizedShardsCollection>($($arg),*).await?
             }
             CollectionType::TxnWalShard => $fn::<TxnWalShardCollection>($($arg),*).await?,
+            CollectionType::BranchDescriptor => {
+                $fn::<BranchDescriptorCollection>($($arg),*).await?
+            }
         }
     };
 }
@@ -476,6 +479,7 @@ async fn dump(
         storage_collection_metadata,
         unfinalized_shards,
         txn_wal_shard,
+        branch_descriptors,
     } = if consolidate {
         openable_state.trace_consolidated().await?
     } else {
@@ -580,6 +584,13 @@ async fn dump(
         consolidate,
     );
     dump_col(&mut data, txn_wal_shard, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        branch_descriptors,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())

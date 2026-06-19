@@ -77,6 +77,7 @@ pub enum CollectionType {
     StorageCollectionMetadata,
     UnfinalizedShard,
     TxnWalShard,
+    BranchDescriptor,
 }
 
 derive_display_from_serialize!(CollectionType);
@@ -315,6 +316,14 @@ collection_impl!({
     trace_field: txn_wal_shard,
     update: StateUpdateKind::TxnWalShard,
 });
+collection_impl!({
+    name: BranchDescriptorCollection,
+    key: proto::BranchDescriptorKey,
+    value: proto::BranchDescriptorValue,
+    collection_type: CollectionType::BranchDescriptor,
+    trace_field: branch_descriptors,
+    update: StateUpdateKind::BranchDescriptor,
+});
 
 /// A trace of timestamped diffs for a particular [`Collection`].
 ///
@@ -370,6 +379,7 @@ pub struct Trace {
     pub storage_collection_metadata: CollectionTrace<StorageCollectionMetadataCollection>,
     pub unfinalized_shards: CollectionTrace<UnfinalizedShardsCollection>,
     pub txn_wal_shard: CollectionTrace<TxnWalShardCollection>,
+    pub branch_descriptors: CollectionTrace<BranchDescriptorCollection>,
 }
 
 impl Trace {
@@ -399,6 +409,7 @@ impl Trace {
             storage_collection_metadata: CollectionTrace::new(),
             unfinalized_shards: CollectionTrace::new(),
             txn_wal_shard: CollectionTrace::new(),
+            branch_descriptors: CollectionTrace::new(),
         }
     }
 
@@ -428,6 +439,7 @@ impl Trace {
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
+            branch_descriptors,
         } = self;
         audit_log.sort();
         clusters.sort();
@@ -453,6 +465,7 @@ impl Trace {
         storage_collection_metadata.sort();
         unfinalized_shards.sort();
         txn_wal_shard.sort();
+        branch_descriptors.sort();
     }
 }
 

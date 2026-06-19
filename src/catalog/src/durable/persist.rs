@@ -884,6 +884,9 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::RoleAuth(key, value) => {
                         apply(&mut snapshot.role_auth, key, value, diff);
                     }
+                    StateUpdateKind::BranchDescriptor(key, value) => {
+                        apply(&mut snapshot.branch_descriptors, key, value, diff);
+                    }
                 }
             }
             f(snapshot)
@@ -2090,6 +2093,9 @@ impl Trace {
                     trace.txn_wal_shard.values.push((((), v), ts, diff))
                 }
                 StateUpdateKind::RoleAuth(k, v) => trace.role_auth.values.push(((k, v), ts, diff)),
+                StateUpdateKind::BranchDescriptor(k, v) => {
+                    trace.branch_descriptors.values.push(((k, v), ts, diff))
+                }
             }
         }
         trace

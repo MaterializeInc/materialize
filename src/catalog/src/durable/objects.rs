@@ -896,6 +896,85 @@ impl DurableType for Comment {
     }
 }
 
+/// A catalog-decoupled record of one branched object. Each row carries the
+/// shard fork backing the branched object, the branch-time snapshot of its
+/// relation shape, and the branch-local identity that catalog reads of
+/// branch items should resolve through (instead of re-resolving the source).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BranchDescriptor {
+    /// Branch-local catalog item id. This is the primary key for the
+    /// collection: each branched object gets a unique
+    /// [`CatalogItemId`].
+    pub branch_catalog_id: CatalogItemId,
+    /// Persist shard backing the branched object.
+    pub fork_shard_id: ShardId,
+    /// Coordinated fork timestamp; reads of inherited batches drop updates
+    /// strictly above this point.
+    pub branch_ts: u64,
+    /// Source object this branch was forked from. Recorded for bookkeeping
+    /// only; the branch's read path does not re-resolve through it.
+    pub source_catalog_id: CatalogItemId,
+    /// Branch-local global id. Catalog items built from this descriptor use
+    /// this identity, never the source's.
+    pub branch_global_id: GlobalId,
+    /// Proto-encoded snapshot of the branched object's relation shape at
+    /// `branch_ts`. Stored as bytes so the descriptor stays decoupled from
+    /// in-memory [`RelationDesc`].
+    pub relation_desc: Vec<u8>,
+    /// Branch identifier, shared across every object in the branch and used
+    /// as the join key for bulk teardown.
+    pub branch_id: String,
+    pub branch_name: String,
+    pub owner: RoleId,
+    /// Milliseconds since the Unix epoch when the branch was created.
+    pub created_at_ms: u64,
+}
+
+impl DurableType for BranchDescriptor {
+    type Key = BranchDescriptorKey;
+    type Value = BranchDescriptorValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            BranchDescriptorKey {
+                branch_catalog_id: self.branch_catalog_id,
+            },
+            BranchDescriptorValue {
+                fork_shard_id: self.fork_shard_id,
+                branch_ts: self.branch_ts,
+                source_catalog_id: self.source_catalog_id,
+                branch_global_id: self.branch_global_id,
+                relation_desc: self.relation_desc,
+                branch_id: self.branch_id,
+                branch_name: self.branch_name,
+                owner: self.owner,
+                created_at_ms: self.created_at_ms,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            branch_catalog_id: key.branch_catalog_id,
+            fork_shard_id: value.fork_shard_id,
+            branch_ts: value.branch_ts,
+            source_catalog_id: value.source_catalog_id,
+            branch_global_id: value.branch_global_id,
+            relation_desc: value.relation_desc,
+            branch_id: value.branch_id,
+            branch_name: value.branch_name,
+            owner: value.owner,
+            created_at_ms: value.created_at_ms,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        BranchDescriptorKey {
+            branch_catalog_id: self.branch_catalog_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdAlloc {
     pub name: String,
@@ -1258,6 +1337,8 @@ pub struct Snapshot {
         BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
     pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
     pub txn_wal_shard: BTreeMap<(), proto::TxnWalShardValue>,
+    pub branch_descriptors:
+        BTreeMap<proto::BranchDescriptorKey, proto::BranchDescriptorValue>,
 }
 
 impl Snapshot {
@@ -1474,6 +1555,24 @@ pub struct CommentKey {
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct CommentValue {
     pub(crate) comment: String,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct BranchDescriptorKey {
+    pub(crate) branch_catalog_id: CatalogItemId,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct BranchDescriptorValue {
+    pub(crate) fork_shard_id: ShardId,
+    pub(crate) branch_ts: u64,
+    pub(crate) source_catalog_id: CatalogItemId,
+    pub(crate) branch_global_id: GlobalId,
+    pub(crate) relation_desc: Vec<u8>,
+    pub(crate) branch_id: String,
+    pub(crate) branch_name: String,
+    pub(crate) owner: RoleId,
+    pub(crate) created_at_ms: u64,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]

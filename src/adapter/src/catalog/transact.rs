@@ -1382,14 +1382,29 @@ impl Catalog {
                     CatalogItem::Table(table) => {
                         let gids: Vec<_> = table.global_ids().collect();
                         assert_eq!(gids.len(), 1);
-                        storage_collections_to_create.extend(gids);
+                        if let Some(shard_id) = table.branch_target_shard {
+                            // Branch-target table: bind the table's global id
+                            // to the pre-existing fork shard rather than
+                            // allocating a fresh one. The fork shard already
+                            // carries the source's history (absolute keys +
+                            // cutoff_ts at branch_ts) and accepts new writes
+                            // into its own blob namespace.
+                            storage_collections_to_register.insert(gids[0], shard_id);
+                        } else {
+                            storage_collections_to_create.extend(gids);
+                        }
                     }
                     CatalogItem::Source(source) => {
                         storage_collections_to_create.insert(source.global_id());
                     }
                     CatalogItem::MaterializedView(mv) => {
                         let mv_gid = mv.global_id_writes();
-                        if let Some(target_id) = mv.replacement_target {
+                        if let Some(shard_id) = mv.branch_target_shard {
+                            // Branch-target MV: bind to the pre-existing
+                            // fork shard. The MV's dataflow is suppressed
+                            // (snapshot-only mode); the fork serves reads.
+                            storage_collections_to_register.insert(mv_gid, shard_id);
+                        } else if let Some(target_id) = mv.replacement_target {
                             let target_gid = state.get_entry(&target_id).latest_global_id();
                             let shard_id =
                                 state.storage_metadata().get_collection_shard(target_gid)?;
@@ -3293,6 +3308,7 @@ mod tests {
                     custom_logical_compaction_window: None,
                     is_retained_metrics_object: false,
                     data_source: TableDataSource::TableWrites { defaults: vec![] },
+                    branch_target_shard: None,
                 }),
                 owner_id: MZ_SYSTEM_ROLE_ID,
             };

@@ -112,6 +112,7 @@ impl Debug for StableTrace<'_> {
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
+            branch_descriptors,
         } = self.0;
         let configs: CollectionTrace<ConfigCollection> = CollectionTrace {
             values: configs
@@ -164,6 +165,7 @@ impl Debug for StableTrace<'_> {
             .field("storage_collection_metadata", storage_collection_metadata)
             .field("unfinalized_shards", unfinalized_shards)
             .field("txn_wal_shard", txn_wal_shard)
+            .field("branch_descriptors", branch_descriptors)
             .finish()
     }
 }

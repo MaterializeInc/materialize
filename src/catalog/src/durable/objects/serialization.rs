@@ -14,11 +14,11 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
-    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
-    ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    AuditLogKey, BranchDescriptorKey, BranchDescriptorValue, ClusterIntrospectionSourceIndexKey,
+    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplicaKey, ClusterReplicaValue,
+    ClusterSystemConfigurationKey, ClusterSystemConfigurationValue, ClusterValue, CommentKey,
+    CommentValue, ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
+    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
     NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
     ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
@@ -513,6 +513,55 @@ impl RustType<proto::CommentKey> for CommentKey {
         Ok(CommentKey {
             object_id: proto.object.into_rust()?,
             sub_component,
+        })
+    }
+}
+
+impl RustType<proto::BranchDescriptorKey> for BranchDescriptorKey {
+    fn into_proto(&self) -> proto::BranchDescriptorKey {
+        proto::BranchDescriptorKey {
+            branch_catalog_id: self.branch_catalog_id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::BranchDescriptorKey) -> Result<Self, TryFromProtoError> {
+        Ok(BranchDescriptorKey {
+            branch_catalog_id: proto.branch_catalog_id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::BranchDescriptorValue> for BranchDescriptorValue {
+    fn into_proto(&self) -> proto::BranchDescriptorValue {
+        proto::BranchDescriptorValue {
+            fork_shard_id: self.fork_shard_id.to_string(),
+            branch_ts: self.branch_ts,
+            source_catalog_id: self.source_catalog_id.into_proto(),
+            branch_global_id: self.branch_global_id.into_proto(),
+            relation_desc: self.relation_desc.clone(),
+            branch_id: self.branch_id.clone(),
+            branch_name: self.branch_name.clone(),
+            owner: self.owner.into_proto(),
+            created_at_ms: self.created_at_ms,
+        }
+    }
+
+    fn from_proto(
+        proto: proto::BranchDescriptorValue,
+    ) -> Result<Self, TryFromProtoError> {
+        let fork_shard_id = proto.fork_shard_id.parse().map_err(|err: String| {
+            TryFromProtoError::InvalidShardId(err)
+        })?;
+        Ok(BranchDescriptorValue {
+            fork_shard_id,
+            branch_ts: proto.branch_ts,
+            source_catalog_id: proto.source_catalog_id.into_rust()?,
+            branch_global_id: proto.branch_global_id.into_rust()?,
+            relation_desc: proto.relation_desc,
+            branch_id: proto.branch_id,
+            branch_name: proto.branch_name,
+            owner: proto.owner.into_rust()?,
+            created_at_ms: proto.created_at_ms,
         })
     }
 }

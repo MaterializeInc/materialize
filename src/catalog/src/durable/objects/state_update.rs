@@ -156,6 +156,7 @@ impl StateUpdate {
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
+            branch_descriptors,
             audit_log_updates,
             upper: _,
         } = txn_batch;
@@ -196,6 +197,8 @@ impl StateUpdate {
         );
         let unfinalized_shards = from_batch(unfinalized_shards, StateUpdateKind::UnfinalizedShard);
         let txn_wal_shard = from_batch(txn_wal_shard, StateUpdateKind::TxnWalShard);
+        let branch_descriptors =
+            from_batch(branch_descriptors, StateUpdateKind::BranchDescriptor);
         let audit_logs = from_batch(audit_log_updates, StateUpdateKind::AuditLog);
 
         databases
@@ -221,6 +224,7 @@ impl StateUpdate {
             .chain(storage_collection_metadata)
             .chain(unfinalized_shards)
             .chain(txn_wal_shard)
+            .chain(branch_descriptors)
             .chain(audit_logs)
     }
 }
@@ -272,6 +276,7 @@ pub enum StateUpdateKind {
     ),
     UnfinalizedShard(proto::UnfinalizedShardKey, ()),
     TxnWalShard((), proto::TxnWalShardValue),
+    BranchDescriptor(proto::BranchDescriptorKey, proto::BranchDescriptorValue),
 }
 
 impl StateUpdateKind {
@@ -310,6 +315,9 @@ impl StateUpdateKind {
             }
             StateUpdateKind::UnfinalizedShard(_, _) => Some(CollectionType::UnfinalizedShard),
             StateUpdateKind::TxnWalShard(_, _) => Some(CollectionType::TxnWalShard),
+            StateUpdateKind::BranchDescriptor(_, _) => {
+                Some(CollectionType::BranchDescriptor)
+            }
         }
     }
 }
@@ -588,6 +596,12 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     unfinalized_shard,
                 ))
             }
+            StateUpdateKind::BranchDescriptor(key, value) => {
+                let branch_descriptor = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::BranchDescriptor(
+                    branch_descriptor,
+                ))
+            }
             // Not exposed to higher layers.
             StateUpdateKind::Config(_, _)
             | StateUpdateKind::FenceToken(_)
@@ -735,6 +749,12 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::TxnWalShard((), value) => {
                 proto::StateUpdateKind::TxnWalShard(proto::TxnWalShard { value })
             }
+            StateUpdateKind::BranchDescriptor(key, value) => {
+                proto::StateUpdateKind::BranchDescriptor(proto::BranchDescriptor {
+                    key,
+                    value,
+                })
+            }
         }
     }
 
@@ -822,6 +842,10 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::NetworkPolicy(proto::NetworkPolicy { key, value }) => {
                 StateUpdateKind::NetworkPolicy(key, value)
             }
+            proto::StateUpdateKind::BranchDescriptor(proto::BranchDescriptor {
+                key,
+                value,
+            }) => StateUpdateKind::BranchDescriptor(key, value),
         })
     }
 }

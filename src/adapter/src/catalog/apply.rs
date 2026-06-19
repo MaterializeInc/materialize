@@ -384,6 +384,11 @@ impl CatalogState {
             StateUpdateKind::UnfinalizedShard(unfinalized_shard) => {
                 self.apply_unfinalized_shard_update(unfinalized_shard, diff, retractions);
             }
+            StateUpdateKind::BranchDescriptor(_branch_descriptor) => {
+                // BranchDescriptor rows have no in-memory state to apply yet.
+                // Branched catalog items will materialize from these rows once
+                // the orchestration layer is in place.
+            }
         }
 
         Ok(())
@@ -882,6 +887,7 @@ impl CatalogState {
                         data_source: TableDataSource::TableWrites {
                             defaults: vec![Expr::null(); table.desc.arity()],
                         },
+                        branch_target_shard: None,
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),
@@ -1547,7 +1553,8 @@ impl CatalogState {
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::NetworkPolicy(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
-            | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
+            | StateUpdateKind::UnfinalizedShard(_)
+            | StateUpdateKind::BranchDescriptor(_) => Vec::new(),
         }
     }
 
@@ -2332,7 +2339,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | StateUpdateKind::SourceReferences(_)
             | StateUpdateKind::AuditLog(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
-            | StateUpdateKind::UnfinalizedShard(_) => push_update(
+            | StateUpdateKind::UnfinalizedShard(_)
+            | StateUpdateKind::BranchDescriptor(_) => push_update(
                 update,
                 diff,
                 &mut post_item_retractions,
@@ -2662,7 +2670,8 @@ impl ApplyState {
             | Comment(_)
             | AuditLog(_)
             | StorageCollectionMetadata(_)
-            | UnfinalizedShard(_) => Self::Updates(vec![update]),
+            | UnfinalizedShard(_)
+            | BranchDescriptor(_) => Self::Updates(vec![update]),
         }
     }
 

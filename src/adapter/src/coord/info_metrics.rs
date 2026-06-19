@@ -381,6 +381,7 @@ mod tests {
             custom_logical_compaction_window: None,
             is_retained_metrics_object: false,
             data_source: TableDataSource::TableWrites { defaults: vec![] },
+            branch_target_shard: None,
         })
     }
 

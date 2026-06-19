@@ -883,6 +883,16 @@ pub struct Table {
     pub is_retained_metrics_object: bool,
     /// Where data for this table comes from, e.g. `INSERT` statements or an upstream source.
     pub data_source: TableDataSource,
+    /// If set, this table is a branched-schema table backed by a pre-existing
+    /// persist shard (the fork). At [`Op::CreateItem`] time the catalog binds
+    /// the table's global id to this shard via `storage_collections_to_register`
+    /// instead of allocating a fresh shard. The mapping persists in
+    /// `storage_metadata`, so this field is in-memory only and is not
+    /// re-derived on rehydration.
+    ///
+    /// [`Op::CreateItem`]: crate::durable::objects
+    #[serde(skip)]
+    pub branch_target_shard: Option<mz_persist_client::ShardId>,
 }
 
 impl Table {
@@ -1440,6 +1450,16 @@ pub struct MaterializedView {
     /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
     #[serde(skip)]
     pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
+    /// If set, this materialized view is a branched-schema MV backed by a
+    /// pre-existing persist shard (the fork). Same role as
+    /// [`Table::branch_target_shard`]: at `Op::CreateItem` time the catalog
+    /// binds the MV's global id to this shard via
+    /// `storage_collections_to_register` instead of allocating a fresh
+    /// shard. The MV's dataflow is suppressed in snapshot-only mode; the
+    /// fork's contents serve reads against the branched MV. In-memory
+    /// only, not serialized to durable.
+    #[serde(skip)]
+    pub branch_target_shard: Option<mz_persist_client::ShardId>,
 }
 
 impl MaterializedView {
@@ -1544,6 +1564,7 @@ impl MaterializedView {
             optimized_plan: replacement.optimized_plan,
             physical_plan: replacement.physical_plan,
             dataflow_metainfo: replacement.dataflow_metainfo,
+            branch_target_shard: replacement.branch_target_shard,
         };
     }
 }
@@ -3744,6 +3765,7 @@ pub enum StateUpdateKind {
     // Storage updates.
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
+    BranchDescriptor(durable::objects::BranchDescriptor),
 }
 
 /// Valid diffs for catalog state updates.
@@ -3838,6 +3860,7 @@ pub enum BootstrapStateUpdateKind {
     // Storage updates.
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
+    BranchDescriptor(durable::objects::BranchDescriptor),
 }
 
 impl From<BootstrapStateUpdateKind> for StateUpdateKind {
@@ -3882,6 +3905,9 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
             }
             BootstrapStateUpdateKind::UnfinalizedShard(kind) => {
                 StateUpdateKind::UnfinalizedShard(kind)
+            }
+            BootstrapStateUpdateKind::BranchDescriptor(kind) => {
+                StateUpdateKind::BranchDescriptor(kind)
             }
         }
     }
@@ -3936,6 +3962,9 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
             }
             StateUpdateKind::UnfinalizedShard(kind) => {
                 Ok(BootstrapStateUpdateKind::UnfinalizedShard(kind))
+            }
+            StateUpdateKind::BranchDescriptor(kind) => {
+                Ok(BootstrapStateUpdateKind::BranchDescriptor(kind))
             }
         }
     }

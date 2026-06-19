@@ -693,6 +693,7 @@ impl Coordinator {
                     optimized_plan: None,
                     physical_plan: None,
                     dataflow_metainfo: None,
+                    branch_target_shard: None,
                 }),
                 owner_id: *ctx.session().current_role_id(),
             },

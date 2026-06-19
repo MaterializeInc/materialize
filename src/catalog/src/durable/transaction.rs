@@ -48,14 +48,14 @@ use crate::durable::initialize::{
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
-    AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
-    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
-    ClusterReplicaValue, ClusterSystemConfiguration, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey,
-    ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
+    AuditLogKey, BranchDescriptorKey, BranchDescriptorValue, Cluster, ClusterConfig,
+    ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue, ClusterKey,
+    ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfiguration,
+    ClusterSystemConfigurationKey, ClusterSystemConfigurationValue, ClusterValue, CommentKey,
+    CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
+    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey,
+    NetworkPolicyValue, ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
     ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
@@ -109,6 +109,7 @@ pub struct Transaction<'a> {
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
     txn_wal_shard: TableTransaction<(), TxnWalShardValue>,
+    branch_descriptors: TableTransaction<BranchDescriptorKey, BranchDescriptorValue>,
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
     audit_log_updates: Vec<(AuditLogKey, Diff, Timestamp)>,
@@ -145,6 +146,7 @@ impl<'a> Transaction<'a> {
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
+            branch_descriptors,
         }: Snapshot,
         upper: mz_repr::Timestamp,
     ) -> Result<Transaction<'a>, CatalogError> {
@@ -200,6 +202,7 @@ impl<'a> Transaction<'a> {
             // the value (the key is the unit struct `()` so this is a singleton
             // value).
             txn_wal_shard: TableTransaction::new(txn_wal_shard)?,
+            branch_descriptors: TableTransaction::new(branch_descriptors)?,
             audit_log_updates: Vec::new(),
             upper,
             op_id: 0,
@@ -1061,6 +1064,7 @@ impl<'a> Transaction<'a> {
             storage_collection_metadata: self.storage_collection_metadata.current_items_proto(),
             unfinalized_shards: self.unfinalized_shards.current_items_proto(),
             txn_wal_shard: self.txn_wal_shard.current_items_proto(),
+            branch_descriptors: self.branch_descriptors.current_items_proto(),
         }
     }
 
@@ -2140,6 +2144,63 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    /// Insert one [`BranchDescriptor`] for a single branched object. Each
+    /// row carries its own branch-local catalog item id (the primary key)
+    /// plus the branch-level identity (branch_id, name, owner, created_at)
+    /// repeated across every object in the branch.
+    pub fn insert_branch_descriptor(
+        &mut self,
+        descriptor: super::objects::BranchDescriptor,
+    ) -> Result<(), CatalogError> {
+        let (key, value) = super::objects::DurableType::into_key_value(descriptor);
+        self.branch_descriptors.set(key, Some(value), self.op_id)?;
+        Ok(())
+    }
+
+    /// Iterate over every [`BranchDescriptor`] currently in the catalog. The
+    /// in-memory layer materializes branch state from these rows on startup
+    /// and on demand.
+    pub fn get_branch_descriptors(
+        &self,
+    ) -> impl Iterator<Item = super::objects::BranchDescriptor> + use<'_> {
+        self.branch_descriptors
+            .items()
+            .into_iter()
+            .map(|(k, v)| super::objects::DurableType::from_key_value(k.clone(), v.clone()))
+    }
+
+    /// Look up the descriptors that name `source_id` as their source. The
+    /// `source_ddl_blocked_by_branch` helper consults this through a
+    /// trait wrapper so planner paths can answer "which branches block me?".
+    pub fn branch_descriptors_for_source(
+        &self,
+        source_id: CatalogItemId,
+    ) -> Vec<super::objects::BranchDescriptor> {
+        self.get_branch_descriptors()
+            .filter(|d| d.source_catalog_id == source_id)
+            .collect()
+    }
+
+    /// Drop every descriptor tagged with `branch_id`. Returns the dropped
+    /// descriptors so the caller can clean up the corresponding catalog
+    /// items, fork shards, and `fork_blob_refs` rows.
+    pub fn drop_branch_descriptors_by_branch(
+        &mut self,
+        branch_id: &str,
+    ) -> Result<Vec<super::objects::BranchDescriptor>, CatalogError> {
+        let dropped: Vec<_> = self
+            .get_branch_descriptors()
+            .filter(|d| d.branch_id == branch_id)
+            .collect();
+        let ids: std::collections::BTreeSet<CatalogItemId> = dropped
+            .iter()
+            .map(|d| d.branch_catalog_id)
+            .collect();
+        self.branch_descriptors
+            .delete(|k, _v| ids.contains(&k.branch_catalog_id), self.op_id);
+        Ok(dropped)
+    }
+
     /// Upserts persisted system configuration `name` to `value`.
     pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), CatalogError> {
         let key = ServerConfigurationKey {
@@ -2435,6 +2496,7 @@ impl<'a> Transaction<'a> {
             audit_log_updates,
             storage_collection_metadata,
             unfinalized_shards,
+            branch_descriptors,
             // Not representable as a `StateUpdate`.
             id_allocator: _,
             configs: _,
@@ -2540,6 +2602,11 @@ impl<'a> Transaction<'a> {
                 StateUpdateKind::UnfinalizedShard,
                 self.op_id,
             ))
+            .chain(get_collection_op_updates(
+                branch_descriptors,
+                StateUpdateKind::BranchDescriptor,
+                self.op_id,
+            ))
             .chain(get_large_collection_op_updates(
                 audit_log_updates,
                 StateUpdateKind::AuditLog,
@@ -2602,6 +2669,7 @@ impl<'a> Transaction<'a> {
             storage_collection_metadata: self.storage_collection_metadata.pending(),
             unfinalized_shards: self.unfinalized_shards.pending(),
             txn_wal_shard: self.txn_wal_shard.pending(),
+            branch_descriptors: self.branch_descriptors.pending(),
             audit_log_updates,
             upper: self.upper,
         };
@@ -2649,6 +2717,7 @@ impl<'a> Transaction<'a> {
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
+            branch_descriptors,
             audit_log_updates,
             upper: _,
         } = &mut txn_batch;
@@ -2677,6 +2746,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
         differential_dataflow::consolidation::consolidate_updates(unfinalized_shards);
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
+        differential_dataflow::consolidation::consolidate_updates(branch_descriptors);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
 
         let upper = durable_catalog
@@ -2892,6 +2962,11 @@ pub struct TransactionBatch {
     )>,
     pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
     pub(crate) txn_wal_shard: Vec<((), proto::TxnWalShardValue, Diff)>,
+    pub(crate) branch_descriptors: Vec<(
+        proto::BranchDescriptorKey,
+        proto::BranchDescriptorValue,
+        Diff,
+    )>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     /// The upper of the catalog when the transaction started.
     pub(crate) upper: mz_repr::Timestamp,
@@ -2923,6 +2998,7 @@ impl TransactionBatch {
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
+            branch_descriptors,
             audit_log_updates,
             upper: _,
         } = self;
@@ -2949,6 +3025,7 @@ impl TransactionBatch {
             && storage_collection_metadata.is_empty()
             && unfinalized_shards.is_empty()
             && txn_wal_shard.is_empty()
+            && branch_descriptors.is_empty()
             && audit_log_updates.is_empty()
     }
 }
@@ -3010,6 +3087,7 @@ mod unique_name {
 
     impl_no_unique_name!(
         (),
+        BranchDescriptorValue,
         ClusterIntrospectionSourceIndexValue,
         ClusterSystemConfigurationValue,
         CommentValue,
@@ -4182,6 +4260,77 @@ mod tests {
         assert_eq!(db_name, db.name);
         assert_eq!(db_owner, db.owner_id);
         assert_eq!(db_privileges, db.privileges);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_branch_descriptor_round_trip() {
+        const VERSION: Version = Version::new(26, 0, 0);
+        let mut persist_cache = PersistClientCache::new_no_metrics();
+        persist_cache.cfg.build_version = VERSION;
+        let persist_client = persist_cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .unwrap();
+        let state_builder = TestCatalogStateBuilder::new(persist_client)
+            .with_default_deploy_generation()
+            .with_version(VERSION);
+
+        // Initialize catalog first so the tables exist; then re-open in
+        // savepoint mode for the actual test.
+        let _ = state_builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap()
+            .0;
+        let mut state = state_builder
+            .unwrap_build()
+            .await
+            .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap()
+            .0;
+        let _ = state.sync_to_current_updates().await.unwrap();
+
+        let descriptor = crate::durable::objects::BranchDescriptor {
+            branch_catalog_id: CatalogItemId::User(42),
+            fork_shard_id: mz_persist_client::ShardId::new(),
+            branch_ts: 7,
+            source_catalog_id: CatalogItemId::User(11),
+            branch_global_id: GlobalId::User(43),
+            relation_desc: vec![1, 2, 3],
+            branch_id: "00000000-0000-0000-0000-000000000001".to_owned(),
+            branch_name: "nightly".to_owned(),
+            owner: RoleId::User(99),
+            created_at_ms: 1_700_000_000_000,
+        };
+
+        let mut txn = state.transaction().await.unwrap();
+        txn.insert_branch_descriptor(descriptor.clone()).unwrap();
+
+        // Visible within the transaction.
+        let listed: Vec<_> = txn.get_branch_descriptors().collect();
+        assert_eq!(listed, vec![descriptor.clone()]);
+
+        // Source-keyed lookup.
+        let by_source = txn.branch_descriptors_for_source(CatalogItemId::User(11));
+        assert_eq!(by_source, vec![descriptor.clone()]);
+        let none = txn.branch_descriptors_for_source(CatalogItemId::User(999));
+        assert!(none.is_empty());
+
+        // Branch-keyed delete returns the dropped rows and clears them.
+        let dropped = txn
+            .drop_branch_descriptors_by_branch(&descriptor.branch_id)
+            .unwrap();
+        assert_eq!(dropped, vec![descriptor.clone()]);
+        let listed_after: Vec<_> = txn.get_branch_descriptors().collect();
+        assert!(listed_after.is_empty());
+
+        let commit_ts = txn.upper();
+        txn.commit_internal(commit_ts).await.unwrap();
     }
 
     #[mz_ore::test]

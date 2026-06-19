@@ -1043,6 +1043,7 @@ impl Coordinator {
             custom_logical_compaction_window: table.compaction_window,
             is_retained_metrics_object: false,
             data_source,
+            branch_target_shard: None,
         };
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,

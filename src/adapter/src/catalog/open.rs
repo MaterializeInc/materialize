@@ -294,7 +294,8 @@ impl Catalog {
                 BootstrapStateUpdateKind::Comment(_)
                 | BootstrapStateUpdateKind::StorageCollectionMetadata(_)
                 | BootstrapStateUpdateKind::SourceReferences(_)
-                | BootstrapStateUpdateKind::UnfinalizedShard(_) => {
+                | BootstrapStateUpdateKind::UnfinalizedShard(_)
+                | BootstrapStateUpdateKind::BranchDescriptor(_) => {
                     post_item_updates.push((kind, ts, diff));
                 }
                 BootstrapStateUpdateKind::AuditLog(_) => {
