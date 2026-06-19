@@ -108,6 +108,11 @@
 //!   must STOP draining results — a later, good result would otherwise release
 //!   a capability and advance the
 //!   frontier past data never emitted.
+//! * The fetch task's result channel is bounded: the task downloads ahead of
+//!   the operator, so an unbounded channel would let fetched blobs pile up
+//!   without limit while Timely is busy. The bound makes the task block in
+//!   `send` once the operator falls behind, restoring the implicit limit the
+//!   async operator had (its future only advanced when Timely scheduled it).
 //! * The `completed_fetches` feedback edge carries no data (`Infallible`); it
 //!   exists for its frontier, which signals cross-process fetch completion,
 //!   wakes the descs operator, and keeps that operator alive (and thus the
@@ -830,6 +835,12 @@ where
     (descs_stream, shutdown_button.press_on_drop())
 }
 
+/// Capacity of the bounded channel carrying fetch results from the fetch task
+/// back to [shard_source_fetch]. Small, to keep fetched-but-undrained blobs
+/// bounded when Timely is busy, while leaving room for a little fetch/decode
+/// pipelining. See the channel's construction for the full rationale.
+const FETCH_RESULT_CHANNEL_CAPACITY: usize = 4;
+
 pub(crate) fn shard_source_fetch<'inner, K, V, T, D, TInner>(
     descs: StreamVec<'inner, TInner, (usize, ExchangeableBatchPart<T>)>,
     name: &str,
@@ -872,15 +883,26 @@ where
     // reader's lease diagnostics so the operator can distinguish a lease expiry
     // from a GC bug. The task wakes the operator through the activator after
     // each result.
+    //
     // Each desc is tagged with the time it was minted at; the task echoes that
     // time back with the result so the operator can emit at the right
     // capability without relying on the order results come back in.
+    //
+    // The result channel is *bounded*: the fetch task downloads parts ahead of
+    // the operator (which only drains when Timely schedules it), so an unbounded
+    // channel would let fetched blobs — the memory-heavy payloads — pile up
+    // without limit whenever Timely is busy and Tokio keeps fetching. The bound
+    // makes the task block in `send` once the operator falls behind, restoring
+    // the implicit "roughly one in flight" limit the async operator had (its
+    // future only advanced when Timely scheduled it) while still allowing a
+    // little fetch/decode pipelining. (The persist fetch semaphore bounds total
+    // in-flight *bytes*; this is the coarser per-operator count bound.)
     let (desc_tx, mut desc_rx) =
         tokio::sync::mpsc::unbounded_channel::<(TInner, ExchangeableBatchPart<T>)>();
-    let (blob_tx, blob_rx) = tokio::sync::mpsc::unbounded_channel::<(
+    let (blob_tx, blob_rx) = tokio::sync::mpsc::channel::<(
         TInner,
         Result<FetchedBlob<K, V, T, D>, (BlobKey, String)>,
-    )>();
+    )>(FETCH_RESULT_CHANNEL_CAPACITY);
     let (activator, activation_ack) = ArcActivator::new(scope.clone(), &info);
 
     // The fetch task owns the `BatchFetcher` and performs all async work:
@@ -926,7 +948,7 @@ where
                         Err((blob_key, diagnostics))
                     }
                 };
-                if blob_tx.send((time, fetched)).is_err() {
+                if blob_tx.send((time, fetched)).await.is_err() {
                     // The operator is gone; stop fetching.
                     return;
                 }
