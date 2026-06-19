@@ -322,8 +322,7 @@ mod tests {
     };
     use mz_compute_types::config::ComputeReplicaConfig;
     use mz_controller::clusters::{
-        ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaConfig,
-        UnmanagedReplicaLocation,
+        ManagedReplicaLocation, ReplicaAllocation, ReplicaConfig, UnmanagedReplicaLocation,
     };
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_repr::adt::mz_acl_item::PrivilegeMap;
@@ -448,6 +447,9 @@ mod tests {
                 replication_factor: 1,
                 optimizer_feature_overrides: Default::default(),
                 schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst: None,
             }),
             workload_class: None,
         }
@@ -656,7 +658,7 @@ mod tests {
                     size: "scale=2,workers=4".to_string(),
                     internal: false,
                     billed_as: None,
-                    availability_zones: ManagedReplicaAvailabilityZones::FromReplica(None),
+                    availability_zones: Vec::new(),
                     pending: false,
                 }),
                 compute: ComputeReplicaConfig {

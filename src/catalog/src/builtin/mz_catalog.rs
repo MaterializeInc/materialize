@@ -2361,7 +2361,7 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::ne
             ),
             (
                 "availability_zone",
-                "The availability zone in which the cluster is running.",
+                "The availability zones the replica is provisioned in, comma-separated. `NULL` if nothing constrains the replica's placement.",
             ),
             (
                 "owner_id",
@@ -2370,8 +2370,16 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::ne
             ("disk", "If the replica has a local disk."),
         ]),
         // `config.location` is a serde-tagged enum: `{"Unmanaged": {...}}` or
-        // `{"Managed": {...}}`. For unmanaged replicas all orchestrator-facing
-        // fields (size, availability_zone, disk) are NULL.
+        // `{"Managed": {...}}`. For replicas with an unmanaged location all
+        // orchestrator-facing fields (size, availability_zone, disk) are NULL.
+        //
+        // `availability_zone` surfaces the durable `Managed` location's
+        // `availability_zones` list as a comma-separated string in stored
+        // order. For a managed cluster that is the provisioned AVAILABILITY
+        // ZONES pool. For an unmanaged cluster it is the single AVAILABILITY
+        // ZONE pin. An empty list (nothing constrains placement) maps to NULL,
+        // matching the list-to-NULL normalization the `mz_clusters`
+        // `availability_zones` column uses.
         //
         // `disk` mirrors `cluster_replica_size_has_disk`, joining
         // `mz_cluster_replica_size_internal` for both `swap_enabled` and
@@ -2397,7 +2405,14 @@ SELECT
     data->'value'->>'name' AS name,
     mz_internal.parse_catalog_id(data->'value'->'cluster_id') AS cluster_id,
     data->'value'->'config'->'location'->'Managed'->>'size' AS size,
-    data->'value'->'config'->'location'->'Managed'->>'availability_zone' AS availability_zone,
+    CASE
+        WHEN jsonb_array_length(data->'value'->'config'->'location'->'Managed'->'availability_zones') > 0 THEN
+            (
+                SELECT pg_catalog.string_agg(az.value, ',' ORDER BY az.ord)
+                FROM jsonb_array_elements_text(data->'value'->'config'->'location'->'Managed'->'availability_zones')
+                     WITH ORDINALITY AS az(value, ord)
+            )
+    END AS availability_zone,
     mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
     CASE
         WHEN data->'value'->'config'->'location' ? 'Managed' THEN
