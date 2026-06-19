@@ -57,7 +57,7 @@ use mz_sql_parser::ast::{
     ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
     ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement, CreateClusterStatement,
     CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
-    CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
+    CreateBranchStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
@@ -67,7 +67,7 @@ use mz_sql_parser::ast::{
     CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
+    DocOnIdentifier, DocOnSchema, DropBranchStatement, DropObjectsStatement, DropOwnedStatement, Expr, Format,
     FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
     IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
@@ -75,7 +75,8 @@ use mz_sql_parser::ast::{
     NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
     PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
     RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, ShowBranchStatusStatement, SourceErrorPolicy,
+    SourceIncludeMetadata,
     SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
     TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
     TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
@@ -154,14 +155,15 @@ use crate::plan::{
     AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
     CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
+    CreateBranchPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DataSourceDesc, DropBranchPlan, DropObjectsPlan, DropOwnedPlan, HirRelationExpr,
+    Index, MaterializedView, NetworkPolicyRule,
     NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
-    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation, literal, plan_utils, query, transform_ast,
+    PolicyAddress, QueryContext, ReplicaConfig, Secret, ShowBranchStatusPlan, Sink, Source, Table,
+    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -7921,4 +7923,71 @@ fn ensure_cluster_is_not_managed(
     } else {
         Ok(())
     }
+}
+
+fn require_branching(scx: &StatementContext) -> Result<(), PlanError> {
+    if !scx.catalog.system_vars().enable_branching() {
+        sql_bail!(
+            "CREATE BRANCH, DROP BRANCH, and SHOW BRANCHES are gated behind \
+             the `enable_branching` feature flag, which is currently off"
+        );
+    }
+    Ok(())
+}
+
+pub fn describe_create_branch(scx: &StatementContext) -> Result<StatementDesc, PlanError> {
+    require_branching(scx)?;
+    Ok(StatementDesc::new(None))
+}
+
+pub fn describe_drop_branch(scx: &StatementContext) -> Result<StatementDesc, PlanError> {
+    require_branching(scx)?;
+    Ok(StatementDesc::new(None))
+}
+
+pub fn describe_show_branches(scx: &StatementContext) -> Result<StatementDesc, PlanError> {
+    require_branching(scx)?;
+    Ok(StatementDesc::new(None))
+}
+
+pub fn describe_show_branch_status(scx: &StatementContext) -> Result<StatementDesc, PlanError> {
+    require_branching(scx)?;
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_branch(
+    scx: &StatementContext,
+    stmt: CreateBranchStatement,
+) -> Result<Plan, PlanError> {
+    require_branching(scx)?;
+    Ok(Plan::CreateBranch(CreateBranchPlan {
+        branch_name: stmt.name.into_string(),
+        source_schema: stmt.source_schema,
+    }))
+}
+
+pub fn plan_drop_branch(
+    scx: &StatementContext,
+    stmt: DropBranchStatement,
+) -> Result<Plan, PlanError> {
+    require_branching(scx)?;
+    Ok(Plan::DropBranch(DropBranchPlan {
+        branch_name: stmt.name.into_string(),
+        if_exists: stmt.if_exists,
+    }))
+}
+
+pub fn plan_show_branches(scx: &StatementContext) -> Result<Plan, PlanError> {
+    require_branching(scx)?;
+    Ok(Plan::ShowBranches)
+}
+
+pub fn plan_show_branch_status(
+    scx: &StatementContext,
+    stmt: ShowBranchStatusStatement,
+) -> Result<Plan, PlanError> {
+    require_branching(scx)?;
+    Ok(Plan::ShowBranchStatus(ShowBranchStatusPlan {
+        branch_name: stmt.name.into_string(),
+    }))
 }

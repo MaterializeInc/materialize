@@ -115,6 +115,10 @@ pub enum Statement<T: AstInfo> {
     ReassignOwned(ReassignOwnedStatement<T>),
     ValidateConnection(ValidateConnectionStatement<T>),
     Comment(CommentStatement<T>),
+    CreateBranch(CreateBranchStatement),
+    DropBranch(DropBranchStatement),
+    ShowBranches(ShowBranchesStatement),
+    ShowBranchStatus(ShowBranchStatusStatement),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -194,6 +198,10 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ReassignOwned(stmt) => f.write_node(stmt),
             Statement::ValidateConnection(stmt) => f.write_node(stmt),
             Statement::Comment(stmt) => f.write_node(stmt),
+            Statement::CreateBranch(stmt) => f.write_node(stmt),
+            Statement::DropBranch(stmt) => f.write_node(stmt),
+            Statement::ShowBranches(stmt) => f.write_node(stmt),
+            Statement::ShowBranchStatus(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -278,6 +286,10 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::ReassignOwned => "reassign_owned",
         StatementKind::ValidateConnection => "validate_connection",
         StatementKind::Comment => "comment",
+        StatementKind::CreateBranch => "create_branch",
+        StatementKind::DropBranch => "drop_branch",
+        StatementKind::ShowBranches => "show_branches",
+        StatementKind::ShowBranchStatus => "show_branch_status",
     }
 }
 
@@ -5870,6 +5882,66 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
 }
 
 impl_display_t!(CommentObjectType);
+
+/// `CREATE BRANCH <name> FROM SCHEMA <schema>`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateBranchStatement {
+    pub name: Ident,
+    pub source_schema: UnresolvedSchemaName,
+}
+
+impl AstDisplay for CreateBranchStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE BRANCH ");
+        f.write_node(&self.name);
+        f.write_str(" FROM SCHEMA ");
+        f.write_node(&self.source_schema);
+    }
+}
+impl_display!(CreateBranchStatement);
+
+/// `DROP BRANCH [IF EXISTS] <name>`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropBranchStatement {
+    pub if_exists: bool,
+    pub name: Ident,
+}
+
+impl AstDisplay for DropBranchStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DROP BRANCH ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+    }
+}
+impl_display!(DropBranchStatement);
+
+/// `SHOW BRANCHES`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowBranchesStatement;
+
+impl AstDisplay for ShowBranchesStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW BRANCHES");
+    }
+}
+impl_display!(ShowBranchesStatement);
+
+/// `SHOW BRANCH STATUS <name>`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowBranchStatusStatement {
+    pub name: Ident,
+}
+
+impl AstDisplay for ShowBranchStatusStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW BRANCH STATUS ");
+        f.write_node(&self.name);
+    }
+}
+impl_display!(ShowBranchStatusStatement);
 
 // Include the `AstDisplay` implementations for simple options derived by the
 // crate's build.rs script.

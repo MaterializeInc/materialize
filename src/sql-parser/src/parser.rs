@@ -444,9 +444,29 @@ impl<'a> Parser<'a> {
                 Token::Keyword(RESET) => Ok(self
                     .parse_reset()
                     .map_parser_err(StatementKind::ResetVariable)?),
-                Token::Keyword(SHOW) => Ok(Statement::Show(
-                    self.parse_show().map_parser_err(StatementKind::Show)?,
-                )),
+                Token::Keyword(SHOW) => {
+                    // SHOW BRANCH STATUS and SHOW BRANCHES are top-level
+                    // statements, not ShowStatement variants, because they
+                    // have no FROM / IN / LIKE clause and don't fit the
+                    // generic show-objects machinery.
+                    if self.peek_keywords(&[BRANCH, STATUS]) {
+                        let _ = self.next_token();
+                        let _ = self.next_token();
+                        let name = self
+                            .parse_identifier()
+                            .map_parser_err(StatementKind::ShowBranchStatus)?;
+                        Ok(Statement::ShowBranchStatus(ShowBranchStatusStatement {
+                            name,
+                        }))
+                    } else if self.peek_keyword(BRANCHES) {
+                        let _ = self.next_token();
+                        Ok(Statement::ShowBranches(ShowBranchesStatement))
+                    } else {
+                        Ok(Statement::Show(
+                            self.parse_show().map_parser_err(StatementKind::Show)?,
+                        ))
+                    }
+                }
                 Token::Keyword(START) => Ok(self
                     .parse_start_transaction()
                     .map_parser_err(StatementKind::StartTransaction)?),
@@ -2032,7 +2052,10 @@ impl<'a> Parser<'a> {
 
     /// Parse a SQL CREATE statement
     fn parse_create(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
-        if self.peek_keyword(DATABASE) {
+        if self.peek_keyword(BRANCH) {
+            self.parse_create_branch()
+                .map_parser_err(StatementKind::CreateBranch)
+        } else if self.peek_keyword(DATABASE) {
             self.parse_create_database()
                 .map_parser_err(StatementKind::CreateDatabase)
         } else if self.peek_keyword(SCHEMA) {
@@ -4408,6 +4431,17 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_create_branch(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(BRANCH)?;
+        let name = self.parse_identifier()?;
+        self.expect_keywords(&[FROM, SCHEMA])?;
+        let source_schema = self.parse_schema_name()?;
+        Ok(Statement::CreateBranch(CreateBranchStatement {
+            name,
+            source_schema,
+        }))
+    }
+
     fn parse_create_type(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(TYPE)?;
         let name = self.parse_item_name()?;
@@ -4805,10 +4839,23 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(OWNED) {
             self.parse_drop_owned()
                 .map_parser_err(StatementKind::DropOwned)
+        } else if self.peek_keyword(BRANCH) {
+            self.parse_drop_branch()
+                .map_parser_err(StatementKind::DropBranch)
         } else {
             self.parse_drop_objects()
                 .map_parser_err(StatementKind::DropObjects)
         }
+    }
+
+    fn parse_drop_branch(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(BRANCH)?;
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_identifier()?;
+        Ok(Statement::DropBranch(DropBranchStatement {
+            if_exists,
+            name,
+        }))
     }
 
     fn parse_drop_objects(&mut self) -> Result<Statement<Raw>, ParserError> {

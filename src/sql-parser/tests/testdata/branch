@@ -1,0 +1,73 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+parse-statement
+CREATE BRANCH nightly FROM SCHEMA public
+----
+CREATE BRANCH nightly FROM SCHEMA public
+=>
+CreateBranch(CreateBranchStatement { name: Ident("nightly"), source_schema: UnresolvedSchemaName([Ident("public")]) })
+
+parse-statement
+CREATE BRANCH b FROM SCHEMA db.s
+----
+CREATE BRANCH b FROM SCHEMA db.s
+=>
+CreateBranch(CreateBranchStatement { name: Ident("b"), source_schema: UnresolvedSchemaName([Ident("db"), Ident("s")]) })
+
+parse-statement
+DROP BRANCH nightly
+----
+DROP BRANCH nightly
+=>
+DropBranch(DropBranchStatement { if_exists: false, name: Ident("nightly") })
+
+parse-statement
+DROP BRANCH IF EXISTS nightly
+----
+DROP BRANCH IF EXISTS nightly
+=>
+DropBranch(DropBranchStatement { if_exists: true, name: Ident("nightly") })
+
+parse-statement
+SHOW BRANCHES
+----
+SHOW BRANCHES
+=>
+ShowBranches(ShowBranchesStatement)
+
+parse-statement
+SHOW BRANCH STATUS nightly
+----
+SHOW BRANCH STATUS nightly
+=>
+ShowBranchStatus(ShowBranchStatusStatement { name: Ident("nightly") })
+
+# `FROM BRANCH` and `FROM DATABASE` are intentionally not recognized in the
+# MVP: only `FROM SCHEMA` is parsed. Confirm the parser rejects them.
+
+parse-statement
+CREATE BRANCH b FROM BRANCH p
+----
+error: Expected SCHEMA, found BRANCH
+CREATE BRANCH b FROM BRANCH p
+                     ^
+
+parse-statement
+CREATE BRANCH b FROM DATABASE p
+----
+error: Expected SCHEMA, found DATABASE
+CREATE BRANCH b FROM DATABASE p
+                     ^

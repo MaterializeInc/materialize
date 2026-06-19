@@ -690,6 +690,17 @@ impl Coordinator {
                         ctx.retire(res);
                     });
                 }
+                // BRANCH plans land in a later commit; planner-side gating
+                // by `enable_branching` keeps these arms unreachable when
+                // the flag is off, but rustc still demands they exist.
+                Plan::CreateBranch(_)
+                | Plan::DropBranch(_)
+                | Plan::ShowBranches
+                | Plan::ShowBranchStatus(_) => {
+                    ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
+                        "BRANCH plans are not yet wired through the sequencer"
+                    ))));
+                }
             }
         }
         .instrument(tracing::debug_span!("coord::sequencer::sequence_plan"))

@@ -2192,6 +2192,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_branching,
+        desc: "Whether to allow CREATE BRANCH / DROP BRANCH / SHOW BRANCHES.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_join_prioritize_arranged,
         desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
         default: false,

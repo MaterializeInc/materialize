@@ -213,6 +213,30 @@ pub enum Plan {
     ValidateConnection(ValidateConnectionPlan),
     AlterRetainHistory(AlterRetainHistoryPlan),
     AlterSourceTimestampInterval(AlterSourceTimestampIntervalPlan),
+    CreateBranch(CreateBranchPlan),
+    DropBranch(DropBranchPlan),
+    ShowBranches,
+    ShowBranchStatus(ShowBranchStatusPlan),
+}
+
+/// Plan for `CREATE BRANCH <name> FROM SCHEMA <schema>`.
+#[derive(Debug, Clone)]
+pub struct CreateBranchPlan {
+    pub branch_name: String,
+    pub source_schema: mz_sql_parser::ast::UnresolvedSchemaName,
+}
+
+/// Plan for `DROP BRANCH [IF EXISTS] <name>`.
+#[derive(Debug, Clone)]
+pub struct DropBranchPlan {
+    pub branch_name: String,
+    pub if_exists: bool,
+}
+
+/// Plan for `SHOW BRANCH STATUS <name>`.
+#[derive(Debug, Clone)]
+pub struct ShowBranchStatusPlan {
+    pub branch_name: String,
 }
 
 impl Plan {
@@ -329,6 +353,10 @@ impl Plan {
             StatementKind::ValidateConnection => &[PlanKind::ValidateConnection],
             StatementKind::AlterRetainHistory => &[PlanKind::AlterRetainHistory],
             StatementKind::ExecuteUnitTest => &[],
+            StatementKind::CreateBranch => &[PlanKind::CreateBranch],
+            StatementKind::DropBranch => &[PlanKind::DropBranch],
+            StatementKind::ShowBranches => &[PlanKind::ShowBranches],
+            StatementKind::ShowBranchStatus => &[PlanKind::ShowBranchStatus],
         }
     }
 
@@ -473,6 +501,10 @@ impl Plan {
             Plan::ValidateConnection(_) => "validate connection",
             Plan::AlterRetainHistory(_) => "alter retain history",
             Plan::AlterSourceTimestampInterval(_) => "alter source timestamp interval",
+            Plan::CreateBranch(_) => "create branch",
+            Plan::DropBranch(_) => "drop branch",
+            Plan::ShowBranches => "show branches",
+            Plan::ShowBranchStatus(_) => "show branch status",
         }
     }
 

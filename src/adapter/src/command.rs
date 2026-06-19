@@ -940,6 +940,9 @@ impl ExecuteResponse {
             StartTransaction => &[StartedTransaction],
             SideEffectingFunc => &[SendingRowsStreaming, SendingRowsImmediate],
             ValidateConnection => &[ExecuteResponseKind::ValidatedConnection],
+            CreateBranch => &[ExecuteResponseKind::CreatedSchema],
+            DropBranch => &[ExecuteResponseKind::DroppedObject],
+            ShowBranches | ShowBranchStatus => &[ExecuteResponseKind::SendingRowsImmediate],
         }
     }
 }

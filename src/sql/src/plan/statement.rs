@@ -262,6 +262,10 @@ pub fn describe(
                 discussion_no: None,
             });
         }
+        Statement::CreateBranch(_) => ddl::describe_create_branch(&scx)?,
+        Statement::DropBranch(_) => ddl::describe_drop_branch(&scx)?,
+        Statement::ShowBranches(_) => ddl::describe_show_branches(&scx)?,
+        Statement::ShowBranchStatus(_) => ddl::describe_show_branch_status(&scx)?,
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -455,6 +459,12 @@ pub fn plan(
                 discussion_no: None,
             });
         }
+
+        // BRANCH statements.
+        Statement::CreateBranch(stmt) => ddl::plan_create_branch(scx, stmt),
+        Statement::DropBranch(stmt) => ddl::plan_drop_branch(scx, stmt),
+        Statement::ShowBranches(_) => ddl::plan_show_branches(scx),
+        Statement::ShowBranchStatus(stmt) => ddl::plan_show_branch_status(scx, stmt),
     };
 
     if let Ok(plan) = &plan {
@@ -1151,6 +1161,10 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::InspectShard(_)) => Other,
             Statement::ValidateConnection(_) => Other,
             Statement::ExecuteUnitTest(_) => Other,
+            Statement::CreateBranch(_) => DDL,
+            Statement::DropBranch(_) => DDL,
+            Statement::ShowBranches(_) => DDL,
+            Statement::ShowBranchStatus(_) => DDL,
         }
     }
 }
