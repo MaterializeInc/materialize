@@ -530,15 +530,17 @@ def run_scoped_feature_flag_cases(
             )
             c.stop("materialized")
 
-        # Create-time resolution: a cluster created between sync ticks must
-        # resolve its cluster-coherent overrides synchronously, before its first
-        # plan, since optimizer features are baked into immutable dataflows. We
-        # isolate this from the periodic loop by running with a very long sync
-        # interval: the frontend is still installed on the first (immediate)
-        # tick, but no further reconcile happens during the test, so a row that
-        # appears right after `CREATE CLUSTER` can only come from create-time
-        # resolution. (testdrive `>` retries, but the periodic loop cannot fire
-        # within the retry window at this interval.)
+        # Create-time resolution: a cluster and its replicas created between sync
+        # ticks must resolve their overrides synchronously, before the cluster's
+        # first plan (cluster-coherent, optimizer features are baked into
+        # immutable dataflows) and before the replica renders (replica-local,
+        # render-frozen flags like the column-paged batcher). We isolate this from
+        # the periodic loop by running with a very long sync interval: the
+        # frontend is still installed on the first (immediate) tick, but no
+        # further reconcile happens during the test, so a row that appears right
+        # after `CREATE CLUSTER` can only come from create-time resolution.
+        # (testdrive `>` retries, but the periodic loop cannot fire within the
+        # retry window at this interval.)
         slow_mz = Materialized(
             environment_extra=[
                 f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
@@ -566,6 +568,22 @@ def run_scoped_feature_flag_cases(
                     [
                         f"> SELECT c.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id WHERE p.name = '{OPTIMIZER_PARAM}' AND c.name = 'ld_sync'",
                         "ld_sync true",
+                    ]
+                )
+            )
+            # Create-time replica resolution: `ld_sync` is a legacy-family
+            # cluster, so its replica is served `enable_lgalloc=false`, which
+            # differs from the env-wide `true` and is recorded. The override is
+            # folded into the create transaction, so the row appears immediately,
+            # before the (disabled) sync loop could write it. This is the
+            # replica-local counterpart to the cluster-coherent case above, and it
+            # would not appear if the replica's override were resolved only after
+            # the create transaction.
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT cr.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name = 'ld_sync'",
+                        "r1 false",
                     ]
                 )
             )

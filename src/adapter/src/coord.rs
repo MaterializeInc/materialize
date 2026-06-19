@@ -118,7 +118,7 @@ use mz_controller::clusters::{
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
-use mz_dyncfg::ConfigUpdates;
+use mz_dyncfg::{ConfigUpdates, ParameterScope};
 use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
@@ -185,8 +185,8 @@ use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{
-    ScopedParameters, ScopedParametersScope, SynchronizedParameters, SystemParameterFrontend,
-    SystemParameterSyncConfig, evaluate_scoped_parameters,
+    ClusterEvalContext, ReplicaEvalContext, ScopedParameters, ScopedParametersScope,
+    SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig,
 };
 use crate::coord::appends::{
     BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit, PendingWriteTxn,
@@ -2037,9 +2037,10 @@ impl Coordinator {
     /// Persists the scoped system-parameter working copy and reconciles it into
     /// the per-scope resolution boundaries.
     ///
-    /// The system-parameter sync loop and the create-time resolve
-    /// (`resolve_scoped_for_new_objects`) are the only writers, both serialized
-    /// on the coordinator loop. The diff is persisted to the
+    /// The system-parameter sync loop and the create-time fold
+    /// (`scoped_overrides_create_op`, folded into the create transaction) are the
+    /// only writers, both serialized on the coordinator loop. The diff is
+    /// persisted to the
     /// durable cache (so values survive an `environmentd` restart and an LD
     /// outage) via `Op::UpdateScopedSystemParameters`, which also updates the
     /// in-memory working copy in [`CatalogState`] and the
@@ -2064,7 +2065,7 @@ impl Coordinator {
 
         // Persist the diff and update the in-memory working copy + introspection
         // through the catalog transaction, serialized on the coordinator loop
-        // with the create-time resolve. The replica-scoped
+        // with the create-time fold. The replica-scoped
         // controller push is derived from this transaction's diff by the catalog
         // implication. `prune_scope` bounds removals to the evaluated objects, so
         // a concurrently-created object's override is not wiped. Best-effort: a
@@ -2083,52 +2084,75 @@ impl Coordinator {
         }
     }
 
-    /// Synchronously resolves the scoped overrides for the given freshly-created
-    /// clusters and replicas and folds them into the working copy, so a new
-    /// object observes its overrides immediately, before its first plan
-    /// (cluster-coherent) or first controller configuration (replica-local),
-    /// rather than after the next sync tick. Render-frozen flags (optimizer
-    /// features baked into an immutable dataflow) make the tick-latency window a
-    /// correctness problem, not just a delay, which is why this exists.
+    /// Evaluates the scoped overrides for freshly-created objects from explicit
+    /// eval contexts and returns an [`Op::UpdateScopedSystemParameters`] to fold
+    /// into the same transaction that creates them.
     ///
-    /// No-op when the feature is gated off or the shared frontend is not yet
-    /// installed (e.g. before LaunchDarkly connects), in which case the object
-    /// resolves to the environment-wide value, the cold-cache fallback. The
-    /// periodic sync loop remains the authoritative full-state reconciler.
-    pub(crate) async fn resolve_scoped_for_new_objects(
-        &mut self,
-        clusters: &BTreeSet<ClusterId>,
-        replicas: &BTreeSet<ReplicaId>,
-    ) {
-        if clusters.is_empty() && replicas.is_empty() {
-            return;
-        }
-        let Some(frontend) = self.scoped_frontend.clone() else {
-            return;
-        };
+    /// The objects are not yet in the catalog, so the contexts are built from
+    /// plan data and pre-allocated ids. Folding the op into the create
+    /// transaction makes its committed diff drive the replica-scoped controller
+    /// push, as a catalog implication, before `create_replica`. A new replica's
+    /// first configuration then carries its overrides rather than the env-wide
+    /// values. Render-frozen flags (e.g. the column-paged batcher, chosen at
+    /// arrangement-build time) make a later push too late, which is why this
+    /// happens in the create transaction rather than the next sync tick.
+    ///
+    /// Returns `None` when the feature is gated off, the shared frontend is not
+    /// yet installed (e.g. before LaunchDarkly connects), or no override
+    /// applies. The new objects then resolve to the environment-wide value, and
+    /// the periodic sync loop remains the authoritative full-state reconciler.
+    ///
+    /// [`Op::UpdateScopedSystemParameters`]: crate::catalog::Op::UpdateScopedSystemParameters
+    fn scoped_overrides_create_op(
+        &self,
+        clusters: &[ClusterEvalContext],
+        replicas: &[ReplicaEvalContext],
+    ) -> Option<crate::catalog::Op> {
+        let frontend = self.scoped_frontend.clone()?;
         let catalog = self.catalog();
-        if !ENABLE_SCOPED_SYSTEM_PARAMETERS.get(catalog.system_config().dyncfgs()) {
-            return;
+        let system_config = catalog.system_config();
+        if !ENABLE_SCOPED_SYSTEM_PARAMETERS.get(system_config.dyncfgs()) {
+            return None;
         }
 
-        // Evaluate only the new objects, then merge onto the current working copy
-        // so reconcile keeps the overrides of objects it did not re-evaluate.
-        let params = SynchronizedParameters::new(catalog.system_config().clone());
-        let evaluated =
-            evaluate_scoped_parameters(&frontend, &params, catalog, Some(clusters), Some(replicas));
-        let merged = catalog.state().scoped_system_parameters().merge(&evaluated);
-        // This runs synchronously after the create transaction, so the catalog
-        // already reflects the new objects. The merged state is authoritative
-        // for all live objects, so prune within them.
+        // Partition the synced parameters by scope class, as the sync loop does,
+        // so we evaluate exactly the flags in use at each scope.
+        let replica_param_names: Vec<&'static str> = system_config
+            .iter_synced()
+            .filter(|var| var.scope() == ParameterScope::Replica)
+            .map(|var| var.name())
+            .collect();
+        let cluster_param_names: Vec<&'static str> = system_config
+            .iter_synced()
+            .filter(|var| var.scope() == ParameterScope::Cluster)
+            .map(|var| var.name())
+            .collect();
+
+        let params = SynchronizedParameters::new(system_config.clone());
+        let mut evaluated = ScopedParameters::default();
+        if !cluster_param_names.is_empty() && !clusters.is_empty() {
+            evaluated.cluster =
+                frontend.pull_cluster_overrides(&params, &cluster_param_names, clusters);
+        }
+        if !replica_param_names.is_empty() && !replicas.is_empty() {
+            evaluated.replica =
+                frontend.pull_replica_overrides(&params, &replica_param_names, replicas);
+        }
+        if evaluated.is_empty() {
+            return None;
+        }
+
+        // Prune only within the objects being created. They have no prior rows,
+        // so nothing is removed, and this op never touches another object whose
+        // override a concurrent reconcile may be writing.
         let prune_scope = ScopedParametersScope {
-            clusters: catalog.clusters().map(|cluster| cluster.id).collect(),
-            replicas: catalog
-                .clusters()
-                .flat_map(|cluster| cluster.replicas().map(|replica| replica.replica_id))
-                .collect(),
+            clusters: clusters.iter().map(|cluster| cluster.cluster_id).collect(),
+            replicas: replicas.iter().map(|replica| replica.replica_id).collect(),
         };
-        self.reconcile_scoped_system_parameters(merged, Some(prune_scope))
-            .await;
+        Some(crate::catalog::Op::UpdateScopedSystemParameters {
+            scoped: evaluated,
+            prune_scope: Some(prune_scope),
+        })
     }
 
     /// Resolves the replica-local scoped overrides from the catalog working copy
