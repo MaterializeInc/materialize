@@ -76,7 +76,7 @@ impl crate::Transform for ReduceScalars {
                         .as_ref()
                         .unwrap();
                     for predicate in predicates.iter_mut() {
-                        predicate.reduce(input_type);
+                        predicate.reduce_with_features(input_type, ctx.features);
                     }
                     predicates.retain(|p| !p.is_literal_true());
                 }
@@ -88,7 +88,7 @@ impl crate::Transform for ReduceScalars {
                         .as_ref()
                         .unwrap();
                     for expr in exprs.iter_mut() {
-                        expr.reduce(input_type);
+                        expr.reduce_with_features(input_type, ctx.features);
                     }
                 }
                 MirRelationExpr::Map { scalars, .. } => {
@@ -100,7 +100,10 @@ impl crate::Transform for ReduceScalars {
                         .unwrap();
                     let input_arity = output_type.len() - scalars.len();
                     for (index, scalar) in scalars.iter_mut().enumerate() {
-                        scalar.reduce(&output_type[..input_arity + index]);
+                        scalar.reduce_with_features(
+                            &output_type[..input_arity + index],
+                            ctx.features,
+                        );
                     }
                 }
                 MirRelationExpr::Join { equivalences, .. } => {
@@ -119,7 +122,7 @@ impl crate::Transform for ReduceScalars {
                         .collect();
                     for class in equivalences.iter_mut() {
                         for expr in class.iter_mut() {
-                            expr.reduce(&input_types[..]);
+                            expr.reduce_with_features(&input_types[..], ctx.features);
                         }
                         class.sort();
                         class.dedup();
@@ -140,10 +143,12 @@ impl crate::Transform for ReduceScalars {
                         .as_ref()
                         .unwrap();
                     for key in group_key.iter_mut() {
-                        key.reduce(input_type);
+                        key.reduce_with_features(input_type, ctx.features);
                     }
                     for aggregate in aggregates.iter_mut() {
-                        aggregate.expr.reduce(input_type);
+                        aggregate
+                            .expr
+                            .reduce_with_features(input_type, ctx.features);
                     }
                 }
                 MirRelationExpr::TopK { limit, .. } => {
@@ -154,7 +159,7 @@ impl crate::Transform for ReduceScalars {
                         .as_ref()
                         .unwrap();
                     if let Some(limit) = limit {
-                        limit.reduce(input_type);
+                        limit.reduce_with_features(input_type, ctx.features);
                     }
                 }
             }

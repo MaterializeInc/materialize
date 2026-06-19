@@ -1360,12 +1360,18 @@ pub fn plan_index_exprs<'a>(
         .iter()
         .map(ReprColumnType::from)
         .collect();
+    // Reduce the index-key expressions with the optimizer features in effect, so
+    // that flag-gated canonicalizations (e.g. CaseLiteral construction) match the
+    // form the query-side optimizer produces. Otherwise a flagged rewrite would
+    // make the stored key and the query expression diverge and the index would
+    // not be matched.
+    let features = mz_repr::optimize::OptimizerFeatures::from(scx.catalog.system_vars());
     let mut out = vec![];
     for mut expr in exprs {
         transform_ast::transform(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         let mut expr = expr.lower_uncorrelated(scx.catalog.system_vars())?;
-        expr.reduce(&repr_col_types);
+        expr.reduce_with_features(&repr_col_types, &features);
         out.push(expr);
     }
     Ok(out)
